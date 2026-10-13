@@ -997,7 +997,7 @@ pub fn valid_image(image: &str) -> bool {
         && image.len() < 200
         && image
             .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || "/:._-".contains(ch))
+            .all(|ch| ch.is_ascii_alphanumeric() || "/:._-@".contains(ch))
 }
 
 pub async fn materialize_project(project: &Project, data_dir: &Path) -> Result<PathBuf, String> {
@@ -1529,6 +1529,17 @@ fn close_observation(state: &Shared, job_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_names_allow_a_digest_reference() {
+        assert!(valid_image("quay.io/ansible/awx-ee:latest"));
+        assert!(valid_image(
+            "ghcr.io/ansible-community/community-ee-base@sha256:d42f2597080e8e34ce4d1f70f66f987fc841bd0bbeb680f8d234e94ef1afc60a"
+        ));
+        assert!(!valid_image(""));
+        assert!(!valid_image("image with space"));
+        assert!(!valid_image("bad$(image)"));
+    }
 
     #[test]
     fn ansible_check_tags_and_limit_become_env() {

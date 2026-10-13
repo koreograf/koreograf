@@ -750,6 +750,7 @@ function go(hash) {
 
 function navActive(here, href) {
   if (href === "#/") return here === "#/" || here === "";
+  if (href === "#/runtime" && here.startsWith("#/environments")) return true;
   return here === href || here.startsWith(`${href}/`);
 }
 
@@ -2109,6 +2110,11 @@ async function pageRuntime() {
   const roleRows = (cache.roles || []).map((item) => `<tr><td>${esc(item.name)}</td><td>${esc(item.version)}</td></tr>`);
   const pluginRows = plugins.map((item) => `<tr><td class="tool">${esc(item.id)}</td><td>${esc(t(item.summary))}</td></tr>`);
   shell(t("Laufzeit"), `
+    <section class="card" style="margin-bottom:14px">
+      <h2>${h("Execution Environments")}</h2>
+      <input class="search" id="environment-search" placeholder="${h("Umgebungen suchen")}" autocomplete="off">
+      <div id="environment-table"></div>
+    </section>
     <div class="grid-3" style="margin-bottom:14px">
       <article class="card stat"><span class="small muted">${h("Collections")}</span><strong>${esc(bytes(cache.collections_bytes))}</strong></article>
       <article class="card stat"><span class="small muted">${h("Rollen")}</span><strong>${esc(bytes(cache.roles_bytes))}</strong></article>
@@ -2117,17 +2123,12 @@ async function pageRuntime() {
     <p class="small muted" style="margin-top:0">${esc(t(cache.note || ""))}</p>
     <section class="card" style="margin-bottom:14px"><h2>${h("Werkzeuge")}</h2>${table([t("Id"), t("Beschreibung")], pluginRows)}</section>
     <section class="card" style="margin-bottom:14px"><h2>${h("Collections im Cache")}</h2>${table([t("Name"), t("Version")], collectionRows)}</section>
-    <section class="card" style="margin-bottom:14px"><h2>${h("Rollen im Cache")}</h2>${table([t("Name"), t("Version")], roleRows)}</section>
-    <section class="card">
-      <h2>${h("Execution Environments")}</h2>
-      <input class="search" id="environment-search" placeholder="${h("Umgebungen suchen")}" autocomplete="off">
-      <div id="environment-table"></div>
-    </section>`,
+    <section class="card" style="margin-bottom:14px"><h2>${h("Rollen im Cache")}</h2>${table([t("Name"), t("Version")], roleRows)}</section>`,
     can("owner") ? addLink("#/environments/new", "+ Umgebung") : "");
   const drawEnvironments = () => {
     const needle = document.querySelector("#environment-search").value.trim().toLowerCase();
     const rows = environments.filter((item) => !needle || `${item.name} ${item.image} ${item.pull_policy}`.toLowerCase().includes(needle)).map((item) =>
-      `<tr><td>${esc(item.name)}</td><td class="mono">${esc(item.image)}</td><td>${esc(item.pull_policy)}</td><td>${can("owner") ? `<button class="btn danger" type="button" data-env="${esc(item.id)}">${h("Löschen")}</button>` : ""}</td></tr>`
+      `<tr><td><a href="#/environments/${esc(item.id)}">${esc(item.name)}</a></td><td class="mono">${esc(item.image)}</td><td>${esc(item.pull_policy)}</td><td>${can("owner") ? `<button class="btn danger" type="button" data-env="${esc(item.id)}">${h("Löschen")}</button>` : ""}</td></tr>`
     );
     document.querySelector("#environment-table").innerHTML = table([t("Name"), t("Image"), t("Pull"), ""], rows);
     document.querySelectorAll("[data-env]").forEach((button) => {
@@ -2145,32 +2146,67 @@ async function pageRuntime() {
   drawEnvironments();
 }
 
+function environmentForm(item) {
+  const policy = item ? item.pull_policy : "if_not_present";
+  const option = (value) => `<option value="${value}"${policy === value ? " selected" : ""}>${value}</option>`;
+  return `<form class="card form" id="env-form">
+    <label class="field"><span>${h("Name")}</span><input name="name" required value="${item ? esc(item.name) : ""}"></label>
+    <label class="field"><span>${h("Image")}</span><input name="image" required value="${item ? esc(item.image) : ""}" placeholder="quay.io/ansible/awx-ee:latest"></label>
+    <div class="field-row">
+      <label class="field"><span>${h("Pull")}</span><select class="fit" name="pull_policy">${option("if_not_present")}${option("always")}${option("never")}</select></label>
+    </div>
+    <label class="field"><span>${h("Beschreibung")}</span><input name="description" value="${item ? esc(item.description) : ""}"></label>
+    <button class="btn pill primary" type="submit">${item ? h("Speichern") : h("Anlegen")}</button>
+  </form>`;
+}
+
+function bindEnvironmentForm(id) {
+  document.querySelector("#env-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const payload = {
+      name: form.name.value,
+      image: form.image.value,
+      pull_policy: form.pull_policy.value,
+      description: form.description.value,
+    };
+    try {
+      if (id) await api("PUT", `/api/environments/${encodeURIComponent(id)}`, payload);
+      else await api("POST", "/api/environments", payload);
+      go("#/runtime");
+    } catch (error) {
+      handle(error);
+    }
+  });
+}
+
 async function pageEnvironmentNew() {
   if (!needTeam()) return;
   if (!can("owner")) {
     deny("Execution Environment", "owner");
     return;
   }
-  shell(t("Umgebung anlegen"), `
-    <form class="card form" id="env-form">
-      <label class="field"><span>${h("Name")}</span><input name="name" required></label>
-      <label class="field"><span>${h("Image")}</span><input name="image" required placeholder="quay.io/ansible/awx-ee:latest"></label>
-      <div class="field-row">
-        <label class="field"><span>${h("Pull")}</span><select class="fit" name="pull_policy"><option>if_not_present</option><option>always</option><option>never</option></select></label>
-      </div>
-      <label class="field"><span>${h("Beschreibung")}</span><input name="description"></label>
-      <button class="btn pill primary" type="submit">${h("Anlegen")}</button>
-    </form>`);
-  document.querySelector("#env-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget;
+  shell(t("Umgebung anlegen"), environmentForm(null));
+  bindEnvironmentForm(null);
+}
+
+async function pageEnvironment(id) {
+  if (!needTeam()) return;
+  const item = await api("GET", `/api/environments/${encodeURIComponent(id)}`);
+  if (!can("owner")) {
+    shell(item.name, `<section class="card"><dl class="kv">
+      ${paramRow("Name", item.name)}
+      ${paramRow("Image", item.image)}
+      ${paramRow("Pull", item.pull_policy)}
+      ${paramRow("Beschreibung", item.description)}
+    </dl></section>`);
+    return;
+  }
+  shell(item.name, environmentForm(item), `<button class="btn danger" id="delete-env" type="button">${h("Löschen")}</button>`);
+  bindEnvironmentForm(id);
+  document.querySelector("#delete-env").addEventListener("click", async () => {
     try {
-      await api("POST", "/api/environments", {
-        name: form.name.value,
-        image: form.image.value,
-        pull_policy: form.pull_policy.value,
-        description: form.description.value,
-      });
+      await api("DELETE", `/api/environments/${encodeURIComponent(id)}`);
       go("#/runtime");
     } catch (error) {
       handle(error);
@@ -3273,6 +3309,7 @@ async function route() {
     else if (parts[0] === "hooks" && parts[1] === "new") await pageHookNew();
     else if (parts[0] === "hooks") await pageHooks();
     else if (parts[0] === "environments" && parts[1] === "new") await pageEnvironmentNew();
+    else if (parts[0] === "environments" && parts[1]) await pageEnvironment(parts[1]);
     else if (parts[0] === "runtime") await pageRuntime();
     else if (parts[0] === "projects" && parts[1] === "new") await pageProjectNew();
     else if (parts[0] === "projects" && parts[1]) await pageProject(parts[1]);

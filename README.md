@@ -130,7 +130,7 @@ Empty filters and attributes use the default for the selected mode. `KOREOGRAF_L
 
 ## Execution environments
 
-An environment is an image plus a pull policy (`if_not_present`, `always`, `never`). The demo creates `quay.io/ansible/awx-ee:latest` and attaches it to no template, so the first run works without an image pull.
+An environment is an image plus a pull policy (`if_not_present`, `always`, `never`). The demo creates `quay.io/ansible/awx-ee:latest` and attaches it to no template, so the first run works without an image pull. The Runtime page lists environments first. `GET` and `PUT /api/environments/{id}` read and change the name, image, pull policy, and description. An owner can edit them. The image may be a tag or a digest reference (`name@sha256:…`).
 
 In the container the runner mounts the project read-only at `/runner/project`, the work directory at `/runner/work`, and the cache at `/cache`. `--env-file` points at a file on the host. The image gets a cleaned environment: `PATH` is local only, `HOME` is the work directory, `LANG=C.UTF-8`, and the `KOREOGRAF_*` variables. The server environment is not inherited.
 
@@ -216,8 +216,8 @@ Session cookie `koreograf_session`, HttpOnly, SameSite=Lax, seven days. Team rou
 | GET, POST | `/api/organizations` |
 | GET, PUT | `/api/organizations/{id}` |
 | GET, POST | `/api/projects`, `/api/inventories`, `/api/credentials`, `/api/environments` |
-| GET | `/api/projects/{id}`, `/api/inventories/{id}` |
-| PUT | `/api/projects/{id}`, `/api/inventories/{id}` |
+| GET | `/api/projects/{id}`, `/api/inventories/{id}`, `/api/environments/{id}` |
+| PUT | `/api/projects/{id}`, `/api/inventories/{id}`, `/api/environments/{id}` |
 | DELETE | `/api/projects/{id}`, `/api/inventories/{id}`, `/api/credentials/{id}`, `/api/environments/{id}` |
 | GET | `/api/projects/{id}/contents` |
 | POST | `/api/projects/{id}/sync` |

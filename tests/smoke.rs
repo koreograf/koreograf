@@ -2043,3 +2043,110 @@ async fn signed_in_user_can_read_their_own_account() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn owner_can_edit_an_execution_environment() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-env-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let script = script.as_str().unwrap_or("");
+    let runtime = script
+        .split_once("async function pageRuntime")
+        .expect("runtime page")
+        .1
+        .split_once("function environmentForm")
+        .expect("environment form")
+        .0;
+    let environments = runtime
+        .find("Execution Environments")
+        .expect("environment heading");
+    let collections = runtime.find("Collections im Cache").expect("cache heading");
+    assert!(environments < collections);
+    assert!(runtime.contains("#/environments/"));
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+    let (status, listed, _) = call(
+        &app,
+        "GET",
+        "/api/environments",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let id = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["name"] == "AWX-EE")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap();
+    let image = "quay.io/ansible/awx-ee@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    let (status, updated, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/environments/{id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "EE neu",
+            "image": image,
+            "pull_policy": "always",
+            "description": "angepasst"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["name"], "EE neu");
+    assert_eq!(updated["image"], image);
+    assert_eq!(updated["pull_policy"], "always");
+    let (status, again, _) = call(
+        &app,
+        "GET",
+        &format!("/api/environments/{id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["description"], "angepasst");
+    let (status, rejected, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/environments/{id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "EE neu",
+            "image": "bad image",
+            "pull_policy": "always"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+    assert_eq!(rejected["error"], "Image-Name ist ungültig.");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

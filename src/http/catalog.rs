@@ -695,14 +695,7 @@ pub async fn list_environments(
     Ok(Json(json!(db::list_environments(&db, &team)?)))
 }
 
-pub async fn create_environment(
-    State(state): State<Shared>,
-    headers: HeaderMap,
-    user: AuthUser,
-    Json(body): Json<EnvironmentBody>,
-) -> AppResult<axum::response::Response> {
-    let team = team_header(&headers)?;
-    gate(&state, &user, &team, Role::Owner)?;
+fn environment_fields(body: &EnvironmentBody) -> AppResult<(String, String, String, String)> {
     if !matches!(
         body.pull_policy.as_str(),
         "if_not_present" | "always" | "never"
@@ -711,21 +704,78 @@ pub async fn create_environment(
             "Pull-Policy ist if_not_present, always oder never.",
         ));
     }
-    if !runner::valid_image(body.image.trim()) {
+    let image = body.image.trim();
+    if !runner::valid_image(image) {
         return Err(ApiError::bad("Image-Name ist ungültig."));
     }
+    Ok((
+        require_name(&body.name)?,
+        image.to_string(),
+        body.pull_policy.clone(),
+        body.description.trim().to_string(),
+    ))
+}
+
+pub async fn create_environment(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Json(body): Json<EnvironmentBody>,
+) -> AppResult<axum::response::Response> {
+    let team = team_header(&headers)?;
+    gate(&state, &user, &team, Role::Owner)?;
+    let (name, image, pull_policy, description) = environment_fields(&body)?;
     let item = Environment {
         id: Uuid::new_v4().to_string(),
         team_id: Some(team),
-        name: require_name(&body.name)?,
-        image: body.image.trim().to_string(),
-        pull_policy: body.pull_policy,
-        description: body.description.trim().to_string(),
+        name,
+        image,
+        pull_policy,
+        description,
         created_at: db::now(),
     };
     let db = state.db()?;
     db::insert_environment(&db, &item)?;
     Ok(created(json!(item)))
+}
+
+pub async fn get_environment(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Json<Value>> {
+    let team = team_header(&headers)?;
+    gate(&state, &user, &team, Role::Viewer)?;
+    let db = state.db()?;
+    let item = db::environment(&db, &id)?.ok_or(ApiError::NotFound)?;
+    if item.team_id.as_ref().is_some_and(|owner| owner != &team) {
+        return Err(ApiError::NotFound);
+    }
+    Ok(Json(json!(item)))
+}
+
+pub async fn update_environment(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Path(id): Path<String>,
+    Json(body): Json<EnvironmentBody>,
+) -> AppResult<Json<Value>> {
+    let team = team_header(&headers)?;
+    gate(&state, &user, &team, Role::Owner)?;
+    let (name, image, pull_policy, description) = environment_fields(&body)?;
+    let db = state.db()?;
+    let mut item = db::environment(&db, &id)?.ok_or(ApiError::NotFound)?;
+    if item.team_id.as_deref() != Some(team.as_str()) {
+        return Err(ApiError::NotFound);
+    }
+    item.name = name;
+    item.image = image;
+    item.pull_policy = pull_policy;
+    item.description = description;
+    db::update_environment(&db, &item)?;
+    Ok(Json(json!(item)))
 }
 
 pub async fn delete_environment(

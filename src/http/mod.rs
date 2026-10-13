@@ -104,7 +104,9 @@ pub fn router(state: Shared) -> Router {
         )
         .route(
             "/environments/{id}",
-            axum::routing::delete(catalog::delete_environment),
+            get(catalog::get_environment)
+                .put(catalog::update_environment)
+                .delete(catalog::delete_environment),
         )
         .route("/cache", get(catalog::cache))
         .route("/plugins", get(catalog::plugins))

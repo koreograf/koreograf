@@ -1539,6 +1539,28 @@ fn map_environment(row: &rusqlite::Row<'_>) -> rusqlite::Result<Environment> {
     })
 }
 
+pub fn update_environment(c: &Connection, item: &Environment) -> AppResult<()> {
+    let Some(team_id) = item.team_id.as_deref() else {
+        return Err(ApiError::NotFound);
+    };
+    let n = c.execute(
+        "UPDATE environments SET name=?3, image=?4, pull_policy=?5, description=?6
+         WHERE id=?1 AND team_id=?2",
+        params![
+            item.id,
+            team_id,
+            item.name,
+            item.image,
+            item.pull_policy,
+            item.description
+        ],
+    )?;
+    if n == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(())
+}
+
 pub fn delete_environment(c: &Connection, id: &str, team_id: &str) -> AppResult<()> {
     let n = c.execute(
         "DELETE FROM environments WHERE id = ?1 AND team_id = ?2",
