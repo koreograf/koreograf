@@ -296,7 +296,15 @@ const EN = {
   "Knoten": "Nodes",
   "Knoten hinzufügen": "Add node",
   "Knoten löschen": "Delete node",
-  "Knoten ziehen. Erfolg oder Fehler anklicken, dann den Zielknoten. Kanten sind Bézier-Kurven.": "Drag nodes. Click success or failure, then the target node. Edges are Bézier curves.",
+  "Knoten ziehen. Weitere Knoten rechts hinzufügen. Verbinden über die Auswahl am Knoten oder über Erfolg und Fehler auf der Karte.": "Drag nodes. Add more nodes on the right. Connect them from the node panel, or click success and failure on the card.",
+  "Dieser Knoten": "This node",
+  "Die Kante startet bei diesem Knoten.": "The edge starts at this node.",
+  "Erfolg führt zu": "On success, go to",
+  "Fehler führt zu": "On failure, go to",
+  "Immer führt zu": "Always go to",
+  "Kein Ziel": "No target",
+  "Verbinden": "Connect",
+  "Wähle einen Knoten, um ihn zu verbinden.": "Select a node to connect it.",
   "Lauf": "Run",
   "Laufzeit": "Runtime",
   "LDAP-Gruppe": "LDAP group",
@@ -1773,7 +1781,7 @@ function mountEditor(workflow, templates, readonly, phases) {
             <input id="wf-name" value="${esc(workflow.name)}" ${can("operator") ? "" : "disabled"}>
             <input id="wf-description" value="${esc(workflow.description)}" placeholder="${h("Beschreibung")}" ${can("operator") ? "" : "disabled"}>
           </div>`}
-        <p class="small muted" id="wf-hint">${readonly ? h("Farben zeigen den Lauf. Ein Klick öffnet den Auftrag.") : h("Knoten ziehen. Erfolg oder Fehler anklicken, dann den Zielknoten. Kanten sind Bézier-Kurven.")}</p>
+        <p class="small muted" id="wf-hint">${readonly ? h("Farben zeigen den Lauf. Ein Klick öffnet den Auftrag.") : h("Knoten ziehen. Weitere Knoten rechts hinzufügen. Verbinden über die Auswahl am Knoten oder über Erfolg und Fehler auf der Karte.")}</p>
         <div class="canvas" id="canvas"><div id="board" style="position:relative;min-width:100%;min-height:560px"><svg class="edges" id="edges"></svg><div id="nodes"></div></div></div>
       </div>
       <aside class="card inspector" id="inspector"></aside>
@@ -1813,7 +1821,8 @@ function mountEditor(workflow, templates, readonly, phases) {
       const phase = phases[node.id];
       const phaseClass = phase ? ` phase-${esc(phase.phase)}` : "";
       const selectedClass = selected === node.id ? " selected" : "";
-      const ports = editable ? `<div class="ports"><button type="button" class="port success" data-port="success">${h("Erfolg")}</button><button type="button" class="port failure" data-port="failure">${h("Fehler")}</button></div>` : "";
+      const armed = link && link.from === node.id ? link.when : "";
+      const ports = editable ? `<div class="ports"><button type="button" class="port success${armed === "success" ? " armed" : ""}" data-port="success">${h("Erfolg")}</button><button type="button" class="port failure${armed === "failure" ? " armed" : ""}" data-port="failure">${h("Fehler")}</button></div>` : "";
       return `<div class="wf-node${selectedClass}${phaseClass}" data-id="${esc(node.id)}" style="left:${Number(node.x) || 0}px;top:${Number(node.y) || 0}px"><strong>${esc(node.name)}</strong><span class="small muted">${esc(node.convergence === "all" ? t("alle Vorgänger") : t("ein Vorgänger"))}</span>${ports}</div>`;
     }).join("");
     nodes.querySelectorAll(".wf-node").forEach((element) => {
@@ -1833,11 +1842,15 @@ function mountEditor(workflow, templates, readonly, phases) {
           return;
         }
         if (link && link.from !== node.id) {
-          const exists = graph.edges.some((edge) => edge.from === link.from && edge.to === node.id && edge.when === link.when);
-          if (!exists) graph.edges.push({ from: link.from, to: node.id, when: link.when });
+          const fromId = link.from;
+          const exists = graph.edges.some((edge) => edge.from === fromId && edge.to === node.id && edge.when === link.when);
+          if (!exists) graph.edges.push({ from: fromId, to: node.id, when: link.when });
           link = null;
+          selected = fromId;
+          selectedEdge = null;
           document.querySelector("#wf-hint").textContent = t("Kante gesetzt.");
-          drawEdges();
+          renderNodes();
+          renderInspector();
           return;
         }
         selected = node.id;
@@ -1863,6 +1876,7 @@ function mountEditor(workflow, templates, readonly, phases) {
         port.addEventListener("click", (event) => {
           event.stopPropagation();
           link = { from: node.id, when: port.dataset.port };
+          nodes.querySelectorAll(".port").forEach((item) => item.classList.toggle("armed", item === port));
           document.querySelector("#wf-hint").textContent = port.dataset.port === "failure"
             ? t("Fehlerkante: Zielknoten anklicken.")
             : t("Erfolgskante: Zielknoten anklicken.");
@@ -1870,6 +1884,65 @@ function mountEditor(workflow, templates, readonly, phases) {
       });
     });
     drawEdges();
+  }
+
+  function outgoingTarget(fromId, when) {
+    const edge = graph.edges.find((item) => item.from === fromId && item.when === when);
+    return edge ? edge.to : "";
+  }
+
+  function setOutgoing(fromId, when, toId) {
+    graph.edges = graph.edges.filter((edge) => !(edge.from === fromId && edge.when === when));
+    if (toId && toId !== fromId && graph.nodes.some((item) => item.id === toId)) {
+      graph.edges.push({ from: fromId, to: toId, when });
+    }
+    link = null;
+    drawEdges();
+  }
+
+  function targetOptions(fromId, when) {
+    const current = outgoingTarget(fromId, when);
+    const options = [`<option value="">${h("Kein Ziel")}</option>`];
+    graph.nodes.forEach((item) => {
+      if (item.id === fromId) return;
+      options.push(`<option value="${esc(item.id)}"${item.id === current ? " selected" : ""}>${esc(item.name)}</option>`);
+    });
+    return options.join("");
+  }
+
+  function addNodeControls() {
+    return `<div class="inspector-block">
+      <h2>${h("Knoten")}</h2>
+      <label class="field"><span>${h("Vorlage")}</span><select class="fit" id="add-template">${selectOptions(templates, "", false, (row) => `${row.name} · ${row.tool}`)}</select></label>
+      <button class="btn pill" id="add-node" type="button">${h("Knoten hinzufügen")}</button>
+    </div>`;
+  }
+
+  function bindAddNode(host) {
+    host.querySelector("#add-node").addEventListener("click", () => {
+      const templateId = host.querySelector("#add-template").value;
+      const template = templates.find((item) => item.id === templateId);
+      if (!template) {
+        const hint = document.querySelector("#wf-hint");
+        if (hint) hint.textContent = t("Lege zuerst eine Vorlage oder einen Workflow an.");
+        return;
+      }
+      const index = graph.nodes.length;
+      const id = `n${Math.random().toString(16).slice(2, 10)}`;
+      graph.nodes.push({
+        id,
+        template_id: template.id,
+        name: template.name,
+        x: 40 + (index % 3) * 240,
+        y: 40 + Math.floor(index / 3) * 140,
+        convergence: "any",
+      });
+      selected = id;
+      selectedEdge = null;
+      link = null;
+      renderNodes();
+      renderInspector();
+    });
   }
 
   function renderInspector() {
@@ -1885,16 +1958,19 @@ function mountEditor(workflow, templates, readonly, phases) {
     const node = graph.nodes.find((item) => item.id === selected);
     if (selectedEdge !== null && graph.edges[selectedEdge]) {
       const edge = graph.edges[selectedEdge];
-      host.innerHTML = `
-        <h2>${h("Kante")}</h2>
-        <label class="field"><span>${h("Wann")}</span>
-          <select class="fit" id="edge-when">
-            <option value="success"${edge.when === "success" ? " selected" : ""}>${h("Erfolg")}</option>
-            <option value="failure"${edge.when === "failure" ? " selected" : ""}>${h("Fehler")}</option>
-            <option value="always"${edge.when === "always" ? " selected" : ""}>${h("Immer")}</option>
-          </select>
-        </label>
-        <button class="btn danger" id="edge-delete" type="button">${h("Kante löschen")}</button>`;
+      host.innerHTML = `${addNodeControls()}
+        <div class="inspector-block">
+          <h2>${h("Kante")}</h2>
+          <label class="field"><span>${h("Wann")}</span>
+            <select class="fit" id="edge-when">
+              <option value="success"${edge.when === "success" ? " selected" : ""}>${h("Erfolg")}</option>
+              <option value="failure"${edge.when === "failure" ? " selected" : ""}>${h("Fehler")}</option>
+              <option value="always"${edge.when === "always" ? " selected" : ""}>${h("Immer")}</option>
+            </select>
+          </label>
+          <button class="btn danger" id="edge-delete" type="button">${h("Kante löschen")}</button>
+        </div>`;
+      bindAddNode(host);
       host.querySelector("#edge-when").addEventListener("change", (event) => {
         edge.when = event.target.value;
         drawEdges();
@@ -1908,41 +1984,31 @@ function mountEditor(workflow, templates, readonly, phases) {
       return;
     }
     if (!node) {
-      host.innerHTML = `
-        <h2>${h("Knoten")}</h2>
-        <label class="field"><span>${h("Vorlage")}</span><select id="add-template">${selectOptions(templates, "", false, (row) => `${row.name} · ${row.tool}`)}</select></label>
-        <button class="btn pill" id="add-node" type="button">${h("Knoten hinzufügen")}</button>
-        <p class="small muted">${h("Ein leerer Graph lässt sich speichern, aber nicht starten.")}</p>`;
-      const add = host.querySelector("#add-node");
-      add.addEventListener("click", () => {
-        const templateId = host.querySelector("#add-template").value;
-        const template = templates.find((item) => item.id === templateId);
-        if (!template) return;
-        graph.nodes.push({
-          id: `n${Math.random().toString(16).slice(2, 10)}`,
-          template_id: template.id,
-          name: template.name,
-          x: 48 + (graph.nodes.length % 4) * 28,
-          y: 48 + (graph.nodes.length % 5) * 24,
-          convergence: "any",
-        });
-        selected = graph.nodes[graph.nodes.length - 1].id;
-        renderNodes();
-        renderInspector();
-      });
+      host.innerHTML = `${addNodeControls()}
+        <p class="small muted">${h("Ein leerer Graph lässt sich speichern, aber nicht starten.")}</p>
+        <p class="small muted">${h("Wähle einen Knoten, um ihn zu verbinden.")}</p>`;
+      bindAddNode(host);
       return;
     }
-    host.innerHTML = `
-      <h2>${h("Knoten")}</h2>
-      <label class="field"><span>${h("Name")}</span><input id="node-name" value="${esc(node.name)}"></label>
-      <label class="field"><span>${h("Vorlage")}</span><select id="node-template">${selectOptions(templates, node.template_id, false, (row) => row.name)}</select></label>
-      <label class="field"><span>${h("Zusammenführung")}</span>
-        <select class="fit" id="node-join">
-          <option value="any"${node.convergence !== "all" ? " selected" : ""}>${h("Irgendein Vorgänger")}</option>
-          <option value="all"${node.convergence === "all" ? " selected" : ""}>${h("Alle Vorgänger")}</option>
-        </select>
-      </label>
-      <button class="btn danger" id="node-delete" type="button">${h("Knoten löschen")}</button>`;
+    host.innerHTML = `${addNodeControls()}
+      <div class="inspector-block">
+        <h2>${h("Dieser Knoten")}</h2>
+        <label class="field"><span>${h("Name")}</span><input id="node-name" value="${esc(node.name)}"></label>
+        <label class="field"><span>${h("Vorlage")}</span><select class="fit" id="node-template">${selectOptions(templates, node.template_id, false, (row) => row.name)}</select></label>
+        <label class="field"><span>${h("Zusammenführung")}</span>
+          <select class="fit" id="node-join">
+            <option value="any"${node.convergence !== "all" ? " selected" : ""}>${h("Irgendein Vorgänger")}</option>
+            <option value="all"${node.convergence === "all" ? " selected" : ""}>${h("Alle Vorgänger")}</option>
+          </select>
+        </label>
+        <h2>${h("Verbinden")}</h2>
+        <label class="field"><span>${h("Erfolg führt zu")}</span><select class="fit" id="link-success">${targetOptions(node.id, "success")}</select></label>
+        <label class="field"><span>${h("Fehler führt zu")}</span><select class="fit" id="link-failure">${targetOptions(node.id, "failure")}</select></label>
+        <label class="field"><span>${h("Immer führt zu")}</span><select class="fit" id="link-always">${targetOptions(node.id, "always")}</select></label>
+        <p class="small muted">${h("Die Kante startet bei diesem Knoten.")}</p>
+        <button class="btn danger" id="node-delete" type="button">${h("Knoten löschen")}</button>
+      </div>`;
+    bindAddNode(host);
     host.querySelector("#node-name").addEventListener("input", (event) => {
       node.name = event.target.value;
       const label = nodes.querySelector(`[data-id="${CSS.escape(node.id)}"] strong`);
@@ -1956,10 +2022,17 @@ function mountEditor(workflow, templates, readonly, phases) {
       const label = nodes.querySelector(`[data-id="${CSS.escape(node.id)}"] .muted`);
       if (label) label.textContent = node.convergence === "all" ? t("alle Vorgänger") : t("ein Vorgänger");
     });
+    ["success", "failure", "always"].forEach((when) => {
+      host.querySelector(`#link-${when}`).addEventListener("change", (event) => {
+        setOutgoing(node.id, when, event.target.value);
+        renderNodes();
+      });
+    });
     host.querySelector("#node-delete").addEventListener("click", () => {
       graph.nodes = graph.nodes.filter((item) => item.id !== node.id);
       graph.edges = graph.edges.filter((edge) => edge.from !== node.id && edge.to !== node.id);
       selected = null;
+      link = null;
       renderNodes();
       renderInspector();
     });
@@ -1972,6 +2045,15 @@ function mountEditor(workflow, templates, readonly, phases) {
     selected = null;
     link = null;
     drawEdges();
+    renderInspector();
+  });
+  board.addEventListener("pointerdown", (event) => {
+    if (readonly || !editable) return;
+    if (event.target.closest(".wf-node, path")) return;
+    selected = null;
+    selectedEdge = null;
+    link = null;
+    renderNodes();
     renderInspector();
   });
 

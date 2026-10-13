@@ -402,7 +402,10 @@ pre.vars {
 }
 .port.success { background: var(--good-bg); color: var(--good); }
 .port.failure { background: var(--bad-bg); color: var(--bad); }
-.inspector { display: flex; flex-direction: column; gap: 10px; }
+.inspector { display: flex; flex-direction: column; gap: 12px; }
+.inspector-block { display: flex; flex-direction: column; gap: 10px; }
+.inspector-block + .inspector-block { border-top: 1px solid var(--line); padding-top: 12px; }
+.port.armed { outline: 2px solid var(--accent); outline-offset: 1px; }
 code, .mono { font-family: var(--mono); font-size: 12.5px; word-break: break-all; }
 
 @media (max-width: 900px) {

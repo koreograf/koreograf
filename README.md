@@ -136,7 +136,7 @@ In the container the runner mounts the project read-only at `/runner/project`, t
 
 ## Workflows
 
-The editor draws nodes and edges. An edge applies on `success`, `failure`, or `always`. A node starts on `any` as soon as one matching edge is ready, or on `all` when every matching incoming edge is satisfied. A failure counts as handled when a `failure` or `always` edge leaves that node. The API rejects cycles. An empty graph can be saved and cannot be started.
+The editor draws nodes and edges. Add node stays in the side panel after the first node. A selected node chooses one target for success, one for failure, and one for always. The same links can be drawn by clicking success or failure on the card and then the target node. An edge applies on `success`, `failure`, or `always`. A node starts on `any` as soon as one matching edge is ready, or on `all` when every matching incoming edge is satisfied. A failure counts as handled when a `failure` or `always` edge leaves that node. The API rejects cycles. An empty graph can be saved and cannot be started.
 
 Cancel sets the job to `canceled`. The workflow treats that like a failure so a failure edge can continue.
 

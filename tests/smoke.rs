@@ -908,6 +908,19 @@ async fn playbooks_project_inventory_and_netbox() {
     assert!(script.contains("data-add-kind=\"netbox\""));
     assert!(script.contains("Aktualisieren"));
     assert!(script.contains("[\"netbox\", \"NetBox\", \"\"]"));
+    let inspector = script
+        .split_once("function renderInspector")
+        .expect("workflow inspector")
+        .1;
+    let node_at = inspector.find("Dieser Knoten").expect("selected node panel");
+    let add_at = inspector[..node_at]
+        .rfind("addNodeControls()")
+        .expect("add stays above the selected node");
+    assert!(node_at - add_at < 800, "add node drifted away from the selected node");
+    let node_panel = &inspector[node_at..inspector.find("node-delete").expect("delete node")];
+    assert!(node_panel.contains("Erfolg führt zu"));
+    assert!(node_panel.contains("Fehler führt zu"));
+    assert!(node_panel.contains("Immer führt zu"));
 
     let (status, me, cookie) = call(
         &app,
