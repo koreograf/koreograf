@@ -184,10 +184,178 @@ fn check_limit(text: &str) -> Result<(), String> {
                 '_' | '.' | ':' | '-' | '*' | ',' | '!' | '&' | '[' | ']' | '@' | ' '
             )
     });
-    if text.len() > 200 || text.starts_with('-') || !allowed {
+    if text.len() > 4_000 || text.starts_with('-') || !allowed {
         return Err("Limit enthält ein ungültiges Zeichen.".into());
     }
     Ok(())
+}
+
+/// Hosts Ansible reported as failed or unreachable.
+/// A play recap replaces earlier `fatal:` lines. Without a recap, those lines stay.
+pub fn observe_host_line(stored: &str, line: &str) -> Option<String> {
+    let mut record = host_record(stored);
+    if !apply_host_line(&mut record, line) {
+        return None;
+    }
+    Some(
+        serde_json::json!({
+            "hosts": record.hosts,
+            "recap": record.recap,
+        })
+        .to_string(),
+    )
+}
+
+pub fn failed_host_names(stored: &str) -> Vec<String> {
+    host_record(stored).hosts
+}
+
+pub fn limit_from_hosts(hosts: &[String]) -> Result<String, String> {
+    if hosts.is_empty() {
+        return Err("Für diesen Auftrag sind keine fehlgeschlagenen Hosts gespeichert.".into());
+    }
+    for host in hosts {
+        let token = !host.is_empty()
+            && host.len() <= 253
+            && !host.starts_with('-')
+            && host
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-' | ':'));
+        if !token {
+            return Err(format!(
+                "Host „{host}“ kann nicht als Limit verwendet werden."
+            ));
+        }
+    }
+    let limit = hosts.join(",");
+    check_limit(&limit)?;
+    Ok(limit)
+}
+
+pub fn parameters_with_limit(parameters: &str, limit: &str) -> Result<String, String> {
+    check_limit(limit)?;
+    let mut params = db::json_object(parameters);
+    {
+        let Some(root) = params.as_object_mut() else {
+            return Err("Parameter sind ungültig.".into());
+        };
+        let spec = root
+            .entry("spec")
+            .or_insert_with(|| Value::Object(Default::default()));
+        if !spec.is_object() {
+            *spec = Value::Object(Default::default());
+        }
+        let Some(spec) = spec.as_object_mut() else {
+            return Err("Parameter sind ungültig.".into());
+        };
+        spec.insert("limit".into(), Value::String(limit.to_string()));
+    }
+    check_ansible_spec(&params["spec"])?;
+    Ok(params.to_string())
+}
+
+struct HostRecord {
+    hosts: Vec<String>,
+    recap: bool,
+}
+
+fn host_record(stored: &str) -> HostRecord {
+    let value: Value = serde_json::from_str(stored).unwrap_or(Value::Null);
+    match value {
+        Value::Array(items) => HostRecord {
+            hosts: host_strings(&items),
+            recap: false,
+        },
+        Value::Object(map) => {
+            let hosts = map
+                .get("hosts")
+                .and_then(Value::as_array)
+                .map(|items| host_strings(items))
+                .unwrap_or_default();
+            HostRecord {
+                hosts,
+                recap: map.get("recap").and_then(Value::as_bool).unwrap_or(false),
+            }
+        }
+        _ => HostRecord {
+            hosts: Vec::new(),
+            recap: false,
+        },
+    }
+}
+
+fn host_strings(items: &[Value]) -> Vec<String> {
+    items
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|host| !host.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn apply_host_line(record: &mut HostRecord, line: &str) -> bool {
+    let line = line.trim();
+    if let Some((host, failed, unreachable)) = recap_host(line) {
+        let mut changed = false;
+        if !record.recap {
+            record.recap = true;
+            record.hosts.clear();
+            changed = true;
+        }
+        return set_host(record, &host, failed > 0 || unreachable > 0) || changed;
+    }
+    if record.recap {
+        return false;
+    }
+    fatal_host(line).is_some_and(|host| set_host(record, &host, true))
+}
+
+fn set_host(record: &mut HostRecord, host: &str, failed: bool) -> bool {
+    let present = record.hosts.iter().any(|item| item == host);
+    if failed && !present {
+        record.hosts.push(host.to_string());
+        true
+    } else if !failed && present {
+        record.hosts.retain(|item| item != host);
+        true
+    } else {
+        false
+    }
+}
+
+fn recap_host(line: &str) -> Option<(String, u64, u64)> {
+    let marker = line.find(" : ok=").or_else(|| line.find(": ok="))?;
+    let host = line[..marker].trim();
+    if host.is_empty() || host.contains(' ') {
+        return None;
+    }
+    let failed = recap_count(line, "failed")?;
+    let unreachable = recap_count(line, "unreachable").unwrap_or(0);
+    Some((host.to_string(), failed, unreachable))
+}
+
+fn recap_count(line: &str, key: &str) -> Option<u64> {
+    let token = format!("{key}=");
+    let start = line.find(&token)? + token.len();
+    let digits: String = line[start..]
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect();
+    digits.parse().ok()
+}
+
+fn fatal_host(line: &str) -> Option<String> {
+    let rest = line.trim().strip_prefix("fatal: [")?;
+    let (host, tail) = rest.split_once(']')?;
+    if !(tail.contains("FAILED!") || tail.contains("UNREACHABLE!")) {
+        return None;
+    }
+    let host = host.trim();
+    if host.is_empty() || host.contains(['\n', '\r']) {
+        return None;
+    }
+    Some(host.to_string())
 }
 
 pub fn check_relative(path: &str) -> Result<(), String> {
@@ -316,6 +484,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
         };
         (job, template)
     };
+    let template = with_saved_parameters(template, &job);
     if !known_tool(&template.tool) {
         return Err(format!("Unbekanntes Werkzeug {}.", template.tool));
     }
@@ -352,10 +521,18 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
     let inventory_rel = write_job_inventory(state, &template, &work)?;
     fs::write(work.join("wrapper.sh"), WRAPPER).map_err(|e| e.to_string())?;
 
-    let mut extra = merge_vars(
-        &db::json_object(&template.extra_vars),
-        &db::json_object(&job.extra_vars),
-    );
+    let saved = db::json_object(&job.parameters)
+        .get("tool")
+        .and_then(Value::as_str)
+        .is_some();
+    let mut extra = if saved {
+        db::json_object(&template.extra_vars)
+    } else {
+        merge_vars(
+            &db::json_object(&template.extra_vars),
+            &db::json_object(&job.extra_vars),
+        )
+    };
     let use_container = should_container(state.cfg.runner, template.environment_id.is_some());
     let runtime = if use_container {
         detect_runtime().await
@@ -1285,7 +1462,51 @@ where
 fn log(state: &Shared, job_id: &str, stream: &str, line: &str) {
     if let Ok(db) = state.db() {
         let _ = db::insert_event(&db, job_id, stream, line);
+        if matches!(stream, "stdout" | "stderr") && host_line(line) {
+            if let Ok(Some(job)) = db::job(&db, job_id) {
+                if let Some(next) = observe_host_line(&job.failed_hosts, line) {
+                    let _ = db::set_failed_hosts(&db, job_id, &next);
+                }
+            }
+        }
     }
+}
+
+fn host_line(line: &str) -> bool {
+    let line = line.trim_start();
+    line.starts_with("fatal:") || line.contains("ok=")
+}
+
+fn with_saved_parameters(mut template: Template, job: &db::Job) -> Template {
+    let params = db::json_object(&job.parameters);
+    let Some(tool) = params.get("tool").and_then(Value::as_str) else {
+        return template;
+    };
+    if known_tool(tool) {
+        template.tool = tool.to_string();
+    }
+    if let Some(entrypoint) = params.get("entrypoint").and_then(Value::as_str) {
+        template.entrypoint = entrypoint.to_string();
+    }
+    if let Some(spec) = params.get("spec").filter(|value| value.is_object()) {
+        template.spec = spec.to_string();
+    }
+    if let Some(extra) = params.get("extra_vars").filter(|value| value.is_object()) {
+        template.extra_vars = extra.to_string();
+    }
+    template.project_id = saved_id(&params, "project_id");
+    template.inventory_id = saved_id(&params, "inventory_id");
+    template.credential_id = saved_id(&params, "credential_id");
+    template.environment_id = saved_id(&params, "environment_id");
+    template
+}
+
+fn saved_id(params: &Value, key: &str) -> Option<String> {
+    params
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
 }
 
 fn finish(state: &Shared, job_id: &str, success: bool) {
@@ -1388,5 +1609,40 @@ mod tests {
         assert!(check_relative("site.yml").is_ok());
         assert!(check_relative("../site.yml").is_err());
         assert!(check_relative("/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn recap_replaces_fatal_lines_with_failed_hosts() {
+        let mut stored = String::new();
+        for line in [
+            "fatal: [ghost]: FAILED! => {\"msg\": \"no\"}",
+            "fatal: [web-1]: UNREACHABLE! => {}",
+            "PLAY RECAP *********************************************************************",
+            "web-1                      : ok=1    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0",
+            "db-1                       : ok=1    changed=0    unreachable=1    failed=0    skipped=0    rescued=0    ignored=0",
+            "ok-1                       : ok=2    changed=0    unreachable=0    failed=0    skipped=1    rescued=0    ignored=0",
+        ] {
+            if let Some(next) = observe_host_line(&stored, line) {
+                stored = next;
+            }
+        }
+        assert_eq!(
+            failed_host_names(&stored),
+            vec!["web-1".to_string(), "db-1".to_string()]
+        );
+        let limit = limit_from_hosts(&failed_host_names(&stored)).unwrap();
+        assert_eq!(limit, "web-1,db-1");
+        let params = parameters_with_limit(r#"{"spec":{"tags":"ping"}}"#, &limit).unwrap();
+        let parsed: Value = serde_json::from_str(&params).unwrap();
+        assert_eq!(parsed["spec"]["limit"], "web-1,db-1");
+        assert_eq!(parsed["spec"]["tags"], "ping");
+        assert!(limit_from_hosts(&["all:&rest".into()]).is_err());
+    }
+
+    #[test]
+    fn fatal_lines_stay_when_the_recap_never_arrives() {
+        let stored = observe_host_line("", "fatal: [web-1]: FAILED! => {}").unwrap();
+        assert_eq!(failed_host_names(&stored), vec!["web-1".to_string()]);
+        assert!(observe_host_line(&stored, "ok: [web-1]").is_none());
     }
 }

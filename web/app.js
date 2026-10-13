@@ -41,6 +41,22 @@ const EN = {
   "Auftragsvorlage fehlt.": "Job template is missing.",
   "Ausführlichkeit": "Verbosity",
   "Ausführlichkeit ist 0 bis 4.": "Verbosity is 0 to 4.",
+  "Ausführen": "Run",
+  "Ausgabe": "Output",
+  "Die Liste der fehlgeschlagenen Hosts ist zu lang.": "The failed-host list is too long.",
+  "Die Vorlage dieses Auftrags fehlt.": "This job's template is missing.",
+  "Erneut starten": "Relaunch",
+  "Fehlgeschlagene Hosts": "Failed hosts",
+  "Für diesen Auftrag sind keine fehlgeschlagenen Hosts gespeichert.": "No failed hosts are stored for this job.",
+  "Für diesen Auftrag wurden keine Parameter gespeichert.": "No parameters were stored for this job.",
+  "Ja": "Yes",
+  "Nein": "No",
+  "Nur Ansible-Aufträge haben fehlgeschlagene Hosts.": "Only Ansible jobs have failed hosts.",
+  "Nur ein fehlgeschlagener Auftrag kann erneut gestartet werden.": "Only a failed job can be relaunched.",
+  "Nur fehlgeschlagene Hosts": "Failed hosts only",
+  "Parameter": "Parameters",
+  "Parameter sind ungültig.": "Parameters are invalid.",
+  "Parameter sind zu groß.": "Parameters are too large.",
   "Auslöser": "Trigger",
   "Automation": "Automation",
   "Benutzer": "User",
@@ -1133,6 +1149,68 @@ function appendLog(row) {
   log.scrollTop = log.scrollHeight;
 }
 
+function paramRow(label, value) {
+  if (value === undefined || value === null || value === "") return "";
+  return `<dt>${h(label)}</dt><dd>${esc(value)}</dd>`;
+}
+
+function jobParameters(job) {
+  const params = job.parameters && job.parameters.tool ? job.parameters : null;
+  const hosts = Array.isArray(job.failed_hosts) ? job.failed_hosts : [];
+  if (!params) {
+    const extra = job.extra_vars && Object.keys(job.extra_vars).length
+      ? `<pre class="vars">${esc(JSON.stringify(job.extra_vars, null, 2))}</pre>`
+      : "";
+    return `<p class="muted">${h("Für diesen Auftrag wurden keine Parameter gespeichert.")}</p>${extra}`;
+  }
+  const spec = params.spec || {};
+  const templateId = params.template_id || job.template_id;
+  const templateName = params.template_name || job.name;
+  const template = templateId
+    ? `<a href="#/templates/${esc(templateId)}">${esc(templateName)}</a>`
+    : esc(templateName);
+  const credential = [params.credential_name, params.credential_kind].filter(Boolean).join(" · ");
+  const environment = [params.environment_name, params.environment_image].filter(Boolean).join(" · ");
+  const kind = spec.job_type === "check" ? t("Check") : spec.job_type === "run" ? t("Ausführen") : "";
+  const diff = spec.diff === true ? t("Ja") : spec.diff === false ? t("Nein") : "";
+  const hostLine = hosts.length
+    ? `<dt>${h("Fehlgeschlagene Hosts")}</dt><dd>${hosts.map((host) => esc(host)).join(", ")}</dd>`
+    : "";
+  return `<dl class="kv">
+    <dt>${h("Vorlage")}</dt><dd>${template}</dd>
+    ${paramRow("Werkzeug", params.tool)}
+    ${paramRow("Einstieg", params.entrypoint)}
+    ${paramRow("Projekt", params.project_name)}
+    ${paramRow("Inventar", params.inventory_name)}
+    ${paramRow("Zugang", credential)}
+    ${paramRow("Execution Environment", environment)}
+    ${paramRow("Art", kind)}
+    ${paramRow("Tags", spec.tags)}
+    ${paramRow("Tags überspringen", spec.skip_tags)}
+    ${paramRow("Limit", spec.limit)}
+    ${paramRow("Diff", diff)}
+    ${paramRow("Ausführlichkeit", spec.verbosity)}
+    ${paramRow("Forks", spec.forks)}
+    ${paramRow("Aktion", spec.action)}
+    ${hostLine}
+  </dl>
+  ${spec.script ? `<h3>${h("Skript")}</h3><pre class="vars">${esc(spec.script)}</pre>` : ""}
+  <h3>${h("Extra-Variablen")}</h3>
+  <pre class="vars">${esc(JSON.stringify(params.extra_vars || {}, null, 2))}</pre>`;
+}
+
+function jobActions(job) {
+  const running = job.status === "pending" || job.status === "running";
+  const hosts = Array.isArray(job.failed_hosts) ? job.failed_hosts : [];
+  if (!can("operator")) return "";
+  if (running) return `<button class="btn danger" id="cancel-job" type="button">${h("Abbrechen")}</button>`;
+  if (job.status !== "failed") return "";
+  const failedHosts = job.tool === "ansible" && hosts.length
+    ? `<button class="btn" id="relaunch-failed" type="button">${h("Nur fehlgeschlagene Hosts")}</button>`
+    : "";
+  return `<button class="btn primary" id="relaunch-job" type="button">${h("Erneut starten")}</button>${failedHosts}`;
+}
+
 async function pageJob(id) {
   const live = generation;
   const job = await api("GET", `/api/jobs/${encodeURIComponent(id)}`);
@@ -1140,11 +1218,24 @@ async function pageJob(id) {
   shell(job.name, `
     <div class="spread" style="margin-bottom:12px">
       <div class="row">${pill(job.status)} <span class="tool">${esc(job.tool)}</span> <span class="small muted">${esc(job.trigger)} · ${esc(job.launched_by)}</span></div>
-      ${running && can("operator") ? `<button class="btn danger" id="cancel-job" type="button">${h("Abbrechen")}</button>` : ""}
+      <div class="row" id="job-actions">${jobActions(job)}</div>
     </div>
-    <div class="log" id="log"></div>`);
+    <div class="tabs">
+      <button class="btn pill primary" type="button" data-job-tab="output">${h("Ausgabe")}</button>
+      <button class="btn pill" type="button" data-job-tab="parameters">${h("Parameter")}</button>
+    </div>
+    <div id="panel-output"><div class="log" id="log"></div></div>
+    <div id="panel-parameters" hidden>${jobParameters(job)}</div>`);
   const badge = document.querySelector(".pill");
   (job.events || []).forEach(appendLog);
+  const startAgain = async (onlyFailed) => {
+    try {
+      const copy = await api("POST", `/api/jobs/${encodeURIComponent(id)}/relaunch`, { only_failed_hosts: onlyFailed });
+      go(`#/jobs/${copy.id}`);
+    } catch (error) {
+      handle(error);
+    }
+  };
   const cancel = document.querySelector("#cancel-job");
   if (cancel) {
     cancel.addEventListener("click", async () => {
@@ -1154,11 +1245,26 @@ async function pageJob(id) {
           badge.className = "pill canceled";
           badge.textContent = statusLabel("canceled");
         }
+        cancel.remove();
       } catch (error) {
         handle(error);
       }
     });
   }
+  const again = document.querySelector("#relaunch-job");
+  if (again) again.addEventListener("click", () => startAgain(false));
+  const failedOnly = document.querySelector("#relaunch-failed");
+  if (failedOnly) failedOnly.addEventListener("click", () => startAgain(true));
+  document.querySelectorAll("[data-job-tab]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const tab = button.dataset.jobTab;
+      document.querySelectorAll("[data-job-tab]").forEach((item) => {
+        item.classList.toggle("primary", item === button);
+      });
+      document.querySelector("#panel-output").hidden = tab !== "output";
+      document.querySelector("#panel-parameters").hidden = tab !== "parameters";
+    });
+  });
   if (!running || live !== generation) return;
   const last = (job.events || []).reduce((max, event) => Math.max(max, event.id), 0);
   source = new EventSource(`/api/jobs/${encodeURIComponent(id)}/events?after=${last}`);
@@ -1177,6 +1283,7 @@ async function pageJob(id) {
     if (button) button.remove();
     source.close();
     source = null;
+    if (payload.status === "failed") pageJob(id);
   });
 }
 

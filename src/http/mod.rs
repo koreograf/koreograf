@@ -16,6 +16,7 @@ use tower_http::trace::TraceLayer;
 use crate::auth::{self, AuthUser, Role};
 use crate::db::{self, Job, JobEvent};
 use crate::error::{ApiError, AppResult};
+use crate::runner;
 use crate::Shared;
 
 pub fn router(state: Shared) -> Router {
@@ -119,6 +120,7 @@ pub fn router(state: Shared) -> Router {
         .route("/jobs", get(work::list_jobs))
         .route("/jobs/{id}", get(work::get_job))
         .route("/jobs/{id}/cancel", post(work::cancel_job))
+        .route("/jobs/{id}/relaunch", post(work::relaunch_job))
         .route("/jobs/{id}/events", get(work::job_events))
         .route(
             "/workflows",
@@ -272,6 +274,8 @@ pub fn job_json(job: &Job, events: Option<&[JobEvent]>) -> serde_json::Value {
         "started_at": job.started_at,
         "finished_at": job.finished_at,
         "created_at": job.created_at,
+        "parameters": db::json_object(&job.parameters),
+        "failed_hosts": runner::failed_host_names(&job.failed_hosts),
     });
     if let Some(events) = events {
         value["events"] = serde_json::json!(events

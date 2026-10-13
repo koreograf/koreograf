@@ -23,6 +23,12 @@ use crate::Shared;
 use super::{accepted, blank, created, gate, job_json, no_content, require_name, team_header};
 
 #[derive(Deserialize)]
+pub(super) struct RelaunchBody {
+    #[serde(default)]
+    only_failed_hosts: bool,
+}
+
+#[derive(Deserialize)]
 pub struct TemplateBody {
     name: String,
     #[serde(default)]
@@ -157,6 +163,7 @@ pub async fn launch_template(
             trigger: "manual".into(),
             workflow_job_id: None,
             workflow_node_id: None,
+            parameters_override: None,
         },
     )?;
     let db = state.db()?;
@@ -207,6 +214,23 @@ pub async fn cancel_job(
     let db = state.db()?;
     let job = db::job(&db, &id)?.ok_or(ApiError::NotFound)?;
     Ok(Json(job_json(&job, None)))
+}
+
+pub async fn relaunch_job(
+    State(state): State<Shared>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    Json(body): Json<RelaunchBody>,
+) -> AppResult<Response> {
+    {
+        let db = state.db()?;
+        let job = db::job(&db, &id)?.ok_or(ApiError::NotFound)?;
+        crate::auth::authorize(&db, &user, &job.team_id, Role::Operator)?;
+    }
+    let job_id = jobs::relaunch(&state, &id, &user.username, body.only_failed_hosts)?;
+    let db = state.db()?;
+    let job = db::job(&db, &job_id)?.ok_or(ApiError::NotFound)?;
+    Ok(accepted(job_json(&job, None)))
 }
 
 pub async fn job_events(
@@ -338,7 +362,9 @@ pub async fn launch_workflow(
     let run_id = jobs::launch_workflow(&state, &team, &id, extra, &user.username, "manual")?;
     let db = state.db()?;
     let run = db::workflow_job(&db, &run_id)?.ok_or(ApiError::NotFound)?;
-    Ok(accepted(run_json(&state, &run)?))
+    // The connection mutex is not re-entrant. A second lock here froze every
+    // request, including health checks, while this handler still held it.
+    Ok(accepted(run_json(&db, &run)?))
 }
 
 pub async fn get_workflow_job(
@@ -349,8 +375,7 @@ pub async fn get_workflow_job(
     let db = state.db()?;
     let run = db::workflow_job(&db, &id)?.ok_or(ApiError::NotFound)?;
     crate::auth::authorize(&db, &user, &run.team_id, Role::Viewer)?;
-    drop(db);
-    Ok(Json(run_json(&state, &run)?))
+    Ok(Json(run_json(&db, &run)?))
 }
 
 pub async fn list_hooks(
@@ -705,15 +730,14 @@ fn hook_json(hook: &Hook, reveal_token: bool) -> Value {
     })
 }
 
-fn run_json(state: &Shared, run: &db::WorkflowJob) -> AppResult<Value> {
-    let db = state.db()?;
+fn run_json(db: &rusqlite::Connection, run: &db::WorkflowJob) -> AppResult<Value> {
     let graph = run
         .workflow_id
         .as_deref()
-        .and_then(|id| db::workflow(&db, id).ok().flatten())
+        .and_then(|id| db::workflow(db, id).ok().flatten())
         .map(|item| db::json_object(&item.graph))
         .unwrap_or_else(|| json!({"nodes": [], "edges": []}));
-    let nodes = db::workflow_nodes(&db, &run.id)?;
+    let nodes = db::workflow_nodes(db, &run.id)?;
     Ok(json!({
         "id": run.id,
         "workflow_id": run.workflow_id,

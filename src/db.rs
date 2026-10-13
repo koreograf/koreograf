@@ -141,7 +141,9 @@ CREATE TABLE IF NOT EXISTS jobs (
   trigger TEXT NOT NULL,
   started_at TEXT,
   finished_at TEXT,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  parameters TEXT NOT NULL DEFAULT '{}',
+  failed_hosts TEXT NOT NULL DEFAULT '[]'
 );
 CREATE TABLE IF NOT EXISTS job_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -311,6 +313,18 @@ fn migrate(c: &Connection) -> AppResult<()> {
          )",
         [],
     )?;
+    if !column_exists(c, "jobs", "parameters")? {
+        c.execute(
+            "ALTER TABLE jobs ADD COLUMN parameters TEXT NOT NULL DEFAULT '{}'",
+            [],
+        )?;
+    }
+    if !column_exists(c, "jobs", "failed_hosts")? {
+        c.execute(
+            "ALTER TABLE jobs ADD COLUMN failed_hosts TEXT NOT NULL DEFAULT '[]'",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -467,6 +481,10 @@ pub struct Job {
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
     pub created_at: String,
+    /// Resolved launch parameters. Empty for jobs created before this column.
+    pub parameters: String,
+    /// JSON `{"hosts":[...],"recap":bool}` or a bare host array.
+    pub failed_hosts: String,
 }
 
 #[derive(Clone, Debug)]
@@ -1634,12 +1652,15 @@ pub fn delete_template(c: &Connection, id: &str, team_id: &str) -> AppResult<()>
     Ok(())
 }
 
+const JOB_SELECT: &str = "id, team_id, template_id, workflow_job_id, workflow_node_id, name, tool, status, extra_vars, launched_by, trigger, started_at, finished_at, created_at, parameters, failed_hosts";
+
 pub fn insert_job(c: &Connection, job: &Job) -> AppResult<()> {
     c.execute(
         "INSERT INTO jobs (
             id, team_id, template_id, workflow_job_id, workflow_node_id, name, tool, status,
-            extra_vars, launched_by, trigger, started_at, finished_at, created_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            extra_vars, launched_by, trigger, started_at, finished_at, created_at,
+            parameters, failed_hosts
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
             job.id,
             job.team_id,
@@ -1654,7 +1675,9 @@ pub fn insert_job(c: &Connection, job: &Job) -> AppResult<()> {
             job.trigger,
             job.started_at,
             job.finished_at,
-            job.created_at
+            job.created_at,
+            job.parameters,
+            job.failed_hosts
         ],
     )?;
     Ok(())
@@ -1662,9 +1685,7 @@ pub fn insert_job(c: &Connection, job: &Job) -> AppResult<()> {
 
 pub fn job(c: &Connection, id: &str) -> AppResult<Option<Job>> {
     c.query_row(
-        "SELECT id, team_id, template_id, workflow_job_id, workflow_node_id, name, tool, status,
-                extra_vars, launched_by, trigger, started_at, finished_at, created_at
-         FROM jobs WHERE id = ?1",
+        &format!("SELECT {JOB_SELECT} FROM jobs WHERE id = ?1"),
         [id],
         map_job,
     )
@@ -1688,15 +1709,15 @@ fn map_job(row: &rusqlite::Row<'_>) -> rusqlite::Result<Job> {
         started_at: row.get(11)?,
         finished_at: row.get(12)?,
         created_at: row.get(13)?,
+        parameters: row.get(14)?,
+        failed_hosts: row.get(15)?,
     })
 }
 
 pub fn list_jobs(c: &Connection, team_id: &str, limit: i64) -> AppResult<Vec<Job>> {
-    let mut stmt = c.prepare(
-        "SELECT id, team_id, template_id, workflow_job_id, workflow_node_id, name, tool, status,
-                extra_vars, launched_by, trigger, started_at, finished_at, created_at
-         FROM jobs WHERE team_id = ?1 ORDER BY created_at DESC LIMIT ?2",
-    )?;
+    let mut stmt = c.prepare(&format!(
+        "SELECT {JOB_SELECT} FROM jobs WHERE team_id = ?1 ORDER BY created_at DESC LIMIT ?2"
+    ))?;
     let rows = stmt.query_map(params![team_id, limit], map_job)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
 }
@@ -1708,6 +1729,14 @@ pub fn mark_running(c: &Connection, id: &str) -> AppResult<bool> {
         params![id, now()],
     )?;
     Ok(n == 1)
+}
+
+pub fn set_failed_hosts(c: &Connection, id: &str, failed_hosts: &str) -> AppResult<()> {
+    c.execute(
+        "UPDATE jobs SET failed_hosts = ?2 WHERE id = ?1",
+        params![id, failed_hosts],
+    )?;
+    Ok(())
 }
 
 pub fn finish_job(c: &Connection, id: &str, status: &str) -> AppResult<bool> {

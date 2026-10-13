@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::db::{self, Hook, Job, WorkflowJob};
@@ -19,6 +19,8 @@ pub struct LaunchRequest {
     pub trigger: String,
     pub workflow_job_id: Option<String>,
     pub workflow_node_id: Option<String>,
+    /// When set, this is stored instead of a fresh snapshot of the template.
+    pub parameters_override: Option<String>,
 }
 
 pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
@@ -29,14 +31,31 @@ pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
         if template.team_id != req.team_id {
             return Err(ApiError::Forbidden);
         }
+        let parameters = match &req.parameters_override {
+            Some(raw) => stored_parameters(raw)?,
+            None => capture_parameters(&db, &template, &req.extra_vars),
+        };
+        let parsed = db::json_object(&parameters);
+        let name = parsed
+            .get("template_name")
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+            .unwrap_or(&template.name)
+            .to_string();
+        let tool = parsed
+            .get("tool")
+            .and_then(Value::as_str)
+            .filter(|text| runner::known_tool(text))
+            .unwrap_or(&template.tool)
+            .to_string();
         let job = Job {
             id: id.clone(),
             team_id: req.team_id,
             template_id: Some(template.id),
             workflow_job_id: req.workflow_job_id,
             workflow_node_id: req.workflow_node_id,
-            name: template.name,
-            tool: template.tool,
+            name,
+            tool,
             status: "pending".into(),
             extra_vars: serde_json::to_string(&req.extra_vars).unwrap_or_else(|_| "{}".into()),
             launched_by: req.launched_by,
@@ -44,6 +63,8 @@ pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
             started_at: None,
             finished_at: None,
             created_at: db::now(),
+            parameters,
+            failed_hosts: "[]".into(),
         };
         db::insert_job(&db, &job)?;
     }
@@ -53,6 +74,127 @@ pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
         runner::execute(shared, job_id).await;
     });
     Ok(id)
+}
+
+pub fn relaunch(
+    state: &Shared,
+    source_id: &str,
+    launched_by: &str,
+    only_failed_hosts: bool,
+) -> AppResult<String> {
+    let (team_id, template_id, extra, parameters) = {
+        let db = state.db()?;
+        let job = db::job(&db, source_id)?.ok_or(ApiError::NotFound)?;
+        if job.status != "failed" {
+            return Err(ApiError::bad(
+                "Nur ein fehlgeschlagener Auftrag kann erneut gestartet werden.",
+            ));
+        }
+        let template_id = job
+            .template_id
+            .clone()
+            .ok_or_else(|| ApiError::bad("Die Vorlage dieses Auftrags fehlt."))?;
+        let template = db::template(&db, &template_id)?
+            .ok_or_else(|| ApiError::bad("Die Vorlage dieses Auftrags fehlt."))?;
+        if template.team_id != job.team_id {
+            return Err(ApiError::Forbidden);
+        }
+        let mut parameters = if db::json_object(&job.parameters)
+            .get("tool")
+            .and_then(Value::as_str)
+            .is_some()
+        {
+            job.parameters.clone()
+        } else {
+            capture_parameters(&db, &template, &db::json_object(&job.extra_vars))
+        };
+        if only_failed_hosts {
+            if job.tool != "ansible" {
+                return Err(ApiError::bad(
+                    "Nur Ansible-Aufträge haben fehlgeschlagene Hosts.",
+                ));
+            }
+            let hosts = runner::failed_host_names(&job.failed_hosts);
+            let limit = runner::limit_from_hosts(&hosts).map_err(ApiError::bad)?;
+            parameters =
+                runner::parameters_with_limit(&parameters, &limit).map_err(ApiError::bad)?;
+        }
+        (
+            job.team_id,
+            template_id,
+            db::json_object(&job.extra_vars),
+            parameters,
+        )
+    };
+    launch(
+        state,
+        LaunchRequest {
+            team_id,
+            template_id,
+            extra_vars: extra,
+            launched_by: launched_by.to_string(),
+            trigger: "relaunch".into(),
+            workflow_job_id: None,
+            workflow_node_id: None,
+            parameters_override: Some(parameters),
+        },
+    )
+}
+
+fn stored_parameters(raw: &str) -> AppResult<String> {
+    if raw.len() > 512 * 1024 {
+        return Err(ApiError::bad("Parameter sind zu groß."));
+    }
+    let value: Value =
+        serde_json::from_str(raw).map_err(|_| ApiError::bad("Parameter sind ungültig."))?;
+    if !value.is_object() {
+        return Err(ApiError::bad("Parameter sind ungültig."));
+    }
+    Ok(value.to_string())
+}
+
+fn capture_parameters(
+    db: &rusqlite::Connection,
+    template: &db::Template,
+    request_extra: &Value,
+) -> String {
+    let project_name = template
+        .project_id
+        .as_deref()
+        .and_then(|id| db::project(db, id).ok().flatten().map(|item| item.name));
+    let inventory_name = template
+        .inventory_id
+        .as_deref()
+        .and_then(|id| db::inventory(db, id).ok().flatten().map(|item| item.name));
+    let credential = template
+        .credential_id
+        .as_deref()
+        .and_then(|id| db::credential(db, id).ok().flatten())
+        .map(|item| (item.name, item.kind));
+    let environment = template
+        .environment_id
+        .as_deref()
+        .and_then(|id| db::environment(db, id).ok().flatten())
+        .map(|item| (item.name, item.image));
+    json!({
+        "template_id": template.id,
+        "template_name": template.name,
+        "tool": template.tool,
+        "entrypoint": template.entrypoint,
+        "project_id": template.project_id,
+        "project_name": project_name,
+        "inventory_id": template.inventory_id,
+        "inventory_name": inventory_name,
+        "credential_id": template.credential_id,
+        "credential_name": credential.as_ref().map(|(name, _)| name),
+        "credential_kind": credential.as_ref().map(|(_, kind)| kind),
+        "environment_id": template.environment_id,
+        "environment_name": environment.as_ref().map(|(name, _)| name),
+        "environment_image": environment.as_ref().map(|(_, image)| image),
+        "extra_vars": runner::merge_vars(&db::json_object(&template.extra_vars), request_extra),
+        "spec": db::json_object(&template.spec),
+    })
+    .to_string()
 }
 
 pub async fn sync_project(state: &Shared, project: &db::Project) -> AppResult<String> {
@@ -257,6 +399,7 @@ fn apply_step(
                     trigger: "workflow".into(),
                     workflow_job_id: Some(wf_job_id.to_string()),
                     workflow_node_id: Some(node_id.clone()),
+                    parameters_override: None,
                 },
             );
             let db = state.db()?;
@@ -384,6 +527,7 @@ pub fn accept_hook(state: &Shared, hook: &Hook, payload: &Value) -> AppResult<Di
                     trigger: "hook".into(),
                     workflow_job_id: None,
                     workflow_node_id: None,
+                    parameters_override: None,
                 },
             )?;
             if first_job.is_none() {
@@ -431,5 +575,104 @@ fn truncate(value: &str, max: usize) -> String {
             end -= 1;
         }
         value[..end].to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Config, RunnerMode};
+    use std::path::PathBuf;
+
+    fn config(dir: &std::path::Path) -> Config {
+        Config {
+            bind: "127.0.0.1:0".into(),
+            data_dir: dir.to_path_buf(),
+            web_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web"),
+            examples_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples"),
+            admin_user: "admin".into(),
+            admin_password: Some("test-admin-pass".into()),
+            runner: RunnerMode::Local,
+            job_timeout_secs: 60,
+            ldap: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn relaunch_copies_parameters_and_limits_failed_hosts() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-relaunch-{nanos}"));
+        let state = crate::boot(config(&dir)).expect("boot");
+        let (template_id, team_id) = {
+            let db = state.db().expect("db");
+            db.query_row(
+                "SELECT id, team_id FROM templates WHERE name = 'Self-Heal'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .expect("template")
+        };
+        {
+            let db = state.db().expect("db");
+            db::insert_job(
+                &db,
+                &db::Job {
+                    id: "src-failed".into(),
+                    team_id,
+                    template_id: Some(template_id),
+                    workflow_job_id: None,
+                    workflow_node_id: None,
+                    name: "Self-Heal".into(),
+                    tool: "ansible".into(),
+                    status: "failed".into(),
+                    extra_vars: r#"{"alertname":"manual"}"#.into(),
+                    launched_by: "admin".into(),
+                    trigger: "manual".into(),
+                    started_at: None,
+                    finished_at: Some(db::now()),
+                    created_at: db::now(),
+                    parameters: json!({
+                        "template_name": "Self-Heal",
+                        "tool": "ansible",
+                        "entrypoint": "missing.yml",
+                        "extra_vars": {"alertname": "manual"},
+                        "spec": {"tags": "heal"}
+                    })
+                    .to_string(),
+                    failed_hosts: json!({"hosts": ["web-1", "db-1"], "recap": true}).to_string(),
+                },
+            )
+            .expect("insert");
+        }
+        let copy = relaunch(&state, "src-failed", "admin", true).expect("relaunch");
+        let params = {
+            let db = state.db().expect("db");
+            let job = db::job(&db, &copy).expect("read").expect("job");
+            assert_eq!(job.trigger, "relaunch");
+            assert_eq!(job.status, "pending");
+            assert!(!job.parameters.contains("secret"));
+            db::json_object(&job.parameters)
+        };
+        assert_eq!(params["spec"]["limit"], "web-1,db-1");
+        assert_eq!(params["spec"]["tags"], "heal");
+        assert_eq!(params["extra_vars"]["alertname"], "manual");
+        {
+            let db = state.db().expect("db");
+            db.execute("UPDATE jobs SET tool = 'shell' WHERE id = 'src-failed'", [])
+                .expect("tool");
+            db.execute(
+                "UPDATE jobs SET status = 'successful' WHERE id = ?1",
+                [&copy],
+            )
+            .expect("status");
+        }
+        let shell = relaunch(&state, "src-failed", "admin", true).expect_err("shell");
+        assert!(shell.to_string().contains("Ansible"), "{shell}");
+        let running = relaunch(&state, &copy, "admin", false).expect_err("not failed");
+        assert!(running.to_string().contains("fehlgeschlagen"), "{running}");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

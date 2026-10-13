@@ -256,6 +256,210 @@ async fn login_shell_job_and_webhook() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The launch handler used to lock the database and then lock it again while
+/// building the response. `std::sync::Mutex` waits forever in that case, and
+/// every later request stops. A timeout on another thread is the failure signal.
+#[test]
+fn launching_a_workflow_answers() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let result = runtime.block_on(launch_demo_workflow());
+        let _ = tx.send(result);
+    });
+    let (status, body, health) = rx.recv_timeout(Duration::from_secs(8)).unwrap_or_else(|_| {
+        panic!("POST /api/workflows/{{id}}/launch held the database lock and stopped answering")
+    });
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["name"], "Self-Heal Ablauf");
+    assert_eq!(body["status"], "running");
+    assert_eq!(body["nodes"].as_array().map(Vec::len), Some(3), "{body}");
+    assert_eq!(health, StatusCode::OK);
+}
+
+async fn launch_demo_workflow() -> (StatusCode, Value, StatusCode) {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-wf-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+    let (status, workflows, _) = call(
+        &app,
+        "GET",
+        "/api/workflows",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{workflows}");
+    let workflow_id = workflows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["name"] == "Self-Heal Ablauf")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (status, body, _) = call(
+        &app,
+        "POST",
+        &format!("/api/workflows/{workflow_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"extra_vars": {}})),
+    )
+    .await;
+    let (health, _, _) = call(&app, "GET", "/healthz", None, None, None).await;
+    let _ = std::fs::remove_dir_all(&dir);
+    (status, body, health)
+}
+
+#[tokio::test]
+async fn failed_job_shows_parameters_and_can_be_relaunched() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-relaunch-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let script = script.as_str().unwrap_or("");
+    assert!(script.contains("Ausgabe"));
+    assert!(script.contains("Erneut starten"));
+    assert!(script.contains("Nur fehlgeschlagene Hosts"));
+    let (status, style, _) = call(&app, "GET", "/app.css", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(style.as_str().unwrap_or("").contains(".tabs"));
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Kaputt",
+            "tool": "shell",
+            "entrypoint": "",
+            "extra_vars": {"keep": "template"},
+            "spec": {"script": "echo nope; exit 1"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().unwrap();
+
+    let (status, launched, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"extra_vars": {"from_launch": "yes"}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{launched}");
+    let job_id = launched["id"].as_str().unwrap().to_string();
+
+    let mut failed = Value::Null;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let (status, body, _) = call(
+            &app,
+            "GET",
+            &format!("/api/jobs/{job_id}"),
+            Some(&cookie),
+            Some(&team),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        if body["status"] == "failed" {
+            failed = body;
+            break;
+        }
+    }
+    assert_eq!(failed["status"], "failed", "{failed}");
+    assert_eq!(failed["parameters"]["tool"], "shell");
+    assert_eq!(failed["parameters"]["extra_vars"]["keep"], "template");
+    assert_eq!(failed["parameters"]["extra_vars"]["from_launch"], "yes");
+    assert!(failed["parameters"]["spec"]["script"]
+        .as_str()
+        .unwrap_or("")
+        .contains("exit 1"));
+    assert!(failed["failed_hosts"].as_array().unwrap().is_empty());
+
+    let (status, copy, _) = call(
+        &app,
+        "POST",
+        &format!("/api/jobs/{job_id}/relaunch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{copy}");
+    assert_ne!(copy["id"], failed["id"]);
+    assert_eq!(copy["trigger"], "relaunch");
+    assert_eq!(copy["parameters"]["extra_vars"]["keep"], "template");
+    assert_eq!(copy["parameters"]["extra_vars"]["from_launch"], "yes");
+
+    let (status, denied, _) = call(
+        &app,
+        "POST",
+        &format!("/api/jobs/{job_id}/relaunch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"only_failed_hosts": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{denied}");
+    assert_eq!(
+        denied["error"],
+        "Nur Ansible-Aufträge haben fehlgeschlagene Hosts."
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 fn git(dir: &std::path::Path, args: &[&str]) {
     let status = std::process::Command::new("git")
         .arg("-C")

@@ -182,6 +182,8 @@ A file with `plugin:` is not executed. `plugin: netbox.netbox.nb_inventory` (als
 
 An Ansible template stores the run in `spec`: `job_type` `run` or `check`, `tags`, `skip_tags`, `limit`, `diff`, `verbosity` from 0 to 4, and `forks` from 1 to 50. Check starts `ansible-playbook --check`.
 
+Each job stores the parameters of that launch: template, tool, entry path, project, inventory, credential name and kind (not the secret), execution environment, spec, and the merged extra variables. The job page has an Output tab and a Parameters tab. `POST /api/jobs/{id}/relaunch` starts a failed job again with those parameters. `{"only_failed_hosts": true}` is Ansible-only and sets `--limit` to the hosts that failed or were unreachable. A play recap replaces earlier `fatal:` lines. When the recap never arrives, the fatal lines are kept.
+
 ## Users and permissions
 
 An administrator sees every account under **Users** (German: **Benutzerkonten**). `GET /api/users` lists them. `GET /api/users/{id}` returns the account and its memberships. The password hash is never returned.
@@ -229,7 +231,7 @@ Session cookie `koreograf_session`, HttpOnly, SameSite=Lax, seven days. Team rou
 | PUT, DELETE | `/api/templates/{id}`, `/api/workflows/{id}` |
 | POST | `/api/templates/{id}/launch`, `/api/workflows/{id}/launch` |
 | GET | `/api/jobs/{id}`, `/api/workflows/{id}`, `/api/workflow-jobs/{id}` |
-| POST | `/api/jobs/{id}/cancel`, `/api/hooks/{id}/test` |
+| POST | `/api/jobs/{id}/cancel`, `/api/jobs/{id}/relaunch`, `/api/hooks/{id}/test` |
 | GET | `/api/hooks/{id}/deliveries` |
 | DELETE | `/api/hooks/{id}` |
 | POST | `/hooks/{id}/{token}` |
