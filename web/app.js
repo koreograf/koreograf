@@ -83,6 +83,7 @@ const EN = {
   "Der Workflow hat noch keine Knoten.": "The workflow has no nodes yet.",
   "Die Anfrage ist fehlgeschlagen.": "The request failed.",
   "Die Datei ist kein Inventar.": "The file is not an inventory.",
+  "Die E-Mail kommt aus LDAP oder Active Directory.": "The email comes from LDAP or Active Directory.",
   "Die Mitgliedschaft kommt aus LDAP oder Active Directory.": "The membership comes from LDAP or Active Directory.",
   "Die manuelle Quelle ist leer.": "The manual source is empty.",
   "Die Sitzung ist abgelaufen.": "The session has expired.",
@@ -107,6 +108,8 @@ const EN = {
   "Eine Kante darf nicht auf denselben Knoten zeigen.": "An edge cannot point at the same node.",
   "Eine Kante verweist auf einen unbekannten Knoten.": "An edge points at an unknown node.",
   "Eine Vorlage gehört zu einem anderen Team.": "A template belongs to another team.",
+  "E-Mail": "Email",
+  "E-Mail ist ungültig.": "Email is invalid.",
   "Eingänge": "Deliveries",
   "Einstieg": "Entry",
   "Einstiegspfad": "Entry path",
@@ -171,6 +174,7 @@ const EN = {
   "Kante gesetzt.": "Edge added.",
   "Kante löschen": "Delete edge",
   "Keine Berechtigung für diese Aktion.": "You are not allowed to do this.",
+  "Keine E-Mail hinterlegt.": "No email is stored.",
   "Keine Inventardateien. Bei einem Git-Projekt zuerst synchronisieren.": "No inventory files. Sync the Git project first.",
   "Keine Playbooks gefunden. Bei einem Git-Projekt zuerst synchronisieren. Den Pfad kannst du unten eintragen.": "No playbooks found. Sync the Git project first. You can type the path below.",
   "Kein Team": "No team",
@@ -179,6 +183,7 @@ const EN = {
   "Konto": "Account",
   "Konto deaktivieren": "Disable account.",
   "Leer lassen, um das Passwort zu behalten.": "Leave empty to keep the password.",
+  "Lokal": "Local",
   "Mitgliedschaften": "Memberships",
   "Neues Passwort": "New password",
   "Operator startet Aufträge und pflegt Projekte, Inventare, Vorlagen, Workflows und Webhooks.": "An operator launches jobs and maintains projects, inventories, templates, workflows, and webhooks.",
@@ -206,10 +211,12 @@ const EN = {
   "Lokales Konto": "Local account",
   "Löschen": "Delete",
   "Manuell": "Manual",
+  "Mein Konto": "My account",
   "Mehrere": "Several",
   "Mitglieder": "Members",
   "Modulverzeichnis": "Module directory",
   "Name": "Name",
+  "Name und E-Mail kommen aus dem Verzeichnis.": "Name and email come from the directory.",
   "Name der Quelle": "Source name",
   "Name fehlt oder ist zu lang.": "Name is missing or too long.",
   "NetBox-Adresse muss http oder https sein.": "The NetBox address must be http or https.",
@@ -531,8 +538,13 @@ function roleOptions(selected) {
 
 function sourceLabel(source) {
   if (source === "ldap") return "LDAP";
-  if (source === "manual" || source === "local") return t("Manuell");
+  if (source === "manual") return t("Manuell");
+  if (source === "local") return t("Lokal");
   return source || "";
+}
+
+function authSourceLabel(source) {
+  return sourceLabel(source === "local" ? "local" : source);
 }
 
 function roleLegend() {
@@ -665,7 +677,7 @@ function shell(title, body, actions) {
         <label class="field"><span class="small">${h("Organisation · Team")}</span><select id="team-select">${options || `<option value="">${h("Kein Team")}</option>`}</select></label>
         <nav class="nav">${nav}</nav>
         <div class="side-foot">
-          <div class="small">${esc(me.display_name)} · ${esc(roleLabel(roleOf()))}${me.auth_source === "ldap" ? " · LDAP" : ""}</div>
+          <a class="account-link" href="#/account">${esc(me.display_name)} · ${esc(roleLabel(roleOf()))}${me.auth_source === "ldap" ? " · LDAP" : ""}</a>
           ${langSwitch()}
           <button class="btn ghost" id="logout" type="button">${h("Abmelden")}</button>
         </div>
@@ -2485,6 +2497,58 @@ async function pageTeamNew() {
   });
 }
 
+function emailLine(email) {
+  return email ? esc(email) : `<span class="muted">${h("Keine E-Mail hinterlegt.")}</span>`;
+}
+
+async function pageAccount() {
+  me = await api("GET", "/api/me");
+  const rows = (me.memberships || []).map((row) => {
+    const org = row.organization_name || "—";
+    return `<tr><td>${esc(org)}</td><td>${esc(row.team_name)}</td><td>${esc(roleLabel(row.role))}</td><td>${esc(sourceLabel(row.source))}</td></tr>`;
+  });
+  const local = me.auth_source === "local";
+  const identity = local ? `
+    <form class="card form" id="account-form">
+      <h2>${h("Konto")}</h2>
+      <p class="small muted">${h("Benutzername")}: ${esc(me.username)} · ${esc(authSourceLabel(me.auth_source))}${me.is_admin ? ` · ${h("Administrator")}` : ""}</p>
+      <label class="field"><span>${h("Anzeigename")}</span><input name="display_name" value="${esc(me.display_name)}" required></label>
+      <label class="field"><span>${h("E-Mail")}</span><input name="email" type="email" value="${esc(me.email || "")}" autocomplete="email"></label>
+      <label class="field"><span>${h("Neues Passwort")}</span><input name="password" type="password" minlength="8" autocomplete="new-password" placeholder="${h("Leer lassen, um das Passwort zu behalten.")}"></label>
+      <button class="btn pill primary" type="submit">${h("Speichern")}</button>
+    </form>` : `
+    <section class="card">
+      <h2>${h("Konto")}</h2>
+      <p class="small muted">${h("Benutzername")}: ${esc(me.username)} · ${esc(authSourceLabel(me.auth_source))}${me.is_admin ? ` · ${h("Administrator")}` : ""}</p>
+      <p>${h("Anzeigename")}: ${esc(me.display_name)}</p>
+      <p>${h("E-Mail")}: ${emailLine(me.email)}</p>
+      <p class="muted">${h("Name und E-Mail kommen aus dem Verzeichnis.")}</p>
+    </section>`;
+  shell(t("Mein Konto"), `
+    <div class="stack">
+      ${identity}
+      <section class="card">
+        <h2>${h("Mitgliedschaften")}</h2>
+        ${table([t("Organisation"), t("Team"), t("Rolle"), t("Herkunft")], rows)}
+      </section>
+    </div>`);
+  const form = document.querySelector("#account-form");
+  if (form) {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        const payload = {
+          display_name: form.display_name.value,
+          email: form.email.value,
+        };
+        if (form.password.value) payload.password = form.password.value;
+        me = await api("PUT", "/api/me", payload);
+        route();
+      } catch (error) { handle(error); }
+    });
+  }
+}
+
 async function pageUsers() {
   if (!me.is_admin) {
     deny("Benutzerkonten", "admin");
@@ -2501,7 +2565,7 @@ async function pageUsers() {
     const needle = document.querySelector("#user-search").value.trim().toLowerCase();
     const shown = items.filter((item) => {
       if (!needle) return true;
-      return `${item.display_name} ${item.username} ${item.auth_source}`.toLowerCase().includes(needle);
+      return `${item.display_name} ${item.username} ${item.email || ""} ${item.auth_source}`.toLowerCase().includes(needle);
     });
     const rows = shown.map((item) => {
       const flags = [
@@ -2512,7 +2576,7 @@ async function pageUsers() {
       return `<tr>
         <td><a href="#/users/${esc(item.id)}">${esc(item.display_name)}</a> ${flags}</td>
         <td>${esc(item.username)}</td>
-        <td>${esc(sourceLabel(item.auth_source))}</td>
+        <td>${esc(authSourceLabel(item.auth_source))}</td>
         <td>${esc(item.team_count)}</td>
         <td class="small muted">${esc(when)}</td>
       </tr>`;
@@ -2557,7 +2621,8 @@ async function pageUser(id) {
     <div class="stack">
       <form class="card form" id="user-form">
         <h2>${h("Konto")}</h2>
-        <p class="small muted">${h("Benutzername")}: ${esc(item.username)} · ${esc(sourceLabel(item.auth_source))}</p>
+        <p class="small muted">${h("Benutzername")}: ${esc(item.username)} · ${esc(authSourceLabel(item.auth_source))}</p>
+        <p class="small">${h("E-Mail")}: ${emailLine(item.email)}</p>
         <label class="field"><span>${h("Anzeigename")}</span><input name="display_name" value="${esc(item.display_name)}" required></label>
         <label class="row"><input name="is_admin" type="checkbox"${item.is_admin ? " checked" : ""}> ${h("Administrator")}</label>
         <label class="row"><input name="account_disabled" type="checkbox"${item.disabled ? " checked" : ""}${self ? " disabled" : ""}> ${h("Konto deaktivieren")}</label>
@@ -2788,6 +2853,7 @@ async function route() {
     else if (parts[0] === "catalog") location.hash = "#/projects";
     else if (parts[0] === "team" && parts[1] === "members" && parts[2] === "new") await pageMemberNew();
     else if (parts[0] === "team" && parts[1] === "new") await pageTeamNew();
+    else if (parts[0] === "account") await pageAccount();
     else if (parts[0] === "users" && parts[1] === "new") await pageUserNew();
     else if (parts[0] === "users" && parts[1]) await pageUser(parts[1]);
     else if (parts[0] === "users") await pageUsers();

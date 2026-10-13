@@ -29,6 +29,14 @@ pub struct UserBody {
 }
 
 #[derive(Deserialize)]
+pub(super) struct MeUpdate {
+    display_name: String,
+    email: Option<String>,
+    #[serde(default)]
+    password: String,
+}
+
+#[derive(Deserialize)]
 pub(super) struct UserUpdate {
     display_name: String,
     is_admin: bool,
@@ -87,8 +95,37 @@ pub async fn logout(
 
 pub async fn me(State(state): State<Shared>, user: AuthUser) -> Result<Json<Value>, ApiError> {
     let db = state.db()?;
-    let teams = db::list_teams_for_user(&db, &user.id, user.is_admin)?;
-    Ok(Json(user_payload(&user, &teams)))
+    Ok(Json(profile_json(&db, &user)?))
+}
+
+pub async fn update_me(
+    State(state): State<Shared>,
+    user: AuthUser,
+    Json(body): Json<MeUpdate>,
+) -> AppResult<Json<Value>> {
+    let display = trimmed_display(&body.display_name)?;
+    let db = state.db()?;
+    let existing = db::user_by_id(&db, &user.id)?.ok_or(ApiError::NotFound)?;
+    if existing.auth_source != "local" && !body.password.is_empty() {
+        return Err(ApiError::bad(
+            "Das Passwort kommt aus LDAP oder Active Directory.",
+        ));
+    }
+    let email = profile_email(
+        &existing.auth_source,
+        existing.email.as_deref(),
+        body.email.as_deref(),
+    )?;
+    let password_hash = new_password(&existing, &body.password)?;
+    db::update_profile(
+        &db,
+        &user.id,
+        display,
+        email.as_deref(),
+        password_hash.as_deref(),
+    )?;
+    let updated = db::user_by_id(&db, &user.id)?.ok_or(ApiError::NotFound)?;
+    Ok(Json(profile_json(&db, &updated.into())?))
 }
 
 pub async fn list_users(State(state): State<Shared>, user: AuthUser) -> AppResult<Json<Value>> {
@@ -226,7 +263,12 @@ fn provision_ldap(state: &Shared, identity: ldap::LdapIdentity) -> AppResult<Use
         db::user_by_id(&db, &id)?.ok_or(ApiError::NotFound)?
     };
     auth::sync_ldap_teams(&db, &user.id, &identity.groups)?;
-    Ok(user)
+    if let Some(raw) = identity.email.as_deref() {
+        if let Ok(Some(email)) = normalize_email(raw) {
+            db::set_user_email(&db, &user.id, Some(&email))?;
+        }
+    }
+    db::user_by_id(&db, &user.id)?.ok_or(ApiError::NotFound)
 }
 
 fn session_response(state: &Shared, user: &User) -> AppResult<Response> {
@@ -237,21 +279,32 @@ fn session_response(state: &Shared, user: &User) -> AppResult<Response> {
     let db = state.db()?;
     db::create_session(&db, &token, &user.id)?;
     let auth_user = AuthUser::from(user.clone());
-    let teams = db::list_teams_for_user(&db, &user.id, user.is_admin)?;
+    let body = profile_json(&db, &auth_user)?;
     drop(db);
-    let mut response = (StatusCode::OK, Json(user_payload(&auth_user, &teams))).into_response();
+    let mut response = (StatusCode::OK, Json(body)).into_response();
     let cookie = HeaderValue::from_str(&auth::session_cookie(&token))
         .map_err(|err| ApiError::Internal(err.to_string()))?;
     response.headers_mut().insert(header::SET_COOKIE, cookie);
     Ok(response)
 }
 
-fn user_payload(user: &AuthUser, teams: &[(db::Team, String)]) -> Value {
+fn profile_json(db: &rusqlite::Connection, user: &AuthUser) -> AppResult<Value> {
+    let teams = db::list_teams_for_user(db, &user.id, user.is_admin)?;
+    let memberships = db::list_user_memberships(db, &user.id)?;
+    Ok(user_payload(user, &teams, &memberships))
+}
+
+fn user_payload(
+    user: &AuthUser,
+    teams: &[(db::Team, String)],
+    memberships: &[db::UserMembership],
+) -> Value {
     json!({
         "id": user.id,
         "username": user.username,
         "display_name": user.display_name,
         "auth_source": user.auth_source,
+        "email": user.email,
         "is_admin": user.is_admin,
         "teams": teams.iter().map(|(team, role)| json!({
             "id": team.id,
@@ -262,6 +315,7 @@ fn user_payload(user: &AuthUser, teams: &[(db::Team, String)]) -> Value {
             "organization_name": team.organization_name,
             "role": role,
         })).collect::<Vec<_>>(),
+        "memberships": memberships,
     })
 }
 
@@ -318,6 +372,7 @@ fn account_json(user: &User, team_count: i64) -> Value {
         "username": user.username,
         "display_name": user.display_name,
         "auth_source": user.auth_source,
+        "email": user.email,
         "is_admin": user.is_admin,
         "disabled": user.disabled,
         "created_at": user.created_at,
@@ -331,10 +386,85 @@ fn account_detail(user: &User, memberships: &[db::UserMembership]) -> Value {
     value
 }
 
+fn profile_email(
+    auth_source: &str,
+    current: Option<&str>,
+    requested: Option<&str>,
+) -> AppResult<Option<String>> {
+    let Some(requested) = requested else {
+        return Ok(current.map(str::to_string));
+    };
+    let next = normalize_email(requested)?;
+    if auth_source != "local" {
+        let same = next
+            .as_deref()
+            .unwrap_or("")
+            .eq_ignore_ascii_case(current.unwrap_or(""));
+        if !same {
+            return Err(ApiError::bad(
+                "Die E-Mail kommt aus LDAP oder Active Directory.",
+            ));
+        }
+    }
+    Ok(next)
+}
+
+fn normalize_email(value: &str) -> AppResult<Option<String>> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let Some((local, domain)) = value.split_once('@') else {
+        return Err(ApiError::bad("E-Mail ist ungültig."));
+    };
+    if local.is_empty()
+        || domain.is_empty()
+        || domain.starts_with('.')
+        || domain.ends_with('.')
+        || value.len() > 254
+        || value
+            .chars()
+            .any(|ch| ch.is_whitespace() || ch.is_control())
+    {
+        return Err(ApiError::bad("E-Mail ist ungültig."));
+    }
+    Ok(Some(value.to_string()))
+}
+
 fn normalize(username: &str) -> AppResult<String> {
     let name = username.trim().to_ascii_lowercase();
     if name.is_empty() || name.len() > 128 || name.chars().any(|ch| ch.is_control()) {
         return Err(ApiError::bad("Benutzername ist ungültig."));
     }
     Ok(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{normalize_email, profile_email};
+
+    #[test]
+    fn email_trims_and_rejects_a_broken_address() {
+        assert_eq!(
+            normalize_email("  ada@example.com ").unwrap().as_deref(),
+            Some("ada@example.com")
+        );
+        assert_eq!(normalize_email("  ").unwrap(), None);
+        assert!(normalize_email("ada").is_err());
+        assert!(normalize_email("ada @example.com").is_err());
+    }
+
+    #[test]
+    fn ldap_email_stays_with_the_directory() {
+        let err =
+            profile_email("ldap", Some("ada@example.com"), Some("other@example.com")).unwrap_err();
+        assert!(err.to_string().contains("LDAP"));
+        assert_eq!(
+            profile_email("ldap", Some("Ada@Example.com"), Some("ada@example.com"))
+                .unwrap()
+                .as_deref(),
+            Some("ada@example.com")
+        );
+        assert_eq!(profile_email("local", None, Some("")).unwrap(), None);
+    }
 }

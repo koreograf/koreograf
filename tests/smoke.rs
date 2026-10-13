@@ -1651,3 +1651,151 @@ async fn admin_can_list_and_update_users() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn signed_in_user_can_read_their_own_account() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-account-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let script = script.as_str().unwrap_or("");
+    assert!(script.contains("Mein Konto"));
+    assert!(script.contains("#/account"));
+    let (status, style, _) = call(&app, "GET", "/app.css", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let style = style.as_str().unwrap_or("");
+    assert!(style.contains(".lang-switch .btn.pill:not(.primary)"));
+    assert!(style.contains("color: var(--ink)"));
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+    assert_eq!(me["auth_source"], "local");
+    assert!(me["email"].is_null());
+    assert_eq!(me["memberships"][0]["role"], "owner");
+    assert_eq!(me["memberships"][0]["organization_name"], "Plattform");
+    assert!(me.get("password_hash").is_none());
+
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "username": "nia",
+            "display_name": "Nia",
+            "password": "nia-secret-1",
+            "is_admin": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let (status, _member, _) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{team}/members"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"username": "nia", "role": "viewer"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, nia, nia_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "nia", "password": "nia-secret-1"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{nia}");
+    let nia_cookie = nia_cookie.expect("nia session");
+    assert_eq!(nia["auth_source"], "local");
+    assert_eq!(nia["memberships"][0]["role"], "viewer");
+    assert_eq!(nia["memberships"][0]["source"], "manual");
+    assert_eq!(nia["memberships"][0]["team_name"], "Plattform");
+    assert_eq!(nia["memberships"][0]["organization_name"], "Plattform");
+    let (status, forbidden, _) =
+        call(&app, "GET", "/api/users", Some(&nia_cookie), None, None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{forbidden}");
+
+    let (status, saved, _) = call(
+        &app,
+        "PUT",
+        "/api/me",
+        Some(&nia_cookie),
+        None,
+        Some(json!({
+            "display_name": "Nia Klein",
+            "email": "nia@example.com",
+            "is_admin": true
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["display_name"], "Nia Klein");
+    assert_eq!(saved["email"], "nia@example.com");
+    assert_eq!(saved["is_admin"], false);
+
+    let (status, broken, _) = call(
+        &app,
+        "PUT",
+        "/api/me",
+        Some(&nia_cookie),
+        None,
+        Some(json!({"display_name": "Nia Klein", "email": "keine"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{broken}");
+    assert_eq!(broken["error"], "E-Mail ist ungültig.");
+
+    let (status, changed, _) = call(
+        &app,
+        "PUT",
+        "/api/me",
+        Some(&nia_cookie),
+        None,
+        Some(json!({
+            "display_name": "Nia Klein",
+            "email": "nia@example.com",
+            "password": "nia-secret-2"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    assert!(changed.get("password_hash").is_none());
+    let (status, still, _) = call(&app, "GET", "/api/me", Some(&nia_cookie), None, None).await;
+    assert_eq!(status, StatusCode::OK, "{still}");
+    assert_eq!(still["email"], "nia@example.com");
+    let (status, old_login, _) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "nia", "password": "nia-secret-1"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{old_login}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

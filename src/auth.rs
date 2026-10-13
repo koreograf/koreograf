@@ -42,6 +42,7 @@ pub struct AuthUser {
     pub username: String,
     pub display_name: String,
     pub auth_source: String,
+    pub email: Option<String>,
     pub is_admin: bool,
 }
 
@@ -50,6 +51,7 @@ impl From<User> for AuthUser {
         Self {
             id: user.id,
             auth_source: user.auth_source,
+            email: user.email,
             username: user.username,
             display_name: user.display_name,
             is_admin: user.is_admin,

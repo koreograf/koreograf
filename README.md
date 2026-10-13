@@ -186,6 +186,8 @@ An Ansible template stores the run in `spec`: `job_type` `run` or `check`, `tags
 
 An administrator sees every account under **Users** (German: **Benutzerkonten**). `GET /api/users` lists them. `GET /api/users/{id}` returns the account and its memberships. The password hash is never returned.
 
+Every signed-in user opens **My account** (German: **Mein Konto**) from their name in the sidebar. `GET /api/me` returns the account, the real team memberships with organization and role, and the email when one is stored. A local user can change the display name, the email, and the password there. An LDAP email is taken from the directory attribute `mail` at sign-in and is not edited here.
+
 `PUT /api/users/{id}` changes the display name, the administrator flag, and whether the account is disabled. The username stays as it is, because LDAP matches on it. A local account can take a new password in the same request. An empty password leaves the current one. An LDAP account keeps its password in the directory.
 
 Disabling an account ends that user's sessions. The next sign-in, after a correct password, answers `Das Konto ist deaktiviert.` You cannot disable or delete your own account. The last active administrator cannot be demoted, disabled, or deleted.
@@ -203,7 +205,8 @@ Session cookie `koreograf_session`, HttpOnly, SameSite=Lax, seven days. Team rou
 | POST | `/api/login`, `/api/logout` |
 | GET, POST | `/api/users` |
 | GET, PUT, DELETE | `/api/users/{id}` |
-| GET | `/api/me`, `/api/overview`, `/api/teams` |
+| GET, PUT | `/api/me` |
+| GET | `/api/overview`, `/api/teams` |
 | POST | `/api/teams` |
 | PUT | `/api/teams/{id}` |
 | GET, POST | `/api/teams/{id}/members` |

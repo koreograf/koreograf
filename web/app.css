@@ -148,6 +148,7 @@ h2 { font-size: 18px; margin: 0 0 10px; }
 .btn {
   border: 1px solid var(--line);
   background: white;
+  color: var(--ink);
   border-radius: 9px;
   padding: 7px 12px;
   cursor: pointer;
@@ -159,6 +160,14 @@ h2 { font-size: 18px; margin: 0 0 10px; }
 .btn.pill { border-radius: 999px; padding: 7px 14px; font-weight: 600; }
 .lang-switch { display: flex; gap: 6px; }
 .lang-switch .btn.pill { padding: 3px 10px; }
+.lang-switch .btn.pill:not(.primary) {
+  color: var(--ink);
+  background: #fff;
+  border-color: #78716c;
+}
+.side .btn.ghost { color: var(--side-text); }
+.account-link { color: var(--side-text); text-decoration: none; font-size: 13px; }
+.account-link:hover { color: white; text-decoration: underline; }
 .login-card .spread { align-items: center; margin-bottom: 18px; }
 .login-card .brand-lockup { margin-bottom: 0; }
 .btn:disabled { opacity: 0.55; cursor: not-allowed; }

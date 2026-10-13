@@ -9,6 +9,7 @@ use crate::config::LdapConfig;
 pub struct LdapIdentity {
     pub username: String,
     pub display_name: String,
+    pub email: Option<String>,
     pub groups: Vec<String>,
 }
 
@@ -170,6 +171,7 @@ pub async fn authenticate(
     Ok(LdapIdentity {
         username: username.to_ascii_lowercase(),
         display_name: display,
+        email: first_attr(&entry, "mail"),
         groups,
     })
 }

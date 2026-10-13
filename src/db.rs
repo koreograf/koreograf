@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS users (
   auth_source TEXT NOT NULL,
   is_admin INTEGER NOT NULL DEFAULT 0,
   disabled INTEGER NOT NULL DEFAULT 0,
+  email TEXT,
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sessions (
@@ -223,6 +224,9 @@ fn migrate(c: &Connection) -> AppResult<()> {
             [],
         )?;
     }
+    if !column_exists(c, "users", "email")? {
+        c.execute("ALTER TABLE users ADD COLUMN email TEXT", [])?;
+    }
     if !column_exists(c, "teams", "organization_id")? {
         c.execute("ALTER TABLE teams ADD COLUMN organization_id TEXT", [])?;
     }
@@ -336,6 +340,7 @@ pub struct User {
     pub auth_source: String,
     pub is_admin: bool,
     pub disabled: bool,
+    pub email: Option<String>,
     pub created_at: String,
 }
 
@@ -552,7 +557,7 @@ pub fn insert_user(
 }
 
 const USER_SELECT: &str =
-    "id, username, display_name, password_hash, auth_source, is_admin, disabled, created_at";
+    "id, username, display_name, password_hash, auth_source, is_admin, disabled, created_at, email";
 
 pub fn user_by_username(c: &Connection, username: &str) -> AppResult<Option<User>> {
     c.query_row(
@@ -580,7 +585,7 @@ pub fn list_users(c: &Connection) -> AppResult<Vec<(User, i64)>> {
                 (SELECT COUNT(*) FROM memberships m WHERE m.user_id = users.id)
          FROM users ORDER BY username COLLATE NOCASE"
     ))?;
-    let rows = stmt.query_map([], |row| Ok((map_user(row)?, row.get::<_, i64>(8)?)))?;
+    let rows = stmt.query_map([], |row| Ok((map_user(row)?, row.get::<_, i64>(9)?)))?;
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
 }
 
@@ -604,6 +609,35 @@ pub fn list_user_memberships(c: &Connection, user_id: &str) -> AppResult<Vec<Use
         })
     })?;
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+pub fn update_profile(
+    c: &Connection,
+    id: &str,
+    display_name: &str,
+    email: Option<&str>,
+    password_hash: Option<&str>,
+) -> AppResult<()> {
+    if let Some(password_hash) = password_hash {
+        c.execute(
+            "UPDATE users SET display_name = ?2, email = ?3, password_hash = ?4 WHERE id = ?1",
+            params![id, display_name, email, password_hash],
+        )?;
+    } else {
+        c.execute(
+            "UPDATE users SET display_name = ?2, email = ?3 WHERE id = ?1",
+            params![id, display_name, email],
+        )?;
+    }
+    Ok(())
+}
+
+pub fn set_user_email(c: &Connection, id: &str, email: Option<&str>) -> AppResult<()> {
+    c.execute(
+        "UPDATE users SET email = ?2 WHERE id = ?1",
+        params![id, email],
+    )?;
+    Ok(())
 }
 
 pub fn update_user(
@@ -684,6 +718,7 @@ fn map_user(row: &rusqlite::Row<'_>) -> rusqlite::Result<User> {
         is_admin: flag(row.get(5)?),
         disabled: flag(row.get(6)?),
         created_at: row.get(7)?,
+        email: row.get(8)?,
     })
 }
 
@@ -708,11 +743,11 @@ pub fn purge_sessions(c: &Connection) -> AppResult<()> {
 pub fn user_by_session(c: &Connection, token: &str) -> AppResult<Option<User>> {
     let found = c
         .query_row(
-            "SELECT u.id, u.username, u.display_name, u.password_hash, u.auth_source, u.is_admin, u.disabled, u.created_at, s.expires_at
+            "SELECT u.id, u.username, u.display_name, u.password_hash, u.auth_source, u.is_admin, u.disabled, u.created_at, u.email, s.expires_at
              FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?1",
             [token],
             |row| {
-                let expires: String = row.get(8)?;
+                let expires: String = row.get(9)?;
                 Ok((map_user(row)?, expires))
             },
         )

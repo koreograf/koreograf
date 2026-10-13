@@ -22,7 +22,7 @@ pub fn router(state: Shared) -> Router {
     let api = Router::new()
         .route("/login", post(session::login))
         .route("/logout", post(session::logout))
-        .route("/me", get(session::me))
+        .route("/me", get(session::me).put(session::update_me))
         .route(
             "/users",
             get(session::list_users).post(session::create_user),
