@@ -98,6 +98,12 @@ helm upgrade --install koreograf deploy/helm/koreograf
 
 Probes rufen `/healthz` auf. Prometheus kann auf demselben Port `GET /metrics` scrapen. Die Zähler gehören zu dieser einen Replica und liegen nur im Speicher. Ist `admin.password` leer, liegt das erste Passwort im Volume unter `/var/lib/koreograf/initial-admin-password`.
 
+## Prüfung auf GitHub
+
+Jeder Push und jeder Pull Request startet GitHub Actions. Geprüft werden Format und Clippy, die Rust-Tests, die Rust-Dokumentation, die Syntax von `web/app.js`, Shellcheck, Hadolint, die pre-commit-Hooks, das Helm-Chart und der Image-Build. Das Image wird nicht veröffentlicht, und es wird nichts ausgerollt. `cargo check` läuft zusätzlich mit Rust 1.89, der Mindestversion aus `Cargo.toml`. Der Image-Build nutzt Rust 1.96, wie das Dockerfile.
+
+Commit-Nachrichten sind Englisch und folgen Conventional Commits. Auf Pull Requests prüft commitlint die Nachrichten. `data/` bleibt außerhalb von Git: dort liegen die SQLite-Datei, `secret.key` und das erste Admin-Passwort.
+
 ## Organisationen, Teams, LDAP und Active Directory
 
 Eine Organisation besitzt die Projekte. Jedes Team gehört zu genau einer Organisation. Ein Projekt ist für jedes Team dieser Organisation nutzbar, solange keine Teams zugewiesen sind. Sind `team_ids` gesetzt, sehen nur diese Teams das Projekt. Die zugewiesenen Teams müssen zur Organisation des Projekts gehören.
