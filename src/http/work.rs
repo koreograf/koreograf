@@ -2,9 +2,9 @@ use std::convert::Infallible;
 use std::time::Duration;
 
 use axum::extract::{Path, Query, State};
-use axum::http::HeaderMap;
+use axum::http::{header, HeaderMap, HeaderValue};
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::Json;
 use futures::stream::Stream;
 use serde::Deserialize;
@@ -196,6 +196,87 @@ pub async fn get_job(
     crate::auth::authorize(&db, &user, &job.team_id, Role::Viewer)?;
     let events = db::events_after(&db, &id, 0, 2_000)?;
     Ok(Json(job_json(&job, Some(&events))))
+}
+
+const OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
+
+fn output_filename(name: &str, id: &str) -> String {
+    let mut slug = String::new();
+    for ch in name.chars().take(48) {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let slug = slug.trim_matches('-');
+    let base = if slug.is_empty() { "job" } else { slug };
+    let short: String = id
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .take(8)
+        .collect();
+    if short.is_empty() {
+        format!("{base}.txt")
+    } else {
+        format!("{base}-{short}.txt")
+    }
+}
+
+fn render_job_output(db: &rusqlite::Connection, job_id: &str) -> AppResult<String> {
+    let mut out = String::new();
+    let mut after = 0_i64;
+    loop {
+        let batch = db::events_after(db, job_id, after, 500)?;
+        if batch.is_empty() {
+            break;
+        }
+        for event in &batch {
+            after = event.id;
+            let extra = event.line.len() + 1;
+            if out.len().saturating_add(extra) > OUTPUT_LIMIT {
+                out.push_str("… Ausgabe gekürzt.\n");
+                return Ok(out);
+            }
+            out.push_str(&event.line);
+            if !event.line.ends_with('\n') {
+                out.push('\n');
+            }
+        }
+        if batch.len() < 500 {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+pub async fn job_output(
+    State(state): State<Shared>,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    let (body, filename) = {
+        let db = state.db()?;
+        let job = db::job(&db, &id)?.ok_or(ApiError::NotFound)?;
+        crate::auth::authorize(&db, &user, &job.team_id, Role::Viewer)?;
+        let body = render_job_output(&db, &id)?;
+        (body, output_filename(&job.name, &job.id))
+    };
+    let disposition = format!("attachment; filename=\"{filename}\"");
+    let disposition = HeaderValue::from_str(&disposition)
+        .unwrap_or_else(|_| HeaderValue::from_static("attachment; filename=\"job.txt\""));
+    Ok((
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; charset=utf-8"),
+            ),
+            (header::CONTENT_DISPOSITION, disposition),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+        ],
+        body,
+    )
+        .into_response())
 }
 
 pub async fn cancel_job(

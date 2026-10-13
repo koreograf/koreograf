@@ -121,6 +121,7 @@ pub fn router(state: Shared) -> Router {
         .route("/jobs/{id}", get(work::get_job))
         .route("/jobs/{id}/cancel", post(work::cancel_job))
         .route("/jobs/{id}/relaunch", post(work::relaunch_job))
+        .route("/jobs/{id}/output", get(work::job_output))
         .route("/jobs/{id}/events", get(work::job_events))
         .route(
             "/workflows",

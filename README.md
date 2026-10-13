@@ -4,7 +4,7 @@ Koreograf is a prototype for team-scoped automation. One Rust binary serves the 
 
 This is an early prototype, not a replacement for AWX and not a rebuild of Semaphore. There are no surveys, no schedules, no Receptor, and no high-availability setup. The database today is one SQLite file with one writer. PostgreSQL is not connected yet.
 
-The browser UI is German by default. DE / ENG in the sidebar and on the sign-in page switches the language.
+The browser UI is German by default. A language menu in the sidebar and on the sign-in page lists each language with a flag and a short code, for example GER and ENG.
 
 ## What the cache changes
 
@@ -58,7 +58,7 @@ Requirements: Rust 1.89 or newer, plus `ansible-playbook` and `tofu` on `PATH` w
 cargo run
 ```
 
-The UI is at `http://127.0.0.1:8080`. DE / ENG at the bottom of the sidebar and on the sign-in page switches the language. Create-lists share the same pill button, for example `+ Projekt`, `+ Zugang`, and `+ Umgebung` (English: `+ Project`, `+ Credential`, `+ Environment`). Without `KOREOGRAF_ADMIN_PASSWORD`, the first start writes the password to `data/initial-admin-password` (mode `0600`) and logs the path. The password is not in the log.
+The UI is at `http://127.0.0.1:8080`. The language menu at the bottom of the sidebar and on the sign-in page switches the language. Create-lists share the same pill button, for example `+ Projekt`, `+ Zugang`, and `+ Umgebung` (English: `+ Project`, `+ Credential`, `+ Environment`). Without `KOREOGRAF_ADMIN_PASSWORD`, the first start writes the password to `data/initial-admin-password` (mode `0600`) and logs the path. The password is not in the log.
 
 Environment variables: see `.env.example`. Comments in that file are still German.
 
@@ -182,7 +182,7 @@ A file with `plugin:` is not executed. `plugin: netbox.netbox.nb_inventory` (als
 
 An Ansible template stores the run in `spec`: `job_type` `run` or `check`, `tags`, `skip_tags`, `limit`, `diff`, `verbosity` from 0 to 4, and `forks` from 1 to 50. Check starts `ansible-playbook --check`.
 
-Each job stores the parameters of that launch: template, tool, entry path, project, inventory, credential name and kind (not the secret), execution environment, spec, and the merged extra variables. The job page has an Output tab and a Parameters tab. `POST /api/jobs/{id}/relaunch` starts a failed job again with those parameters. `{"only_failed_hosts": true}` is Ansible-only and sets `--limit` to the hosts that failed or were unreachable. A play recap replaces earlier `fatal:` lines. When the recap never arrives, the fatal lines are kept.
+Each job stores the parameters of that launch: template, tool, entry path, project, inventory, credential name and kind (not the secret), execution environment, spec, and the merged extra variables. The job page has an Output tab and a Parameters tab. A failed job can be started again from the job list and from the same row as the Output and Parameters tabs. `POST /api/jobs/{id}/relaunch` uses the stored parameters. `{"only_failed_hosts": true}` is Ansible-only and sets `--limit` to the hosts that failed or were unreachable. A play recap replaces earlier `fatal:` lines. When the recap never arrives, the fatal lines are kept. `GET /api/jobs/{id}/output` downloads the output as text.
 
 ## Users and permissions
 
@@ -230,7 +230,7 @@ Session cookie `koreograf_session`, HttpOnly, SameSite=Lax, seven days. Team rou
 | GET, POST | `/api/templates`, `/api/workflows`, `/api/hooks`, `/api/jobs` |
 | PUT, DELETE | `/api/templates/{id}`, `/api/workflows/{id}` |
 | POST | `/api/templates/{id}/launch`, `/api/workflows/{id}/launch` |
-| GET | `/api/jobs/{id}`, `/api/workflows/{id}`, `/api/workflow-jobs/{id}` |
+| GET | `/api/jobs/{id}`, `/api/jobs/{id}/output`, `/api/workflows/{id}`, `/api/workflow-jobs/{id}` |
 | POST | `/api/jobs/{id}/cancel`, `/api/jobs/{id}/relaunch`, `/api/hooks/{id}/test` |
 | GET | `/api/hooks/{id}/deliveries` |
 | DELETE | `/api/hooks/{id}` |

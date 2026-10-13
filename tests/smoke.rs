@@ -350,11 +350,16 @@ async fn failed_job_shows_parameters_and_can_be_relaunched() {
     assert_eq!(status, StatusCode::OK);
     let script = script.as_str().unwrap_or("");
     assert!(script.contains("Ausgabe"));
+    assert!(script.contains("Ausgabe herunterladen"));
+    assert!(script.contains("data-relaunch"));
     assert!(script.contains("Erneut starten"));
     assert!(script.contains("Nur fehlgeschlagene Hosts"));
     let (status, style, _) = call(&app, "GET", "/app.css", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    assert!(style.as_str().unwrap_or("").contains(".tabs"));
+    let style = style.as_str().unwrap_or("");
+    assert!(style.contains(".tabs"));
+    assert!(style.contains(".tab-bar"));
+    assert!(script.contains("download-output"));
 
     let (status, me, cookie) = call(
         &app,
@@ -418,6 +423,25 @@ async fn failed_job_shows_parameters_and_can_be_relaunched() {
         }
     }
     assert_eq!(failed["status"], "failed", "{failed}");
+    let output_request = Request::builder()
+        .method("GET")
+        .uri(format!("/api/jobs/{job_id}/output"))
+        .header("cookie", &cookie)
+        .header("x-team-id", &team)
+        .body(Body::empty())
+        .unwrap();
+    let output = app.clone().oneshot(output_request).await.unwrap();
+    assert_eq!(output.status(), StatusCode::OK);
+    let disposition = output
+        .headers()
+        .get("content-disposition")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    assert!(disposition.contains("attachment"));
+    assert!(disposition.contains("filename=\"kaputt-"));
+    let output_body = output.into_body().collect().await.unwrap().to_bytes();
+    let output_text = String::from_utf8_lossy(&output_body);
+    assert!(output_text.contains("nope"), "{output_text}");
     assert_eq!(failed["parameters"]["tool"], "shell");
     assert_eq!(failed["parameters"]["extra_vars"]["keep"], "template");
     assert_eq!(failed["parameters"]["extra_vars"]["from_launch"], "yes");
@@ -1165,11 +1189,23 @@ async fn inventory_sources_and_ansible_check_options() {
     assert!(script.contains("+ Projekt"));
     assert!(script.contains("+ Zugang"));
     assert!(script.contains("+ Umgebung"));
-    assert!(script.contains("data-lang=\"en\""));
-    assert!(script.contains(">ENG<"));
+    assert!(script.contains("data-lang-select"));
+    assert!(script.contains("FLAG_SVG"));
+    assert!(script.contains("country: \"gb\""));
     assert!(script.contains("data-add-kind"));
     assert!(script.contains("Check (Dry-Run)"));
     assert!(script.contains("Tags überspringen"));
+    assert!(script.contains("0 (Normal)"));
+    assert!(script.contains("1 (Ausführlich)"));
+    assert!(script.contains("2 (Ausführlicher)"));
+    assert!(script.contains("4 (Verbindungs-Debug)"));
+    assert!(script.contains("data-chips"));
+    assert!(script.contains("chip-entry"));
+    let (status, style, _) = call(&app, "GET", "/app.css", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let style = style.as_str().unwrap_or("");
+    assert!(style.contains(".chips"));
+    assert!(style.contains(".chip-entry"));
 
     let (status, me, cookie) = call(
         &app,
@@ -1872,10 +1908,14 @@ async fn signed_in_user_can_read_their_own_account() {
     let script = script.as_str().unwrap_or("");
     assert!(script.contains("Mein Konto"));
     assert!(script.contains("#/account"));
+    assert!(script.contains("data-lang-select"));
+    assert!(script.contains("GER"));
+    assert!(script.contains("ENG"));
     let (status, style, _) = call(&app, "GET", "/app.css", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let style = style.as_str().unwrap_or("");
-    assert!(style.contains(".lang-switch .btn.pill:not(.primary)"));
+    assert!(style.contains("[hidden]"));
+    assert!(style.contains("display: none !important"));
     assert!(style.contains("color: var(--ink)"));
 
     let (status, me, cookie) = call(

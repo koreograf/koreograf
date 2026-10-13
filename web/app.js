@@ -1,13 +1,27 @@
 "use strict";
 
+const LANGUAGES = [
+  { id: "de", code: "GER", name: "Deutsch", country: "de" },
+  { id: "en", code: "ENG", name: "English", country: "gb" },
+];
+
+const FLAG_SVG = {
+  de: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 5 3"><rect width="5" height="3" fill="#000"/><rect width="5" y="1" height="2" fill="#DE0000"/><rect width="5" y="2" height="1" fill="#FFCE00"/></svg>`,
+  gb: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 30"><clipPath id="a"><path d="M0 0v30h60V0z"/></clipPath><clipPath id="b"><path d="M30 15h30v15zv15H0zH0V0zV0h30z"/></clipPath><g clip-path="url(#a)"><path d="M0 0v30h60V0z" fill="#012169"/><path d="M0 0l60 30m0-30L0 30" stroke="#fff" stroke-width="6"/><path d="M0 0l60 30m0-30L0 30" clip-path="url(#b)" stroke="#C8102E" stroke-width="4"/><path d="M30 0v30M0 15h60" stroke="#fff" stroke-width="10"/><path d="M30 0v30M0 15h60" stroke="#C8102E" stroke-width="6"/></g></svg>`,
+};
+
+function languageId(value) {
+  return LANGUAGES.some((item) => item.id === value) ? value : "de";
+}
+
 const app = document.querySelector("#app");
 let me = null;
 let teamId = localStorage.getItem("koreograf.team") || "";
-let lang = localStorage.getItem("koreograf.lang") === "en" ? "en" : "de";
+let lang = languageId(localStorage.getItem("koreograf.lang"));
 let source = null;
 let pollTimer = null;
 let generation = 0;
-document.documentElement.lang = lang === "en" ? "en" : "de";
+document.documentElement.lang = lang;
 
 const EN = {
   "Abmelden": "Sign out",
@@ -41,9 +55,15 @@ const EN = {
   "Auftragsvorlage fehlt.": "Job template is missing.",
   "Ausführlichkeit": "Verbosity",
   "Ausführlichkeit ist 0 bis 4.": "Verbosity is 0 to 4.",
+  "0 (Normal)": "0 (Normal)",
+  "1 (Ausführlich)": "1 (Verbose)",
+  "2 (Ausführlicher)": "2 (More Verbose)",
+  "4 (Verbindungs-Debug)": "4 (Connection Debug)",
   "Ausführen": "Run",
   "Ausgabe": "Output",
+  "Ausgabe herunterladen": "Download output",
   "Die Liste der fehlgeschlagenen Hosts ist zu lang.": "The failed-host list is too long.",
+  "Die Tags sind zu lang.": "The tags are too long.",
   "Die Vorlage dieses Auftrags fehlt.": "This job's template is missing.",
   "Erneut starten": "Relaunch",
   "Fehlgeschlagene Hosts": "Failed hosts",
@@ -76,6 +96,7 @@ const EN = {
   "Check": "Check",
   "Check (Dry-Run)": "Check (dry run)",
   "Check startet ansible-playbook mit --check. Tags, übersprungene Tags und Limit gelten für jeden Start dieser Vorlage.": "Check starts ansible-playbook with --check. Tags, skipped tags, and limit apply to every launch of this template.",
+  "Ein Komma oder ein Leerzeichen macht den getippten Tag zu einer Pille.": "A comma or a space turns the typed tag into a pill.",
   "Checkout: {path}": "Checkout: {path}",
   "Collections": "Collections",
   "Collections im Cache": "Cached collections",
@@ -92,6 +113,7 @@ const EN = {
   "Der Eintrag wird noch verwendet.": "The entry is still in use.",
   "Der Einstiegspfad muss relativ sein und darf das Projekt nicht verlassen.": "The entry path must be relative and must stay inside the project.",
   "Der Benutzer ist in jedem Team.": "The user is in every team.",
+  "Der Tag „{part}“ ist ungültig. Erlaubt sind Buchstaben, Ziffern und _ . : -.": "The tag “{part}” is invalid. Letters, digits, and _ . : - are allowed.",
   "Der Benutzername ist schon vergeben.": "That username is already used.",
   "Der letzte Administrator bleibt erhalten.": "The last administrator stays.",
   "Der Name ist in diesem Team schon vergeben.": "That name is already used in this team.",
@@ -253,7 +275,6 @@ const EN = {
   "Nicht gefunden.": "Not found.",
   "Nichts vorhanden.": "Nothing here.",
   "Noch keine Quelle.": "No source yet.",
-  "normal": "normal",
   "ohne": "skip",
   "Ohne angehaktes Team dürfen alle Teams der Organisation das Projekt nutzen.": "With no team checked, every team in the organization can use the project.",
   "Ohne Execution Environment läuft die Vorlage auf dem Controller. Im lokalen Runner-Modus wird ein gesetztes Image ignoriert.": "Without an execution environment the template runs on the controller. In local runner mode a set image is ignored.",
@@ -348,6 +369,8 @@ const EN = {
   "Sync fehlgeschlagen.": "Sync failed.",
   "Synchron": "Synced",
   "Synchronisieren": "Sync",
+  "Tag eingeben": "Enter a tag",
+  "Tag {name} entfernen": "Remove tag {name}",
   "Tags": "Tags",
   "Tags überspringen": "Skip tags",
   "Team": "Team",
@@ -487,26 +510,101 @@ function h(text, vars) {
 }
 
 function setLang(next) {
-  lang = next === "en" ? "en" : "de";
+  lang = languageId(next);
   localStorage.setItem("koreograf.lang", lang);
-  document.documentElement.lang = lang === "en" ? "en" : "de";
+  document.documentElement.lang = lang;
   if (!me) renderLogin("");
   else route();
 }
 
+function flagMarkup(country) {
+  const svg = FLAG_SVG[country];
+  if (!svg) return `<span class="flag flag-fallback" aria-hidden="true">${esc(String(country || "").slice(0, 2).toUpperCase())}</span>`;
+  return `<img class="flag" alt="" src="data:image/svg+xml,${encodeURIComponent(svg)}">`;
+}
+
+function langOption(item) {
+  const selected = item.id === lang ? "true" : "false";
+  return `<li role="option" tabindex="-1" lang="${esc(item.id)}" data-lang-option="${esc(item.id)}" aria-selected="${selected}">${flagMarkup(item.country)}<span class="lang-code">${esc(item.code)}</span><span class="lang-name">${esc(item.name)}</span></li>`;
+}
+
 function langSwitch() {
-  return `<div class="lang-switch" role="group" aria-label="${h("Sprache")}">
-    <button class="btn pill${lang === "de" ? " primary" : ""}" type="button" data-lang="de">DE</button>
-    <button class="btn pill${lang === "en" ? " primary" : ""}" type="button" data-lang="en">ENG</button>
+  const current = LANGUAGES.find((item) => item.id === lang) || LANGUAGES[0];
+  const options = LANGUAGES.map(langOption).join("");
+  return `<div class="lang-switch" data-lang-select>
+    <button class="lang-button" type="button" data-lang-button aria-haspopup="listbox" aria-expanded="false" aria-controls="lang-menu" aria-label="${h("Sprache")}">${flagMarkup(current.country)}<span class="lang-code">${esc(current.code)}</span><span class="lang-caret" aria-hidden="true"></span></button>
+    <ul class="lang-menu" id="lang-menu" role="listbox" hidden>${options}</ul>
   </div>`;
 }
 
+function closeLangMenus() {
+  document.querySelectorAll(".lang-menu").forEach((menu) => {
+    menu.hidden = true;
+    const button = menu.parentElement && menu.parentElement.querySelector("[data-lang-button]");
+    if (button) button.setAttribute("aria-expanded", "false");
+  });
+}
+
 function bindLangSwitch() {
-  document.querySelectorAll("[data-lang]").forEach((button) => {
-    button.addEventListener("click", () => {
-      if (button.dataset.lang !== lang) setLang(button.dataset.lang);
+  document.querySelectorAll(".lang-switch").forEach((root) => {
+    const button = root.querySelector("[data-lang-button]");
+    const menu = root.querySelector(".lang-menu");
+    if (!button || !menu) return;
+    const options = () => [...menu.querySelectorAll("[data-lang-option]")];
+    const openMenu = () => {
+      closeLangMenus();
+      menu.hidden = false;
+      button.setAttribute("aria-expanded", "true");
+      const current = options().find((item) => item.dataset.langOption === lang) || options()[0];
+      if (current) current.focus();
+    };
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (menu.hidden) openMenu();
+      else closeLangMenus();
+    });
+    button.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openMenu();
+      }
+    });
+    options().forEach((option, index, list) => {
+      option.addEventListener("click", () => {
+        if (option.dataset.langOption !== lang) setLang(option.dataset.langOption);
+        else closeLangMenus();
+      });
+      option.addEventListener("keydown", (event) => {
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          list[(index + 1) % list.length].focus();
+        } else if (event.key === "ArrowUp") {
+          event.preventDefault();
+          list[(index - 1 + list.length) % list.length].focus();
+        } else if (event.key === "Home") {
+          event.preventDefault();
+          list[0].focus();
+        } else if (event.key === "End") {
+          event.preventDefault();
+          list[list.length - 1].focus();
+        } else if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          if (option.dataset.langOption !== lang) setLang(option.dataset.langOption);
+          else closeLangMenus();
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          closeLangMenus();
+          button.focus();
+        }
+      });
     });
   });
+  if (!bindLangSwitch.outside) {
+    document.addEventListener("click", (event) => {
+      if (!event.target.closest(".lang-switch")) closeLangMenus();
+    });
+    bindLangSwitch.outside = true;
+  }
 }
 
 function addLink(href, label) {
@@ -835,6 +933,148 @@ function selectOptions(items, selected, allowEmpty, label) {
   return empty + options;
 }
 
+function verbosityLabel(level) {
+  return [
+    "0 (Normal)",
+    "1 (Ausführlich)",
+    "2 (Ausführlicher)",
+    "3 (Debug)",
+    "4 (Verbindungs-Debug)",
+  ][Number(level)] || "";
+}
+
+function parseTagList(value) {
+  return String(value || "").split(",").map((part) => part.trim()).filter(Boolean);
+}
+
+function validTag(part) {
+  return part.length > 0
+    && part.length <= 80
+    && !part.startsWith("-")
+    && /^[A-Za-z0-9_.:-]+$/.test(part);
+}
+
+function splitDraft(raw, flush) {
+  const parts = String(raw || "").split(/[,\s]+/);
+  const trailing = /[,\s]$/.test(raw);
+  if (flush || trailing) return { tokens: parts.filter(Boolean), rest: "" };
+  return { tokens: parts.slice(0, -1).filter(Boolean), rest: parts.at(-1) || "" };
+}
+
+function readChips(box) {
+  return [...box.querySelectorAll(".chip-text")].map((node) => node.textContent);
+}
+
+function renderChips(box, tokens) {
+  const entry = box.querySelector(".chip-entry");
+  box.querySelectorAll(".chip").forEach((node) => node.remove());
+  const html = tokens.map((token) => `<span class="chip"><span class="chip-text">${esc(token)}</span><button class="chip-remove" type="button" aria-label="${h("Tag {name} entfernen", { name: token })}">×</button></span>`).join("");
+  entry.insertAdjacentHTML("beforebegin", html);
+  entry.placeholder = tokens.length ? "" : t("Tag eingeben");
+  const hidden = box.parentElement.querySelector(`input[type="hidden"][name="${CSS.escape(box.dataset.chips)}"]`);
+  if (hidden) hidden.value = tokens.join(",");
+  box.querySelectorAll(".chip-remove").forEach((button) => {
+    button.addEventListener("mousedown", (event) => event.preventDefault());
+    button.addEventListener("click", () => {
+      const name = button.parentElement.querySelector(".chip-text").textContent;
+      renderChips(box, readChips(box).filter((item) => item !== name));
+      const error = box.parentElement.querySelector(".chip-error");
+      if (error) error.textContent = "";
+      entry.focus();
+    });
+  });
+}
+
+function addTokens(box, tokens) {
+  const error = box.parentElement.querySelector(".chip-error");
+  const chips = readChips(box);
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (chips.includes(token)) continue;
+    const tooLong = [...chips, token].join(",").length > 300;
+    if (!validTag(token) || tooLong) {
+      if (error) {
+        error.textContent = tooLong
+          ? t("Die Tags sind zu lang.")
+          : t("Der Tag „{part}“ ist ungültig. Erlaubt sind Buchstaben, Ziffern und _ . : -.", { part: token });
+      }
+      renderChips(box, chips);
+      return { ok: false, keep: tokens.slice(index) };
+    }
+    chips.push(token);
+  }
+  if (error) error.textContent = "";
+  renderChips(box, chips);
+  return { ok: true, keep: [] };
+}
+
+function takeDraft(box, flush) {
+  const entry = box.querySelector(".chip-entry");
+  const { tokens, rest } = splitDraft(entry.value, flush);
+  if (!tokens.length) {
+    entry.value = rest;
+    return true;
+  }
+  const result = addTokens(box, tokens);
+  const leftover = result.ok ? rest : [...result.keep, rest].filter(Boolean).join(" ");
+  entry.value = leftover;
+  return result.ok;
+}
+
+function bindChips(form) {
+  form.querySelectorAll("[data-chips]").forEach((box) => {
+    const hidden = box.parentElement.querySelector(`input[type="hidden"][name="${CSS.escape(box.dataset.chips)}"]`);
+    renderChips(box, parseTagList(hidden ? hidden.value : ""));
+    const entry = box.querySelector(".chip-entry");
+    const error = box.parentElement.querySelector(".chip-error");
+    entry.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === "," || event.key === " ") {
+        event.preventDefault();
+        takeDraft(box, true);
+      } else if (event.key === "Backspace" && entry.value === "") {
+        const tokens = readChips(box);
+        if (!tokens.length) return;
+        event.preventDefault();
+        renderChips(box, tokens.slice(0, -1));
+        if (error) error.textContent = "";
+      }
+    });
+    entry.addEventListener("input", () => {
+      if (error) error.textContent = "";
+      if (/[,\s]/.test(entry.value)) takeDraft(box, false);
+    });
+    entry.addEventListener("blur", () => takeDraft(box, true));
+    box.addEventListener("click", (event) => {
+      if (event.target === box) entry.focus();
+    });
+  });
+}
+
+function flushChips(form) {
+  let ok = true;
+  form.querySelectorAll("[data-chips]").forEach((box) => {
+    if (box.closest("[hidden]")) return;
+    if (!takeDraft(box, true)) ok = false;
+  });
+  return ok;
+}
+
+function chipBox(name, label, value) {
+  return `<label class="field chips-field"><span>${h(label)}</span>
+    <div class="chips" data-chips="${esc(name)}">
+      <input class="chip-entry" type="text" autocomplete="off" aria-label="${h(label)}">
+    </div>
+    <input type="hidden" name="${esc(name)}" value="${esc(parseTagList(value).join(","))}">
+    <span class="chip-error" aria-live="polite"></span>
+  </label>`;
+}
+
+function chipReadout(value) {
+  const tokens = parseTagList(value);
+  if (!tokens.length) return "";
+  return `<span class="chips readonly">${tokens.map((token) => `<span class="chip"><span class="chip-text">${esc(token)}</span></span>`).join("")}</span>`;
+}
+
 function templateSpec(form) {
   if (form.tool.value === "ansible") {
     const spec = { job_type: form.job_type.value === "check" ? "check" : "run" };
@@ -866,6 +1106,7 @@ function templateOptionLine(item) {
   const spec = item.spec || {};
   if (item.tool === "ansible") {
     const bits = [spec.job_type === "check" ? t("Check") : t("Lauf")];
+    if (spec.verbosity) bits.push(t(verbosityLabel(spec.verbosity)));
     if (spec.tags) bits.push(`${t("Tags")} ${spec.tags}`);
     if (spec.skip_tags) bits.push(`${t("ohne")} ${spec.skip_tags}`);
     if (spec.limit) bits.push(`${t("Limit")} ${spec.limit}`);
@@ -970,59 +1211,68 @@ async function pageTemplateForm(id) {
         <h2>${h("Allgemein")}</h2>
         <label class="field"><span>${h("Name")}</span><input name="name" required value="${esc(item.name)}"></label>
         <label class="field"><span>${h("Beschreibung")}</span><input name="description" value="${esc(item.description)}"></label>
-        <label class="field"><span>${h("Werkzeug")}</span>
-          <select name="tool">
-            <option value="ansible"${item.tool === "ansible" ? " selected" : ""}>Ansible</option>
-            <option value="opentofu"${item.tool === "opentofu" ? " selected" : ""}>OpenTofu</option>
-            <option value="shell"${item.tool === "shell" ? " selected" : ""}>Shell</option>
-          </select>
-        </label>
+        <div class="field-row">
+          <label class="field"><span>${h("Werkzeug")}</span>
+            <select class="fit" name="tool">
+              <option value="ansible"${item.tool === "ansible" ? " selected" : ""}>Ansible</option>
+              <option value="opentofu"${item.tool === "opentofu" ? " selected" : ""}>OpenTofu</option>
+              <option value="shell"${item.tool === "shell" ? " selected" : ""}>Shell</option>
+            </select>
+          </label>
+        </div>
       </div>
       <div class="form-section">
         <h2>${h("Ziel")}</h2>
-        <label class="field"><span>${h("Projekt")}</span><select name="project_id">${selectOptions(projects, item.project_id, true, (row) => row.name)}</select></label>
+        <div class="field-grid">
+          <label class="field"><span>${h("Projekt")}</span><select name="project_id">${selectOptions(projects, item.project_id, true, (row) => row.name)}</select></label>
+          <label class="field" id="inventory-field"${item.tool === "ansible" ? "" : " hidden"}><span>${h("Inventar")}</span><select name="inventory_id">${selectOptions(inventories, item.inventory_id, true, (row) => row.name)}</select></label>
+          <label class="field"><span>${h("Zugang")}</span><select name="credential_id">${selectOptions(credentials, item.credential_id, true, (row) => `${row.name} (${row.kind})`)}</select></label>
+          <label class="field"><span>${h("Execution Environment")}</span><select name="environment_id">${selectOptions(environments, item.environment_id, true, (row) => row.name)}</select></label>
+        </div>
         <label class="field" id="playbook-field" hidden><span>${h("Playbook aus dem Projekt")}</span><select name="playbook"><option value="">${h("Anderer Pfad")}</option></select></label>
         <p class="small muted" id="entrypoint-note"></p>
         <label class="field"><span id="entrypoint-label">${h("Einstiegspfad")}</span><input name="entrypoint" value="${esc(item.entrypoint)}" placeholder="site.yml"></label>
-        <label class="field" id="inventory-field"><span>${h("Inventar")}</span><select name="inventory_id">${selectOptions(inventories, item.inventory_id, true, (row) => row.name)}</select></label>
-        <label class="field"><span>${h("Zugang")}</span><select name="credential_id">${selectOptions(credentials, item.credential_id, true, (row) => `${row.name} (${row.kind})`)}</select></label>
-        <label class="field"><span>${h("Execution Environment")}</span><select name="environment_id">${selectOptions(environments, item.environment_id, true, (row) => row.name)}</select></label>
         <p class="small muted">${h("Ohne Execution Environment läuft die Vorlage auf dem Controller. Im lokalen Runner-Modus wird ein gesetztes Image ignoriert.")}</p>
       </div>
-      <div class="form-section" id="ansible-options">
+      <div class="form-section" id="ansible-options"${item.tool === "ansible" ? "" : " hidden"}>
         <h2>Ansible</h2>
-        <label class="field"><span>${h("Art")}</span>
-          <select name="job_type">
-            <option value="run"${spec.job_type === "check" ? "" : " selected"}>${h("Lauf")}</option>
-            <option value="check"${spec.job_type === "check" ? " selected" : ""}>${h("Check (Dry-Run)")}</option>
-          </select>
-        </label>
-        <div class="grid-3">
-          <label class="field"><span>${h("Tags")}</span><input name="tags" value="${esc(spec.tags || "")}" placeholder="web,db"></label>
-          <label class="field"><span>${h("Tags überspringen")}</span><input name="skip_tags" value="${esc(spec.skip_tags || "")}" placeholder="slow"></label>
-          <label class="field"><span>${h("Limit")}</span><input name="limit" value="${esc(spec.limit || "")}" placeholder="web:&db"></label>
-        </div>
-        <div class="grid-3">
-          <label class="field"><span>${h("Ausführlichkeit")}</span>
-            <select name="verbosity">
-              ${[0, 1, 2, 3, 4].map((level) => `<option value="${level}"${verbosity === level ? " selected" : ""}>${level === 0 ? h("normal") : "v".repeat(level)}</option>`).join("")}
+        <div class="field-row">
+          <label class="field"><span>${h("Art")}</span>
+            <select class="fit" name="job_type">
+              <option value="run"${spec.job_type === "check" ? "" : " selected"}>${h("Lauf")}</option>
+              <option value="check"${spec.job_type === "check" ? " selected" : ""}>${h("Check (Dry-Run)")}</option>
             </select>
           </label>
-          <label class="field"><span>${h("Forks")}</span><input name="forks" inputmode="numeric" value="${esc(spec.forks || "")}" placeholder="5"></label>
-          <label class="field"><span>${h("Diff")}</span><input name="diff" type="checkbox"${spec.diff ? " checked" : ""}></label>
+          <label class="field"><span>${h("Ausführlichkeit")}</span>
+            <select class="fit" name="verbosity">
+              ${[0, 1, 2, 3, 4].map((level) => `<option value="${level}"${verbosity === level ? " selected" : ""}>${h(verbosityLabel(level))}</option>`).join("")}
+            </select>
+          </label>
+          <label class="field"><span>${h("Forks")}</span><input class="tiny" name="forks" inputmode="numeric" value="${esc(spec.forks || "")}" placeholder="5"></label>
+          <label class="field check"><span>${h("Diff")}</span><input name="diff" type="checkbox"${spec.diff ? " checked" : ""}></label>
+        </div>
+        <div class="field-row">
+          ${chipBox("tags", "Tags", spec.tags)}
+          ${chipBox("skip_tags", "Tags überspringen", spec.skip_tags)}
+        </div>
+        <p class="small muted">${h("Ein Komma oder ein Leerzeichen macht den getippten Tag zu einer Pille.")}</p>
+        <div class="field-row">
+          <label class="field"><span>${h("Limit")}</span><input class="fit" name="limit" value="${esc(spec.limit || "")}" placeholder="web:&db"></label>
         </div>
         <p class="small muted">${h("Check startet ansible-playbook mit --check. Tags, übersprungene Tags und Limit gelten für jeden Start dieser Vorlage.")}</p>
       </div>
-      <div class="form-section" id="tofu-options">
+      <div class="form-section" id="tofu-options"${item.tool === "opentofu" ? "" : " hidden"}>
         <h2>OpenTofu</h2>
-        <label class="field"><span>${h("Aktion")}</span>
-          <select name="action">
-            <option value="plan"${spec.action === "apply" ? "" : " selected"}>plan</option>
-            <option value="apply"${spec.action === "apply" ? " selected" : ""}>apply</option>
-          </select>
-        </label>
+        <div class="field-row">
+          <label class="field"><span>${h("Aktion")}</span>
+            <select class="fit" name="action">
+              <option value="plan"${spec.action === "apply" ? "" : " selected"}>plan</option>
+              <option value="apply"${spec.action === "apply" ? " selected" : ""}>apply</option>
+            </select>
+          </label>
+        </div>
       </div>
-      <div class="form-section" id="shell-options">
+      <div class="form-section" id="shell-options"${item.tool === "shell" ? "" : " hidden"}>
         <h2>Shell</h2>
         <label class="field"><span>${h("Skript, wenn kein Einstiegspfad gesetzt ist")}</span><textarea name="script">${esc(spec.script || "")}</textarea></label>
       </div>
@@ -1036,8 +1286,10 @@ async function pageTemplateForm(id) {
       </div>
     </form>`);
   const form = document.querySelector("#template-form");
+  bindChips(form);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (!flushChips(form)) return;
     try {
       const body = {
         name: form.name.value,
@@ -1131,9 +1383,23 @@ async function pageJobs() {
     const needle = document.querySelector("#job-search").value.trim().toLowerCase();
     const shown = jobs.filter((job) => !needle || [job.name, job.tool, job.status, job.trigger, statusLabel(job.status)].join(" ").toLowerCase().includes(needle));
     const filtered = shown.map((job) =>
-      `<tr><td><a href="#/jobs/${esc(job.id)}">${esc(job.name)}</a></td><td class="tool">${esc(job.tool)}</td><td>${pill(job.status)}</td><td class="small">${esc(job.trigger)}</td><td class="small muted">${esc(job.created_at)}</td></tr>`
+      `<tr><td><a href="#/jobs/${esc(job.id)}">${esc(job.name)}</a></td><td class="tool">${esc(job.tool)}</td><td>${pill(job.status)}</td><td class="small">${esc(job.trigger)}</td><td class="small muted">${esc(job.created_at)}</td><td>${jobListActions(job)}</td></tr>`
     );
-    document.querySelector("#job-table").innerHTML = table([t("Name"), t("Werkzeug"), t("Status"), t("Auslöser"), t("Angelegt")], filtered);
+    document.querySelector("#job-table").innerHTML = table([t("Name"), t("Werkzeug"), t("Status"), t("Auslöser"), t("Angelegt"), ""], filtered);
+    document.querySelectorAll("[data-relaunch]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        try {
+          const copy = await api("POST", `/api/jobs/${encodeURIComponent(button.dataset.relaunch)}/relaunch`, {
+            only_failed_hosts: button.dataset.failed === "1",
+          });
+          go(`#/jobs/${copy.id}`);
+        } catch (error) {
+          button.disabled = false;
+          handle(error);
+        }
+      });
+    });
   };
   document.querySelector("#job-search").addEventListener("input", drawJobs);
   drawJobs();
@@ -1152,6 +1418,11 @@ function appendLog(row) {
 function paramRow(label, value) {
   if (value === undefined || value === null || value === "") return "";
   return `<dt>${h(label)}</dt><dd>${esc(value)}</dd>`;
+}
+
+function paramRowHtml(label, html) {
+  if (!html) return "";
+  return `<dt>${h(label)}</dt><dd>${html}</dd>`;
 }
 
 function jobParameters(job) {
@@ -1185,11 +1456,11 @@ function jobParameters(job) {
     ${paramRow("Zugang", credential)}
     ${paramRow("Execution Environment", environment)}
     ${paramRow("Art", kind)}
-    ${paramRow("Tags", spec.tags)}
-    ${paramRow("Tags überspringen", spec.skip_tags)}
+    ${paramRowHtml("Tags", chipReadout(spec.tags))}
+    ${paramRowHtml("Tags überspringen", chipReadout(spec.skip_tags))}
     ${paramRow("Limit", spec.limit)}
     ${paramRow("Diff", diff)}
-    ${paramRow("Ausführlichkeit", spec.verbosity)}
+    ${paramRow("Ausführlichkeit", spec.verbosity === undefined || spec.verbosity === null || spec.verbosity === "" ? "" : t(verbosityLabel(spec.verbosity)))}
     ${paramRow("Forks", spec.forks)}
     ${paramRow("Aktion", spec.action)}
     ${hostLine}
@@ -1199,45 +1470,66 @@ function jobParameters(job) {
   <pre class="vars">${esc(JSON.stringify(params.extra_vars || {}, null, 2))}</pre>`;
 }
 
+function jobListActions(job) {
+  if (!can("operator") || job.status !== "failed") return "";
+  const hosts = Array.isArray(job.failed_hosts) ? job.failed_hosts : [];
+  const failedHosts = job.tool === "ansible" && hosts.length
+    ? `<button class="btn" type="button" data-relaunch="${esc(job.id)}" data-failed="1">${h("Nur fehlgeschlagene Hosts")}</button>`
+    : "";
+  return `<div class="row"><button class="btn" type="button" data-relaunch="${esc(job.id)}" data-failed="0">${h("Erneut starten")}</button>${failedHosts}</div>`;
+}
+
 function jobActions(job) {
   const running = job.status === "pending" || job.status === "running";
   const hosts = Array.isArray(job.failed_hosts) ? job.failed_hosts : [];
   if (!can("operator")) return "";
-  if (running) return `<button class="btn danger" id="cancel-job" type="button">${h("Abbrechen")}</button>`;
+  if (running) return `<button class="btn danger" type="button" data-action="cancel">${h("Abbrechen")}</button>`;
   if (job.status !== "failed") return "";
   const failedHosts = job.tool === "ansible" && hosts.length
-    ? `<button class="btn" id="relaunch-failed" type="button">${h("Nur fehlgeschlagene Hosts")}</button>`
+    ? `<button class="btn" type="button" data-action="relaunch-failed">${h("Nur fehlgeschlagene Hosts")}</button>`
     : "";
-  return `<button class="btn primary" id="relaunch-job" type="button">${h("Erneut starten")}</button>${failedHosts}`;
+  return `<button class="btn primary" type="button" data-action="relaunch">${h("Erneut starten")}</button>${failedHosts}`;
 }
 
 async function pageJob(id) {
   const live = generation;
   const job = await api("GET", `/api/jobs/${encodeURIComponent(id)}`);
   const running = job.status === "pending" || job.status === "running";
+  const actions = jobActions(job);
   shell(job.name, `
     <div class="spread" style="margin-bottom:12px">
       <div class="row">${pill(job.status)} <span class="tool">${esc(job.tool)}</span> <span class="small muted">${esc(job.trigger)} · ${esc(job.launched_by)}</span></div>
-      <div class="row" id="job-actions">${jobActions(job)}</div>
     </div>
-    <div class="tabs">
-      <button class="btn pill primary" type="button" data-job-tab="output">${h("Ausgabe")}</button>
-      <button class="btn pill" type="button" data-job-tab="parameters">${h("Parameter")}</button>
+    <div class="spread tab-bar">
+      <div class="tabs">
+        <button class="btn pill primary" type="button" data-job-tab="output">${h("Ausgabe")}</button>
+        <button class="btn pill" type="button" data-job-tab="parameters">${h("Parameter")}</button>
+      </div>
+      <div class="row">
+        ${actions}
+        <button class="btn" type="button" id="download-output">${h("Ausgabe herunterladen")}</button>
+      </div>
     </div>
     <div id="panel-output"><div class="log" id="log"></div></div>
     <div id="panel-parameters" hidden>${jobParameters(job)}</div>`);
   const badge = document.querySelector(".pill");
   (job.events || []).forEach(appendLog);
+  const relaunchButtons = () => document.querySelectorAll("[data-action=relaunch], [data-action=relaunch-failed]");
   const startAgain = async (onlyFailed) => {
+    relaunchButtons().forEach((button) => {
+      button.disabled = true;
+    });
     try {
       const copy = await api("POST", `/api/jobs/${encodeURIComponent(id)}/relaunch`, { only_failed_hosts: onlyFailed });
       go(`#/jobs/${copy.id}`);
     } catch (error) {
+      relaunchButtons().forEach((button) => {
+        button.disabled = false;
+      });
       handle(error);
     }
   };
-  const cancel = document.querySelector("#cancel-job");
-  if (cancel) {
+  document.querySelectorAll("[data-action=cancel]").forEach((cancel) => {
     cancel.addEventListener("click", async () => {
       try {
         await api("POST", `/api/jobs/${encodeURIComponent(id)}/cancel`, {});
@@ -1245,16 +1537,18 @@ async function pageJob(id) {
           badge.className = "pill canceled";
           badge.textContent = statusLabel("canceled");
         }
-        cancel.remove();
+        document.querySelectorAll("[data-action=cancel]").forEach((button) => button.remove());
       } catch (error) {
         handle(error);
       }
     });
-  }
-  const again = document.querySelector("#relaunch-job");
-  if (again) again.addEventListener("click", () => startAgain(false));
-  const failedOnly = document.querySelector("#relaunch-failed");
-  if (failedOnly) failedOnly.addEventListener("click", () => startAgain(true));
+  });
+  document.querySelectorAll("[data-action=relaunch]").forEach((button) => {
+    button.addEventListener("click", () => startAgain(false));
+  });
+  document.querySelectorAll("[data-action=relaunch-failed]").forEach((button) => {
+    button.addEventListener("click", () => startAgain(true));
+  });
   document.querySelectorAll("[data-job-tab]").forEach((button) => {
     button.addEventListener("click", () => {
       const tab = button.dataset.jobTab;
@@ -1264,6 +1558,37 @@ async function pageJob(id) {
       document.querySelector("#panel-output").hidden = tab !== "output";
       document.querySelector("#panel-parameters").hidden = tab !== "parameters";
     });
+  });
+  document.querySelector("#download-output").addEventListener("click", async () => {
+    const button = document.querySelector("#download-output");
+    button.disabled = true;
+    try {
+      const headers = {};
+      if (teamId) headers["X-Team-Id"] = teamId;
+      const response = await fetch(`/api/jobs/${encodeURIComponent(id)}/output`, { headers, credentials: "same-origin" });
+      const blob = await response.blob();
+      if (!response.ok) {
+        const text = await blob.text();
+        let message = "Die Anfrage ist fehlgeschlagen.";
+        try { message = JSON.parse(text).error || message; } catch { /* keep */ }
+        const error = new Error(message);
+        error.status = response.status;
+        throw error;
+      }
+      const match = /filename="([^"]+)"/.exec(response.headers.get("content-disposition") || "");
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = match ? match[1] : "job.txt";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      handle(error);
+    } finally {
+      button.disabled = false;
+    }
   });
   if (!running || live !== generation) return;
   const last = (job.events || []).reduce((max, event) => Math.max(max, event.id), 0);
@@ -1279,8 +1604,7 @@ async function pageJob(id) {
       badge.className = `pill ${payload.status}`;
       badge.textContent = statusLabel(payload.status);
     }
-    const button = document.querySelector("#cancel-job");
-    if (button) button.remove();
+    document.querySelectorAll("[data-action=cancel]").forEach((button) => button.remove());
     source.close();
     source = null;
     if (payload.status === "failed") pageJob(id);
@@ -1498,7 +1822,7 @@ function mountEditor(workflow, templates, readonly, phases) {
       host.innerHTML = `
         <h2>${h("Kante")}</h2>
         <label class="field"><span>${h("Wann")}</span>
-          <select id="edge-when">
+          <select class="fit" id="edge-when">
             <option value="success"${edge.when === "success" ? " selected" : ""}>${h("Erfolg")}</option>
             <option value="failure"${edge.when === "failure" ? " selected" : ""}>${h("Fehler")}</option>
             <option value="always"${edge.when === "always" ? " selected" : ""}>${h("Immer")}</option>
@@ -1547,7 +1871,7 @@ function mountEditor(workflow, templates, readonly, phases) {
       <label class="field"><span>${h("Name")}</span><input id="node-name" value="${esc(node.name)}"></label>
       <label class="field"><span>${h("Vorlage")}</span><select id="node-template">${selectOptions(templates, node.template_id, false, (row) => row.name)}</select></label>
       <label class="field"><span>${h("Zusammenführung")}</span>
-        <select id="node-join">
+        <select class="fit" id="node-join">
           <option value="any"${node.convergence !== "all" ? " selected" : ""}>${h("Irgendein Vorgänger")}</option>
           <option value="all"${node.convergence === "all" ? " selected" : ""}>${h("Alle Vorgänger")}</option>
         </select>
@@ -1734,11 +2058,11 @@ async function pageHookNew() {
   ]);
   shell(t("Webhook anlegen"), `
     <form class="card form" id="hook-form">
-      <div class="grid-3">
-        <label class="field"><span>${h("Name")}</span><input name="name" required></label>
-        <label class="field"><span>${h("Alertname")}</span><input name="match_alertname" required placeholder="DiskSpaceLow"></label>
+      <label class="field"><span>${h("Name")}</span><input name="name" required></label>
+      <div class="field-row">
+        <label class="field"><span>${h("Alertname")}</span><input class="fit" name="match_alertname" required placeholder="DiskSpaceLow"></label>
         <label class="field"><span>${h("Status")}</span>
-          <select name="match_status"><option value="firing">firing</option><option value="resolved">resolved</option><option value="any">any</option></select>
+          <select class="fit" name="match_status"><option value="firing">firing</option><option value="resolved">resolved</option><option value="any">any</option></select>
         </label>
       </div>
       <label class="field"><span>${h("Ziel")}</span>
@@ -1829,10 +2153,10 @@ async function pageEnvironmentNew() {
   }
   shell(t("Umgebung anlegen"), `
     <form class="card form" id="env-form">
-      <div class="grid-3">
-        <label class="field"><span>${h("Name")}</span><input name="name" required></label>
-        <label class="field"><span>${h("Image")}</span><input name="image" required placeholder="quay.io/ansible/awx-ee:latest"></label>
-        <label class="field"><span>${h("Pull")}</span><select name="pull_policy"><option>if_not_present</option><option>always</option><option>never</option></select></label>
+      <label class="field"><span>${h("Name")}</span><input name="name" required></label>
+      <label class="field"><span>${h("Image")}</span><input name="image" required placeholder="quay.io/ansible/awx-ee:latest"></label>
+      <div class="field-row">
+        <label class="field"><span>${h("Pull")}</span><select class="fit" name="pull_policy"><option>if_not_present</option><option>always</option><option>never</option></select></label>
       </div>
       <label class="field"><span>${h("Beschreibung")}</span><input name="description"></label>
       <button class="btn pill primary" type="submit">${h("Anlegen")}</button>
@@ -1904,12 +2228,12 @@ async function pageProjectNew() {
   const current = (me.teams || []).find((team) => team.id === teamId);
   shell(t("Projekt anlegen"), `
     <form class="card form" id="project-form">
-      <div class="grid-3">
-        <label class="field"><span>${h("Name")}</span><input name="name" required></label>
-        <label class="field"><span>${h("Art")}</span><select name="source_type"><option value="path">${h("Pfad")}</option><option value="git">Git</option></select></label>
-        <label class="field"><span>${h("Quelle")}</span><input name="source" required placeholder="https://… oder file://…"></label>
+      <label class="field"><span>${h("Name")}</span><input name="name" required></label>
+      <div class="field-row">
+        <label class="field"><span>${h("Art")}</span><select class="fit" name="source_type"><option value="path">${h("Pfad")}</option><option value="git">Git</option></select></label>
+        <label class="field"><span>${h("Revision")}</span><input class="fit" name="revision" placeholder="${h("Branch, Tag oder Commit")}"></label>
       </div>
-      <label class="field"><span>${h("Revision")}</span><input name="revision" placeholder="${h("Branch, Tag oder Commit")}"></label>
+      <label class="field"><span>${h("Quelle")}</span><input name="source" required placeholder="https://… oder file://…"></label>
       ${me.is_admin ? `<label class="field"><span>${h("Organisation")}</span><select name="organization_id">${orgOptions(organizations, current && current.organization_id)}</select></label>` : ""}
       <button class="btn pill primary" type="submit">${h("Anlegen")}</button>
     </form>`);
@@ -2353,9 +2677,9 @@ async function pageCredentialNew() {
   }
   shell(t("Zugang anlegen"), `
     <form class="card form" id="credential-form">
-      <div class="grid-3">
-        <label class="field"><span>${h("Name")}</span><input name="name" required></label>
-        <label class="field"><span>${h("Art")}</span><select name="kind"><option value="ssh">ssh</option><option value="vault">vault</option><option value="env">env</option><option value="netbox">netbox</option></select></label>
+      <label class="field"><span>${h("Name")}</span><input name="name" required></label>
+      <div class="field-row">
+        <label class="field"><span>${h("Art")}</span><select class="fit" name="kind"><option value="ssh">ssh</option><option value="vault">vault</option><option value="env">env</option><option value="netbox">netbox</option></select></label>
       </div>
       <div id="secret-ssh">
         <label class="field"><span>${h("Benutzer")}</span><input name="username"></label>
@@ -2552,9 +2876,11 @@ async function pageMemberNew() {
   shell(t("Mitglied hinzufügen"), `
     <form class="card form" id="member-form">
       <label class="field"><span>${h("Benutzername")}</span><input name="username" required></label>
-      <label class="field"><span>${h("Rolle")}</span>
-        <select name="role"><option value="viewer">${h("Betrachter")}</option><option value="operator" selected>${h("Operator")}</option><option value="owner">${h("Besitzer")}</option></select>
-      </label>
+      <div class="field-row">
+        <label class="field"><span>${h("Rolle")}</span>
+          <select class="fit" name="role"><option value="viewer">${h("Betrachter")}</option><option value="operator" selected>${h("Operator")}</option><option value="owner">${h("Besitzer")}</option></select>
+        </label>
+      </div>
       <button class="btn pill primary" type="submit">${h("Hinzufügen")}</button>
     </form>`);
   document.querySelector("#member-form").addEventListener("submit", async (event) => {
@@ -2749,7 +3075,9 @@ async function pageUser(id) {
         ${openTeams.length ? `<form class="form" id="grant-form">
           <h2>${h("Zum Team hinzufügen")}</h2>
           <label class="field"><span>${h("Team")}</span><select name="team_id">${teamChoices}</select></label>
-          <label class="field"><span>${h("Rolle")}</span><select name="role">${roleOptions("operator")}</select></label>
+          <div class="field-row">
+            <label class="field"><span>${h("Rolle")}</span><select class="fit" name="role">${roleOptions("operator")}</select></label>
+          </div>
           <button class="btn pill primary" type="submit">${h("Hinzufügen")}</button>
         </form>` : `<p class="muted">${h("Der Benutzer ist in jedem Team.")}</p>`}
       </section>

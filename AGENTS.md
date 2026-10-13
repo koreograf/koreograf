@@ -7,6 +7,7 @@ Koreograf is a Rust prototype: one binary with an HTTP API, a browser UI, and a 
 - `README.md`, code identifiers, and commit messages are English.
 - Commit messages follow Conventional Commits. The subject is imperative, starts with a lowercase letter, has no trailing period, and stays within 72 characters. commitlint enforces that on pull requests.
 - The browser UI defaults to German. English is the `EN` map in `web/app.js`. The German string is the key. New visible copy goes through `t()` or `h()`, and the same German string gets an `EN` entry. Smoke tests look for those German literals in `/app.js`.
+- A new UI language is one object in `LANGUAGES` (`id`, `code`, `name`, `country`) plus the `EN` strings when `id` is not `de`. Add that country's SVG to `FLAG_SVG`; a missing flag shows the country code. The sidebar and the sign-in page share the list. English uses the UK flag.
 - API errors are German sentences in `{ "error": "..." }`. A static sentence that the UI shows should also be an `EN` key. Errors built with `format!` stay German.
 - Comments in `.env.example` and the Helm chart are still German. Leave them unless asked to translate them.
 
