@@ -113,6 +113,8 @@ h2 { font-size: 18px; margin: 0 0 10px; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .stack { display: flex; flex-direction: column; gap: 14px; }
+.role-legend { margin: 0 0 12px; padding-left: 18px; display: grid; gap: 6px; }
+.table select { min-width: 9rem; }
 
 .card {
   background: var(--panel);

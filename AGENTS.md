@@ -36,6 +36,7 @@ node --check web/app.js
 ## Product boundaries
 
 - SQLite is the only database. `postgres://` and `postgresql://` are rejected on purpose in `config::database_choice`. Do not add a PostgreSQL driver unless asked.
+- Team roles stay `viewer`, `operator`, and `owner`. System admin is `users.is_admin`. Do not add per-object roles unless asked. `/api/users` is admin-only. LDAP memberships stay directory-owned.
 - This is not an AWX drop-in. Do not add surveys, schedules, Receptor, or high availability unless asked.
 - Demo playbooks must not delete arbitrary files on remote hosts. Cleanup stays under the job work directory and only for names the hook lists.
 - A new CLI tool needs an entry in `runner::tools()` and a branch in `src/wrapper.sh`.

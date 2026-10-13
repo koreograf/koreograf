@@ -68,6 +68,10 @@ impl FromRequestParts<Shared> for AuthUser {
             read_cookie(&parts.headers, "koreograf_session").ok_or(ApiError::Unauthorized)?;
         let db = state.db()?;
         let user = db::user_by_session(&db, &token)?.ok_or(ApiError::Unauthorized)?;
+        if user.disabled {
+            db::delete_session(&db, &token)?;
+            return Err(ApiError::Unauthorized);
+        }
         Ok(user.into())
     }
 }

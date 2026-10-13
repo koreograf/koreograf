@@ -1306,3 +1306,348 @@ async fn admin_backup_roundtrip_replaces_the_installation() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn admin_can_list_and_update_users() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-users-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let script = script.as_str().unwrap_or("");
+    assert!(script.contains("Benutzer suchen"));
+    assert!(script.contains("#/users"));
+    assert!(script.contains("+ Benutzer"));
+
+    let (status, denied, _) = call(&app, "GET", "/api/users", None, None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{denied}");
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let admin_id = me["id"].as_str().unwrap().to_string();
+    let admin_name = me["display_name"].as_str().unwrap().to_string();
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "username": "ada",
+            "display_name": "Ada Lovelace",
+            "password": "ada-secret-1",
+            "is_admin": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let ada_id = created["id"].as_str().unwrap().to_string();
+    assert!(created.get("password_hash").is_none());
+
+    let (status, duplicate, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "username": "Ada",
+            "display_name": "Noch Ada",
+            "password": "ada-secret-1",
+            "is_admin": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{duplicate}");
+    assert_eq!(duplicate["error"], "Der Benutzername ist schon vergeben.");
+
+    let (status, member, _) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{team}/members"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"username": "ada", "role": "operator"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{member}");
+
+    let (status, ada_me, ada_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "ada", "password": "ada-secret-1"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ada_me}");
+    let ada_cookie = ada_cookie.expect("ada session");
+    let (status, forbidden, _) = call(
+        &app,
+        "GET",
+        "/api/users",
+        Some(&ada_cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{forbidden}");
+
+    let (status, users, _) = call(&app, "GET", "/api/users", Some(&cookie), None, None).await;
+    assert_eq!(status, StatusCode::OK, "{users}");
+    let names: Vec<_> = users
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["username"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"admin"), "{users}");
+    assert!(names.contains(&"ada"), "{users}");
+    assert!(users
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|item| item.get("password_hash").is_none()));
+
+    let (status, detail, _) = call(
+        &app,
+        "GET",
+        &format!("/api/users/{ada_id}"),
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["memberships"][0]["role"], "operator");
+    assert_eq!(detail["memberships"][0]["source"], "manual");
+    assert!(detail.get("password_hash").is_none());
+
+    let (status, promoted, _) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{team}/members"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"username": "ada", "role": "owner"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{promoted}");
+    let (status, detail, _) = call(
+        &app,
+        "GET",
+        &format!("/api/users/{ada_id}"),
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["memberships"][0]["role"], "owner");
+
+    let (status, updated, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/users/{ada_id}"),
+        Some(&cookie),
+        None,
+        Some(json!({
+            "display_name": "Ada L.",
+            "is_admin": false,
+            "disabled": false,
+            "password": "ada-secret-2"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["display_name"], "Ada L.");
+    assert!(updated.get("password_hash").is_none());
+
+    let (status, old_login, _) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "ada", "password": "ada-secret-1"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{old_login}");
+    let (status, stale, _) = call(&app, "GET", "/api/me", Some(&ada_cookie), None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{stale}");
+
+    let (status, fresh, fresh_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "ada", "password": "ada-secret-2"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{fresh}");
+    let fresh_cookie = fresh_cookie.expect("new ada session");
+
+    let (status, disabled, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/users/{ada_id}"),
+        Some(&cookie),
+        None,
+        Some(json!({
+            "display_name": "Ada L.",
+            "is_admin": false,
+            "disabled": true
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{disabled}");
+    assert_eq!(disabled["disabled"], true);
+    let (status, blocked, _) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "ada", "password": "ada-secret-2"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{blocked}");
+    assert_eq!(blocked["error"], "Das Konto ist deaktiviert.");
+    let (status, ended, _) = call(&app, "GET", "/api/me", Some(&fresh_cookie), None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{ended}");
+
+    let (status, enabled, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/users/{ada_id}"),
+        Some(&cookie),
+        None,
+        Some(json!({
+            "display_name": "Ada L.",
+            "is_admin": false,
+            "disabled": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{enabled}");
+    let (status, back, _) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "ada", "password": "ada-secret-2"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{back}");
+
+    let (status, self_off, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/users/{admin_id}"),
+        Some(&cookie),
+        None,
+        Some(json!({
+            "display_name": admin_name,
+            "is_admin": true,
+            "disabled": true
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{self_off}");
+    assert_eq!(
+        self_off["error"],
+        "Du kannst dein eigenes Konto nicht deaktivieren."
+    );
+    let (status, demote, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/users/{admin_id}"),
+        Some(&cookie),
+        None,
+        Some(json!({
+            "display_name": admin_name,
+            "is_admin": false,
+            "disabled": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{demote}");
+    assert_eq!(demote["error"], "Der letzte Administrator bleibt erhalten.");
+
+    let (status, own, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/users/{admin_id}"),
+        Some(&cookie),
+        None,
+        Some(json!({
+            "display_name": admin_name,
+            "is_admin": true,
+            "disabled": false,
+            "password": "admin-kept-session"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{own}");
+    assert!(own.get("password_hash").is_none());
+    let (status, still, _) = call(&app, "GET", "/api/me", Some(&cookie), None, None).await;
+    assert_eq!(status, StatusCode::OK, "{still}");
+
+    let (status, self_delete, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/users/{admin_id}"),
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{self_delete}");
+    assert_eq!(
+        self_delete["error"],
+        "Du kannst dein eigenes Konto nicht löschen."
+    );
+
+    let (status, removed, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/users/{ada_id}"),
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{removed}");
+    let (status, missing, _) = call(
+        &app,
+        "GET",
+        &format!("/api/users/{ada_id}"),
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

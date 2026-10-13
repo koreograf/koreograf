@@ -23,7 +23,16 @@ pub fn router(state: Shared) -> Router {
         .route("/login", post(session::login))
         .route("/logout", post(session::logout))
         .route("/me", get(session::me))
-        .route("/users", post(session::create_user))
+        .route(
+            "/users",
+            get(session::list_users).post(session::create_user),
+        )
+        .route(
+            "/users/{id}",
+            get(session::get_user)
+                .put(session::update_user)
+                .delete(session::delete_user),
+        )
         .route("/overview", get(catalog::overview))
         .route(
             "/teams",

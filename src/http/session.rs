@@ -1,4 +1,4 @@
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -26,6 +26,15 @@ pub struct UserBody {
     display_name: String,
     #[serde(default)]
     is_admin: bool,
+}
+
+#[derive(Deserialize)]
+pub(super) struct UserUpdate {
+    display_name: String,
+    is_admin: bool,
+    disabled: bool,
+    #[serde(default)]
+    password: String,
 }
 
 pub async fn login(
@@ -82,14 +91,36 @@ pub async fn me(State(state): State<Shared>, user: AuthUser) -> Result<Json<Valu
     Ok(Json(user_payload(&user, &teams)))
 }
 
+pub async fn list_users(State(state): State<Shared>, user: AuthUser) -> AppResult<Json<Value>> {
+    require_admin(&user)?;
+    let db = state.db()?;
+    let users = db::list_users(&db)?;
+    Ok(Json(Value::Array(
+        users
+            .iter()
+            .map(|(item, team_count)| account_json(item, *team_count))
+            .collect(),
+    )))
+}
+
+pub async fn get_user(
+    State(state): State<Shared>,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Json<Value>> {
+    require_admin(&user)?;
+    let db = state.db()?;
+    let found = db::user_by_id(&db, &id)?.ok_or(ApiError::NotFound)?;
+    let memberships = db::list_user_memberships(&db, &id)?;
+    Ok(Json(account_detail(&found, &memberships)))
+}
+
 pub async fn create_user(
     State(state): State<Shared>,
     user: AuthUser,
     Json(body): Json<UserBody>,
 ) -> Result<Response, ApiError> {
-    if !user.is_admin {
-        return Err(ApiError::Forbidden);
-    }
+    require_admin(&user)?;
     let username = body.username.trim().to_ascii_lowercase();
     if !username
         .chars()
@@ -103,11 +134,11 @@ pub async fn create_user(
     if body.password.len() < 8 {
         return Err(ApiError::bad("Passwort braucht mindestens 8 Zeichen."));
     }
-    let display = body.display_name.trim();
-    if display.is_empty() {
-        return Err(ApiError::bad("Anzeigename fehlt."));
-    }
+    let display = trimmed_display(&body.display_name)?;
     let db = state.db()?;
+    if db::user_by_username(&db, &username)?.is_some() {
+        return Err(ApiError::bad("Der Benutzername ist schon vergeben."));
+    }
     db::insert_user(
         &db,
         &Uuid::new_v4().to_string(),
@@ -118,12 +149,63 @@ pub async fn create_user(
         body.is_admin,
     )?;
     let created = db::user_by_username(&db, &username)?.ok_or(ApiError::NotFound)?;
-    Ok(super::created(json!({
-        "id": created.id,
-        "username": created.username,
-        "display_name": created.display_name,
-        "is_admin": created.is_admin,
-    })))
+    Ok(super::created(account_json(&created, 0)))
+}
+
+pub async fn update_user(
+    State(state): State<Shared>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    Json(body): Json<UserUpdate>,
+) -> AppResult<Json<Value>> {
+    require_admin(&user)?;
+    let display = trimmed_display(&body.display_name)?;
+    let db = state.db()?;
+    let existing = db::user_by_id(&db, &id)?.ok_or(ApiError::NotFound)?;
+    if body.disabled && id == user.id {
+        return Err(ApiError::bad(
+            "Du kannst dein eigenes Konto nicht deaktivieren.",
+        ));
+    }
+    ensure_last_admin(
+        &existing,
+        body.is_admin,
+        body.disabled,
+        db::other_active_admins(&db, &id)?,
+    )?;
+    let password_hash = new_password(&existing, &body.password)?;
+    db::update_user(
+        &db,
+        &id,
+        display,
+        body.is_admin,
+        body.disabled,
+        password_hash.as_deref(),
+    )?;
+    if id != user.id && (password_hash.is_some() || (body.disabled && !existing.disabled)) {
+        db::delete_user_sessions(&db, &id)?;
+    }
+    let updated = db::user_by_id(&db, &id)?.ok_or(ApiError::NotFound)?;
+    let memberships = db::list_user_memberships(&db, &id)?;
+    Ok(Json(account_detail(&updated, &memberships)))
+}
+
+pub async fn delete_user(
+    State(state): State<Shared>,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    require_admin(&user)?;
+    if id == user.id {
+        return Err(ApiError::bad("Du kannst dein eigenes Konto nicht löschen."));
+    }
+    let db = state.db()?;
+    let existing = db::user_by_id(&db, &id)?.ok_or(ApiError::NotFound)?;
+    ensure_last_admin(&existing, false, true, db::other_active_admins(&db, &id)?)?;
+    if !db::delete_user(&db, &id)? {
+        return Err(ApiError::NotFound);
+    }
+    Ok(super::no_content())
 }
 
 fn provision_ldap(state: &Shared, identity: ldap::LdapIdentity) -> AppResult<User> {
@@ -148,6 +230,9 @@ fn provision_ldap(state: &Shared, identity: ldap::LdapIdentity) -> AppResult<Use
 }
 
 fn session_response(state: &Shared, user: &User) -> AppResult<Response> {
+    if user.disabled {
+        return Err(ApiError::bad("Das Konto ist deaktiviert."));
+    }
     let token = crypto::random_token();
     let db = state.db()?;
     db::create_session(&db, &token, &user.id)?;
@@ -178,6 +263,72 @@ fn user_payload(user: &AuthUser, teams: &[(db::Team, String)]) -> Value {
             "role": role,
         })).collect::<Vec<_>>(),
     })
+}
+
+fn require_admin(user: &AuthUser) -> AppResult<()> {
+    if user.is_admin {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden)
+    }
+}
+
+fn trimmed_display(value: &str) -> AppResult<&str> {
+    let display = value.trim();
+    if display.is_empty() {
+        Err(ApiError::bad("Anzeigename fehlt."))
+    } else {
+        Ok(display)
+    }
+}
+
+fn ensure_last_admin(
+    existing: &User,
+    is_admin: bool,
+    disabled: bool,
+    others: i64,
+) -> AppResult<()> {
+    let was_active = existing.is_admin && !existing.disabled;
+    let stays_active = is_admin && !disabled;
+    if was_active && !stays_active && others == 0 {
+        Err(ApiError::bad("Der letzte Administrator bleibt erhalten."))
+    } else {
+        Ok(())
+    }
+}
+
+fn new_password(existing: &User, password: &str) -> AppResult<Option<String>> {
+    if password.is_empty() {
+        return Ok(None);
+    }
+    if existing.auth_source != "local" {
+        return Err(ApiError::bad(
+            "Das Passwort kommt aus LDAP oder Active Directory.",
+        ));
+    }
+    if password.len() < 8 {
+        return Err(ApiError::bad("Passwort braucht mindestens 8 Zeichen."));
+    }
+    Ok(Some(hash_password(password)))
+}
+
+fn account_json(user: &User, team_count: i64) -> Value {
+    json!({
+        "id": user.id,
+        "username": user.username,
+        "display_name": user.display_name,
+        "auth_source": user.auth_source,
+        "is_admin": user.is_admin,
+        "disabled": user.disabled,
+        "created_at": user.created_at,
+        "team_count": team_count,
+    })
+}
+
+fn account_detail(user: &User, memberships: &[db::UserMembership]) -> Value {
+    let mut value = account_json(user, i64::try_from(memberships.len()).unwrap_or(i64::MAX));
+    value["memberships"] = json!(memberships);
+    value
 }
 
 fn normalize(username: &str) -> AppResult<String> {

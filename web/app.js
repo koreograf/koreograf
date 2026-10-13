@@ -14,6 +14,7 @@ const EN = {
   "Abbrechen": "Cancel",
   "Abhängigkeits-Cache": "Dependency cache",
   "Administrator": "Administrator",
+  "Administrator verwaltet Organisationen, Teams, Benutzer und die Sicherung. Die Teamrolle wird dabei nicht geprüft.": "An administrator manages organizations, teams, users, and backup. The team role is not checked.",
   "Aktion": "Action",
   "Aktualisieren": "Refresh",
   "Alertname": "Alert name",
@@ -46,8 +47,13 @@ const EN = {
   "Benutzer angelegt.": "User created.",
   "Benutzer ist unbekannt. Lege ihn zuerst an.": "Unknown user. Create the account first.",
   "Benutzer wurde nicht eindeutig gefunden.": "The user was not found uniquely.",
+  "Benutzerkonten": "Users",
   "Benutzername": "Username",
   "Benutzername ist ungültig.": "Username is invalid.",
+  "Benutzername: 2–64 Zeichen, a-z, 0-9, Punkt, Unterstrich, Bindestrich.": "Username: 2–64 characters, a-z, 0-9, dot, underscore, hyphen.",
+  "Benutzer suchen": "Search users",
+  "Besitzer verwaltet zusätzlich Zugänge, Umgebungen und Mitglieder.": "An owner also manages credentials, environments, and members.",
+  "Betrachter sieht Projekte, Inventare, Vorlagen, Aufträge und Workflows.": "A viewer sees projects, inventories, templates, jobs, and workflows.",
   "Beschreibung": "Description",
   "Besitzer": "Owner",
   "Betrachter": "Viewer",
@@ -61,16 +67,23 @@ const EN = {
   "Dafür brauchst du die Rolle Besitzer.": "You need the owner role.",
   "Dafür brauchst du die Rolle Operator.": "You need the operator role.",
   "Dafür brauchst du ein Administratorkonto.": "You need an administrator account.",
+  "Deaktiviert": "Disabled",
+  "Das Konto ist deaktiviert.": "The account is disabled.",
+  "Das Passwort kommt aus LDAP oder Active Directory.": "The password comes from LDAP or Active Directory.",
   "Das Projekt ist für dieses Team nicht sichtbar.": "This project is not visible to this team.",
   "Datei fehlt im Projekt.": "File is missing from the project.",
   "Der Cache liegt unter data/cache und bleibt zwischen den Läufen erhalten.": "The cache lives under data/cache and stays between runs.",
   "Der Eintrag wird noch verwendet.": "The entry is still in use.",
   "Der Einstiegspfad muss relativ sein und darf das Projekt nicht verlassen.": "The entry path must be relative and must stay inside the project.",
+  "Der Benutzer ist in jedem Team.": "The user is in every team.",
+  "Der Benutzername ist schon vergeben.": "That username is already used.",
+  "Der letzte Administrator bleibt erhalten.": "The last administrator stays.",
   "Der Name ist in diesem Team schon vergeben.": "That name is already used in this team.",
   "Der Workflow enthält einen Zyklus.": "The workflow contains a cycle.",
   "Der Workflow hat noch keine Knoten.": "The workflow has no nodes yet.",
   "Die Anfrage ist fehlgeschlagen.": "The request failed.",
   "Die Datei ist kein Inventar.": "The file is not an inventory.",
+  "Die Mitgliedschaft kommt aus LDAP oder Active Directory.": "The membership comes from LDAP or Active Directory.",
   "Die manuelle Quelle ist leer.": "The manual source is empty.",
   "Die Sitzung ist abgelaufen.": "The session has expired.",
   "Die Sitzung ist lokal beendet.": "The session ended locally.",
@@ -79,10 +92,13 @@ const EN = {
   "Diese Seite gibt es nicht.": "This page does not exist.",
   "Diese Vorlage gibt es nicht.": "This template does not exist.",
   "Diesem Konto ist kein Team zugeordnet. Ein Administrator legt eines unter Team an.": "This account has no team. An administrator creates one under Team.",
+  "Dieses Konto wirklich löschen?": "Delete this account?",
   "Dieses Inventar hat keine externe Quelle.": "This inventory has no external source.",
   "Dieses Inventar hat mehrere Quellen. Den Text bearbeitest du an der einzelnen Quelle.": "This inventory has several sources. Edit the text on the single source.",
   "Diff": "Diff",
   "Diff ist ja oder nein.": "Diff is yes or no.",
+  "Du kannst dein eigenes Konto nicht deaktivieren.": "You cannot disable your own account.",
+  "Du kannst dein eigenes Konto nicht löschen.": "You cannot delete your own account.",
   "Du kannst dich nicht selbst aus dem Team nehmen.": "You cannot remove yourself from the team.",
   "Ein Inventar kann mehrere Quellen haben. Sie werden zusammen an Ansible übergeben.": "An inventory can have several sources. They are passed to Ansible together.",
   "Ein Knoten hat keine ID.": "A node has no id.",
@@ -159,6 +175,15 @@ const EN = {
   "Keine Playbooks gefunden. Bei einem Git-Projekt zuerst synchronisieren. Den Pfad kannst du unten eintragen.": "No playbooks found. Sync the Git project first. You can type the path below.",
   "Kein Team": "No team",
   "Kein Team ausgewählt.": "No team selected.",
+  "Kommt aus dem Verzeichnis.": "Comes from the directory.",
+  "Konto": "Account",
+  "Konto deaktivieren": "Disable account.",
+  "Leer lassen, um das Passwort zu behalten.": "Leave empty to keep the password.",
+  "Mitgliedschaften": "Memberships",
+  "Neues Passwort": "New password",
+  "Operator startet Aufträge und pflegt Projekte, Inventare, Vorlagen, Workflows und Webhooks.": "An operator launches jobs and maintains projects, inventories, templates, workflows, and webhooks.",
+  "Rechte": "Permissions",
+  "Zum Team hinzufügen": "Add to a team",
   "KEY=Wert, eine Zeile je Variable": "KEY=value, one variable per line",
   "Knoten": "Nodes",
   "Knoten hinzufügen": "Add node",
@@ -497,6 +522,28 @@ function roleLabel(role) {
   }[role] || role;
 }
 
+function roleOptions(selected) {
+  const labels = { viewer: "Betrachter", operator: "Operator", owner: "Besitzer" };
+  return ["viewer", "operator", "owner"].map((role) =>
+    `<option value="${role}"${role === selected ? " selected" : ""}>${h(labels[role])}</option>`
+  ).join("");
+}
+
+function sourceLabel(source) {
+  if (source === "ldap") return "LDAP";
+  if (source === "manual" || source === "local") return t("Manuell");
+  return source || "";
+}
+
+function roleLegend() {
+  return `<ul class="role-legend">
+    <li><strong>${h("Betrachter")}</strong> ${h("Betrachter sieht Projekte, Inventare, Vorlagen, Aufträge und Workflows.")}</li>
+    <li><strong>${h("Operator")}</strong> ${h("Operator startet Aufträge und pflegt Projekte, Inventare, Vorlagen, Workflows und Webhooks.")}</li>
+    <li><strong>${h("Besitzer")}</strong> ${h("Besitzer verwaltet zusätzlich Zugänge, Umgebungen und Mitglieder.")}</li>
+    <li><strong>${h("Administrator")}</strong> ${h("Administrator verwaltet Organisationen, Teams, Benutzer und die Sicherung. Die Teamrolle wird dabei nicht geprüft.")}</li>
+  </ul>`;
+}
+
 function statusLabel(status) {
   return {
     pending: t("Wartend"),
@@ -599,7 +646,7 @@ function shell(title, body, actions) {
     [lang === "en" ? "Access" : "Zugang", [
       ["#/organizations", t("Organisationen")],
       ["#/team", t("Team")],
-      ...(me.is_admin ? [["#/backup", t("Sicherung")]] : []),
+      ...(me.is_admin ? [["#/users", t("Benutzerkonten")], ["#/backup", t("Sicherung")]] : []),
     ]],
   ];
   const nav = groups.map(([label, links]) => `
@@ -2294,9 +2341,21 @@ async function pageTeam() {
   const organizations = me.is_admin ? await api("GET", "/api/organizations") : [];
   let members = [];
   if (teamId) members = await api("GET", `/api/teams/${encodeURIComponent(teamId)}/members`);
-  const memberRows = members.map((member) =>
-    `<tr><td>${esc(member.display_name)} <span class="small muted">${esc(member.username)}</span></td><td>${esc(roleLabel(member.role))}</td><td>${esc(member.source)}</td><td>${can("owner") ? `<button class="btn danger" type="button" data-member="${esc(member.user_id)}">${h("Entfernen")}</button>` : ""}</td></tr>`
-  );
+  const memberRows = members.map((member) => {
+    const name = me.is_admin
+      ? `<a href="#/users/${esc(member.user_id)}">${esc(member.display_name)}</a>`
+      : esc(member.display_name);
+    const roleCell = member.source === "manual" && can("owner")
+      ? `<select data-member-role="${esc(member.username)}" data-current="${esc(member.role)}">${roleOptions(member.role)}</select>`
+      : esc(roleLabel(member.role));
+    const sourceCell = member.source === "ldap"
+      ? `${esc(sourceLabel(member.source))} <span class="small muted">${h("Kommt aus dem Verzeichnis.")}</span>`
+      : esc(sourceLabel(member.source));
+    const remove = can("owner")
+      ? `<button class="btn danger" type="button" data-member="${esc(member.user_id)}">${h("Entfernen")}</button>`
+      : "";
+    return `<tr><td>${name} <span class="small muted">${esc(member.username)}</span></td><td>${roleCell}</td><td>${sourceCell}</td><td>${remove}</td></tr>`;
+  });
   const actions = [
     teamId && can("owner") ? addLink("#/team/members/new", "+ Mitglied") : "",
     me.is_admin ? addLink("#/team/new", "+ Team") : "",
@@ -2317,6 +2376,7 @@ async function pageTeam() {
     </section>
     <section class="card">
       <h2>${h("Mitglieder")}</h2>
+      ${roleLegend()}
       ${table([t("Name"), t("Rolle"), t("Herkunft"), ""], memberRows)}
     </section>` : `<div class="card">${h("Kein Team ausgewählt.")}</div>`}`, actions);
   const teamForm = document.querySelector("#team-form");
@@ -2336,6 +2396,21 @@ async function pageTeam() {
       } catch (error) { handle(error); }
     });
   }
+  document.querySelectorAll("[data-member-role]").forEach((select) => {
+    select.addEventListener("change", async () => {
+      const next = select.value;
+      try {
+        await api("POST", `/api/teams/${encodeURIComponent(teamId)}/members`, {
+          username: select.dataset.memberRole,
+          role: next,
+        });
+        select.dataset.current = next;
+      } catch (error) {
+        select.value = select.dataset.current;
+        handle(error);
+      }
+    });
+  });
   document.querySelectorAll("[data-member]").forEach((button) => {
     button.addEventListener("click", async () => {
       try {
@@ -2410,6 +2485,166 @@ async function pageTeamNew() {
   });
 }
 
+async function pageUsers() {
+  if (!me.is_admin) {
+    deny("Benutzerkonten", "admin");
+    return;
+  }
+  const items = await api("GET", "/api/users");
+  shell(t("Benutzerkonten"), `
+    <section class="card">
+      <input class="search" id="user-search" placeholder="${h("Benutzer suchen")}" autocomplete="off">
+      <div id="user-table"></div>
+    </section>`,
+    addLink("#/users/new", "+ Benutzer"));
+  const draw = () => {
+    const needle = document.querySelector("#user-search").value.trim().toLowerCase();
+    const shown = items.filter((item) => {
+      if (!needle) return true;
+      return `${item.display_name} ${item.username} ${item.auth_source}`.toLowerCase().includes(needle);
+    });
+    const rows = shown.map((item) => {
+      const flags = [
+        item.is_admin ? `<span class="pill">${h("Administrator")}</span>` : "",
+        item.disabled ? `<span class="pill failed">${h("Deaktiviert")}</span>` : "",
+      ].filter(Boolean).join(" ");
+      const when = String(item.created_at || "").slice(0, 10);
+      return `<tr>
+        <td><a href="#/users/${esc(item.id)}">${esc(item.display_name)}</a> ${flags}</td>
+        <td>${esc(item.username)}</td>
+        <td>${esc(sourceLabel(item.auth_source))}</td>
+        <td>${esc(item.team_count)}</td>
+        <td class="small muted">${esc(when)}</td>
+      </tr>`;
+    });
+    document.querySelector("#user-table").innerHTML = table(
+      [t("Name"), t("Benutzername"), t("Herkunft"), t("Teams"), t("Angelegt")],
+      rows
+    );
+  };
+  document.querySelector("#user-search").addEventListener("input", draw);
+  draw();
+}
+
+async function pageUser(id) {
+  if (!me.is_admin) {
+    deny("Benutzerkonten", "admin");
+    return;
+  }
+  const item = await api("GET", `/api/users/${encodeURIComponent(id)}`);
+  const teams = await api("GET", "/api/teams");
+  const memberIds = new Set((item.memberships || []).map((row) => row.team_id));
+  const openTeams = teams.filter((team) => !memberIds.has(team.id));
+  const self = item.id === me.id;
+  const rows = (item.memberships || []).map((row) => {
+    const org = row.organization_name ? `${row.organization_name} · ` : "";
+    const roleCell = row.source === "manual"
+      ? `<select data-role="${esc(row.team_id)}" data-current="${esc(row.role)}">${roleOptions(row.role)}</select>`
+      : `${esc(roleLabel(row.role))} <span class="small muted">${h("Kommt aus dem Verzeichnis.")}</span>`;
+    const remove = row.source === "manual"
+      ? `<button class="btn danger" type="button" data-leave="${esc(row.team_id)}">${h("Entfernen")}</button>`
+      : "";
+    return `<tr><td>${esc(org + row.team_name)}</td><td>${roleCell}</td><td>${esc(sourceLabel(row.source))}</td><td>${remove}</td></tr>`;
+  });
+  const passwordField = item.auth_source === "local"
+    ? `<label class="field"><span>${h("Neues Passwort")}</span><input name="password" type="password" minlength="8" autocomplete="new-password" placeholder="${h("Leer lassen, um das Passwort zu behalten.")}"></label>`
+    : `<p class="small muted">${h("Das Passwort kommt aus LDAP oder Active Directory.")}</p>`;
+  const teamChoices = openTeams.map((team) => {
+    const label = team.organization_name ? `${team.organization_name} · ${team.name}` : team.name;
+    return `<option value="${esc(team.id)}">${esc(label)}</option>`;
+  }).join("");
+  shell(item.display_name, `
+    <div class="stack">
+      <form class="card form" id="user-form">
+        <h2>${h("Konto")}</h2>
+        <p class="small muted">${h("Benutzername")}: ${esc(item.username)} · ${esc(sourceLabel(item.auth_source))}</p>
+        <label class="field"><span>${h("Anzeigename")}</span><input name="display_name" value="${esc(item.display_name)}" required></label>
+        <label class="row"><input name="is_admin" type="checkbox"${item.is_admin ? " checked" : ""}> ${h("Administrator")}</label>
+        <label class="row"><input name="account_disabled" type="checkbox"${item.disabled ? " checked" : ""}${self ? " disabled" : ""}> ${h("Konto deaktivieren")}</label>
+        ${passwordField}
+        <div class="row">
+          <button class="btn pill primary" type="submit">${h("Speichern")}</button>
+          ${self ? "" : `<button class="btn danger" id="delete-user" type="button">${h("Löschen")}</button>`}
+        </div>
+      </form>
+      <section class="card">
+        <h2>${h("Rechte")}</h2>
+        ${roleLegend()}
+      </section>
+      <section class="card">
+        <h2>${h("Mitgliedschaften")}</h2>
+        ${table([t("Team"), t("Rolle"), t("Herkunft"), ""], rows)}
+        ${openTeams.length ? `<form class="form" id="grant-form">
+          <h2>${h("Zum Team hinzufügen")}</h2>
+          <label class="field"><span>${h("Team")}</span><select name="team_id">${teamChoices}</select></label>
+          <label class="field"><span>${h("Rolle")}</span><select name="role">${roleOptions("operator")}</select></label>
+          <button class="btn pill primary" type="submit">${h("Hinzufügen")}</button>
+        </form>` : `<p class="muted">${h("Der Benutzer ist in jedem Team.")}</p>`}
+      </section>
+    </div>`);
+  document.querySelector("#user-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    try {
+      const payload = {
+        display_name: form.display_name.value,
+        is_admin: form.is_admin.checked,
+        disabled: form.account_disabled.checked,
+      };
+      if (form.password && form.password.value) payload.password = form.password.value;
+      await api("PUT", `/api/users/${encodeURIComponent(id)}`, payload);
+      if (self) me = await api("GET", "/api/me");
+      route();
+    } catch (error) { handle(error); }
+  });
+  const deleteButton = document.querySelector("#delete-user");
+  if (deleteButton) {
+    deleteButton.addEventListener("click", async () => {
+      if (!window.confirm(t("Dieses Konto wirklich löschen?"))) return;
+      try {
+        await api("DELETE", `/api/users/${encodeURIComponent(id)}`);
+        go("#/users");
+      } catch (error) { handle(error); }
+    });
+  }
+  document.querySelectorAll("[data-role]").forEach((select) => {
+    select.addEventListener("change", async () => {
+      const next = select.value;
+      try {
+        await api("POST", `/api/teams/${encodeURIComponent(select.dataset.role)}/members`, {
+          username: item.username,
+          role: next,
+        });
+        select.dataset.current = next;
+      } catch (error) {
+        select.value = select.dataset.current;
+        handle(error);
+      }
+    });
+  });
+  document.querySelectorAll("[data-leave]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      try {
+        await api("DELETE", `/api/teams/${encodeURIComponent(button.dataset.leave)}/members/${encodeURIComponent(item.id)}`);
+        route();
+      } catch (error) { handle(error); }
+    });
+  });
+  const grant = document.querySelector("#grant-form");
+  if (grant) {
+    grant.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        await api("POST", `/api/teams/${encodeURIComponent(grant.team_id.value)}/members`, {
+          username: item.username,
+          role: grant.role.value,
+        });
+        route();
+      } catch (error) { handle(error); }
+    });
+  }
+}
+
 async function pageUserNew() {
   if (!me.is_admin) {
     deny("Benutzer", "admin");
@@ -2417,9 +2652,10 @@ async function pageUserNew() {
   }
   shell(t("Benutzer anlegen"), `
     <form class="card form" id="create-user">
-      <label class="field"><span>${h("Benutzername")}</span><input name="username" required></label>
+      <label class="field"><span>${h("Benutzername")}</span><input name="username" required autocomplete="off"></label>
+      <p class="small muted">${h("Benutzername: 2–64 Zeichen, a-z, 0-9, Punkt, Unterstrich, Bindestrich.")}</p>
       <label class="field"><span>${h("Anzeigename")}</span><input name="display_name" required></label>
-      <label class="field"><span>${h("Passwort")}</span><input name="password" type="password" required minlength="8"></label>
+      <label class="field"><span>${h("Passwort")}</span><input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
       <label class="row"><input name="is_admin" type="checkbox"> ${h("Administrator")}</label>
       <button class="btn pill primary" type="submit">${h("Anlegen")}</button>
     </form>`);
@@ -2427,14 +2663,13 @@ async function pageUserNew() {
     event.preventDefault();
     const form = event.currentTarget;
     try {
-      await api("POST", "/api/users", {
+      const created = await api("POST", "/api/users", {
         username: form.username.value,
         display_name: form.display_name.value,
         password: form.password.value,
         is_admin: form.is_admin.checked,
       });
-      form.reset();
-      document.querySelector(".main").insertAdjacentHTML("afterbegin", `<div class="banner good">${h("Benutzer angelegt.")}</div>`);
+      go(`#/users/${created.id}`);
     } catch (error) { handle(error); }
   });
 }
@@ -2554,6 +2789,8 @@ async function route() {
     else if (parts[0] === "team" && parts[1] === "members" && parts[2] === "new") await pageMemberNew();
     else if (parts[0] === "team" && parts[1] === "new") await pageTeamNew();
     else if (parts[0] === "users" && parts[1] === "new") await pageUserNew();
+    else if (parts[0] === "users" && parts[1]) await pageUser(parts[1]);
+    else if (parts[0] === "users") await pageUsers();
     else if (parts[0] === "backup") await pageBackup();
     else if (parts[0] === "team") await pageTeam();
     else shell(t("Seite"), `<div class="card">${h("Diese Seite gibt es nicht.")}</div>`);

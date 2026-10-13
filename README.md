@@ -114,7 +114,7 @@ An operator cannot move a project to an organization other than the one of the t
 
 Roles are `viewer`, `operator`, and `owner`. The local administrator bypasses the role check so an LDAP outage cannot lock everyone out. Sign-in checks the local password first, then LDAP.
 
-Memberships from LDAP have source `ldap` and role `operator`. When the group disappears, only that membership is removed. Manual memberships stay.
+Memberships from LDAP have source `ldap` and role `operator`. When the group disappears, only that membership is removed. Manual memberships stay. A manual change does not overwrite an LDAP membership. The next directory sync owns that row. Removing the member is still allowed, and the directory can add it back.
 
 A team stores an LDAP group as a CN or a DN. The comparison ignores case.
 
@@ -182,13 +182,27 @@ A file with `plugin:` is not executed. `plugin: netbox.netbox.nb_inventory` (als
 
 An Ansible template stores the run in `spec`: `job_type` `run` or `check`, `tags`, `skip_tags`, `limit`, `diff`, `verbosity` from 0 to 4, and `forks` from 1 to 50. Check starts `ansible-playbook --check`.
 
+## Users and permissions
+
+An administrator sees every account under **Users** (German: **Benutzerkonten**). `GET /api/users` lists them. `GET /api/users/{id}` returns the account and its memberships. The password hash is never returned.
+
+`PUT /api/users/{id}` changes the display name, the administrator flag, and whether the account is disabled. The username stays as it is, because LDAP matches on it. A local account can take a new password in the same request. An empty password leaves the current one. An LDAP account keeps its password in the directory.
+
+Disabling an account ends that user's sessions. The next sign-in, after a correct password, answers `Das Konto ist deaktiviert.` You cannot disable or delete your own account. The last active administrator cannot be demoted, disabled, or deleted.
+
+There is no per-object role. A viewer sees projects, inventories, templates, jobs, and workflows. An operator launches jobs and edits those objects, plus workflows and webhooks. An owner also manages credentials, environments, and team members. The administrator flag skips the team-role check and can manage organizations, teams, users, and backup.
+
+`POST /api/teams/{id}/members` sets a manual role. The same call adds a user to a team they are not in yet.
+
 ## API
 
 Session cookie `koreograf_session`, HttpOnly, SameSite=Lax, seven days. Team routes need `X-Team-Id`. Job events use the team membership stored on the job, because `EventSource` cannot set custom headers. The stream is `GET /api/jobs/{id}/events?after=`.
 
 | Method | Path |
 | --- | --- |
-| POST | `/api/login`, `/api/logout`, `/api/users` |
+| POST | `/api/login`, `/api/logout` |
+| GET, POST | `/api/users` |
+| GET, PUT, DELETE | `/api/users/{id}` |
 | GET | `/api/me`, `/api/overview`, `/api/teams` |
 | POST | `/api/teams` |
 | PUT | `/api/teams/{id}` |

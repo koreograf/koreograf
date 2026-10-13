@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT,
   auth_source TEXT NOT NULL,
   is_admin INTEGER NOT NULL DEFAULT 0,
+  disabled INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sessions (
@@ -216,6 +217,12 @@ fn column_exists(c: &Connection, table: &str, column: &str) -> AppResult<bool> {
 }
 
 fn migrate(c: &Connection) -> AppResult<()> {
+    if !column_exists(c, "users", "disabled")? {
+        c.execute(
+            "ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
     if !column_exists(c, "teams", "organization_id")? {
         c.execute("ALTER TABLE teams ADD COLUMN organization_id TEXT", [])?;
     }
@@ -328,6 +335,18 @@ pub struct User {
     pub password_hash: Option<String>,
     pub auth_source: String,
     pub is_admin: bool,
+    pub disabled: bool,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct UserMembership {
+    pub team_id: String,
+    pub team_name: String,
+    pub organization_id: String,
+    pub organization_name: String,
+    pub role: String,
+    pub source: String,
 }
 
 #[derive(Clone, Debug)]
@@ -532,9 +551,12 @@ pub fn insert_user(
     Ok(())
 }
 
+const USER_SELECT: &str =
+    "id, username, display_name, password_hash, auth_source, is_admin, disabled, created_at";
+
 pub fn user_by_username(c: &Connection, username: &str) -> AppResult<Option<User>> {
     c.query_row(
-        "SELECT id, username, display_name, password_hash, auth_source, is_admin FROM users WHERE username = ?1 COLLATE NOCASE",
+        &format!("SELECT {USER_SELECT} FROM users WHERE username = ?1 COLLATE NOCASE"),
         [username],
         map_user,
     )
@@ -544,12 +566,112 @@ pub fn user_by_username(c: &Connection, username: &str) -> AppResult<Option<User
 
 pub fn user_by_id(c: &Connection, id: &str) -> AppResult<Option<User>> {
     c.query_row(
-        "SELECT id, username, display_name, password_hash, auth_source, is_admin FROM users WHERE id = ?1",
+        &format!("SELECT {USER_SELECT} FROM users WHERE id = ?1"),
         [id],
         map_user,
     )
     .optional()
     .map_err(Into::into)
+}
+
+pub fn list_users(c: &Connection) -> AppResult<Vec<(User, i64)>> {
+    let mut stmt = c.prepare(&format!(
+        "SELECT {USER_SELECT},
+                (SELECT COUNT(*) FROM memberships m WHERE m.user_id = users.id)
+         FROM users ORDER BY username COLLATE NOCASE"
+    ))?;
+    let rows = stmt.query_map([], |row| Ok((map_user(row)?, row.get::<_, i64>(8)?)))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+pub fn list_user_memberships(c: &Connection, user_id: &str) -> AppResult<Vec<UserMembership>> {
+    let mut stmt = c.prepare(
+        "SELECT t.id, t.name, COALESCE(t.organization_id, ''), COALESCE(o.name, ''), m.role, m.source
+         FROM memberships m
+         JOIN teams t ON t.id = m.team_id
+         LEFT JOIN organizations o ON o.id = t.organization_id
+         WHERE m.user_id = ?1
+         ORDER BY o.name, t.name",
+    )?;
+    let rows = stmt.query_map([user_id], |row| {
+        Ok(UserMembership {
+            team_id: row.get(0)?,
+            team_name: row.get(1)?,
+            organization_id: row.get(2)?,
+            organization_name: row.get(3)?,
+            role: row.get(4)?,
+            source: row.get(5)?,
+        })
+    })?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+pub fn update_user(
+    c: &Connection,
+    id: &str,
+    display_name: &str,
+    is_admin: bool,
+    disabled: bool,
+    password_hash: Option<&str>,
+) -> AppResult<()> {
+    if let Some(password_hash) = password_hash {
+        c.execute(
+            "UPDATE users SET display_name = ?2, is_admin = ?3, disabled = ?4, password_hash = ?5 WHERE id = ?1",
+            params![id, display_name, is_admin as i64, disabled as i64, password_hash],
+        )?;
+    } else {
+        c.execute(
+            "UPDATE users SET display_name = ?2, is_admin = ?3, disabled = ?4 WHERE id = ?1",
+            params![id, display_name, is_admin as i64, disabled as i64],
+        )?;
+    }
+    Ok(())
+}
+
+pub fn delete_user_sessions(c: &Connection, user_id: &str) -> AppResult<()> {
+    c.execute("DELETE FROM sessions WHERE user_id = ?1", [user_id])?;
+    Ok(())
+}
+
+pub fn delete_user(c: &Connection, id: &str) -> AppResult<bool> {
+    Ok(c.execute("DELETE FROM users WHERE id = ?1", [id])? > 0)
+}
+
+pub fn other_active_admins(c: &Connection, user_id: &str) -> AppResult<i64> {
+    c.query_row(
+        "SELECT COUNT(*) FROM users WHERE is_admin != 0 AND disabled = 0 AND id != ?1",
+        [user_id],
+        |row| row.get(0),
+    )
+    .map_err(Into::into)
+}
+
+pub fn membership_source(
+    c: &Connection,
+    team_id: &str,
+    user_id: &str,
+) -> AppResult<Option<String>> {
+    c.query_row(
+        "SELECT source FROM memberships WHERE team_id = ?1 AND user_id = ?2",
+        params![team_id, user_id],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+pub fn grant_manual_membership(
+    c: &Connection,
+    team_id: &str,
+    user_id: &str,
+    role: &str,
+) -> AppResult<()> {
+    if membership_source(c, team_id, user_id)?.as_deref() == Some("ldap") {
+        return Err(ApiError::bad(
+            "Die Mitgliedschaft kommt aus LDAP oder Active Directory.",
+        ));
+    }
+    upsert_membership(c, team_id, user_id, role, "manual")
 }
 
 fn map_user(row: &rusqlite::Row<'_>) -> rusqlite::Result<User> {
@@ -560,6 +682,8 @@ fn map_user(row: &rusqlite::Row<'_>) -> rusqlite::Result<User> {
         password_hash: row.get(3)?,
         auth_source: row.get(4)?,
         is_admin: flag(row.get(5)?),
+        disabled: flag(row.get(6)?),
+        created_at: row.get(7)?,
     })
 }
 
@@ -584,11 +708,11 @@ pub fn purge_sessions(c: &Connection) -> AppResult<()> {
 pub fn user_by_session(c: &Connection, token: &str) -> AppResult<Option<User>> {
     let found = c
         .query_row(
-            "SELECT u.id, u.username, u.display_name, u.password_hash, u.auth_source, u.is_admin, s.expires_at
+            "SELECT u.id, u.username, u.display_name, u.password_hash, u.auth_source, u.is_admin, u.disabled, u.created_at, s.expires_at
              FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?1",
             [token],
             |row| {
-                let expires: String = row.get(6)?;
+                let expires: String = row.get(8)?;
                 Ok((map_user(row)?, expires))
             },
         )
@@ -1965,6 +2089,29 @@ mod tests {
             .unwrap()
             .iter()
             .any(|item| item.id == "p1"));
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn manual_grant_leaves_an_ldap_membership() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-member-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = open(&dir.join("koreograf.db")).unwrap();
+        insert_organization(&conn, "org", "Plattform", "").unwrap();
+        insert_team(&conn, "team", "org", "Plattform", "", None).unwrap();
+        insert_user(&conn, "user", "ada", "Ada", None, "ldap", false).unwrap();
+        upsert_membership(&conn, "team", "user", "operator", "ldap").unwrap();
+        let err = grant_manual_membership(&conn, "team", "user", "owner").unwrap_err();
+        assert!(err.to_string().contains("LDAP"));
+        let members = list_members(&conn, "team").unwrap();
+        assert_eq!(members[0].role, "operator");
+        assert_eq!(members[0].source, "ldap");
+        grant_manual_membership(&conn, "team", "user", "viewer").unwrap_err();
         drop(conn);
         let _ = std::fs::remove_dir_all(&dir);
     }

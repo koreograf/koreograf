@@ -232,7 +232,7 @@ pub async fn add_member(
     let db = state.db()?;
     let member = db::user_by_username(&db, &username)?
         .ok_or_else(|| ApiError::bad("Benutzer ist unbekannt. Lege ihn zuerst an."))?;
-    db::upsert_membership(&db, &id, &member.id, role.as_str(), "manual")?;
+    db::grant_manual_membership(&db, &id, &member.id, role.as_str())?;
     Ok(created(
         json!({"user_id": member.id, "role": role.as_str()}),
     ))
