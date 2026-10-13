@@ -49,6 +49,71 @@ const EN = {
   "Art": "Type",
   "Art ist run oder check.": "Type is run or check.",
   "Art ist ssh, vault, env oder netbox.": "Type is ssh, vault, env, or netbox.",
+  "Access Key": "Access key",
+  "Adresse muss mit https:// beginnen.": "The address must start with https://.",
+  "Amazon Web Services": "Amazon Web Services",
+  "Ansible Galaxy": "Ansible Galaxy",
+  "Ansible Vault": "Ansible Vault",
+  "Authorize": "Authorize",
+  "Authorize-Passwort": "Authorize password",
+  "AWS braucht access_key.": "AWS needs access_key.",
+  "AWS braucht secret_key.": "AWS needs secret_key.",
+  "Azure braucht client_id.": "Azure needs client_id.",
+  "Azure braucht secret.": "Azure needs secret.",
+  "Azure braucht subscription_id.": "Azure needs subscription_id.",
+  "Azure braucht tenant.": "Azure needs tenant.",
+  "Become-Benutzer": "Become user",
+  "Become-Methode": "Become method",
+  "Become-Methode ist ungültig.": "The become method is invalid.",
+  "Become-Passwort": "Become password",
+  "Benutzer fehlt.": "Username is missing.",
+  "Client": "Client",
+  "Container-Registry": "Container registry",
+  "Der Auftrag sieht Host, Benutzer und Passwort. Docker selbst wird nicht angemeldet.": "The job sees the host, username, and password. Docker itself is not logged in.",
+  "Dienstkonto": "Service account",
+  "Dienstkonto fehlt.": "The service account is missing.",
+  "Dienstkonto ist kein JSON-Objekt.": "The service account is not a JSON object.",
+  "Domain": "Domain",
+  "Geheimnis": "Secret",
+  "Geheimnis ist zu groß.": "The secret is too large.",
+  "GitHub-Token": "GitHub token",
+  "GitLab-Token": "GitLab token",
+  "Gilt im Auftrag. Der Projekt-Sync nutzt diesen Zugang noch nicht.": "Applies to the job. Project sync does not use this credential yet.",
+  "Google Compute Engine": "Google Compute Engine",
+  "Host": "Host",
+  "Keine": "None",
+  "Kubernetes": "Kubernetes",
+  "Kubernetes braucht host.": "Kubernetes needs a host.",
+  "Leer lässt https://galaxy.ansible.com.": "Empty keeps https://galaxy.ansible.com.",
+  "Leer setzt die Domain auf Default.": "Empty sets the domain to Default.",
+  "Maschine (SSH)": "Machine (SSH)",
+  "Microsoft Azure": "Microsoft Azure",
+  "NetBox": "NetBox",
+  "Netzwerk": "Network",
+  "Netzwerk braucht einen Benutzer oder ein Passwort.": "Network needs a username or a password.",
+  "OpenStack": "OpenStack",
+  "OpenStack braucht auth_url.": "OpenStack needs auth_url.",
+  "OpenStack braucht project.": "OpenStack needs project.",
+  "Passphrase": "Passphrase",
+  "Passphrase braucht einen privaten Schlüssel.": "A passphrase needs a private key.",
+  "Passwort fehlt.": "Password is missing.",
+  "Quellcode": "Source control",
+  "Quellcode braucht einen Schlüssel oder ein Passwort.": "Source control needs a key or a password.",
+  "Red Hat Insights": "Red Hat Insights",
+  "Registry braucht host.": "The registry needs a host.",
+  "Schlüssel oder Passwort, auch beides.": "A key or a password, or both.",
+  "Secret Key": "Secret key",
+  "Session-Token": "Session token",
+  "SSH braucht einen Schlüssel oder ein Passwort.": "SSH needs a key or a password.",
+  "Subscription": "Subscription",
+  "Tenant": "Tenant",
+  "Token fehlt.": "Token is missing.",
+  "Umgebungsvariablen": "Environment variables",
+  "Unbekannte Zugangsart.": "Unknown credential type.",
+  "Vault-Id": "Vault id",
+  "Vault-Id ist ungültig.": "The vault id is invalid.",
+  "VMware braucht host.": "VMware needs a host.",
+  "VMware vCenter": "VMware vCenter",
   "Auftrag fehlt.": "Job is missing.",
   "Auftrag ohne Vorlage.": "Job has no template.",
   "Aufträge": "Jobs",
@@ -1227,7 +1292,7 @@ async function pageTemplateForm(id) {
         <div class="field-grid">
           <label class="field"><span>${h("Projekt")}</span><select name="project_id">${selectOptions(projects, item.project_id, true, (row) => row.name)}</select></label>
           <label class="field" id="inventory-field"${item.tool === "ansible" ? "" : " hidden"}><span>${h("Inventar")}</span><select name="inventory_id">${selectOptions(inventories, item.inventory_id, true, (row) => row.name)}</select></label>
-          <label class="field"><span>${h("Zugang")}</span><select name="credential_id">${selectOptions(credentials, item.credential_id, true, (row) => `${row.name} (${row.kind})`)}</select></label>
+          <label class="field"><span>${h("Zugang")}</span><select name="credential_id">${selectOptions(credentials, item.credential_id, true, (row) => `${row.name} (${credentialKindLabel(row.kind)})`)}</select></label>
           <label class="field"><span>${h("Execution Environment")}</span><select name="environment_id">${selectOptions(environments, item.environment_id, true, (row) => row.name)}</select></label>
         </div>
         <label class="field" id="playbook-field" hidden><span>${h("Playbook aus dem Projekt")}</span><select name="playbook"><option value="">${h("Anderer Pfad")}</option></select></label>
@@ -2645,35 +2710,207 @@ async function pageInventory(id) {
     });
   }
 }
+const CREDENTIAL_KINDS = [
+  ["ssh", "Maschine (SSH)", "Schlüssel oder Passwort, auch beides."],
+  ["vault", "Ansible Vault", ""],
+  ["scm", "Quellcode", "Gilt im Auftrag. Der Projekt-Sync nutzt diesen Zugang noch nicht."],
+  ["net", "Netzwerk", ""],
+  ["aws", "Amazon Web Services", ""],
+  ["azure", "Microsoft Azure", ""],
+  ["gce", "Google Compute Engine", ""],
+  ["vmware", "VMware vCenter", ""],
+  ["openstack", "OpenStack", "Leer setzt die Domain auf Default."],
+  ["registry", "Container-Registry", "Der Auftrag sieht Host, Benutzer und Passwort. Docker selbst wird nicht angemeldet."],
+  ["github", "GitHub-Token", ""],
+  ["gitlab", "GitLab-Token", ""],
+  ["galaxy", "Ansible Galaxy", "Leer lässt https://galaxy.ansible.com."],
+  ["kubernetes", "Kubernetes", ""],
+  ["insights", "Red Hat Insights", ""],
+  ["env", "Umgebungsvariablen", ""],
+  ["netbox", "NetBox", ""],
+];
+
+function credentialKindLabel(kind) {
+  const row = CREDENTIAL_KINDS.find((item) => item[0] === kind);
+  return row ? t(row[1]) : kind;
+}
+
+function credText(name, label, type) {
+  const inputType = type || "text";
+  const complete = inputType === "password" ? "new-password" : "off";
+  return `<label class="field"><span>${h(label)}</span><input name="${name}" type="${inputType}" autocomplete="${complete}"></label>`;
+}
+
+function credArea(name, label) {
+  return `<label class="field"><span>${h(label)}</span><textarea name="${name}" autocomplete="off" spellcheck="false"></textarea></label>`;
+}
+
+function credCheck(name, label, checked) {
+  return `<label class="field check"><span>${h(label)}</span><input name="${name}" type="checkbox"${checked ? " checked" : ""}></label>`;
+}
+
+function credHint(text) {
+  return text ? `<p class="small muted">${h(text)}</p>` : "";
+}
+
+function becomeSelect() {
+  const methods = ["sudo", "su", "pbrun", "pfexec", "doas", "dzdo", "ksu", "runas"];
+  const options = [`<option value="">${h("Keine")}</option>`].concat(
+    methods.map((method) => `<option value="${method}">${esc(method)}</option>`)
+  );
+  return `<label class="field"><span>${h("Become-Methode")}</span><select class="fit" name="become_method">${options.join("")}</select></label>`;
+}
+
+function credentialFields(kind) {
+  const row = CREDENTIAL_KINDS.find((item) => item[0] === kind);
+  const hint = row ? row[2] : "";
+  if (kind === "ssh") {
+    return [
+      credHint(hint),
+      credText("username", "Benutzer"),
+      credText("password", "Passwort", "password"),
+      credArea("private_key", "Privater Schlüssel"),
+      credText("passphrase", "Passphrase", "password"),
+      becomeSelect(),
+      credText("become_username", "Become-Benutzer"),
+      credText("become_password", "Become-Passwort", "password"),
+    ].join("");
+  }
+  if (kind === "scm") {
+    return [
+      credHint(hint),
+      credText("username", "Benutzer"),
+      credText("password", "Passwort", "password"),
+      credArea("private_key", "Privater Schlüssel"),
+      credText("passphrase", "Passphrase", "password"),
+    ].join("");
+  }
+  if (kind === "vault") {
+    return [credText("password", "Vault-Passwort", "password"), credText("vault_id", "Vault-Id")].join("");
+  }
+  if (kind === "net") {
+    return [
+      credText("username", "Benutzer"),
+      credText("password", "Passwort", "password"),
+      credArea("private_key", "Privater Schlüssel"),
+      credCheck("authorize", "Authorize", false),
+      credText("authorize_password", "Authorize-Passwort", "password"),
+    ].join("");
+  }
+  if (kind === "aws") {
+    return [
+      credText("access_key", "Access Key"),
+      credText("secret_key", "Secret Key", "password"),
+      credText("security_token", "Session-Token", "password"),
+    ].join("");
+  }
+  if (kind === "azure") {
+    return [
+      credText("subscription_id", "Subscription"),
+      credText("client_id", "Client"),
+      credText("secret", "Geheimnis", "password"),
+      credText("tenant", "Tenant"),
+    ].join("");
+  }
+  if (kind === "gce") return credArea("service_account", "Dienstkonto");
+  if (kind === "vmware") {
+    return [
+      credText("host", "Host"),
+      credText("username", "Benutzer"),
+      credText("password", "Passwort", "password"),
+    ].join("");
+  }
+  if (kind === "openstack") {
+    return [
+      credHint(hint),
+      credText("auth_url", "API-Adresse"),
+      credText("username", "Benutzer"),
+      credText("password", "Passwort", "password"),
+      credText("project", "Projekt"),
+      credText("domain", "Domain"),
+    ].join("");
+  }
+  if (kind === "registry") {
+    return [
+      credHint(hint),
+      credText("host", "Host"),
+      credText("username", "Benutzer"),
+      credText("password", "Passwort", "password"),
+    ].join("");
+  }
+  if (kind === "github" || kind === "gitlab") return credText("token", "Token", "password");
+  if (kind === "galaxy") {
+    return [credHint(hint), credText("url", "API-Adresse"), credText("token", "Token", "password")].join("");
+  }
+  if (kind === "kubernetes") {
+    return [
+      credText("host", "API-Adresse"),
+      credText("token", "Token", "password"),
+      credCheck("verify_ssl", "Zertifikat prüfen", true),
+    ].join("");
+  }
+  if (kind === "insights") {
+    return [credText("username", "Benutzer"), credText("password", "Passwort", "password")].join("");
+  }
+  if (kind === "netbox") {
+    return [credText("url", "API-Adresse"), credText("token", "Token", "password")].join("");
+  }
+  return credArea("env", "KEY=Wert, eine Zeile je Variable");
+}
+
+function inputText(form, name) {
+  const field = form.elements[name];
+  return field && "value" in field ? field.value.trim() : "";
+}
+
 function credentialSecret(form) {
   const kind = form.kind.value;
-  if (kind === "ssh") {
-    const secret = { private_key: form.private_key.value };
-    if (form.username.value.trim()) secret.username = form.username.value.trim();
+  if (kind === "env") {
+    const secret = {};
+    form.env.value.split("\n").forEach((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      const eq = trimmed.indexOf("=");
+      if (eq < 1) throw new Error("Env-Zeile braucht KEY=Wert.");
+      secret[trimmed.slice(0, eq)] = trimmed.slice(eq + 1);
+    });
     return secret;
   }
-  if (kind === "vault") return { password: form.password.value };
-  if (kind === "netbox") return { token: form.token.value };
+  const names = {
+    ssh: ["username", "password", "private_key", "passphrase", "become_method", "become_username", "become_password"],
+    vault: ["password", "vault_id"],
+    scm: ["username", "password", "private_key", "passphrase"],
+    net: ["username", "password", "private_key", "authorize_password"],
+    aws: ["access_key", "secret_key", "security_token"],
+    azure: ["subscription_id", "client_id", "secret", "tenant"],
+    gce: ["service_account"],
+    vmware: ["host", "username", "password"],
+    openstack: ["auth_url", "username", "password", "project", "domain"],
+    registry: ["host", "username", "password"],
+    github: ["token"],
+    gitlab: ["token"],
+    galaxy: ["url", "token"],
+    kubernetes: ["host", "token"],
+    insights: ["username", "password"],
+    netbox: ["token", "url"],
+  };
   const secret = {};
-  form.env.value.split("\n").forEach((line) => {
-    const trimmed = line.trim();
-    if (!trimmed) return;
-    const eq = trimmed.indexOf("=");
-    if (eq < 1) throw new Error("Env-Zeile braucht KEY=Wert.");
-    secret[trimmed.slice(0, eq)] = trimmed.slice(eq + 1);
+  (names[kind] || []).forEach((name) => {
+    const value = inputText(form, name);
+    if (value) secret[name] = value;
   });
+  if (kind === "net" && form.authorize && form.authorize.checked) secret.authorize = true;
+  if (kind === "kubernetes") secret.verify_ssl = Boolean(form.verify_ssl && form.verify_ssl.checked);
   return secret;
 }
 
 function bindCredentialKind(form) {
-  const showSecret = () => {
-    document.querySelector("#secret-ssh").hidden = form.kind.value !== "ssh";
-    document.querySelector("#secret-vault").hidden = form.kind.value !== "vault";
-    document.querySelector("#secret-env").hidden = form.kind.value !== "env";
-    document.querySelector("#secret-netbox").hidden = form.kind.value !== "netbox";
+  const box = document.querySelector("#credential-fields");
+  const draw = () => {
+    box.innerHTML = credentialFields(form.kind.value);
   };
-  form.kind.addEventListener("change", showSecret);
-  showSecret();
+  form.kind.addEventListener("change", draw);
+  draw();
 }
 
 async function pageCredentials() {
@@ -2688,8 +2925,8 @@ async function pageCredentials() {
     can("owner") ? addLink("#/credentials/new", "+ Zugang") : "");
   const drawCredentials = () => {
     const needle = document.querySelector("#credential-search").value.trim().toLowerCase();
-    const rows = credentials.filter((item) => !needle || `${item.name} ${item.kind}`.toLowerCase().includes(needle)).map((item) =>
-      `<tr><td>${esc(item.name)}</td><td>${esc(item.kind)}</td><td>${can("owner") ? `<button class="btn danger" type="button" data-credential="${esc(item.id)}">${h("Löschen")}</button>` : ""}</td></tr>`
+    const rows = credentials.filter((item) => !needle || `${item.name} ${item.kind} ${credentialKindLabel(item.kind)}`.toLowerCase().includes(needle)).map((item) =>
+      `<tr><td>${esc(item.name)}</td><td>${esc(credentialKindLabel(item.kind))}</td><td>${can("owner") ? `<button class="btn danger" type="button" data-credential="${esc(item.id)}">${h("Löschen")}</button>` : ""}</td></tr>`
     );
     document.querySelector("#credential-table").innerHTML = table([t("Name"), t("Art"), ""], rows);
     document.querySelectorAll("[data-credential]").forEach((button) => {
@@ -2711,19 +2948,14 @@ async function pageCredentialNew() {
     deny("Zugang", "owner");
     return;
   }
+  const kindOptions = CREDENTIAL_KINDS.map(([id, label]) => `<option value="${esc(id)}">${h(label)}</option>`).join("");
   shell(t("Zugang anlegen"), `
     <form class="card form" id="credential-form">
       <label class="field"><span>${h("Name")}</span><input name="name" required></label>
       <div class="field-row">
-        <label class="field"><span>${h("Art")}</span><select class="fit" name="kind"><option value="ssh">ssh</option><option value="vault">vault</option><option value="env">env</option><option value="netbox">netbox</option></select></label>
+        <label class="field"><span>${h("Art")}</span><select class="fit" name="kind">${kindOptions}</select></label>
       </div>
-      <div id="secret-ssh">
-        <label class="field"><span>${h("Benutzer")}</span><input name="username"></label>
-        <label class="field"><span>${h("Privater Schlüssel")}</span><textarea name="private_key"></textarea></label>
-      </div>
-      <div id="secret-vault" hidden><label class="field"><span>${h("Vault-Passwort")}</span><input name="password" type="password"></label></div>
-      <div id="secret-env" hidden><label class="field"><span>${h("KEY=Wert, eine Zeile je Variable")}</span><textarea name="env"></textarea></label></div>
-      <div id="secret-netbox" hidden><label class="field"><span>${h("Token")}</span><input name="token" type="password" autocomplete="off"></label></div>
+      <div id="credential-fields"></div>
       <button class="btn pill primary" type="submit">${h("Anlegen")}</button>
     </form>`);
   const form = document.querySelector("#credential-form");

@@ -620,38 +620,14 @@ pub async fn create_credential(
 ) -> AppResult<axum::response::Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Owner)?;
-    if !matches!(body.kind.as_str(), "ssh" | "vault" | "env" | "netbox") {
-        return Err(ApiError::bad("Art ist ssh, vault, env oder netbox."));
+    if !crate::credentials::known_kind(&body.kind) {
+        return Err(ApiError::bad("Unbekannte Zugangsart."));
     }
-    if !body.secret.is_object() {
-        return Err(ApiError::bad("Geheimnis muss ein JSON-Objekt sein."));
+    if let Err(message) = crate::credentials::check(&body.kind, &body.secret) {
+        return Err(ApiError::bad(message));
     }
-    if body.kind == "ssh"
-        && body
-            .secret
-            .get("private_key")
-            .and_then(Value::as_str)
-            .is_none()
-    {
-        return Err(ApiError::bad("SSH braucht private_key."));
-    }
-    if body.kind == "vault"
-        && body
-            .secret
-            .get("password")
-            .and_then(Value::as_str)
-            .is_none()
-    {
-        return Err(ApiError::bad("Vault braucht password."));
-    }
-    if body.kind == "netbox"
-        && body
-            .secret
-            .get("token")
-            .and_then(Value::as_str)
-            .is_none_or(str::is_empty)
-    {
-        return Err(ApiError::bad("NetBox braucht token."));
+    if body.secret.to_string().len() > 256 * 1024 {
+        return Err(ApiError::bad("Geheimnis ist zu groß."));
     }
     let blob = state.encrypt(&body.secret.to_string())?;
     let item = Credential {

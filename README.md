@@ -170,7 +170,21 @@ The registry lives in `runner::tools()`. Another CLI tool needs an entry there a
 | `opentofu` | `tofu init`, then `plan` or `apply` |
 | `shell` | a script from the project, or `spec.script` written as `inline.sh` |
 
-Credential kinds are `ssh`, `vault`, `env`, and `netbox`. They are stored with AES-GCM and the API never returns them. `ssh` and `vault` land in the job directory with mode `0600`. A NetBox token stays on the credential.
+A template stores one credential. The kinds follow the built-in types in AWX and the two useful Semaphore key-store types (SSH, and login with password). Semaphore's empty "None" type is left out. There is no custom credential-type designer, and no external lookup such as CyberArk, HashiCorp Vault, or a cloud secret manager.
+
+| Kind | What the job receives |
+| --- | --- |
+| `ssh` | Machine login. A private key, a password, or both. Optional username, key passphrase, and become (`sudo`, `su`, `pbrun`, `pfexec`, `doas`, `dzdo`, `ksu`, `runas`). The password is a file with mode `0600`, not a command argument. |
+| `vault` | Ansible Vault password, and an optional vault id. |
+| `scm` | Git username and password, or an SSH key, for commands inside the job. The project Sync button does not use this credential. |
+| `net` | Network username, password, optional key, and an enable password. |
+| `aws`, `azure`, `gce`, `vmware`, `openstack` | Cloud credentials as environment variables. Google is a service-account file. |
+| `registry` | Host, username, and password visible to the job. Koreograf does not run `docker login`. |
+| `github`, `gitlab`, `galaxy`, `kubernetes`, `insights` | A token, or a username and password, for that service. |
+| `env` | Extra environment variables as `KEY=value` lines. |
+| `netbox` | A token, and an optional API address. The token stays on the credential, not in the inventory source. |
+
+Secrets are stored with AES-GCM. The list API returns the name and the kind, never the secret. Files written for the job, including the container environment file, use mode `0600`.
 
 ## Playbooks and inventory sources
 

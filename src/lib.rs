@@ -10,6 +10,7 @@ mod auth;
 mod backup;
 mod cacheinfo;
 mod config;
+mod credentials;
 mod crypto;
 mod db;
 mod error;

@@ -9,6 +9,22 @@ log() {
 
 mkdir -p "$KOREOGRAF_COLLECTIONS" "$KOREOGRAF_ROLES" "$KOREOGRAF_TOFU" "$KOREOGRAF_WORK/tmp"
 
+if [ -n "${KOREOGRAF_GIT_PASSWORD_FILE:-}" ]; then
+  cat > "$KOREOGRAF_WORK/git-askpass" <<'EOF'
+#!/bin/sh
+case "$1" in
+  *sername*) printf '%s\n' "${KOREOGRAF_GIT_USERNAME:-git}" ;;
+  *) cat "$KOREOGRAF_GIT_PASSWORD_FILE" ;;
+esac
+EOF
+  chmod 700 "$KOREOGRAF_WORK/git-askpass"
+  export GIT_ASKPASS="$KOREOGRAF_WORK/git-askpass"
+  export GIT_TERMINAL_PROMPT=0
+fi
+if [ -n "${KOREOGRAF_GIT_SSH_KEY:-}" ]; then
+  export GIT_SSH_COMMAND="ssh -i \"$KOREOGRAF_GIT_SSH_KEY\" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+fi
+
 list_cols() {
   root="$KOREOGRAF_COLLECTIONS/ansible_collections"
   if [ -d "$root" ]; then
@@ -90,6 +106,42 @@ run_ansible() {
   if [ -n "${KOREOGRAF_REMOTE_USER:-}" ]; then
     export ANSIBLE_REMOTE_USER="$KOREOGRAF_REMOTE_USER"
   fi
+  if [ -n "${KOREOGRAF_CONNECTION_PASSWORD_FILE:-}" ]; then
+    export ANSIBLE_CONNECTION_PASSWORD_FILE="$KOREOGRAF_CONNECTION_PASSWORD_FILE"
+  fi
+  if [ -n "${KOREOGRAF_BECOME_PASSWORD_FILE:-}" ]; then
+    export ANSIBLE_BECOME_PASSWORD_FILE="$KOREOGRAF_BECOME_PASSWORD_FILE"
+  fi
+  if [ -n "${KOREOGRAF_BECOME_METHOD:-}" ]; then
+    export ANSIBLE_BECOME=1
+    export ANSIBLE_BECOME_METHOD="$KOREOGRAF_BECOME_METHOD"
+  fi
+  if [ -n "${KOREOGRAF_BECOME_USER:-}" ]; then
+    export ANSIBLE_BECOME_USER="$KOREOGRAF_BECOME_USER"
+  fi
+  if [ -n "${KOREOGRAF_KEY_PASSPHRASE_FILE:-}" ] || [ -n "${KOREOGRAF_CONNECTION_PASSWORD_FILE:-}" ]; then
+    cat > "$KOREOGRAF_WORK/askpass" <<'EOF'
+#!/bin/sh
+case "$1" in
+  *assphrase*)
+    if [ -n "${KOREOGRAF_KEY_PASSPHRASE_FILE:-}" ]; then
+      cat "$KOREOGRAF_KEY_PASSPHRASE_FILE"
+    fi
+    ;;
+  *)
+    if [ -n "${KOREOGRAF_CONNECTION_PASSWORD_FILE:-}" ]; then
+      cat "$KOREOGRAF_CONNECTION_PASSWORD_FILE"
+    fi
+    ;;
+esac
+EOF
+    chmod 700 "$KOREOGRAF_WORK/askpass"
+    export SSH_ASKPASS="$KOREOGRAF_WORK/askpass"
+    export SSH_ASKPASS_REQUIRE=force
+    if [ -z "${DISPLAY:-}" ]; then
+      export DISPLAY=none
+    fi
+  fi
   set -- ansible-playbook -i "$KOREOGRAF_INVENTORY" "$KOREOGRAF_ENTRYPOINT" --extra-vars "@$KOREOGRAF_EXTRA"
   if [ "${KOREOGRAF_CHECK:-}" = "1" ]; then
     set -- "$@" --check
@@ -116,7 +168,14 @@ run_ansible() {
     4) set -- "$@" -vvvv ;;
   esac
   if [ -n "${KOREOGRAF_VAULT_FILE:-}" ]; then
-    set -- "$@" --vault-password-file "$KOREOGRAF_VAULT_FILE"
+    if [ -n "${KOREOGRAF_VAULT_ID:-}" ]; then
+      set -- "$@" --vault-id "${KOREOGRAF_VAULT_ID}@${KOREOGRAF_VAULT_FILE}"
+    else
+      set -- "$@" --vault-password-file "$KOREOGRAF_VAULT_FILE"
+    fi
+  fi
+  if [ -n "${KOREOGRAF_AUTH_EXTRA:-}" ]; then
+    set -- "$@" --extra-vars "@$KOREOGRAF_AUTH_EXTRA"
   fi
   log "Starte: $*"
   exec "$@"

@@ -907,7 +907,7 @@ async fn playbooks_project_inventory_and_netbox() {
     assert!(script.contains("data-add-kind=\"project\""));
     assert!(script.contains("data-add-kind=\"netbox\""));
     assert!(script.contains("Aktualisieren"));
-    assert!(script.contains("value=\"netbox\""));
+    assert!(script.contains("[\"netbox\", \"NetBox\", \"\"]"));
 
     let (status, me, cookie) = call(
         &app,
@@ -2147,6 +2147,115 @@ async fn owner_can_edit_an_execution_environment() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
     assert_eq!(rejected["error"], "Image-Name ist ungültig.");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn owner_can_store_an_ssh_password_without_a_key() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-cred-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let script = script.as_str().unwrap_or("");
+    assert!(script.contains("Maschine (SSH)"));
+    assert!(script.contains("Amazon Web Services"));
+    assert!(script.contains("Schlüssel oder Passwort, auch beides."));
+    assert!(script.contains("Gilt im Auftrag. Der Projekt-Sync nutzt diesen Zugang noch nicht."));
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "SSH Passwort",
+            "kind": "ssh",
+            "secret": {"username": "deploy", "password": "ssh-only-pass"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["kind"], "ssh");
+    assert!(
+        !created.to_string().contains("ssh-only-pass"),
+        "response echoed the secret"
+    );
+    let id = created["id"].as_str().unwrap();
+    let (status, listed, _) = call(
+        &app,
+        "GET",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert!(
+        !listed.to_string().contains("ssh-only-pass"),
+        "list echoed the secret"
+    );
+    assert!(listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["id"] == id && item["kind"] == "ssh"));
+    let (status, rejected, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Leer", "kind": "ssh", "secret": {}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+    assert_eq!(
+        rejected["error"],
+        "SSH braucht einen Schlüssel oder ein Passwort."
+    );
+    let (status, unknown, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Fremd", "kind": "gpg", "secret": {"token": "x"}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{unknown}");
+    assert_eq!(unknown["error"], "Unbekannte Zugangsart.");
+    let (status, gone, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/credentials/{id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{gone}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

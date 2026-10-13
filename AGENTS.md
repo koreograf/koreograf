@@ -39,6 +39,7 @@ node --check web/app.js
 - SQLite is the only database. `postgres://` and `postgresql://` are rejected on purpose in `config::database_choice`. Do not add a PostgreSQL driver unless asked.
 - Team roles stay `viewer`, `operator`, and `owner`. System admin is `users.is_admin`. Do not add per-object roles unless asked. `/api/users` is admin-only. `/api/me` is the signed-in account, including real memberships. LDAP memberships and the LDAP email stay directory-owned.
 - This is not an AWX drop-in. Do not add surveys, schedules, Receptor, or high availability unless asked.
+- Credential kinds are the built-in list in `credentials::KINDS`. One credential per template. Do not add external secret plugins or a custom type designer unless asked. An `scm` credential applies to the job, not to project sync.
 - Demo playbooks must not delete arbitrary files on remote hosts. Cleanup stays under the job work directory and only for names the hook lists.
 - A new CLI tool needs an entry in `runner::tools()` and a branch in `src/wrapper.sh`.
 

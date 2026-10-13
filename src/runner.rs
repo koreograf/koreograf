@@ -829,52 +829,11 @@ fn apply_credential(
         .map_err(|_| "Zugangsdaten lassen sich nicht lesen.".to_string())?;
     let secret: Value =
         serde_json::from_str(&plain).map_err(|_| "Zugangsdaten sind kein JSON.".to_string())?;
-    let guest = |name: &str| {
-        if container {
-            format!("/runner/work/{name}")
-        } else {
-            work.join(name).display().to_string()
-        }
-    };
-    match credential.kind.as_str() {
-        "ssh" => {
-            let key = secret
-                .get("private_key")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "SSH-Zugang ohne private_key.".to_string())?;
-            write_secret(&work.join("ssh_key"), key)?;
-            env.push(("KOREOGRAF_PRIVATE_KEY".into(), guest("ssh_key")));
-            if let Some(user) = secret.get("username").and_then(Value::as_str) {
-                env.push(("KOREOGRAF_REMOTE_USER".into(), user.to_string()));
-            }
-        }
-        "vault" => {
-            let password = secret
-                .get("password")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "Vault-Zugang ohne password.".to_string())?;
-            write_secret(&work.join("vault.pass"), password)?;
-            env.push(("KOREOGRAF_VAULT_FILE".into(), guest("vault.pass")));
-        }
-        "env" => {
-            let Some(map) = secret.as_object() else {
-                return Err("Env-Zugang muss ein JSON-Objekt sein.".into());
-            };
-            for (key, value) in map {
-                if !safe_ident(key) {
-                    continue;
-                }
-                let Some(text) = value.as_str() else { continue };
-                if text.contains('\n') || text.contains('\0') {
-                    return Err(format!(
-                        "Umgebungsvariable {key} enthält einen Zeilenumbruch."
-                    ));
-                }
-                env.push((key.clone(), text.to_string()));
-            }
-        }
-        other => return Err(format!("Unbekannte Zugangsart {other}.")),
+    let prepared = crate::credentials::prepare(credential.kind.as_str(), &secret, container, work)?;
+    for (name, body) in prepared.files {
+        write_secret(&work.join(name), &body)?;
     }
+    env.extend(prepared.env);
     Ok(())
 }
 
@@ -1308,7 +1267,8 @@ fn write_env_file(path: &Path, env: &[(String, String)]) -> Result<(), String> {
         body.push_str(value);
         body.push('\n');
     }
-    fs::write(path, body).map_err(|e| e.to_string())
+    // Cloud tokens sit in this file. Mode 0600 matches the other secret files.
+    write_secret(path, &body)
 }
 
 async fn ensure_image(bin: &str, image: &str, policy: &str) -> Result<(), String> {
