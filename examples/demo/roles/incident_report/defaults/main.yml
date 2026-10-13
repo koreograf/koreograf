@@ -1,0 +1,7 @@
+---
+incident_report_path: "{{ koreograf_work }}/incident-report.txt"
+incident_report_action: noop
+incident_report_alertname: manual
+incident_report_instance: localhost
+incident_report_cleanup_dir: "{{ koreograf_work }}/scratch"
+incident_report_cleanup_files: []

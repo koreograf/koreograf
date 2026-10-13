@@ -1,0 +1,115 @@
+//! Koreograf runs team-scoped automation jobs.
+//!
+//! The binary is the whole prototype: a small HTTP API, a browser UI, and a
+//! job runner that keeps Ansible collections, roles and OpenTofu plugins in a
+//! persistent cache. This is not a feature-complete AWX replacement.
+
+#![forbid(unsafe_code)]
+
+mod auth;
+mod backup;
+mod cacheinfo;
+mod config;
+mod crypto;
+mod db;
+mod error;
+mod hooks;
+mod http;
+mod inventory;
+mod jobs;
+mod ldap;
+mod metrics;
+mod netbox;
+mod runner;
+mod scan;
+mod seed;
+mod workflow;
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+use rusqlite::Connection;
+
+use crate::error::ApiError;
+use crate::runner::RunningProc;
+
+pub use config::{Config, LdapConfig, RunnerMode};
+
+/// Shared process state. Cheap to clone because it is an `Arc`.
+pub struct AppState {
+    pub(crate) conn: Mutex<Connection>,
+    pub cfg: Config,
+    pub(crate) cipher: Mutex<crypto::Cipher>,
+    pub(crate) metrics: metrics::Metrics,
+    /// One backup or restore at a time. Take this before the database lock.
+    pub(crate) maintenance: Mutex<()>,
+    pub(crate) procs: Mutex<HashMap<String, RunningProc>>,
+}
+
+pub type Shared = Arc<AppState>;
+
+impl AppState {
+    pub fn db(&self) -> Result<std::sync::MutexGuard<'_, Connection>, ApiError> {
+        self.conn
+            .lock()
+            .map_err(|_| ApiError::Internal("Datenbank-Sperre ist beschädigt.".into()))
+    }
+
+    pub(crate) fn encrypt(&self, plain: &str) -> Result<String, ApiError> {
+        self.cipher
+            .lock()
+            .map_err(|_| ApiError::Internal("Schlüssel-Sperre ist beschädigt.".into()))?
+            .encrypt(plain)
+    }
+
+    pub(crate) fn decrypt(&self, packed: &str) -> Result<String, ApiError> {
+        self.cipher
+            .lock()
+            .map_err(|_| ApiError::Internal("Schlüssel-Sperre ist beschädigt.".into()))?
+            .decrypt(packed)
+    }
+
+    pub(crate) fn replace_cipher(&self, cipher: crypto::Cipher) -> Result<(), ApiError> {
+        let mut guard = self
+            .cipher
+            .lock()
+            .map_err(|_| ApiError::Internal("Schlüssel-Sperre ist beschädigt.".into()))?;
+        *guard = cipher;
+        Ok(())
+    }
+}
+
+/// Open the database, load the encryption key, and seed the demo once.
+pub fn boot(mut cfg: Config) -> anyhow::Result<Shared> {
+    std::fs::create_dir_all(&cfg.data_dir)?;
+    let conn = db::open(&cfg.data_dir.join("koreograf.db"))?;
+    let cipher = crypto::load_cipher(&cfg.data_dir)?;
+    seed::seed(&conn, &cfg)?;
+    cfg.admin_password = None;
+    Ok(Arc::new(AppState {
+        conn: Mutex::new(conn),
+        cfg,
+        cipher: Mutex::new(cipher),
+        metrics: metrics::Metrics::new(),
+        maintenance: Mutex::new(()),
+        procs: Mutex::new(HashMap::new()),
+    }))
+}
+
+/// Bind the HTTP server and serve until it stops.
+pub async fn serve(cfg: Config) -> anyhow::Result<()> {
+    let url = std::env::var("KOREOGRAF_DATABASE_URL").unwrap_or_default();
+    config::database_choice(&url).map_err(anyhow::Error::msg)?;
+    let state = boot(cfg)?;
+    let bind = state.cfg.bind.clone();
+    let app = router(state);
+    let listener = tokio::net::TcpListener::bind(&bind).await?;
+    tracing::info!(%bind, "Koreograf ist bereit");
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+/// Axum router, including the API and the browser UI.
+pub fn router(state: Shared) -> axum::Router {
+    http::router(state)
+}

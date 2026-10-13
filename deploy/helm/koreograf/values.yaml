@@ -1,0 +1,55 @@
+# Ein Replica. SQLite hat einen Schreiber; ein zweites Pod überschreibt die Datei.
+replicaCount: 1
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: koreograf
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8080
+
+admin:
+  user: admin
+  # Leer: der erste Start schreibt das Passwort nach initial-admin-password im Volume.
+  password: ""
+
+# 64 Hex-Zeichen. Leer: der Pod erzeugt data/secret.key im Volume.
+secretKey: ""
+
+runner:
+  # auto, docker oder local
+  mode: auto
+  dockerSocket:
+    enabled: false
+    hostPath: /var/run/docker.sock
+
+ldap:
+  url: ""
+  mode: ldap
+  bindDn: ""
+  bindPassword: ""
+  userBase: ""
+  userFilter: ""
+  usernameAttr: ""
+  groupAttr: memberOf
+  groupBase: ""
+  starttls: false
+  tlsInsecure: false
+
+ingress:
+  enabled: false
+  className: ""
+  host: koreograf.example.com
+  path: /
+  tls: false
+
+persistence:
+  size: 2Gi
+  storageClass: ""
+
+resources: {}

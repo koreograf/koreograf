@@ -1,0 +1,34 @@
+services:
+  koreograf:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      KOREOGRAF_BIND: 0.0.0.0:8080
+      KOREOGRAF_DATA: /var/lib/koreograf
+      KOREOGRAF_WEB: /opt/koreograf/web
+      KOREOGRAF_EXAMPLES: /opt/koreograf/examples
+      KOREOGRAF_ADMIN_USER: ${KOREOGRAF_ADMIN_USER:-admin}
+      KOREOGRAF_ADMIN_PASSWORD: ${KOREOGRAF_ADMIN_PASSWORD:-}
+      KOREOGRAF_RUNNER: ${KOREOGRAF_RUNNER:-auto}
+      KOREOGRAF_JOB_TIMEOUT_SECS: ${KOREOGRAF_JOB_TIMEOUT_SECS:-1800}
+      KOREOGRAF_SECRET_KEY: ${KOREOGRAF_SECRET_KEY:-}
+      KOREOGRAF_LDAP_URL: ${KOREOGRAF_LDAP_URL:-}
+      KOREOGRAF_LDAP_MODE: ${KOREOGRAF_LDAP_MODE:-ldap}
+      KOREOGRAF_LDAP_BIND_DN: ${KOREOGRAF_LDAP_BIND_DN:-}
+      KOREOGRAF_LDAP_BIND_PASSWORD: ${KOREOGRAF_LDAP_BIND_PASSWORD:-}
+      KOREOGRAF_LDAP_USER_BASE: ${KOREOGRAF_LDAP_USER_BASE:-}
+      KOREOGRAF_LDAP_USER_FILTER: ${KOREOGRAF_LDAP_USER_FILTER:-}
+      KOREOGRAF_LDAP_USERNAME_ATTR: ${KOREOGRAF_LDAP_USERNAME_ATTR:-}
+      KOREOGRAF_LDAP_GROUP_ATTR: ${KOREOGRAF_LDAP_GROUP_ATTR:-}
+      KOREOGRAF_LDAP_GROUP_BASE: ${KOREOGRAF_LDAP_GROUP_BASE:-}
+      KOREOGRAF_LDAP_STARTTLS: ${KOREOGRAF_LDAP_STARTTLS:-}
+      KOREOGRAF_LDAP_TLS_INSECURE: ${KOREOGRAF_LDAP_TLS_INSECURE:-}
+    volumes:
+      - koreograf-data:/var/lib/koreograf
+      # Execution Environments brauchen den Docker-Socket.
+      # Der Socket ist gleichwertig mit root auf dem Host.
+      # - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  koreograf-data:

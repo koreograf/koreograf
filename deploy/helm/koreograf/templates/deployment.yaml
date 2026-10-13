@@ -1,0 +1,104 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "koreograf.fullname" . }}
+  labels:
+    {{- include "koreograf.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "koreograf.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "koreograf.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: koreograf
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: KOREOGRAF_BIND
+              value: "0.0.0.0:8080"
+            - name: KOREOGRAF_DATA
+              value: /var/lib/koreograf
+            - name: KOREOGRAF_WEB
+              value: /opt/koreograf/web
+            - name: KOREOGRAF_EXAMPLES
+              value: /opt/koreograf/examples
+            - name: KOREOGRAF_RUNNER
+              value: {{ .Values.runner.mode | quote }}
+            - name: KOREOGRAF_ADMIN_USER
+              value: {{ .Values.admin.user | quote }}
+            - name: KOREOGRAF_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "koreograf.fullname" . }}
+                  key: admin-password
+            - name: KOREOGRAF_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "koreograf.fullname" . }}
+                  key: secret-key
+            {{- if .Values.ldap.url }}
+            - name: KOREOGRAF_LDAP_URL
+              value: {{ .Values.ldap.url | quote }}
+            - name: KOREOGRAF_LDAP_MODE
+              value: {{ .Values.ldap.mode | quote }}
+            - name: KOREOGRAF_LDAP_BIND_DN
+              value: {{ .Values.ldap.bindDn | quote }}
+            - name: KOREOGRAF_LDAP_BIND_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "koreograf.fullname" . }}
+                  key: ldap-bind-password
+            - name: KOREOGRAF_LDAP_USER_BASE
+              value: {{ .Values.ldap.userBase | quote }}
+            - name: KOREOGRAF_LDAP_USER_FILTER
+              value: {{ .Values.ldap.userFilter | quote }}
+            - name: KOREOGRAF_LDAP_USERNAME_ATTR
+              value: {{ .Values.ldap.usernameAttr | quote }}
+            - name: KOREOGRAF_LDAP_GROUP_ATTR
+              value: {{ .Values.ldap.groupAttr | quote }}
+            - name: KOREOGRAF_LDAP_GROUP_BASE
+              value: {{ .Values.ldap.groupBase | quote }}
+            - name: KOREOGRAF_LDAP_STARTTLS
+              value: {{ .Values.ldap.starttls | quote }}
+            - name: KOREOGRAF_LDAP_TLS_INSECURE
+              value: {{ .Values.ldap.tlsInsecure | quote }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/koreograf
+            {{- if .Values.runner.dockerSocket.enabled }}
+            - name: docker-sock
+              mountPath: /var/run/docker.sock
+            {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "koreograf.fullname" . }}
+        {{- if .Values.runner.dockerSocket.enabled }}
+        - name: docker-sock
+          hostPath:
+            path: {{ .Values.runner.dockerSocket.hostPath }}
+            type: Socket
+        {{- end }}

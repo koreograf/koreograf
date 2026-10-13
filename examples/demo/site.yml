@@ -1,0 +1,12 @@
+---
+# Controller-side record of a self-heal decision.
+# Koreograf injects koreograf_work, alertname, instance and heal_action.
+- name: Respond to an alert
+  hosts: all
+  gather_facts: false
+  vars:
+    incident_report_alertname: "{{ alertname }}"
+    incident_report_instance: "{{ instance }}"
+    incident_report_action: "{{ heal_action }}"
+  roles:
+    - role: incident_report

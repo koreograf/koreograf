@@ -1,0 +1,38 @@
+---
+argument_specs:
+  main:
+    short_description: Record a self-heal decision on the controller.
+    description:
+      - Writes a report file into the job workspace.
+      - Removes only explicitly listed file names from a scratch directory.
+    author:
+      - Koreograf
+    options:
+      incident_report_path:
+        type: str
+        default: "{{ koreograf_work }}/incident-report.txt"
+        description: Destination of the report file. Koreograf sets koreograf_work.
+      incident_report_action:
+        type: str
+        default: noop
+        choices:
+          - noop
+          - cleanup-tmp
+        description: What the heal step is allowed to do.
+      incident_report_alertname:
+        type: str
+        default: manual
+        description: Alert name copied into the report.
+      incident_report_instance:
+        type: str
+        default: localhost
+        description: Instance copied into the report.
+      incident_report_cleanup_dir:
+        type: str
+        default: "{{ koreograf_work }}/scratch"
+        description: Directory that may contain the listed scratch files.
+      incident_report_cleanup_files:
+        type: list
+        elements: str
+        default: []
+        description: Plain file names removed when the action is cleanup-tmp.

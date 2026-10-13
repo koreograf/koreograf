@@ -1,0 +1,31 @@
+---
+- name: Reject cleanup names that leave the scratch directory
+  ansible.builtin.fail:
+    msg: "incident_report_cleanup_files only accepts plain file names, not {{ item }}."
+  loop: "{{ incident_report_cleanup_files }}"
+  when:
+    - incident_report_action == "cleanup-tmp"
+    - item is search("[\\\\/]") or item == ".." or item == "."
+  delegate_to: localhost
+  run_once: true
+
+- name: Record the alert on the controller
+  ansible.builtin.template:
+    src: report.txt.j2
+    dest: "{{ incident_report_path }}"
+    mode: "{{ __incident_report_file_mode }}"
+  delegate_to: localhost
+  run_once: true
+
+- name: Remove listed scratch files on the controller
+  ansible.builtin.file:
+    path: "{{ incident_report_cleanup_dir }}/{{ item }}"
+    state: absent
+  loop: "{{ incident_report_cleanup_files }}"
+  when:
+    - incident_report_action == "cleanup-tmp"
+    - item is not search("[\\\\/]")
+    - item != ".."
+    - item != "."
+  delegate_to: localhost
+  run_once: true

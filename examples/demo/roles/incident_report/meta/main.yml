@@ -1,0 +1,13 @@
+---
+galaxy_info:
+  role_name: incident_report
+  author: Koreograf
+  description: Records a self-heal decision on the controller.
+  license: MIT
+  min_ansible_version: "2.16"
+  platforms:
+    - name: EL
+      versions: ["9", "10"]
+    - name: Debian
+      versions: ["12", "13"]
+dependencies: []

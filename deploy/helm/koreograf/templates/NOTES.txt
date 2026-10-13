@@ -1,0 +1,10 @@
+Koreograf lauscht im Cluster auf Port {{ .Values.service.port }}.
+SQLite erlaubt ein Replica. replicaCount steht auf {{ .Values.replicaCount }}.
+
+kubectl port-forward svc/{{ include "koreograf.fullname" . }} 8080:{{ .Values.service.port }}
+
+Wenn admin.password leer ist, liegt das erste Passwort im Volume unter
+/var/lib/koreograf/initial-admin-password.
+
+Der Docker-Socket ist standardmäßig nicht gemountet. Execution Environments
+brauchen runner.dockerSocket.enabled=true. Der Socket ist root auf dem Host.
