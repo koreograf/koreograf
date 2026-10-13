@@ -1,0 +1,30 @@
+# Rust build output
+/target/
+
+# Local installation: SQLite database, secret.key, initial admin password,
+# dependency cache, git checkouts, and job work directories.
+/data/
+
+# Secrets and local configuration. .env.example stays tracked.
+.env
+.env.*
+!.env.example
+secret.key
+initial-admin-password
+
+# SQLite files that might appear outside data/
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+
+# Backup archives produced by the admin UI
+restore-previous.zip
+koreograf-backup.zip
+backup-*.db
+
+# Logs
+*.log
+
+# Node tooling used for commit message checks
+/node_modules/

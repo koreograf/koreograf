@@ -1,0 +1,11 @@
+target
+data
+.git
+*.db
+*.db-wal
+*.db-shm
+.env
+secret.key
+initial-admin-password
+restore-previous.zip
+*.log
