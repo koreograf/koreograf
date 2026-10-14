@@ -153,6 +153,7 @@ h2 { font-size: 18px; margin: 0 0 10px; }
   padding: 7px 12px;
   cursor: pointer;
 }
+a.btn { display: inline-block; text-decoration: none; }
 .btn:hover { border-color: #d6d3d1; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: white; }
 .btn.danger { background: white; color: var(--bad); border-color: #fecdd3; }
@@ -358,7 +359,55 @@ pre.vars {
   white-space: pre-wrap;
 }
 
+.editor-stack { display: flex; flex-direction: column; gap: 12px; }
 .editor-body { display: grid; grid-template-columns: 1fr 260px; gap: 12px; min-height: 560px; }
+.run-lines { display: flex; flex-direction: column; gap: 4px; overflow-x: auto; }
+.run-line {
+  display: grid;
+  grid-template-columns: 7.5rem minmax(8rem, 1.4fr) 9rem 7.5rem 5.5rem;
+  gap: 10px;
+  align-items: center;
+  min-width: 36rem;
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+button.run-line {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.run-line.head { color: var(--muted); font-size: 12px; }
+button.run-line:hover { outline: 1px solid var(--line); }
+.run-line.running { background: var(--info-bg); }
+.run-line.successful { background: var(--good-bg); }
+.run-line.failed, .run-line.canceled { background: var(--bad-bg); }
+.run-line.skipped { opacity: 0.7; }
+.wf-node.run-node { cursor: pointer; }
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(28, 25, 23, 0.45);
+}
+.overlay-card {
+  width: min(920px, 100%);
+  max-height: min(80vh, 760px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--panel);
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: var(--shadow);
+}
+.overlay-card .log { min-height: 280px; flex: 1; }
 .canvas {
   position: relative;
   overflow: auto;
@@ -406,6 +455,9 @@ pre.vars {
 .inspector-block { display: flex; flex-direction: column; gap: 10px; }
 .inspector-block + .inspector-block { border-top: 1px solid var(--line); padding-top: 12px; }
 .port.armed { outline: 2px solid var(--accent); outline-offset: 1px; }
+.node-params { display: flex; flex-direction: column; gap: 10px; }
+.node-params summary { cursor: pointer; font-weight: 600; }
+.node-params textarea { min-height: 72px; }
 code, .mono { font-family: var(--mono); font-size: 12.5px; word-break: break-all; }
 
 @media (max-width: 900px) {

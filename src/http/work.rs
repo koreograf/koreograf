@@ -676,6 +676,60 @@ fn build_template(
     })
 }
 
+fn check_node_overrides(
+    db: &rusqlite::Connection,
+    team: &str,
+    template: &Template,
+    node: &workflow::GraphNode,
+) -> AppResult<()> {
+    let over = &node.overrides;
+    if let Some(id) = over.inventory_id.as_deref().filter(|id| !id.is_empty()) {
+        let inventory = db::inventory(db, id)?.ok_or_else(|| ApiError::bad("Inventar fehlt."))?;
+        if inventory.team_id != team {
+            return Err(ApiError::bad("Inventar gehört zu einem anderen Team."));
+        }
+    }
+    if let Some(id) = over.credential_id.as_deref().filter(|id| !id.is_empty()) {
+        let credential = db::credential(db, id)?.ok_or_else(|| ApiError::bad("Zugang fehlt."))?;
+        if credential.team_id != team {
+            return Err(ApiError::bad("Zugang gehört zu einem anderen Team."));
+        }
+    }
+    if let Some(extra) = &over.extra_vars {
+        if !extra.is_object() {
+            return Err(ApiError::bad("Extra-Variablen muss ein JSON-Objekt sein."));
+        }
+    }
+    if let Some(spec) = &over.spec {
+        if !spec.is_object() {
+            return Err(ApiError::bad("spec muss ein Objekt sein."));
+        }
+    }
+    if over.spec.is_some() {
+        let mut params = serde_json::Map::new();
+        params.insert("spec".into(), db::json_object(&template.spec));
+        workflow::apply_overrides(&mut params, over);
+        let spec = params.get("spec").cloned().unwrap_or_else(|| json!({}));
+        if template.tool == "ansible" {
+            runner::check_ansible_spec(&spec).map_err(ApiError::bad)?;
+        }
+        if template.tool == "opentofu" {
+            if let Some(action) = spec.get("action").and_then(Value::as_str) {
+                if !matches!(action, "plan" | "apply") {
+                    return Err(ApiError::bad("Aktion ist plan oder apply."));
+                }
+            }
+        }
+    }
+    let size = serde_json::to_string(over)
+        .map_err(|err| ApiError::Internal(err.to_string()))?
+        .len();
+    if size > 64 * 1024 {
+        return Err(ApiError::bad("Parameter sind zu groß."));
+    }
+    Ok(())
+}
+
 fn build_workflow(
     state: &Shared,
     team: &str,
@@ -690,6 +744,7 @@ fn build_workflow(
         if template.team_id != team {
             return Err(ApiError::bad("Eine Vorlage gehört zu einem anderen Team."));
         }
+        check_node_overrides(&db, team, &template, node)?;
     }
     let created_at = if let Some(id) = &id {
         db::workflow(&db, id)?
@@ -819,6 +874,23 @@ fn run_json(db: &rusqlite::Connection, run: &db::WorkflowJob) -> AppResult<Value
         .map(|item| db::json_object(&item.graph))
         .unwrap_or_else(|| json!({"nodes": [], "edges": []}));
     let nodes = db::workflow_nodes(db, &run.id)?;
+    let mut node_rows = Vec::with_capacity(nodes.len());
+    for node in &nodes {
+        let job = match &node.job_id {
+            Some(id) => db::job(db, id)?,
+            None => None,
+        };
+        node_rows.push(json!({
+            "node_id": node.node_id,
+            "phase": node.phase,
+            "job_id": node.job_id,
+            "job_name": job.as_ref().map(|item| &item.name),
+            "tool": job.as_ref().map(|item| &item.tool),
+            "started_at": job.as_ref().and_then(|item| item.started_at.as_deref()),
+            "finished_at": job.as_ref().and_then(|item| item.finished_at.as_deref()),
+            "job_created_at": job.as_ref().map(|item| &item.created_at),
+        }));
+    }
     Ok(json!({
         "id": run.id,
         "workflow_id": run.workflow_id,
@@ -831,10 +903,6 @@ fn run_json(db: &rusqlite::Connection, run: &db::WorkflowJob) -> AppResult<Value
         "created_at": run.created_at,
         "finished_at": run.finished_at,
         "graph": graph,
-        "nodes": nodes.iter().map(|node| json!({
-            "node_id": node.node_id,
-            "phase": node.phase,
-            "job_id": node.job_id,
-        })).collect::<Vec<_>>(),
+        "nodes": node_rows,
     }))
 }

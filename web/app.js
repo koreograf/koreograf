@@ -21,6 +21,7 @@ let lang = languageId(localStorage.getItem("koreograf.lang"));
 let source = null;
 let pollTimer = null;
 let generation = 0;
+let runKey = null;
 document.documentElement.lang = lang;
 
 const EN = {
@@ -79,6 +80,8 @@ const EN = {
   "GitHub-Token": "GitHub token",
   "GitLab-Token": "GitLab token",
   "Gilt im Auftrag. Der Projekt-Sync nutzt diesen Zugang noch nicht.": "Applies to the job. Project sync does not use this credential yet.",
+  "Gilt nur für diesen Knoten. Die Vorlage bleibt unverändert.": "Applies only to this node. The template stays unchanged.",
+  "Ohne Inventar": "No inventory",
   "Google Compute Engine": "Google Compute Engine",
   "Host": "Host",
   "Keine": "None",
@@ -232,7 +235,14 @@ const EN = {
   "Extra-Variablen ist kein gültiges JSON.": "Extra variables are not valid JSON.",
   "Extra-Variablen muss ein JSON-Objekt sein.": "Extra variables must be a JSON object.",
   "extra_vars muss ein Objekt sein.": "extra_vars must be an object.",
-  "Farben zeigen den Lauf. Ein Klick öffnet den Auftrag.": "Colors show the run. A click opens the job.",
+  "Farben zeigen den Lauf. Ein Klick zeigt die Ausgabe.": "Colors show the run. A click shows the output.",
+  "Dauer": "Duration",
+  "Ende": "End",
+  "Start": "Start",
+  "Schließen": "Close",
+  "Auftrag öffnen": "Open the job",
+  "Dieser Knoten hat noch keine Ausgabe.": "This node has no output yet.",
+  "Dieser Knoten wurde übersprungen.": "This node was skipped.",
   "Fehler": "Error",
   "Fehlerkante: Zielknoten anklicken.": "Failure edge: click the target node.",
   "Filter, eine Zeile je Schlüssel=Wert": "Filters, one key=value per line",
@@ -306,6 +316,7 @@ const EN = {
   "Verbinden": "Connect",
   "Wähle einen Knoten, um ihn zu verbinden.": "Select a node to connect it.",
   "Lauf": "Run",
+  "Zurück zum Workflow": "Back to the workflow",
   "Laufzeit": "Runtime",
   "LDAP-Gruppe": "LDAP group",
   "LDAP-Gruppe: {group}": "LDAP group: {group}",
@@ -760,6 +771,31 @@ function pill(status) {
   return `<span class="pill ${esc(status)}">${esc(statusLabel(status))}</span>`;
 }
 
+function clock(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleTimeString(lang === "en" ? "en-GB" : "de-DE", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+}
+
+function spanText(start, end, phase) {
+  if (!start || phase === "pending" || phase === "skipped") return "—";
+  const from = Date.parse(start);
+  if (Number.isNaN(from)) return "—";
+  const to = end ? Date.parse(end) : phase === "running" ? Date.now() : NaN;
+  if (Number.isNaN(to)) return "—";
+  const secs = Math.max(0, Math.round((to - from) / 1000));
+  const mins = Math.floor(secs / 60);
+  const rest = secs % 60;
+  if (mins <= 0) return `${secs}s`;
+  return `${mins}m ${String(rest).padStart(2, "0")}s`;
+}
+
 function bytes(value) {
   const n = Number(value) || 0;
   if (n < 1024) return `${n} B`;
@@ -776,6 +812,10 @@ function closeLive() {
   if (pollTimer) {
     clearInterval(pollTimer);
     pollTimer = null;
+  }
+  if (runKey) {
+    document.removeEventListener("keydown", runKey);
+    runKey = null;
   }
 }
 
@@ -1756,14 +1796,18 @@ function edgePoint(node, when) {
 
 async function pageWorkflow(id) {
   if (!needTeam()) return;
-  const [workflow, templates] = await Promise.all([
+  const [workflow, templates, inventories, credentials] = await Promise.all([
     api("GET", `/api/workflows/${encodeURIComponent(id)}`),
     api("GET", "/api/templates"),
+    api("GET", "/api/inventories"),
+    api("GET", "/api/credentials"),
   ]);
-  mountEditor(workflow, templates, false, {});
+  mountEditor(workflow, templates, false, {}, { inventories, credentials });
 }
 
-function mountEditor(workflow, templates, readonly, phases) {
+function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
+  const onNode = hooks && hooks.onNode;
+  const lists = catalogs || { inventories: [], credentials: [] };
   const editable = !readonly && can("operator");
   const graph = {
     nodes: (workflow.graph.nodes || []).map((node) => ({ ...node })),
@@ -1773,7 +1817,12 @@ function mountEditor(workflow, templates, readonly, phases) {
   let selectedEdge = null;
   let link = null;
   let drag = null;
+  let flushNode = () => true;
+  const back = readonly && workflow.workflow_id
+    ? `<a class="btn" href="#/workflows/${esc(workflow.workflow_id)}">${h("Zurück zum Workflow")}</a>`
+    : "";
   shell(readonly ? workflow.name : t("Workflow"), `
+    <div class="editor-stack">
     <div class="editor-body">
       <div>
         ${readonly ? "" : `
@@ -1781,11 +1830,13 @@ function mountEditor(workflow, templates, readonly, phases) {
             <input id="wf-name" value="${esc(workflow.name)}" ${can("operator") ? "" : "disabled"}>
             <input id="wf-description" value="${esc(workflow.description)}" placeholder="${h("Beschreibung")}" ${can("operator") ? "" : "disabled"}>
           </div>`}
-        <p class="small muted" id="wf-hint">${readonly ? h("Farben zeigen den Lauf. Ein Klick öffnet den Auftrag.") : h("Knoten ziehen. Weitere Knoten rechts hinzufügen. Verbinden über die Auswahl am Knoten oder über Erfolg und Fehler auf der Karte.")}</p>
+        <p class="small muted" id="wf-hint">${readonly ? h("Farben zeigen den Lauf. Ein Klick zeigt die Ausgabe.") : h("Knoten ziehen. Weitere Knoten rechts hinzufügen. Verbinden über die Auswahl am Knoten oder über Erfolg und Fehler auf der Karte.")}</p>
         <div class="canvas" id="canvas"><div id="board" style="position:relative;min-width:100%;min-height:560px"><svg class="edges" id="edges"></svg><div id="nodes"></div></div></div>
       </div>
       <aside class="card inspector" id="inspector"></aside>
-    </div>`, readonly ? "" : `
+    </div>
+    ${readonly ? `<section class="card run-log" id="run-log" aria-live="polite"></section>` : ""}
+    </div>`, readonly ? back : `
       ${can("operator") ? `<button class="btn" id="wf-save" type="button">${h("Speichern")}</button><button class="btn primary" id="wf-launch" type="button">${h("Starten")}</button>` : ""}
       ${can("operator") ? `<button class="btn danger" id="wf-delete" type="button">${h("Löschen")}</button>` : ""}`);
 
@@ -1796,6 +1847,85 @@ function mountEditor(workflow, templates, readonly, phases) {
   function localPoint(event) {
     const rect = board.getBoundingClientRect();
     return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+  }
+
+  function sameJson(left, right) {
+    const norm = (value) => {
+      if (Array.isArray(value)) return value.map(norm);
+      if (value && typeof value === "object") {
+        return Object.keys(value).sort().reduce((acc, key) => {
+          acc[key] = norm(value[key]);
+          return acc;
+        }, {});
+      }
+      return value;
+    };
+    return JSON.stringify(norm(left)) === JSON.stringify(norm(right));
+  }
+
+  function nodeCaption(node) {
+    const join = node.convergence === "all" ? t("alle Vorgänger") : t("ein Vorgänger");
+    const inventoryId = node.overrides && Object.prototype.hasOwnProperty.call(node.overrides, "inventory_id")
+      ? node.overrides.inventory_id
+      : undefined;
+    if (inventoryId === undefined) return join;
+    if (!inventoryId) return `${join} · ${t("Ohne Inventar")}`;
+    const inventory = lists.inventories.find((item) => item.id === inventoryId);
+    return inventory ? `${join} · ${inventory.name}` : join;
+  }
+
+  function paintCaption(node) {
+    const label = nodes.querySelector(`[data-id="${CSS.escape(node.id)}"] .muted`);
+    if (label) label.textContent = nodeCaption(node);
+  }
+
+  function nodeParams(node, template) {
+    if (!template) return "";
+    const over = node.overrides || {};
+    const spec = { ...(template.spec || {}), ...(over.spec || {}) };
+    const inventoryId = over.inventory_id !== undefined ? over.inventory_id : (template.inventory_id || "");
+    const credentialId = over.credential_id !== undefined ? over.credential_id : (template.credential_id || "");
+    const extra = over.extra_vars || template.extra_vars || {};
+    const verbosity = Number(spec.verbosity) || 0;
+    const jobType = spec.job_type === "check" ? "check" : "run";
+    let toolFields = "";
+    if (template.tool === "ansible") {
+      toolFields = `
+        <label class="field"><span>${h("Inventar")}</span><select class="fit" id="node-inventory">${selectOptions(lists.inventories, inventoryId, true, (row) => row.name)}</select></label>
+        <label class="field"><span>${h("Art")}</span>
+          <select class="fit" id="node-job-type">
+            <option value="run"${jobType === "check" ? "" : " selected"}>${h("Lauf")}</option>
+            <option value="check"${jobType === "check" ? " selected" : ""}>${h("Check (Dry-Run)")}</option>
+          </select>
+        </label>
+        <label class="field"><span>${h("Ausführlichkeit")}</span>
+          <select class="fit" id="node-verbosity">
+            ${[0, 1, 2, 3, 4].map((level) => `<option value="${level}"${verbosity === level ? " selected" : ""}>${h(verbosityLabel(level))}</option>`).join("")}
+          </select>
+        </label>
+        <label class="field"><span>${h("Forks")}</span><input class="tiny" id="node-forks" inputmode="numeric" value="${esc(spec.forks ?? "")}"></label>
+        <label class="field check"><span>${h("Diff")}</span><input id="node-diff" type="checkbox"${spec.diff ? " checked" : ""}></label>
+        <label class="field"><span>${h("Tags")}</span><input id="node-tags" value="${esc(spec.tags || "")}"></label>
+        <label class="field"><span>${h("Tags überspringen")}</span><input id="node-skip-tags" value="${esc(spec.skip_tags || "")}"></label>
+        <label class="field"><span>${h("Limit")}</span><input id="node-limit" value="${esc(spec.limit || "")}"></label>`;
+    } else if (template.tool === "opentofu") {
+      const action = spec.action === "apply" ? "apply" : "plan";
+      toolFields = `
+        <label class="field"><span>${h("Aktion")}</span>
+          <select class="fit" id="node-action">
+            <option value="plan"${action === "apply" ? "" : " selected"}>plan</option>
+            <option value="apply"${action === "apply" ? " selected" : ""}>apply</option>
+          </select>
+        </label>`;
+    }
+    return `
+      <details class="node-params" open>
+        <summary>${h("Parameter")}</summary>
+        <p class="small muted">${h("Gilt nur für diesen Knoten. Die Vorlage bleibt unverändert.")}</p>
+        ${toolFields}
+        <label class="field"><span>${h("Zugang")}</span><select class="fit" id="node-credential">${selectOptions(lists.credentials, credentialId, true, (row) => `${row.name} (${credentialKindLabel(row.kind)})`)}</select></label>
+        <label class="field"><span>${h("Extra-Variablen (JSON)")}</span><textarea id="node-extra">${esc(JSON.stringify(extra, null, 2))}</textarea></label>
+      </details>`;
   }
 
   function drawEdges() {
@@ -1821,17 +1951,17 @@ function mountEditor(workflow, templates, readonly, phases) {
       const phase = phases[node.id];
       const phaseClass = phase ? ` phase-${esc(phase.phase)}` : "";
       const selectedClass = selected === node.id ? " selected" : "";
+      const runClass = readonly ? " run-node" : "";
       const armed = link && link.from === node.id ? link.when : "";
       const ports = editable ? `<div class="ports"><button type="button" class="port success${armed === "success" ? " armed" : ""}" data-port="success">${h("Erfolg")}</button><button type="button" class="port failure${armed === "failure" ? " armed" : ""}" data-port="failure">${h("Fehler")}</button></div>` : "";
-      return `<div class="wf-node${selectedClass}${phaseClass}" data-id="${esc(node.id)}" style="left:${Number(node.x) || 0}px;top:${Number(node.y) || 0}px"><strong>${esc(node.name)}</strong><span class="small muted">${esc(node.convergence === "all" ? t("alle Vorgänger") : t("ein Vorgänger"))}</span>${ports}</div>`;
+      return `<div class="wf-node${selectedClass}${phaseClass}${runClass}" data-id="${esc(node.id)}" style="left:${Number(node.x) || 0}px;top:${Number(node.y) || 0}px"><strong>${esc(node.name)}</strong><span class="small muted">${esc(nodeCaption(node))}</span>${ports}</div>`;
     }).join("");
     nodes.querySelectorAll(".wf-node").forEach((element) => {
       const node = graph.nodes.find((item) => item.id === element.dataset.id);
       element.addEventListener("pointerdown", (event) => {
         if (event.target.closest(".port")) return;
         if (readonly) {
-          const phase = phases[node.id];
-          if (phase && phase.job_id) go(`#/jobs/${phase.job_id}`);
+          if (onNode) onNode(node, phases[node.id] || null);
           return;
         }
         if (!editable) {
@@ -1842,6 +1972,7 @@ function mountEditor(workflow, templates, readonly, phases) {
           return;
         }
         if (link && link.from !== node.id) {
+          if (!flushNode()) return;
           const fromId = link.from;
           const exists = graph.edges.some((edge) => edge.from === fromId && edge.to === node.id && edge.when === link.when);
           if (!exists) graph.edges.push({ from: fromId, to: node.id, when: link.when });
@@ -1853,6 +1984,7 @@ function mountEditor(workflow, templates, readonly, phases) {
           renderInspector();
           return;
         }
+        if (!flushNode()) return;
         selected = node.id;
         selectedEdge = null;
         const point = localPoint(event);
@@ -1920,6 +2052,7 @@ function mountEditor(workflow, templates, readonly, phases) {
 
   function bindAddNode(host) {
     host.querySelector("#add-node").addEventListener("click", () => {
+      if (!flushNode()) return;
       const templateId = host.querySelector("#add-template").value;
       const template = templates.find((item) => item.id === templateId);
       if (!template) {
@@ -1945,10 +2078,98 @@ function mountEditor(workflow, templates, readonly, phases) {
     });
   }
 
+  function fieldValue(id) {
+    const element = document.querySelector(id);
+    if (!element) return "";
+    if (element.tagName === "SELECT") {
+      const index = element.selectedIndex;
+      if (typeof index === "number" && index >= 0 && element.options && element.options[index]) {
+        return element.options[index].value;
+      }
+      const chosen = element.querySelector("option[selected]");
+      if (chosen) return chosen.value;
+    }
+    return element.value == null ? "" : String(element.value);
+  }
+
+  function note(message) {
+    const hint = document.querySelector("#wf-hint");
+    if (hint) hint.textContent = message;
+  }
+
+  function readOverrides(node) {
+    const template = templates.find((item) => item.id === node.template_id);
+    const extraField = document.querySelector("#node-extra");
+    if (!template || !extraField) return true;
+    const over = {};
+    const templateSpec = template.spec || {};
+    if (template.tool === "ansible") {
+      const inventoryId = fieldValue("#node-inventory");
+      if (inventoryId !== (template.inventory_id || "")) over.inventory_id = inventoryId;
+      const spec = {};
+      const jobType = fieldValue("#node-job-type") === "check" ? "check" : "run";
+      const templateJob = templateSpec.job_type === "check" ? "check" : "run";
+      if (jobType !== templateJob) spec.job_type = jobType;
+      const verbosity = Number(fieldValue("#node-verbosity")) || 0;
+      const templateVerbosity = Number(templateSpec.verbosity) || 0;
+      if (verbosity !== templateVerbosity) spec.verbosity = verbosity;
+      const forksRaw = fieldValue("#node-forks").trim();
+      const templateForks = templateSpec.forks;
+      const templateHasForks = templateForks !== undefined && templateForks !== null && templateForks !== "";
+      if (forksRaw === "") {
+        if (templateHasForks) spec.forks = null;
+      } else {
+        const forks = Number(forksRaw);
+        if (!Number.isInteger(forks)) {
+          note(t("Forks ist eine ganze Zahl."));
+          return false;
+        }
+        if (forks < 1 || forks > 50) {
+          note(t("Forks ist eine Zahl von 1 bis 50."));
+          return false;
+        }
+        if (forks !== templateForks) spec.forks = forks;
+      }
+      const diff = Boolean(document.querySelector("#node-diff") && document.querySelector("#node-diff").checked);
+      if (diff !== Boolean(templateSpec.diff)) spec.diff = diff;
+      const tags = fieldValue("#node-tags");
+      if (tags !== (templateSpec.tags || "")) spec.tags = tags;
+      const skip = fieldValue("#node-skip-tags");
+      if (skip !== (templateSpec.skip_tags || "")) spec.skip_tags = skip;
+      const limit = fieldValue("#node-limit");
+      if (limit !== (templateSpec.limit || "")) spec.limit = limit;
+      if (Object.keys(spec).length) over.spec = spec;
+    } else if (template.tool === "opentofu") {
+      const action = fieldValue("#node-action") === "apply" ? "apply" : "plan";
+      const templateAction = templateSpec.action === "apply" ? "apply" : "plan";
+      if (action !== templateAction) over.spec = { action };
+    }
+    const credentialId = fieldValue("#node-credential");
+    if (credentialId !== (template.credential_id || "")) over.credential_id = credentialId;
+    let extra;
+    try {
+      extra = jsonObject(extraField.value, "Extra-Variablen");
+    } catch (error) {
+      note(t(error.message));
+      return false;
+    }
+    if (!sameJson(extra, template.extra_vars || {})) over.extra_vars = extra;
+    if (Object.keys(over).length) node.overrides = over;
+    else delete node.overrides;
+    paintCaption(node);
+    const hint = document.querySelector("#wf-hint");
+    if (hint && (hint.textContent === t("Forks ist eine ganze Zahl.") || hint.textContent === t("Forks ist eine Zahl von 1 bis 50.") || hint.textContent === t("Extra-Variablen ist kein gültiges JSON.") || hint.textContent === t("Extra-Variablen muss ein JSON-Objekt sein."))) {
+      hint.textContent = "";
+    }
+    return true;
+  }
+
   function renderInspector() {
+    if (!flushNode()) return;
+    flushNode = () => true;
     const host = document.querySelector("#inspector");
     if (readonly) {
-      host.innerHTML = `<h2>${h("Lauf")}</h2><p class="small">${pill(workflow.status || "pending")}</p><p class="small muted">${h("Grün ist erfolgreich, Rot ist fehlgeschlagen, Blau läuft.")}</p>`;
+      host.innerHTML = `<h2>${h("Lauf")}</h2><p class="small"><span id="run-state" class="pill ${esc(workflow.status || "pending")}">${esc(statusLabel(workflow.status || "pending"))}</span></p>${back}<p class="small muted">${h("Grün ist erfolgreich, Rot ist fehlgeschlagen, Blau läuft.")}</p>`;
       return;
     }
     if (!editable) {
@@ -2001,6 +2222,7 @@ function mountEditor(workflow, templates, readonly, phases) {
             <option value="all"${node.convergence === "all" ? " selected" : ""}>${h("Alle Vorgänger")}</option>
           </select>
         </label>
+        ${nodeParams(node, templates.find((item) => item.id === node.template_id))}
         <h2>${h("Verbinden")}</h2>
         <label class="field"><span>${h("Erfolg führt zu")}</span><select class="fit" id="link-success">${targetOptions(node.id, "success")}</select></label>
         <label class="field"><span>${h("Fehler führt zu")}</span><select class="fit" id="link-failure">${targetOptions(node.id, "failure")}</select></label>
@@ -2015,12 +2237,31 @@ function mountEditor(workflow, templates, readonly, phases) {
       if (label) label.textContent = node.name;
     });
     host.querySelector("#node-template").addEventListener("change", (event) => {
-      node.template_id = event.target.value;
+      const next = event.target.value;
+      if (!readOverrides(node)) {
+        Array.from(event.target.options).forEach((option) => {
+          if (option.value === node.template_id) option.setAttribute("selected", "");
+          else option.removeAttribute("selected");
+        });
+        return;
+      }
+      if (node.overrides) delete node.overrides.spec;
+      if (node.overrides && node.overrides.inventory_id === undefined && node.overrides.credential_id === undefined && node.overrides.extra_vars === undefined) {
+        delete node.overrides;
+      }
+      node.template_id = next;
+      flushNode = () => true;
+      renderInspector();
     });
     host.querySelector("#node-join").addEventListener("change", (event) => {
       node.convergence = event.target.value;
-      const label = nodes.querySelector(`[data-id="${CSS.escape(node.id)}"] .muted`);
-      if (label) label.textContent = node.convergence === "all" ? t("alle Vorgänger") : t("ein Vorgänger");
+      paintCaption(node);
+    });
+    flushNode = () => readOverrides(node);
+    ["#node-inventory", "#node-credential", "#node-job-type", "#node-verbosity", "#node-diff", "#node-action", "#node-forks", "#node-tags", "#node-skip-tags", "#node-limit", "#node-extra"].forEach((id) => {
+      const element = host.querySelector(id);
+      if (!element) return;
+      element.addEventListener("change", () => { flushNode(); });
     });
     ["success", "failure", "always"].forEach((when) => {
       host.querySelector(`#link-${when}`).addEventListener("change", (event) => {
@@ -2029,6 +2270,7 @@ function mountEditor(workflow, templates, readonly, phases) {
       });
     });
     host.querySelector("#node-delete").addEventListener("click", () => {
+      flushNode = () => true;
       graph.nodes = graph.nodes.filter((item) => item.id !== node.id);
       graph.edges = graph.edges.filter((edge) => edge.from !== node.id && edge.to !== node.id);
       selected = null;
@@ -2041,6 +2283,7 @@ function mountEditor(workflow, templates, readonly, phases) {
   svg.addEventListener("click", (event) => {
     const path = event.target.closest("path");
     if (!path || readonly) return;
+    if (!flushNode()) return;
     selectedEdge = Number(path.dataset.edge);
     selected = null;
     link = null;
@@ -2050,6 +2293,7 @@ function mountEditor(workflow, templates, readonly, phases) {
   board.addEventListener("pointerdown", (event) => {
     if (readonly || !editable) return;
     if (event.target.closest(".wf-node, path")) return;
+    if (!flushNode()) return;
     selected = null;
     selectedEdge = null;
     link = null;
@@ -2063,6 +2307,7 @@ function mountEditor(workflow, templates, readonly, phases) {
   const save = document.querySelector("#wf-save");
   if (save) {
     save.addEventListener("click", async () => {
+      if (!flushNode()) return;
       try {
         await api("PUT", `/api/workflows/${encodeURIComponent(workflow.id)}`, {
           name: document.querySelector("#wf-name").value,
@@ -2078,6 +2323,7 @@ function mountEditor(workflow, templates, readonly, phases) {
   const launch = document.querySelector("#wf-launch");
   if (launch) {
     launch.addEventListener("click", async () => {
+      if (!flushNode()) return;
       try {
         await api("PUT", `/api/workflows/${encodeURIComponent(workflow.id)}`, {
           name: document.querySelector("#wf-name").value,
@@ -2103,23 +2349,218 @@ function mountEditor(workflow, templates, readonly, phases) {
       }
     });
   }
+
+  function applyPhases() {
+    nodes.querySelectorAll(".wf-node").forEach((element) => {
+      const phase = phases[element.dataset.id];
+      const phaseClass = phase ? ` phase-${phase.phase}` : "";
+      element.className = `wf-node run-node${phaseClass}`;
+    });
+  }
+
+  return { applyPhases };
 }
 
 async function pageRun(id) {
   const live = generation;
-  const paint = (run) => {
-    const phases = {};
+  const phases = {};
+  let editor = null;
+  let openNodeId = null;
+  let shownJob = "";
+  let outputToken = 0;
+
+  function adopt(run) {
+    Object.keys(phases).forEach((key) => delete phases[key]);
     (run.nodes || []).forEach((node) => { phases[node.node_id] = node; });
-    const view = {
+    return {
       id: run.id,
+      workflow_id: run.workflow_id || "",
       name: run.name,
       description: "",
       status: run.status,
       graph: run.graph || { nodes: [], edges: [] },
     };
-    mountEditor(view, [], true, phases);
+  }
+
+  function nodeStart(phase) {
+    if (!phase) return "";
+    return phase.started_at || (phase.phase === "running" ? phase.job_created_at : "") || "";
+  }
+
+  function renderLog(run) {
+    const host = document.querySelector("#run-log");
+    if (!host) return;
+    const graphNodes = (run.graph && run.graph.nodes) || [];
+    const ranked = graphNodes.map((node, index) => ({ node, index, phase: phases[node.id] }));
+    ranked.sort((left, right) => {
+      const a = nodeStart(left.phase);
+      const b = nodeStart(right.phase);
+      if (a && b && a !== b) return a < b ? -1 : 1;
+      if (a && !b) return -1;
+      if (!a && b) return 1;
+      return left.index - right.index;
+    });
+    const rows = ranked.map(({ node, phase }) => {
+      const status = phase ? phase.phase : "pending";
+      const start = nodeStart(phase);
+      const end = phase && phase.finished_at ? phase.finished_at : "";
+      return `<button class="run-line ${esc(status)}" type="button" data-run-node="${esc(node.id)}">
+        <span class="mono">${esc(clock(start))}</span>
+        <span>${esc(node.name)}</span>
+        <span>${esc(statusLabel(status))}</span>
+        <span class="mono">${esc(clock(end))}</span>
+        <span class="mono">${esc(spanText(start, end, status))}</span>
+      </button>`;
+    }).join("");
+    host.innerHTML = `
+      <h2>${h("Status")}</h2>
+      <div class="run-lines">
+        <div class="run-line head">
+          <span>${h("Start")}</span>
+          <span>${h("Name")}</span>
+          <span>${h("Status")}</span>
+          <span>${h("Ende")}</span>
+          <span>${h("Dauer")}</span>
+        </div>
+        ${rows}
+      </div>`;
+    host.querySelectorAll("[data-run-node]").forEach((row) => {
+      row.addEventListener("click", () => {
+        const node = graphNodes.find((item) => item.id === row.dataset.runNode);
+        if (node) openOutput(node, phases[node.id] || null);
+      });
+    });
+  }
+
+  function overlayMeta(phase) {
+    const status = phase ? phase.phase : "pending";
+    const start = nodeStart(phase);
+    const end = phase && phase.finished_at ? phase.finished_at : "";
+    const tool = phase && phase.tool ? `<span class="tool">${esc(phase.tool)}</span>` : "";
+    const link = phase && phase.job_id
+      ? `<a href="#/jobs/${esc(phase.job_id)}">${h("Auftrag öffnen")}</a>`
+      : "";
+    return `${pill(status)} ${tool} <span class="small muted">${esc(clock(start))} – ${esc(clock(end))} · ${esc(spanText(start, end, status))}</span> ${link}`;
+  }
+
+  function closeOutput() {
+    outputToken += 1;
+    openNodeId = null;
+    shownJob = "";
+    const overlay = document.querySelector("#node-output");
+    if (overlay) overlay.remove();
+    if (source) {
+      source.close();
+      source = null;
+    }
+  }
+
+  async function openOutput(node, phase) {
+    if (live !== generation) return;
+    const token = ++outputToken;
+    openNodeId = node.id;
+    const jobId = phase && phase.job_id ? phase.job_id : "";
+    shownJob = jobId;
+    if (source) {
+      source.close();
+      source = null;
+    }
+    let overlay = document.querySelector("#node-output");
+    if (!overlay) {
+      document.querySelector(".main").insertAdjacentHTML("beforeend", `
+        <div class="overlay" id="node-output">
+          <div class="overlay-card" role="dialog" aria-modal="true" aria-labelledby="overlay-title">
+            <div class="spread">
+              <h2 id="overlay-title"></h2>
+              <button class="btn" type="button" id="overlay-close">${h("Schließen")}</button>
+            </div>
+            <p class="small row" id="overlay-meta"></p>
+            <div class="log" id="log"></div>
+          </div>
+        </div>`);
+      overlay = document.querySelector("#node-output");
+      overlay.addEventListener("click", (event) => {
+        if (event.target === overlay) closeOutput();
+      });
+      document.querySelector("#overlay-close").addEventListener("click", closeOutput);
+    }
+    document.querySelector("#overlay-title").textContent = node.name;
+    document.querySelector("#overlay-meta").innerHTML = overlayMeta(phase);
+    const log = document.querySelector("#log");
+    log.replaceChildren();
+    const note = (text) => {
+      const line = document.createElement("div");
+      line.className = "system";
+      line.textContent = text;
+      log.appendChild(line);
+    };
+    if (!jobId) {
+      note(phase && phase.phase === "skipped"
+        ? t("Dieser Knoten wurde übersprungen.")
+        : t("Dieser Knoten hat noch keine Ausgabe."));
+      return;
+    }
+    try {
+      const job = await api("GET", `/api/jobs/${encodeURIComponent(jobId)}`);
+      if (token !== outputToken || live !== generation) return;
+      (job.events || []).forEach(appendLog);
+      if (!log.childNodes.length) note(t("Dieser Knoten hat noch keine Ausgabe."));
+      const running = job.status === "pending" || job.status === "running";
+      if (!running) return;
+      const last = (job.events || []).reduce((max, event) => Math.max(max, event.id), 0);
+      source = new EventSource(`/api/jobs/${encodeURIComponent(jobId)}/events?after=${last}`);
+      source.addEventListener("log", (event) => {
+        if (token !== outputToken || live !== generation) return;
+        appendLog(JSON.parse(event.data));
+      });
+      source.addEventListener("end", (event) => {
+        if (token !== outputToken || live !== generation) return;
+        const payload = JSON.parse(event.data);
+        const badge = document.querySelector("#node-output .pill");
+        if (badge) {
+          badge.className = `pill ${payload.status}`;
+          badge.textContent = statusLabel(payload.status);
+        }
+        source.close();
+        source = null;
+      });
+    } catch (error) {
+      if (token === outputToken && live === generation) handle(error);
+    }
+  }
+
+  function paint(run) {
+    const view = adopt(run);
+    if (!editor) {
+      editor = mountEditor(view, [], true, phases, null, { onNode: openOutput });
+    } else if (editor) {
+      editor.applyPhases();
+      const badge = document.querySelector("#run-state");
+      if (badge) {
+        badge.className = `pill ${run.status || "pending"}`;
+        badge.textContent = statusLabel(run.status || "pending");
+      }
+    }
+    renderLog(run);
+    if (!openNodeId || !document.querySelector("#node-output")) return;
+    const node = ((run.graph && run.graph.nodes) || []).find((item) => item.id === openNodeId);
+    const phase = phases[openNodeId] || null;
+    if (!node) return;
+    const jobId = phase && phase.job_id ? phase.job_id : "";
+    if (jobId && jobId !== shownJob) openOutput(node, phase);
+    else {
+      const meta = document.querySelector("#overlay-meta");
+      if (meta) meta.innerHTML = overlayMeta(phase);
+    }
+  }
+
+  runKey = (event) => {
+    if (event.key === "Escape") closeOutput();
   };
+  document.addEventListener("keydown", runKey);
+
   const run = await api("GET", `/api/workflow-jobs/${encodeURIComponent(id)}`);
+  if (live !== generation) return;
   paint(run);
   if (["successful", "failed", "canceled"].includes(run.status)) return;
   pollTimer = setInterval(async () => {

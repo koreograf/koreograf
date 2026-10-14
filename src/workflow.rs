@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -64,6 +65,86 @@ pub struct GraphNode {
     pub y: f64,
     #[serde(default)]
     pub convergence: Convergence,
+    /// Fields that replace the template for this node only.
+    /// Missing keys keep the template value.
+    #[serde(default, skip_serializing_if = "NodeOverrides::is_empty")]
+    pub overrides: NodeOverrides,
+}
+
+/// Per-node launch values. An empty string clears a template inventory or credential.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct NodeOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inventory_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_vars: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spec: Option<Value>,
+}
+
+impl NodeOverrides {
+    pub fn is_empty(&self) -> bool {
+        self.inventory_id.is_none()
+            && self.credential_id.is_none()
+            && self.extra_vars.is_none()
+            && self.spec.is_none()
+    }
+}
+
+/// Writes node overrides onto a parameter snapshot from `capture_parameters`.
+pub fn apply_overrides(params: &mut Map<String, Value>, overrides: &NodeOverrides) {
+    if let Some(id) = &overrides.inventory_id {
+        params.insert(
+            "inventory_id".into(),
+            if id.is_empty() {
+                Value::Null
+            } else {
+                Value::String(id.clone())
+            },
+        );
+        params.insert("inventory_name".into(), Value::Null);
+    }
+    if let Some(id) = &overrides.credential_id {
+        params.insert(
+            "credential_id".into(),
+            if id.is_empty() {
+                Value::Null
+            } else {
+                Value::String(id.clone())
+            },
+        );
+        params.insert("credential_name".into(), Value::Null);
+        params.insert("credential_kind".into(), Value::Null);
+    }
+    if let Some(extra) = &overrides.extra_vars {
+        params.insert("extra_vars".into(), extra.clone());
+    }
+    if let Some(spec) = &overrides.spec {
+        let base = params
+            .get("spec")
+            .cloned()
+            .unwrap_or_else(|| Value::Object(Map::new()));
+        params.insert("spec".into(), merge_spec(&base, spec));
+    }
+}
+
+fn merge_spec(base: &Value, overlay: &Value) -> Value {
+    let mut out = match base {
+        Value::Object(map) => map.clone(),
+        _ => Map::new(),
+    };
+    if let Some(extra) = overlay.as_object() {
+        for (key, value) in extra {
+            if value.is_null() {
+                out.remove(key);
+            } else {
+                out.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    Value::Object(out)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -242,6 +323,7 @@ mod tests {
             x: 0.0,
             y: 0.0,
             convergence,
+            overrides: NodeOverrides::default(),
         }
     }
 
@@ -323,6 +405,69 @@ mod tests {
             ("d".into(), NodePhase::Pending),
         ]);
         assert_eq!(advance(&graph, &phase), vec![Step::Launch("d".into())]);
+    }
+
+    #[test]
+    fn overrides_replace_inventory_and_keep_other_spec_keys() {
+        let mut params = serde_json::json!({
+            "inventory_id": "inv-template",
+            "inventory_name": "Vorlage",
+            "credential_id": "cred-1",
+            "extra_vars": {"stage": "template"},
+            "spec": {"limit": "old", "job_type": "run", "forks": 5}
+        });
+        let map = params.as_object_mut().expect("object");
+        apply_overrides(
+            map,
+            &NodeOverrides {
+                inventory_id: Some("inv-prod".into()),
+                credential_id: None,
+                extra_vars: Some(serde_json::json!({"stage": "prod"})),
+                spec: Some(serde_json::json!({"limit": "prod", "forks": null})),
+            },
+        );
+        assert_eq!(params["inventory_id"], "inv-prod");
+        assert!(params["inventory_name"].is_null());
+        assert_eq!(params["credential_id"], "cred-1");
+        assert_eq!(params["extra_vars"]["stage"], "prod");
+        assert_eq!(params["spec"]["limit"], "prod");
+        assert_eq!(params["spec"]["job_type"], "run");
+        assert!(params["spec"].get("forks").is_none());
+    }
+
+    #[test]
+    fn a_node_without_overrides_still_parses() {
+        let graph: Graph = serde_json::from_str(
+            r#"{"nodes":[{"id":"a","template_id":"t","name":"A"}],"edges":[]}"#,
+        )
+        .expect("graph");
+        assert!(graph.nodes[0].overrides.is_empty());
+        assert!(validate(&graph).is_ok());
+    }
+
+    #[test]
+    fn empty_inventory_clears_the_snapshot() {
+        let mut params = serde_json::json!({
+            "inventory_id": "inv",
+            "inventory_name": "Alt",
+            "credential_id": "cred",
+            "credential_name": "Schlüssel",
+            "credential_kind": "ssh"
+        });
+        let map = params.as_object_mut().expect("object");
+        apply_overrides(
+            map,
+            &NodeOverrides {
+                inventory_id: Some(String::new()),
+                credential_id: Some(String::new()),
+                ..NodeOverrides::default()
+            },
+        );
+        assert!(params["inventory_id"].is_null());
+        assert!(params["inventory_name"].is_null());
+        assert!(params["credential_id"].is_null());
+        assert!(params["credential_name"].is_null());
+        assert!(params["credential_kind"].is_null());
     }
 
     #[test]

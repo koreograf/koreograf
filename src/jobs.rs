@@ -153,6 +153,104 @@ fn stored_parameters(raw: &str) -> AppResult<String> {
     Ok(value.to_string())
 }
 
+fn parameters_for_node(
+    db: &rusqlite::Connection,
+    template: &db::Template,
+    node: &workflow::GraphNode,
+    workflow_extra: &Value,
+) -> AppResult<String> {
+    let mut params = db::json_object(&capture_parameters(db, template, workflow_extra));
+    let had_extra = node.overrides.extra_vars.is_some();
+    let had_spec = node.overrides.spec.is_some();
+    {
+        let Some(map) = params.as_object_mut() else {
+            return Err(ApiError::bad("Parameter sind ungültig."));
+        };
+        workflow::apply_overrides(map, &node.overrides);
+        if had_extra {
+            let base = map.get("extra_vars").cloned().unwrap_or_else(|| json!({}));
+            map.insert(
+                "extra_vars".into(),
+                runner::merge_vars(&base, workflow_extra),
+            );
+        }
+        if node.overrides.inventory_id.is_some() {
+            refresh_inventory(db, &template.team_id, map)?;
+        }
+        if node.overrides.credential_id.is_some() {
+            refresh_credential(db, &template.team_id, map)?;
+        }
+    }
+    if had_spec && template.tool == "ansible" {
+        let spec = params.get("spec").cloned().unwrap_or_else(|| json!({}));
+        runner::check_ansible_spec(&spec).map_err(ApiError::bad)?;
+    }
+    if had_spec && template.tool == "opentofu" {
+        if let Some(action) = params
+            .get("spec")
+            .and_then(|spec| spec.get("action"))
+            .and_then(Value::as_str)
+        {
+            if !matches!(action, "plan" | "apply") {
+                return Err(ApiError::bad("Aktion ist plan oder apply."));
+            }
+        }
+    }
+    let raw = serde_json::to_string(&params).map_err(|err| ApiError::Internal(err.to_string()))?;
+    if raw.len() > 512 * 1024 {
+        return Err(ApiError::bad("Parameter sind zu groß."));
+    }
+    Ok(raw)
+}
+
+fn refresh_inventory(
+    db: &rusqlite::Connection,
+    team_id: &str,
+    params: &mut serde_json::Map<String, Value>,
+) -> AppResult<()> {
+    match params.get("inventory_id").and_then(Value::as_str) {
+        Some(id) if !id.is_empty() => {
+            let inventory =
+                db::inventory(db, id)?.ok_or_else(|| ApiError::bad("Inventar fehlt."))?;
+            if inventory.team_id != team_id {
+                return Err(ApiError::bad("Inventar gehört zu einem anderen Team."));
+            }
+            params.insert("inventory_id".into(), json!(inventory.id));
+            params.insert("inventory_name".into(), json!(inventory.name));
+        }
+        _ => {
+            params.insert("inventory_id".into(), Value::Null);
+            params.insert("inventory_name".into(), Value::Null);
+        }
+    }
+    Ok(())
+}
+
+fn refresh_credential(
+    db: &rusqlite::Connection,
+    team_id: &str,
+    params: &mut serde_json::Map<String, Value>,
+) -> AppResult<()> {
+    match params.get("credential_id").and_then(Value::as_str) {
+        Some(id) if !id.is_empty() => {
+            let credential =
+                db::credential(db, id)?.ok_or_else(|| ApiError::bad("Zugang fehlt."))?;
+            if credential.team_id != team_id {
+                return Err(ApiError::bad("Zugang gehört zu einem anderen Team."));
+            }
+            params.insert("credential_id".into(), json!(credential.id));
+            params.insert("credential_name".into(), json!(credential.name));
+            params.insert("credential_kind".into(), json!(credential.kind));
+        }
+        _ => {
+            params.insert("credential_id".into(), Value::Null);
+            params.insert("credential_name".into(), Value::Null);
+            params.insert("credential_kind".into(), Value::Null);
+        }
+    }
+    Ok(())
+}
+
 fn capture_parameters(
     db: &rusqlite::Connection,
     template: &db::Template,
@@ -389,19 +487,35 @@ fn apply_step(
             let Some(node) = graph.nodes.iter().find(|item| item.id == node_id) else {
                 return Ok(());
             };
-            let launched = launch(
-                state,
-                LaunchRequest {
-                    team_id: team_id.to_string(),
-                    template_id: node.template_id.clone(),
-                    extra_vars: extra.clone(),
-                    launched_by: format!("workflow:{wf_job_id}"),
-                    trigger: "workflow".into(),
-                    workflow_job_id: Some(wf_job_id.to_string()),
-                    workflow_node_id: Some(node_id.clone()),
-                    parameters_override: None,
-                },
-            );
+            let prepared = {
+                let db = state.db()?;
+                match db::template(&db, &node.template_id)? {
+                    Some(template) if template.team_id == team_id => {
+                        parameters_for_node(&db, &template, node, extra)
+                    }
+                    Some(_) => Err(ApiError::Forbidden),
+                    None => Err(ApiError::NotFound),
+                }
+            };
+            let launched = match prepared {
+                Ok(parameters) => launch(
+                    state,
+                    LaunchRequest {
+                        team_id: team_id.to_string(),
+                        template_id: node.template_id.clone(),
+                        extra_vars: extra.clone(),
+                        launched_by: format!("workflow:{wf_job_id}"),
+                        trigger: "workflow".into(),
+                        workflow_job_id: Some(wf_job_id.to_string()),
+                        workflow_node_id: Some(node_id.clone()),
+                        parameters_override: Some(parameters),
+                    },
+                ),
+                Err(err) => {
+                    tracing::warn!(error = %err, node = %node_id, "Knoten-Parameter");
+                    Err(err)
+                }
+            };
             let db = state.db()?;
             match launched {
                 Ok(job_id) => {
