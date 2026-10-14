@@ -54,20 +54,20 @@ impl AppState {
     pub fn db(&self) -> Result<std::sync::MutexGuard<'_, Connection>, ApiError> {
         self.conn
             .lock()
-            .map_err(|_| ApiError::Internal("Datenbank-Sperre ist beschädigt.".into()))
+            .map_err(|_| ApiError::Internal("database lock is damaged".into()))
     }
 
     pub(crate) fn encrypt(&self, plain: &str) -> Result<String, ApiError> {
         self.cipher
             .lock()
-            .map_err(|_| ApiError::Internal("Schlüssel-Sperre ist beschädigt.".into()))?
+            .map_err(|_| ApiError::Internal("key lock is damaged".into()))?
             .encrypt(plain)
     }
 
     pub(crate) fn decrypt(&self, packed: &str) -> Result<String, ApiError> {
         self.cipher
             .lock()
-            .map_err(|_| ApiError::Internal("Schlüssel-Sperre ist beschädigt.".into()))?
+            .map_err(|_| ApiError::Internal("key lock is damaged".into()))?
             .decrypt(packed)
     }
 
@@ -75,7 +75,7 @@ impl AppState {
         let mut guard = self
             .cipher
             .lock()
-            .map_err(|_| ApiError::Internal("Schlüssel-Sperre ist beschädigt.".into()))?;
+            .map_err(|_| ApiError::Internal("key lock is damaged".into()))?;
         *guard = cipher;
         Ok(())
     }
@@ -106,7 +106,7 @@ pub async fn serve(cfg: Config) -> anyhow::Result<()> {
     let bind = state.cfg.bind.clone();
     let app = router(state);
     let listener = tokio::net::TcpListener::bind(&bind).await?;
-    tracing::info!(%bind, "Koreograf ist bereit");
+    tracing::info!(%bind, "Koreograf is ready");
     axum::serve(listener, app).await?;
     Ok(())
 }

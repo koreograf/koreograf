@@ -73,9 +73,7 @@ pub(crate) fn restore(state: &Shared, bytes: &[u8]) -> AppResult<()> {
     {
         let mut live = state.db()?;
         if busy(&live)? {
-            return Err(ApiError::bad(
-                "Es läuft noch ein Auftrag. Beende ihn vor dem Einspielen.",
-            ));
+            return Err(ApiError::bad("backup.still_running"));
         }
         {
             let mut saved = Connection::open(&snapshot)?;
@@ -88,7 +86,7 @@ pub(crate) fn restore(state: &Shared, bytes: &[u8]) -> AppResult<()> {
             if let Err(rollback) = rollback(&snapshot, &mut live) {
                 tracing::error!(
                     error = %rollback,
-                    "Sicherung konnte nicht zurückgerollt werden"
+                    "backup rollback failed"
                 );
             }
             return Err(err);
@@ -96,7 +94,7 @@ pub(crate) fn restore(state: &Shared, bytes: &[u8]) -> AppResult<()> {
     }
     let cipher = crypto::install_key(&state.cfg.data_dir, &incoming.key)?;
     state.replace_cipher(cipher)?;
-    tracing::info!("Sicherung eingespielt");
+    tracing::info!("backup restored");
     Ok(())
 }
 
@@ -104,33 +102,33 @@ fn lock_maintenance(state: &Shared) -> AppResult<std::sync::MutexGuard<'_, ()>> 
     state
         .maintenance
         .lock()
-        .map_err(|_| ApiError::Internal("Sicherungssperre ist beschädigt.".into()))
+        .map_err(|_| ApiError::Internal("backup lock is damaged".into()))
 }
 
 fn read_key(data_dir: &Path) -> AppResult<Vec<u8>> {
     let key = fs::read(data_dir.join(SECRET))
-        .map_err(|_| ApiError::Internal("secret.key fehlt.".into()))?;
+        .map_err(|_| ApiError::Internal("secret.key is missing".into()))?;
     crypto::parse_key(&key)?;
     Ok(key)
 }
 
 fn prepare_incoming(data_dir: &Path, bytes: &[u8]) -> AppResult<Incoming> {
     if bytes.is_empty() || bytes.len() as u64 > MAX_BYTES {
-        return Err(ApiError::bad("Die Sicherung ist leer oder zu groß."));
+        return Err(ApiError::bad("the_backup_is_empty_or_too_large"));
     }
     let entries = unpack(bytes)?;
-    let manifest = entry(&entries, MANIFEST, "Die Sicherung lässt sich nicht lesen.")?;
+    let manifest = entry(&entries, MANIFEST, "the_backup_cannot_be_read")?;
     let manifest: Manifest = serde_json::from_slice(manifest)
-        .map_err(|_| ApiError::bad("Die Sicherung hat ein unbekanntes Format."))?;
+        .map_err(|_| ApiError::bad("the_backup_has_an_unknown_format"))?;
     if manifest.format != FORMAT || manifest.engine != ENGINE {
-        return Err(ApiError::bad("Die Sicherung hat ein unbekanntes Format."));
+        return Err(ApiError::bad("the_backup_has_an_unknown_format"));
     }
     let database = entry(
         &entries,
         DATABASE,
-        "Die Sicherung enthält keine Koreograf-Datenbank.",
+        "the_backup_does_not_contain_a_koreograf_database",
     )?;
-    let key = entry(&entries, SECRET, "Die Sicherung enthält keinen Schlüssel.")?.to_vec();
+    let key = entry(&entries, SECRET, "the_backup_does_not_contain_a_key")?.to_vec();
     crypto::parse_key(&key)?;
     let path = data_dir.join(format!("restore-{}.db", Uuid::new_v4()));
     fs::write(&path, database).map_err(|err| ApiError::Internal(err.to_string()))?;
@@ -172,7 +170,7 @@ fn snapshot_zip(data_dir: &Path, live: &Connection, key: &[u8]) -> AppResult<Vec
 fn snapshot_zip_from_file(path: &Path, key: &[u8]) -> AppResult<Vec<u8>> {
     let database = fs::read(path).map_err(|err| ApiError::Internal(err.to_string()))?;
     if database.is_empty() || database.len() as u64 > MAX_BYTES {
-        return Err(ApiError::bad("Die Sicherung ist leer oder zu groß."));
+        return Err(ApiError::bad("the_backup_is_empty_or_too_large"));
     }
     let manifest = Manifest {
         format: FORMAT,
@@ -213,14 +211,12 @@ fn busy(c: &Connection) -> AppResult<bool> {
 fn checked_database(c: &Connection) -> AppResult<()> {
     let status: String = c.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
     if status != "ok" {
-        return Err(ApiError::bad(
-            "Die Datenbank in der Sicherung ist beschädigt.",
-        ));
+        return Err(ApiError::bad("the_database_in_the_backup_is_damaged"));
     }
     for table in REQUIRED_TABLES {
         if !has_table(c, table)? {
             return Err(ApiError::bad(
-                "Die Sicherung enthält keine Koreograf-Datenbank.",
+                "the_backup_does_not_contain_a_koreograf_database",
             ));
         }
     }
@@ -250,9 +246,7 @@ fn copy_database(from: &Connection, to: &mut Connection) -> AppResult<()> {
             _ => std::thread::sleep(Duration::from_millis(10)),
         }
     }
-    Err(ApiError::Internal(
-        "Datenbank-Kopie wurde nicht fertig.".into(),
-    ))
+    Err(ApiError::Internal("database copy did not finish".into()))
 }
 
 fn pack(files: &[(&str, &[u8])]) -> AppResult<Vec<u8>> {
@@ -264,45 +258,45 @@ fn pack(files: &[(&str, &[u8])]) -> AppResult<Vec<u8>> {
         for (name, bytes) in files {
             writer
                 .start_file(*name, options)
-                .map_err(|_| ApiError::Internal("Sicherung lässt sich nicht schreiben.".into()))?;
+                .map_err(|_| ApiError::Internal("backup cannot be written".into()))?;
             writer
                 .write_all(bytes)
-                .map_err(|_| ApiError::Internal("Sicherung lässt sich nicht schreiben.".into()))?;
+                .map_err(|_| ApiError::Internal("backup cannot be written".into()))?;
         }
         writer
             .finish()
-            .map_err(|_| ApiError::Internal("Sicherung lässt sich nicht schreiben.".into()))?;
+            .map_err(|_| ApiError::Internal("backup cannot be written".into()))?;
     }
     Ok(cursor.into_inner())
 }
 
 fn unpack(bytes: &[u8]) -> AppResult<Vec<(String, Vec<u8>)>> {
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
-        .map_err(|_| ApiError::bad("Die Sicherung lässt sich nicht lesen."))?;
+        .map_err(|_| ApiError::bad("the_backup_cannot_be_read"))?;
     if archive.is_empty() || archive.len() > 8 {
-        return Err(ApiError::bad("Die Sicherung lässt sich nicht lesen."));
+        return Err(ApiError::bad("the_backup_cannot_be_read"));
     }
     let mut out = Vec::new();
     for index in 0..archive.len() {
         let file = archive
             .by_index(index)
-            .map_err(|_| ApiError::bad("Die Sicherung lässt sich nicht lesen."))?;
+            .map_err(|_| ApiError::bad("the_backup_cannot_be_read"))?;
         if !file.is_file() {
             continue;
         }
         let Some(name) = file.enclosed_name() else {
-            return Err(ApiError::bad("Die Sicherung lässt sich nicht lesen."));
+            return Err(ApiError::bad("the_backup_cannot_be_read"));
         };
         let name = name.to_string_lossy().replace('\\', "/");
         if name.contains("..") || file.size() > MAX_BYTES {
-            return Err(ApiError::bad("Die Sicherung lässt sich nicht lesen."));
+            return Err(ApiError::bad("the_backup_cannot_be_read"));
         }
         let mut buf = Vec::new();
         file.take(MAX_BYTES + 1)
             .read_to_end(&mut buf)
-            .map_err(|_| ApiError::bad("Die Sicherung lässt sich nicht lesen."))?;
+            .map_err(|_| ApiError::bad("the_backup_cannot_be_read"))?;
         if buf.len() as u64 > MAX_BYTES {
-            return Err(ApiError::bad("Die Sicherung ist leer oder zu groß."));
+            return Err(ApiError::bad("the_backup_is_empty_or_too_large"));
         }
         out.push((name, buf));
     }
@@ -352,10 +346,7 @@ mod tests {
         assert!(database_choice("").is_ok());
         assert!(database_choice("sqlite:data/koreograf.db").is_ok());
         let err = database_choice("postgres://koreograf@db/koreograf").expect_err("postgres");
-        assert!(
-            err.contains("PostgreSQL ist noch nicht angebunden"),
-            "{err}"
-        );
+        assert!(err.contains("PostgreSQL is not connected yet"), "{err}");
         assert!(database_choice("postgresql://db/koreograf").is_err());
         assert!(database_choice("mysql://db/koreograf").is_err());
     }
@@ -424,7 +415,7 @@ mod tests {
             .expect("job");
         }
         let err = restore(&state, &archive).expect_err("busy");
-        assert!(err.to_string().contains("läuft noch ein Auftrag"), "{err}");
+        assert!(err.to_string().contains("backup.still_running"), "{err}");
         let _ = fs::remove_dir_all(dir);
     }
 }

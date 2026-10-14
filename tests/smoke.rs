@@ -1,3 +1,5 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
@@ -349,11 +351,11 @@ async fn failed_job_shows_parameters_and_can_be_relaunched() {
     let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let script = script.as_str().unwrap_or("");
-    assert!(script.contains("Ausgabe"));
-    assert!(script.contains("Ausgabe herunterladen"));
+    assert!(script.contains("output"));
+    assert!(script.contains("download_output"));
     assert!(script.contains("data-relaunch"));
-    assert!(script.contains("Erneut starten"));
-    assert!(script.contains("Nur fehlgeschlagene Hosts"));
+    assert!(script.contains("relaunch"));
+    assert!(script.contains("failed_hosts_only"));
     let (status, style, _) = call(&app, "GET", "/app.css", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let style = style.as_str().unwrap_or("");
@@ -476,10 +478,7 @@ async fn failed_job_shows_parameters_and_can_be_relaunched() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{denied}");
-    assert_eq!(
-        denied["error"],
-        "Nur Ansible-Aufträge haben fehlgeschlagene Hosts."
-    );
+    assert_eq!(denied["error"], "only_ansible_jobs_have_failed_hosts");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -516,8 +515,8 @@ async fn organizations_inventories_and_git_sync() {
     let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let script = script.as_str().unwrap_or("");
-    assert!(script.contains("Inventare"), "{script}");
-    assert!(script.contains("Organisationen"));
+    assert!(script.contains("inventories"), "{script}");
+    assert!(script.contains("organizations"));
     assert!(script.contains("nav-group"));
     let (status, style, _) = call(&app, "GET", "/app.css", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
@@ -708,7 +707,7 @@ async fn organizations_inventories_and_git_sync() {
         Some(&team),
         Some(json!({
             "username": "operator",
-            "display_name": "Operator",
+            "display_name": "operator",
             "password": "operator-pass",
             "is_admin": false
         })),
@@ -903,18 +902,17 @@ async fn playbooks_project_inventory_and_netbox() {
     let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let script = script.as_str().unwrap_or("");
-    assert!(script.contains("Playbook aus dem Projekt"), "{script}");
+    assert!(script.contains("playbook_from_the_project"), "{script}");
     assert!(script.contains("data-add-kind=\"project\""));
     assert!(script.contains("data-add-kind=\"netbox\""));
-    assert!(script.contains("Aktualisieren"));
-    assert!(script.contains("[\"netbox\", \"NetBox\", \"\"]"));
+    assert!(script.contains("refresh"));
+    assert!(script.contains("netbox: t(\"netbox\")"));
+    assert!(script.contains("[\"netbox\", \"netbox\", \"\"]"));
     let inspector = script
         .split_once("function renderInspector")
         .expect("workflow inspector")
         .1;
-    let node_at = inspector
-        .find("Dieser Knoten")
-        .expect("selected node panel");
+    let node_at = inspector.find("this_node").expect("selected node panel");
     let add_at = inspector[..node_at]
         .rfind("addNodeControls()")
         .expect("add stays above the selected node");
@@ -923,13 +921,13 @@ async fn playbooks_project_inventory_and_netbox() {
         "add node drifted away from the selected node"
     );
     let node_panel = &inspector[node_at..inspector.find("node-delete").expect("delete node")];
-    assert!(node_panel.contains("Erfolg führt zu"));
-    assert!(node_panel.contains("Fehler führt zu"));
-    assert!(node_panel.contains("Immer führt zu"));
+    assert!(node_panel.contains("on_success_go_to"));
+    assert!(node_panel.contains("on_failure_go_to"));
+    assert!(node_panel.contains("always_go_to"));
     assert!(node_panel.contains("nodeParams("));
-    assert!(script.contains("Gilt nur für diesen Knoten"));
+    assert!(script.contains("applies_only_to_this_node_the_template_stays"));
     assert!(script.contains("node-inventory"));
-    assert!(script.contains("Ohne Inventar"));
+    assert!(script.contains("no_inventory"));
 
     let (status, me, cookie) = call(
         &app,
@@ -1046,7 +1044,7 @@ async fn playbooks_project_inventory_and_netbox() {
     assert!(denied["error"]
         .as_str()
         .unwrap_or("")
-        .contains("keine externe Quelle"));
+        .contains("this_inventory_has_no_external_source"));
 
     let (status, unsynced, _) = call(
         &app,
@@ -1076,7 +1074,7 @@ async fn playbooks_project_inventory_and_netbox() {
     assert!(missing["error"]
         .as_str()
         .unwrap_or("")
-        .contains("synchronisieren"));
+        .contains("sync_the_git_project_first"));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -1144,7 +1142,8 @@ async fn playbooks_project_inventory_and_netbox() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
-    assert!(bad["error"].as_str().unwrap_or("").contains("403"), "{bad}");
+    assert_eq!(bad["error"], "netbox.bad_status");
+    assert_eq!(bad["vars"]["status"], "403", "{bad}");
     let (status, listed, _) = call(
         &app,
         "GET",
@@ -1207,20 +1206,21 @@ async fn inventory_sources_and_ansible_check_options() {
     assert_eq!(status, StatusCode::OK);
     let script = script.as_str().unwrap_or("");
     assert!(script.contains("id=\"inventory-search\""));
-    assert!(script.contains("+ Inventar"));
-    assert!(script.contains("+ Projekt"));
-    assert!(script.contains("+ Zugang"));
-    assert!(script.contains("+ Umgebung"));
+    assert!(script.contains("inventory_2"));
+    assert!(script.contains("project_2"));
+    assert!(script.contains("credential"));
+    assert!(script.contains("environment"));
     assert!(script.contains("data-lang-select"));
     assert!(script.contains("FLAG_SVG"));
     assert!(script.contains("country: \"gb\""));
     assert!(script.contains("data-add-kind"));
-    assert!(script.contains("Check (Dry-Run)"));
-    assert!(script.contains("Tags überspringen"));
-    assert!(script.contains("0 (Normal)"));
-    assert!(script.contains("1 (Ausführlich)"));
-    assert!(script.contains("2 (Ausführlicher)"));
-    assert!(script.contains("4 (Verbindungs-Debug)"));
+    assert!(script.contains("check_dry_run"));
+    assert!(script.contains("skip_tags"));
+    assert!(script.contains("0_normal"));
+    assert!(script.contains("1_verbose"));
+    assert!(script.contains("2_more_verbose"));
+    assert!(script.contains("3_debug"));
+    assert!(script.contains("4_connection_debug"));
     assert!(script.contains("data-chips"));
     assert!(script.contains("chip-entry"));
     let (status, style, _) = call(&app, "GET", "/app.css", None, None, None).await;
@@ -1407,8 +1407,8 @@ async fn workflow_node_can_override_template_parameters() {
     let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let script = script.as_str().unwrap_or("");
-    assert!(script.contains("Ein Klick zeigt die Ausgabe"));
-    assert!(script.contains("Zurück zum Workflow"));
+    assert!(script.contains("colors_show_the_run_a_click_shows_the"));
+    assert!(script.contains("back_to_the_workflow"));
     assert!(script.contains("id=\"run-log\""));
     assert!(script.contains("id=\"node-output\""));
     assert!(!script.contains("Ein Klick öffnet den Auftrag"));
@@ -1496,7 +1496,7 @@ async fn workflow_node_can_override_template_parameters() {
             {
                 "id": "test",
                 "template_id": template_id,
-                "name": "Test",
+                "name": "test",
                 "x": 40,
                 "y": 40,
                 "convergence": "any"
@@ -1569,7 +1569,7 @@ async fn workflow_node_can_override_template_parameters() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{missing}");
-    assert_eq!(missing["error"], "Inventar fehlt.");
+    assert_eq!(missing["error"], "inventory_is_missing");
 
     let (status, bad_extra, _) = call(
         &app,
@@ -1592,10 +1592,7 @@ async fn workflow_node_can_override_template_parameters() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{bad_extra}");
-    assert_eq!(
-        bad_extra["error"],
-        "Extra-Variablen muss ein JSON-Objekt sein."
-    );
+    assert_eq!(bad_extra["error"], "extra_variables_must_be_a_json_object");
 
     let (status, kept, _) = call(
         &app,
@@ -1768,7 +1765,7 @@ async fn admin_backup_roundtrip_replaces_the_installation() {
     let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let script = script.as_str().unwrap_or("");
-    assert!(script.contains("Sicherung herunterladen"));
+    assert!(script.contains("download_backup"));
     assert!(script.contains("#/backup"));
     assert!(script.contains("X-Restore-Confirm"));
 
@@ -1856,7 +1853,10 @@ async fn admin_backup_roundtrip_replaces_the_installation() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     let rejected = String::from_utf8_lossy(&rejected);
-    assert!(rejected.contains("ERSETZEN"), "{rejected}");
+    assert!(
+        rejected.contains("confirm_the_replacement_with_ersetzen"),
+        "{rejected}"
+    );
 
     let (status, orgs, _) =
         call(&app, "GET", "/api/organizations", Some(&cookie), None, None).await;
@@ -1918,9 +1918,9 @@ async fn admin_can_list_and_update_users() {
     let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let script = script.as_str().unwrap_or("");
-    assert!(script.contains("Benutzer suchen"));
+    assert!(script.contains("search_users"));
     assert!(script.contains("#/users"));
-    assert!(script.contains("+ Benutzer"));
+    assert!(script.contains("user_2"));
 
     let (status, denied, _) = call(&app, "GET", "/api/users", None, None, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{denied}");
@@ -1973,7 +1973,7 @@ async fn admin_can_list_and_update_users() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{duplicate}");
-    assert_eq!(duplicate["error"], "Der Benutzername ist schon vergeben.");
+    assert_eq!(duplicate["error"], "that_username_is_already_used");
 
     let (status, member, _) = call(
         &app,
@@ -2128,7 +2128,7 @@ async fn admin_can_list_and_update_users() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{blocked}");
-    assert_eq!(blocked["error"], "Das Konto ist deaktiviert.");
+    assert_eq!(blocked["error"], "the_account_is_disabled");
     let (status, ended, _) = call(&app, "GET", "/api/me", Some(&fresh_cookie), None, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{ended}");
 
@@ -2171,10 +2171,7 @@ async fn admin_can_list_and_update_users() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{self_off}");
-    assert_eq!(
-        self_off["error"],
-        "Du kannst dein eigenes Konto nicht deaktivieren."
-    );
+    assert_eq!(self_off["error"], "you_cannot_disable_your_own_account");
     let (status, demote, _) = call(
         &app,
         "PUT",
@@ -2189,7 +2186,7 @@ async fn admin_can_list_and_update_users() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{demote}");
-    assert_eq!(demote["error"], "Der letzte Administrator bleibt erhalten.");
+    assert_eq!(demote["error"], "the_last_administrator_stays");
 
     let (status, own, _) = call(
         &app,
@@ -2220,10 +2217,7 @@ async fn admin_can_list_and_update_users() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{self_delete}");
-    assert_eq!(
-        self_delete["error"],
-        "Du kannst dein eigenes Konto nicht löschen."
-    );
+    assert_eq!(self_delete["error"], "you_cannot_delete_your_own_account");
 
     let (status, removed, _) = call(
         &app,
@@ -2263,7 +2257,7 @@ async fn signed_in_user_can_read_their_own_account() {
     let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let script = script.as_str().unwrap_or("");
-    assert!(script.contains("Mein Konto"));
+    assert!(script.contains("my_account"));
     assert!(script.contains("#/account"));
     assert!(script.contains("data-lang-select"));
     assert!(script.contains("GER"));
@@ -2367,7 +2361,7 @@ async fn signed_in_user_can_read_their_own_account() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{broken}");
-    assert_eq!(broken["error"], "E-Mail ist ungültig.");
+    assert_eq!(broken["error"], "email_is_invalid");
 
     let (status, changed, _) = call(
         &app,
@@ -2423,9 +2417,9 @@ async fn owner_can_edit_an_execution_environment() {
         .expect("environment form")
         .0;
     let environments = runtime
-        .find("Execution Environments")
+        .find("execution_environments")
         .expect("environment heading");
-    let collections = runtime.find("Collections im Cache").expect("cache heading");
+    let collections = runtime.find("cached_collections").expect("cache heading");
     assert!(environments < collections);
     assert!(runtime.contains("#/environments/"));
 
@@ -2506,7 +2500,7 @@ async fn owner_can_edit_an_execution_environment() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
-    assert_eq!(rejected["error"], "Image-Name ist ungültig.");
+    assert_eq!(rejected["error"], "the_image_name_is_invalid");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -2525,15 +2519,12 @@ async fn environment_scopes_follow_the_selected_team() {
     let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let script = script.as_str().unwrap_or("");
-    assert!(script.contains("Gilt für"));
-    assert!(script.contains("Dieses Team"));
-    assert!(script.contains("Diese Organisation"));
-    assert!(script.contains("Organisation · {name}"));
-    assert!(script.contains("Team · {name}"));
-    assert!(script.contains(
-        "Global gilt für jedes Team. Die Organisation gilt für alle Teams darin. Ein Team bleibt privat."
-    ));
-    assert!(script.contains("Execution Environment ist für dieses Team nicht sichtbar."));
+    assert!(script.contains("applies_to"));
+    assert!(script.contains("this_team"));
+    assert!(script.contains("this_organization"));
+    assert!(script.contains("organization_name"));
+    assert!(script.contains("team_name"));
+    assert!(script.contains("global_applies_to_every_team_the_organization_applies"));
     assert!(script.contains("canManageEnvironment"));
     assert!(script.contains("scopeLabel(row)"));
 
@@ -2692,10 +2683,7 @@ async fn environment_scopes_follow_the_selected_team() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{denied_global}");
-    assert_eq!(
-        denied_global["error"],
-        "Keine Berechtigung für diese Aktion."
-    );
+    assert_eq!(denied_global["error"], "you_are_not_allowed_to_do_this");
     let (status, bad_scope, _) = call(
         &app,
         "POST",
@@ -2710,10 +2698,7 @@ async fn environment_scopes_follow_the_selected_team() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{bad_scope}");
-    assert_eq!(
-        bad_scope["error"],
-        "Geltungsbereich ist team, organization oder global."
-    );
+    assert_eq!(bad_scope["error"], "scope_is_team_organization_or_global");
 
     let (status, global_env, _) = call(
         &app,
@@ -2827,7 +2812,7 @@ async fn environment_scopes_follow_the_selected_team() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{forbidden}");
-    assert_eq!(forbidden["error"], "Keine Berechtigung für diese Aktion.");
+    assert_eq!(forbidden["error"], "you_are_not_allowed_to_do_this");
     let (status, _, _) = call(
         &app,
         "DELETE",
@@ -2939,7 +2924,7 @@ async fn environment_scopes_follow_the_selected_team() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{blocked}");
     assert_eq!(
         blocked["error"],
-        "Execution Environment ist für dieses Team nicht sichtbar."
+        "the_execution_environment_is_not_visible_to_this"
     );
     let (status, allowed, _) = call(
         &app,
@@ -2970,15 +2955,15 @@ async fn owner_can_store_an_ssh_password_without_a_key() {
     let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let script = script.as_str().unwrap_or("");
-    assert!(script.contains("Maschine (SSH)"));
-    assert!(script.contains("Amazon Web Services"));
-    assert!(script.contains("Schlüssel oder Passwort, auch beides."));
-    assert!(script.contains("Gilt im Auftrag. Der Projekt-Sync nutzt diesen Zugang noch nicht."));
-    assert!(script.contains("Leer lassen, um den Wert zu behalten."));
+    assert!(script.contains("machine_ssh"));
+    assert!(script.contains("amazon_web_services"));
+    assert!(script.contains("a_key_or_a_password_or_both"));
+    assert!(script.contains("applies_to_the_job_project_sync_does_not"));
+    assert!(script.contains("leave_empty_to_keep_the_stored_value"));
     assert!(script.contains("data-stored-mask=\"1\""));
     assert!(script.contains("class=\"secret-mask\""));
     assert!(!script.contains("*** bedeutet, dass ein Wert gespeichert ist."));
-    assert!(script.contains("Die Art lässt sich nicht ändern."));
+    assert!(script.contains("the_type_cannot_be_changed"));
     assert!(script.contains("#/credentials/${esc(item.id)}"));
 
     let (status, me, cookie) = call(
@@ -3100,10 +3085,7 @@ async fn owner_can_store_an_ssh_password_without_a_key() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{cleared}");
-    assert_eq!(
-        cleared["error"],
-        "SSH braucht einen Schlüssel oder ein Passwort."
-    );
+    assert_eq!(cleared["error"], "ssh_needs_a_key_or_a_password");
     let (status, still, _) = call(
         &app,
         "GET",
@@ -3126,10 +3108,7 @@ async fn owner_can_store_an_ssh_password_without_a_key() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
-    assert_eq!(
-        rejected["error"],
-        "SSH braucht einen Schlüssel oder ein Passwort."
-    );
+    assert_eq!(rejected["error"], "ssh_needs_a_key_or_a_password");
     let (status, unknown, _) = call(
         &app,
         "POST",
@@ -3140,7 +3119,7 @@ async fn owner_can_store_an_ssh_password_without_a_key() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{unknown}");
-    assert_eq!(unknown["error"], "Unbekannte Zugangsart.");
+    assert_eq!(unknown["error"], "unknown_credential_type");
     let (status, gone, _) = call(
         &app,
         "DELETE",
@@ -3221,15 +3200,11 @@ async fn template_accepts_one_credential_per_kind_and_many_vaults() {
     let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let script = script.as_str().unwrap_or("");
-    assert!(script.contains(
-        "Pro Art ein Zugang. Vault-Zugänge wählst du über Auswählen. Sie stehen hier als Pillen."
-    ));
-    assert!(script.contains(
-        "Gilt nur für diesen Knoten. Die Vorlage bleibt unverändert. Ein anderer Zugang ersetzt nur dieselbe Art."
-    ));
+    assert!(script.contains("one_credential_of_each_kind_choose_vault_credentials"));
+    assert!(script.contains("applies_only_to_this_node_the_template_stays"));
     assert!(script.contains("id=\"vault-pills\""));
-    assert!(script.contains("Keine Vault-Zugänge im Team."));
-    assert!(script.contains("Vault-Zugang {name} entfernen"));
+    assert!(script.contains("no_vault_credentials_in_this_team"));
+    assert!(script.contains("remove_vault_credential_name"));
 
     let (status, me, cookie) = call(
         &app,
@@ -3368,7 +3343,10 @@ async fn template_accepts_one_credential_per_kind_and_many_vaults() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{second_ssh}");
-    assert_eq!(second_ssh["error"], "Pro Art ist nur ein Zugang erlaubt.");
+    assert_eq!(
+        second_ssh["error"],
+        "only_one_credential_of_each_kind_is_allowed"
+    );
 
     let (status, same_label, _) = call(
         &app,
@@ -3383,7 +3361,7 @@ async fn template_accepts_one_credential_per_kind_and_many_vaults() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{same_label}");
-    assert_eq!(same_label["error"], "Diese Vault-Id ist schon gewählt.");
+    assert_eq!(same_label["error"], "this_vault_id_is_already_selected");
 
     let (status, two_plain, _) = call(
         &app,
@@ -3400,7 +3378,7 @@ async fn template_accepts_one_credential_per_kind_and_many_vaults() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{two_plain}");
     assert_eq!(
         two_plain["error"],
-        "Nur ein Vault-Zugang darf ohne Vault-Id sein."
+        "only_one_vault_credential_may_omit_the_vault"
     );
 
     let (status, listed, _) = call(
@@ -3557,17 +3535,17 @@ async fn admin_settings_hide_secrets_and_apply_without_restart() {
     assert_eq!(status, StatusCode::OK);
     let script = script.as_str().unwrap_or("");
     assert!(script.contains("#/settings"));
-    assert!(script.contains("Einstellungen"));
-    assert!(script.contains("Bind-Passwort"));
-    assert!(script.contains("Proxy-Adresse"));
-    assert!(script.contains("Umgebungsvariablen verwenden"));
+    assert!(script.contains("settings"));
+    assert!(script.contains("bind_password"));
+    assert!(script.contains("proxy_address"));
+    assert!(script.contains("use_environment_variables"));
     assert!(script.contains("data-stored-mask=\"1\""));
     assert!(!script.contains("bind-secret-value"));
     assert!(!script.contains("proxy-secret-value"));
 
     let (status, denied, _) = call(&app, "GET", "/api/settings", None, None, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{denied}");
-    assert_eq!(denied["error"], "Anmeldung erforderlich.");
+    assert_eq!(denied["error"], "sign_in_is_required");
 
     let (status, me, cookie) = call(
         &app,
@@ -3611,7 +3589,7 @@ async fn admin_settings_hide_secrets_and_apply_without_restart() {
     let (status, forbidden, _) =
         call(&app, "GET", "/api/settings", Some(&ada_cookie), None, None).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{forbidden}");
-    assert_eq!(forbidden["error"], "Keine Berechtigung für diese Aktion.");
+    assert_eq!(forbidden["error"], "you_are_not_allowed_to_do_this");
 
     let (status, current, _) = call(&app, "GET", "/api/settings", Some(&cookie), None, None).await;
     assert_eq!(status, StatusCode::OK, "{current}");
@@ -3743,7 +3721,7 @@ async fn admin_settings_hide_secrets_and_apply_without_restart() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
     assert_eq!(
         rejected["error"],
-        "Zugangsdaten gehören in die eigenen Felder, nicht in die Proxy-Adresse."
+        "put_the_credentials_in_their_own_fields_not"
     );
     let (status, still, _) = call(&app, "GET", "/api/settings", Some(&cookie), None, None).await;
     assert_eq!(status, StatusCode::OK, "{still}");
@@ -3809,4 +3787,408 @@ async fn admin_settings_hide_secrets_and_apply_without_restart() {
     assert_eq!(reset["job_timeout_secs"], 60);
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn message_catalogs_match_and_cover_the_ui() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let de = load_catalog(&root.join("web/i18n/de.json"));
+    let en = load_catalog(&root.join("web/i18n/en.json"));
+    assert_eq!(
+        de.keys().collect::<Vec<_>>(),
+        en.keys().collect::<Vec<_>>(),
+        "catalog keys differ"
+    );
+
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let mut missing = BTreeSet::new();
+    for key in ui_message_keys(&script) {
+        if !de.contains_key(&key) {
+            missing.insert(key);
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "app.js keys missing from the catalogs: {missing:?}"
+    );
+
+    let german_ui = umlaut_lines("web/app.js", &script);
+    assert!(german_ui.is_empty(), "German left in app.js: {german_ui:?}");
+    let mut german_src = Vec::new();
+    leftover_german(&root.join("src"), &mut german_src);
+    assert!(german_src.is_empty(), "German left in src: {german_src:?}");
+
+    let mut api_missing = BTreeSet::new();
+    for key in rust_message_keys(&root.join("src")) {
+        if !de.contains_key(&key) {
+            api_missing.insert(key);
+        }
+    }
+    assert!(
+        api_missing.is_empty(),
+        "API keys missing from the catalogs: {api_missing:?}"
+    );
+    for catalog in [&de, &en] {
+        let hint = catalog
+            .get("confirm_the_replacement_with_ersetzen")
+            .map(String::as_str)
+            .unwrap_or("");
+        assert!(
+            hint.contains("ERSETZEN"),
+            "restore hint must name the confirm token"
+        );
+    }
+
+    let runner = std::fs::read_to_string(root.join("src/runner.rs")).expect("runner.rs");
+    assert!(
+        runner.contains("nicht gefunden"),
+        "git still reports a missing revision in German"
+    );
+    assert!(
+        runner.contains("konnte den remote-verweis"),
+        "git still reports a missing remote ref in German"
+    );
+}
+
+fn load_catalog(path: &Path) -> BTreeMap<String, String> {
+    let text = std::fs::read_to_string(path)
+        .unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
+    let value: Value =
+        serde_json::from_str(&text).unwrap_or_else(|err| panic!("json {}: {err}", path.display()));
+    let Some(object) = value.as_object() else {
+        panic!("{} is not an object", path.display());
+    };
+    let mut catalog = BTreeMap::new();
+    for (key, item) in object {
+        let Some(text) = item.as_str() else {
+            panic!("{key} in {} is not a string", path.display());
+        };
+        assert!(!text.trim().is_empty(), "{key} is empty");
+        catalog.insert(key.clone(), text.to_string());
+    }
+    catalog
+}
+
+fn ui_message_keys(source: &str) -> Vec<String> {
+    let chars: Vec<char> = source.chars().collect();
+    let mut keys = Vec::new();
+    let mut index = 0;
+    while index < chars.len() {
+        if let Some(open) = call_open(&chars, index) {
+            keys.extend(first_arg_strings(&chars, open));
+        }
+        index += 1;
+    }
+    keys
+}
+
+fn is_ident(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_' || ch == '$'
+}
+
+fn call_open(chars: &[char], index: usize) -> Option<usize> {
+    if index > 0 && is_ident(chars[index - 1]) {
+        return None;
+    }
+    for name in ["renderLogin", "Error", "t", "h"] {
+        if !at_name(chars, index, name) {
+            continue;
+        }
+        let mut next = index + name.chars().count();
+        while chars.get(next).is_some_and(|ch| ch.is_whitespace()) {
+            next += 1;
+        }
+        if chars.get(next) == Some(&'(') {
+            return Some(next);
+        }
+    }
+    None
+}
+
+fn at_name(chars: &[char], index: usize, name: &str) -> bool {
+    let mut offset = index;
+    for ch in name.chars() {
+        if chars.get(offset) != Some(&ch) {
+            return false;
+        }
+        offset += 1;
+    }
+    !chars.get(offset).is_some_and(|ch| is_ident(*ch))
+}
+
+fn first_arg_strings(chars: &[char], open: usize) -> Vec<String> {
+    let mut keys = Vec::new();
+    let mut index = open + 1;
+    let mut paren = 0i32;
+    let mut brace = 0i32;
+    let mut bracket = 0i32;
+    let mut seen_comma = false;
+    while index < chars.len() {
+        let ch = chars[index];
+        if ch == '"' || ch == '\'' {
+            let (next, text) = read_quoted(chars, index);
+            if ch == '"'
+                && !seen_comma
+                && paren == 0
+                && brace == 0
+                && bracket == 0
+                && !text.is_empty()
+            {
+                keys.push(text);
+            }
+            index = next;
+            continue;
+        }
+        if ch == '`' {
+            index = skip_template(chars, index);
+            continue;
+        }
+        if ch == '/' && chars.get(index + 1) == Some(&'/') {
+            index += 2;
+            while index < chars.len() && chars[index] != '\n' {
+                index += 1;
+            }
+            continue;
+        }
+        if ch == '/' && chars.get(index + 1) == Some(&'*') {
+            index += 2;
+            while index + 1 < chars.len() && !(chars[index] == '*' && chars[index + 1] == '/') {
+                index += 1;
+            }
+            index = (index + 2).min(chars.len());
+            continue;
+        }
+        match ch {
+            '(' => paren += 1,
+            ')' if paren > 0 => paren -= 1,
+            ')' => break,
+            '{' => brace += 1,
+            '}' if brace > 0 => brace -= 1,
+            '[' => bracket += 1,
+            ']' if bracket > 0 => bracket -= 1,
+            ',' if paren == 0 && brace == 0 && bracket == 0 => seen_comma = true,
+            _ => {}
+        }
+        index += 1;
+    }
+    keys
+}
+
+fn read_quoted(chars: &[char], start: usize) -> (usize, String) {
+    let quote = chars[start];
+    let mut out = String::new();
+    let mut index = start + 1;
+    while index < chars.len() {
+        let ch = chars[index];
+        if ch == '\\' {
+            if let Some(next) = chars.get(index + 1) {
+                out.push(*next);
+                index += 2;
+                continue;
+            }
+        }
+        if ch == quote {
+            return (index + 1, out);
+        }
+        out.push(ch);
+        index += 1;
+    }
+    (index, out)
+}
+
+fn skip_template(chars: &[char], start: usize) -> usize {
+    let mut index = start + 1;
+    while index < chars.len() {
+        if chars[index] == '\\' {
+            index = (index + 2).min(chars.len());
+            continue;
+        }
+        if chars[index] == '`' {
+            return index + 1;
+        }
+        if chars[index] == '$' && chars.get(index + 1) == Some(&'{') {
+            index = skip_braces(chars, index + 1);
+            continue;
+        }
+        index += 1;
+    }
+    index
+}
+
+fn skip_braces(chars: &[char], open: usize) -> usize {
+    let mut index = open + 1;
+    let mut depth = 1i32;
+    while index < chars.len() && depth > 0 {
+        if chars[index] == '"' || chars[index] == '\'' {
+            index = read_quoted(chars, index).0;
+            continue;
+        }
+        if chars[index] == '`' {
+            index = skip_template(chars, index);
+            continue;
+        }
+        if chars[index] == '{' {
+            depth += 1;
+        } else if chars[index] == '}' {
+            depth -= 1;
+            if depth == 0 {
+                return index + 1;
+            }
+        }
+        index += 1;
+    }
+    index
+}
+
+fn umlaut_lines(label: &str, text: &str) -> Vec<String> {
+    text.lines()
+        .enumerate()
+        .filter(|(_, line)| has_umlaut(line))
+        .map(|(number, line)| format!("{label}:{}: {}", number + 1, preview(line)))
+        .collect()
+}
+
+fn has_umlaut(line: &str) -> bool {
+    line.chars()
+        .any(|ch| matches!(ch, 'ä' | 'ö' | 'ü' | 'Ä' | 'Ö' | 'Ü' | 'ß'))
+}
+
+fn preview(line: &str) -> String {
+    let mut short: String = line.chars().take(160).collect();
+    if line.chars().count() > 160 {
+        short.push_str("...");
+    }
+    short
+}
+
+fn rust_message_keys(dir: &Path) -> BTreeSet<String> {
+    let mut keys = BTreeSet::new();
+    collect_rust_keys(dir, &mut keys);
+    keys
+}
+
+fn collect_rust_keys(dir: &Path, keys: &mut BTreeSet<String>) {
+    let entries =
+        std::fs::read_dir(dir).unwrap_or_else(|err| panic!("read {}: {err}", dir.display()));
+    for entry in entries {
+        let entry = entry.unwrap_or_else(|err| panic!("{err}"));
+        let path = entry.path();
+        if path.is_dir() {
+            collect_rust_keys(&path, keys);
+            continue;
+        }
+        if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
+        push_call_key(&text, "ApiError::bad(", keys);
+        push_call_key(&text, "ApiError::bad_vars(", keys);
+        push_call_key(&text, "::message(", keys);
+        push_err_key(&text, keys);
+    }
+}
+
+fn push_call_key(text: &str, needle: &str, keys: &mut BTreeSet<String>) {
+    let mut from = 0;
+    while let Some(rel) = text[from..].find(needle) {
+        let at = from + rel + needle.len();
+        let tail = text[at..].trim_start();
+        if let Some((key, _)) = take_quoted(tail) {
+            keys.insert(key);
+        }
+        from = at;
+    }
+}
+
+fn push_err_key(text: &str, keys: &mut BTreeSet<String>) {
+    let mut from = 0;
+    while let Some(rel) = text[from..].find("Err(") {
+        let at = from + rel + 4;
+        let tail = text[at..].trim_start();
+        if let Some((key, used)) = take_quoted(tail) {
+            let after = tail[used..].trim_start();
+            if (after.starts_with(".into()") || after.starts_with(".to_string()"))
+                && is_message_key(&key)
+            {
+                keys.insert(key);
+            }
+        }
+        from = at;
+    }
+}
+
+fn is_message_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    if !chars.next().is_some_and(|ch| ch.is_ascii_lowercase()) {
+        return false;
+    }
+    let mut marked = false;
+    for ch in key.chars() {
+        if ch == '_' || ch == '.' {
+            marked = true;
+            continue;
+        }
+        if !ch.is_ascii_lowercase() && !ch.is_ascii_digit() {
+            return false;
+        }
+    }
+    marked
+}
+
+fn take_quoted(text: &str) -> Option<(String, usize)> {
+    let mut chars = text.char_indices();
+    if chars.next().is_none_or(|(_, ch)| ch != '"') {
+        return None;
+    }
+    let mut key = String::new();
+    let mut escaped = false;
+    for (index, ch) in chars {
+        if escaped {
+            key.push(ch);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch == '"' {
+            return Some((key, index + ch.len_utf8()));
+        }
+        key.push(ch);
+    }
+    None
+}
+
+fn leftover_german(dir: &Path, hits: &mut Vec<String>) {
+    let entries =
+        std::fs::read_dir(dir).unwrap_or_else(|err| panic!("read {}: {err}", dir.display()));
+    for entry in entries {
+        let entry = entry.unwrap_or_else(|err| panic!("{err}"));
+        let path = entry.path();
+        if path.is_dir() {
+            leftover_german(&path, hits);
+            continue;
+        }
+        let ext = path.extension().and_then(|ext| ext.to_str());
+        if ext != Some("rs") && ext != Some("sh") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
+        for (number, line) in text.lines().enumerate() {
+            if line.contains("nicht gefunden") || line.contains("konnte den remote-verweis") {
+                continue;
+            }
+            if has_umlaut(line) {
+                hits.push(format!(
+                    "{}:{}: {}",
+                    path.display(),
+                    number + 1,
+                    preview(line)
+                ));
+            }
+        }
+    }
 }

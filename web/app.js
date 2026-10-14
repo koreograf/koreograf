@@ -24,624 +24,7 @@ let generation = 0;
 let runKey = null;
 document.documentElement.lang = lang;
 
-const EN = {
-  "Abmelden": "Sign out",
-  "Abbrechen": "Cancel",
-  "Abhängigkeits-Cache": "Dependency cache",
-  "Administrator": "Administrator",
-  "Administrator verwaltet Organisationen, Teams, Benutzer, Einstellungen und die Sicherung. Die Teamrolle wird dabei nicht geprüft.": "An administrator manages organizations, teams, users, settings, and backup. The team role is not checked.",
-  "Aktion": "Action",
-  "Aktualisieren": "Refresh",
-  "Alertname": "Alert name",
-  "Alle": "All",
-  "Alle Quellen aktualisieren": "Refresh all sources",
-  "Alle Teams der Organisation": "All teams in the organization",
-  "Alle Vorgänger": "All predecessors",
-  "Allgemein": "General",
-  "Angelegt": "Created",
-  "Anlegen": "Create",
-  "Anlegen und öffnen": "Create and open",
-  "Anmelden": "Sign in",
-  "Ansicht": "View",
-  "Ansible": "Ansible",
-  "Anzeigename": "Display name",
-  "Anzeigename fehlt.": "Display name is missing.",
-  "API-Adresse": "API address",
-  "Art": "Type",
-  "Art ist run oder check.": "Type is run or check.",
-  "Art ist ssh, vault, env oder netbox.": "Type is ssh, vault, env, or netbox.",
-  "Access Key": "Access key",
-  "Adresse muss mit https:// beginnen.": "The address must start with https://.",
-  "Amazon Web Services": "Amazon Web Services",
-  "Ansible Galaxy": "Ansible Galaxy",
-  "Ansible Vault": "Ansible Vault",
-  "Authorize": "Authorize",
-  "Authorize-Passwort": "Authorize password",
-  "AWS braucht access_key.": "AWS needs access_key.",
-  "AWS braucht secret_key.": "AWS needs secret_key.",
-  "Azure braucht client_id.": "Azure needs client_id.",
-  "Azure braucht secret.": "Azure needs secret.",
-  "Azure braucht subscription_id.": "Azure needs subscription_id.",
-  "Azure braucht tenant.": "Azure needs tenant.",
-  "Become-Benutzer": "Become user",
-  "Become-Methode": "Become method",
-  "Become-Methode ist ungültig.": "The become method is invalid.",
-  "Become-Passwort": "Become password",
-  "Benutzer fehlt.": "Username is missing.",
-  "Client": "Client",
-  "Container-Registry": "Container registry",
-  "Der Auftrag sieht Host, Benutzer und Passwort. Docker selbst wird nicht angemeldet.": "The job sees the host, username, and password. Docker itself is not logged in.",
-  "Dienstkonto": "Service account",
-  "Dienstkonto fehlt.": "The service account is missing.",
-  "Dienstkonto ist kein JSON-Objekt.": "The service account is not a JSON object.",
-  "Domain": "Domain",
-  "Geheimnis": "Secret",
-  "Geheimnis ist zu groß.": "The secret is too large.",
-  "GitHub-Token": "GitHub token",
-  "GitLab-Token": "GitLab token",
-  "Gilt im Auftrag. Der Projekt-Sync nutzt diesen Zugang noch nicht.": "Applies to the job. Project sync does not use this credential yet.",
-  "Diese Vault-Id ist schon gewählt.": "This vault id is already selected.",
-  "Gilt nur für diesen Knoten. Die Vorlage bleibt unverändert. Ein anderer Zugang ersetzt nur dieselbe Art.": "Applies only to this node. The template stays unchanged. Another credential replaces only the same kind.",
-  "Keine Zugänge im Team.": "No credentials in this team.",
-  "Ohne Inventar": "No inventory",
-  "Google Compute Engine": "Google Compute Engine",
-  "Host": "Host",
-  "Keine": "None",
-  "Kubernetes": "Kubernetes",
-  "Kubernetes braucht host.": "Kubernetes needs a host.",
-  "Leer lässt https://galaxy.ansible.com.": "Empty keeps https://galaxy.ansible.com.",
-  "Leer setzt die Domain auf Default.": "Empty sets the domain to Default.",
-  "Maschine (SSH)": "Machine (SSH)",
-  "Microsoft Azure": "Microsoft Azure",
-  "NetBox": "NetBox",
-  "Netzwerk": "Network",
-  "Netzwerk braucht einen Benutzer oder ein Passwort.": "Network needs a username or a password.",
-  "OpenStack": "OpenStack",
-  "OpenStack braucht auth_url.": "OpenStack needs auth_url.",
-  "OpenStack braucht project.": "OpenStack needs project.",
-  "Hinterlegt": "Stored",
-  "Die Art lässt sich nicht ändern.": "The type cannot be changed.",
-  "Leer lassen, um den Wert zu behalten.": "Leave empty to keep the stored value.",
-  "Passphrase": "Passphrase",
-  "Passphrase braucht einen privaten Schlüssel.": "A passphrase needs a private key.",
-  "Passwort fehlt.": "Password is missing.",
-  "Quellcode": "Source control",
-  "Quellcode braucht einen Schlüssel oder ein Passwort.": "Source control needs a key or a password.",
-  "Red Hat Insights": "Red Hat Insights",
-  "Registry braucht host.": "The registry needs a host.",
-  "Schlüssel oder Passwort, auch beides.": "A key or a password, or both.",
-  "Secret Key": "Secret key",
-  "Session-Token": "Session token",
-  "SSH braucht einen Schlüssel oder ein Passwort.": "SSH needs a key or a password.",
-  "Subscription": "Subscription",
-  "Tenant": "Tenant",
-  "Token fehlt.": "Token is missing.",
-  "Umgebungsvariablen": "Environment variables",
-  "Unbekannte Zugangsart.": "Unknown credential type.",
-  "Vault-Id": "Vault id",
-  "Vault-Id ist ungültig.": "The vault id is invalid.",
-  "VMware braucht host.": "VMware needs a host.",
-  "VMware vCenter": "VMware vCenter",
-  "Auftrag fehlt.": "Job is missing.",
-  "Auftrag ohne Vorlage.": "Job has no template.",
-  "Aufträge": "Jobs",
-  "Auftragsvorlage fehlt.": "Job template is missing.",
-  "Ausführlichkeit": "Verbosity",
-  "Ausführlichkeit ist 0 bis 4.": "Verbosity is 0 to 4.",
-  "0 (Normal)": "0 (Normal)",
-  "1 (Ausführlich)": "1 (Verbose)",
-  "2 (Ausführlicher)": "2 (More Verbose)",
-  "4 (Verbindungs-Debug)": "4 (Connection Debug)",
-  "Ausführen": "Run",
-  "Ausgabe": "Output",
-  "Ausgabe herunterladen": "Download output",
-  "Die Liste der fehlgeschlagenen Hosts ist zu lang.": "The failed-host list is too long.",
-  "Die Tags sind zu lang.": "The tags are too long.",
-  "Die Vorlage dieses Auftrags fehlt.": "This job's template is missing.",
-  "Erneut starten": "Relaunch",
-  "Fehlgeschlagene Hosts": "Failed hosts",
-  "Für diesen Auftrag sind keine fehlgeschlagenen Hosts gespeichert.": "No failed hosts are stored for this job.",
-  "Für diesen Auftrag wurden keine Parameter gespeichert.": "No parameters were stored for this job.",
-  "Ja": "Yes",
-  "Nein": "No",
-  "Nur Ansible-Aufträge haben fehlgeschlagene Hosts.": "Only Ansible jobs have failed hosts.",
-  "Nur ein fehlgeschlagener Auftrag kann erneut gestartet werden.": "Only a failed job can be relaunched.",
-  "Nur fehlgeschlagene Hosts": "Failed hosts only",
-  "Parameter": "Parameters",
-  "Parameter sind ungültig.": "Parameters are invalid.",
-  "Parameter sind zu groß.": "Parameters are too large.",
-  "Auslöser": "Trigger",
-  "Automation": "Automation",
-  "Benutzer": "User",
-  "Benutzer angelegt.": "User created.",
-  "Benutzer ist unbekannt. Lege ihn zuerst an.": "Unknown user. Create the account first.",
-  "Benutzer wurde nicht eindeutig gefunden.": "The user was not found uniquely.",
-  "Benutzerkonten": "Users",
-  "Benutzername": "Username",
-  "Benutzername ist ungültig.": "Username is invalid.",
-  "Benutzername: 2–64 Zeichen, a-z, 0-9, Punkt, Unterstrich, Bindestrich.": "Username: 2–64 characters, a-z, 0-9, dot, underscore, hyphen.",
-  "Benutzer suchen": "Search users",
-  "Besitzer verwaltet zusätzlich Zugänge, Umgebungen und Mitglieder.": "An owner also manages credentials, environments, and members.",
-  "Betrachter sieht Projekte, Inventare, Vorlagen, Aufträge und Workflows.": "A viewer sees projects, inventories, templates, jobs, and workflows.",
-  "Beschreibung": "Description",
-  "Besitzer": "Owner",
-  "Betrachter": "Viewer",
-  "Check": "Check",
-  "Check (Dry-Run)": "Check (dry run)",
-  "Check startet ansible-playbook mit --check. Tags, übersprungene Tags und Limit gelten für jeden Start dieser Vorlage.": "Check starts ansible-playbook with --check. Tags, skipped tags, and limit apply to every launch of this template.",
-  "Ein Komma oder ein Leerzeichen macht den getippten Tag zu einer Pille.": "A comma or a space turns the typed tag into a pill.",
-  "Checkout: {path}": "Checkout: {path}",
-  "Collections": "Collections",
-  "Collections im Cache": "Cached collections",
-  "Collections, Rollen und OpenTofu-Provider bleiben zwischen den Läufen liegen.": "Collections, roles, and OpenTofu providers stay between runs.",
-  "Dafür brauchst du die Rolle Besitzer.": "You need the owner role.",
-  "Dafür brauchst du die Rolle Operator.": "You need the operator role.",
-  "Dafür brauchst du ein Administratorkonto.": "You need an administrator account.",
-  "Deaktiviert": "Disabled",
-  "Das Konto ist deaktiviert.": "The account is disabled.",
-  "Das Passwort kommt aus LDAP oder Active Directory.": "The password comes from LDAP or Active Directory.",
-  "Das Projekt ist für dieses Team nicht sichtbar.": "This project is not visible to this team.",
-  "Datei fehlt im Projekt.": "File is missing from the project.",
-  "Der Cache liegt unter data/cache und bleibt zwischen den Läufen erhalten.": "The cache lives under data/cache and stays between runs.",
-  "Der Eintrag wird noch verwendet.": "The entry is still in use.",
-  "Der Einstiegspfad muss relativ sein und darf das Projekt nicht verlassen.": "The entry path must be relative and must stay inside the project.",
-  "Der Benutzer ist in jedem Team.": "The user is in every team.",
-  "Der Tag „{part}“ ist ungültig. Erlaubt sind Buchstaben, Ziffern und _ . : -.": "The tag “{part}” is invalid. Letters, digits, and _ . : - are allowed.",
-  "Der Benutzername ist schon vergeben.": "That username is already used.",
-  "Der letzte Administrator bleibt erhalten.": "The last administrator stays.",
-  "Der Name ist in diesem Team schon vergeben.": "That name is already used in this team.",
-  "Der Workflow enthält einen Zyklus.": "The workflow contains a cycle.",
-  "Der Workflow hat noch keine Knoten.": "The workflow has no nodes yet.",
-  "Die Anfrage ist fehlgeschlagen.": "The request failed.",
-  "Die Datei ist kein Inventar.": "The file is not an inventory.",
-  "Die E-Mail kommt aus LDAP oder Active Directory.": "The email comes from LDAP or Active Directory.",
-  "Die Mitgliedschaft kommt aus LDAP oder Active Directory.": "The membership comes from LDAP or Active Directory.",
-  "Die manuelle Quelle ist leer.": "The manual source is empty.",
-  "Die Sitzung ist abgelaufen.": "The session has expired.",
-  "Die Sitzung ist lokal beendet.": "The session ended locally.",
-  "Dieselbe Kante ist doppelt vorhanden.": "The same edge is present twice.",
-  "Diese Quelle kommt aus einem Projekt oder aus NetBox. Aktualisieren holt sie neu.": "This source comes from a project or from NetBox. Refresh loads it again.",
-  "Diese Seite gibt es nicht.": "This page does not exist.",
-  "Diese Vorlage gibt es nicht.": "This template does not exist.",
-  "Diesem Konto ist kein Team zugeordnet. Ein Administrator legt eines unter Team an.": "This account has no team. An administrator creates one under Team.",
-  "Dieses Konto wirklich löschen?": "Delete this account?",
-  "Dieses Inventar hat keine externe Quelle.": "This inventory has no external source.",
-  "Dieses Inventar hat mehrere Quellen. Den Text bearbeitest du an der einzelnen Quelle.": "This inventory has several sources. Edit the text on the single source.",
-  "Diff": "Diff",
-  "Diff ist ja oder nein.": "Diff is yes or no.",
-  "Du kannst dein eigenes Konto nicht deaktivieren.": "You cannot disable your own account.",
-  "Du kannst dein eigenes Konto nicht löschen.": "You cannot delete your own account.",
-  "Du kannst dich nicht selbst aus dem Team nehmen.": "You cannot remove yourself from the team.",
-  "Ein Inventar kann mehrere Quellen haben. Sie werden zusammen an Ansible übergeben.": "An inventory can have several sources. They are passed to Ansible together.",
-  "Ein Knoten hat keine ID.": "A node has no id.",
-  "Ein leerer Graph lässt sich speichern, aber nicht starten.": "An empty graph can be saved, but not launched.",
-  "Ein Projekt bleibt in der Organisation des gewählten Teams.": "A project stays in the organization of the selected team.",
-  "Eine Kante darf nicht auf denselben Knoten zeigen.": "An edge cannot point at the same node.",
-  "Eine Kante verweist auf einen unbekannten Knoten.": "An edge points at an unknown node.",
-  "Eine Vorlage gehört zu einem anderen Team.": "A template belongs to another team.",
-  "E-Mail": "Email",
-  "E-Mail ist ungültig.": "Email is invalid.",
-  "Eingänge": "Deliveries",
-  "Einstieg": "Entry",
-  "Einstiegspfad": "Entry path",
-  "Einstiegspfad fehlt.": "Entry path is missing.",
-  "Env-Zugang muss ein JSON-Objekt sein.": "The env credential must be a JSON object.",
-  "Env-Zeile braucht KEY=Wert.": "An env line needs KEY=value.",
-  "Erfolg": "Success",
-  "Erfolgskante: Zielknoten anklicken.": "Success edge: click the target node.",
-  "Erfolgskanten und Fehlerkanten starten die nächsten Vorlagen.": "Success edges and failure edges start the next templates.",
-  "Execution Environment": "Execution environment",
-  "Execution Environment fehlt.": "Execution environment is missing.",
-  "Execution Environment gehört zu einem anderen Team.": "The execution environment belongs to another team.",
-  "Execution Environment ist für dieses Team nicht sichtbar.": "The execution environment is not visible to this team.",
-  "Geltungsbereich ist team, organization oder global.": "Scope is team, organization, or global.",
-  "Gilt für": "Applies to",
-  "Dieses Team": "This team",
-  "Diese Organisation": "This organization",
-  "Global": "Global",
-  "Organisation · {name}": "Organization · {name}",
-  "Team · {name}": "Team · {name}",
-  "Global gilt für jedes Team. Die Organisation gilt für alle Teams darin. Ein Team bleibt privat.": "Global applies to every team. The organization applies to every team in it. A team stays private.",
-  "Execution Environment ist gesetzt, aber weder Docker noch Podman ist erreichbar.": "An execution environment is set, but neither Docker nor Podman is reachable.",
-  "Execution Environments": "Execution environments",
-  "Extra-Variablen": "Extra variables",
-  "Extra-Variablen (JSON)": "Extra variables (JSON)",
-  "Extra-Variablen ist kein gültiges JSON.": "Extra variables are not valid JSON.",
-  "Extra-Variablen muss ein JSON-Objekt sein.": "Extra variables must be a JSON object.",
-  "extra_vars muss ein Objekt sein.": "extra_vars must be an object.",
-  "Farben zeigen den Lauf. Ein Klick zeigt die Ausgabe.": "Colors show the run. A click shows the output.",
-  "Dauer": "Duration",
-  "Ende": "End",
-  "Start": "Start",
-  "Schließen": "Close",
-  "Auftrag öffnen": "Open the job",
-  "Dieser Knoten hat noch keine Ausgabe.": "This node has no output yet.",
-  "Dieser Knoten wurde übersprungen.": "This node was skipped.",
-  "Fehler": "Error",
-  "Fehlerkante: Zielknoten anklicken.": "Failure edge: click the target node.",
-  "Filter, eine Zeile je Schlüssel=Wert": "Filters, one key=value per line",
-  "Forks": "Forks",
-  "Forks ist eine ganze Zahl.": "Forks is a whole number.",
-  "Forks ist eine Zahl von 1 bis 50.": "Forks is a number from 1 to 50.",
-  "Geheimnis muss ein JSON-Objekt sein.": "The secret must be a JSON object.",
-  "Geheimnisse werden verschlüsselt gespeichert und nicht wieder angezeigt.": "Secrets are stored encrypted and are not shown again.",
-  "Gespeichert.": "Saved.",
-  "Git-Adresse ist ungültig.": "The Git address is invalid.",
-  "Git-Adresse muss http(s), ssh, git@ oder file sein.": "The Git address must be http(s), ssh, git@, or file.",
-  "Git-Projekt zuerst synchronisieren.": "Sync the Git project first.",
-  "Git hat das Zeitlimit von 120 Sekunden überschritten.": "Git exceeded the 120 second time limit.",
-  "Grün ist erfolgreich, Rot ist fehlgeschlagen, Blau läuft.": "Green is successful, red is failed, blue is running.",
-  "Gruppierung": "Group by",
-  "Gruppierung „{key}“ wird nicht unterstützt. Möglich sind sites, device_roles, role, platform, tenant, tags, status, cluster, region, location, manufacturer, device_type, site_group und is_virtual.": "Grouping “{key}” is not supported. Allowed values are sites, device_roles, role, platform, tenant, tags, status, cluster, region, location, manufacturer, device_type, site_group, and is_virtual.",
-  "Herkunft": "Source",
-  "Hinzufügen": "Add",
-  "Hook": "Hook",
-  "Hook hat kein Ziel.": "The hook has no target.",
-  "Hosts": "Hosts",
-  "Höchstens 8 Quellen.": "At most 8 sources.",
-  "Id": "Id",
-  "Image": "Image",
-  "Image-Name ist ungültig.": "The image name is invalid.",
-  "Immer": "Always",
-  "In dieser Organisation gibt es noch kein Team.": "This organization has no team yet.",
-  "INI oder YAML": "INI or YAML",
-  "Interner Fehler.": "Internal error.",
-  "Inventar": "Inventory",
-  "Inventar anlegen": "New inventory",
-  "Inventar fehlt.": "Inventory is missing.",
-  "Inventar gehört zu einem anderen Team.": "The inventory belongs to another team.",
-  "Inventar löschen": "Delete inventory",
-  "Inventar löschen?": "Delete this inventory?",
-  "Inventardatei": "Inventory file",
-  "Inventardatei ist größer als 1 MB.": "The inventory file is larger than 1 MB.",
-  "Inventare": "Inventories",
-  "Inventare suchen": "Search inventories",
-  "Irgendein Vorgänger": "Any predecessor",
-  "Kante": "Edge",
-  "Kante gesetzt.": "Edge added.",
-  "Kante löschen": "Delete edge",
-  "Keine Berechtigung für diese Aktion.": "You are not allowed to do this.",
-  "Keine E-Mail hinterlegt.": "No email is stored.",
-  "Keine Inventardateien. Bei einem Git-Projekt zuerst synchronisieren.": "No inventory files. Sync the Git project first.",
-  "Keine Playbooks gefunden. Bei einem Git-Projekt zuerst synchronisieren. Den Pfad kannst du unten eintragen.": "No playbooks found. Sync the Git project first. You can type the path below.",
-  "Kein Team": "No team",
-  "Kein Team ausgewählt.": "No team selected.",
-  "Kommt aus dem Verzeichnis.": "Comes from the directory.",
-  "Konto": "Account",
-  "Konto deaktivieren": "Disable account.",
-  "Leer lassen, um das Passwort zu behalten.": "Leave empty to keep the password.",
-  "Lokal": "Local",
-  "Mitgliedschaften": "Memberships",
-  "Neues Passwort": "New password",
-  "Operator startet Aufträge und pflegt Projekte, Inventare, Vorlagen, Workflows und Webhooks.": "An operator launches jobs and maintains projects, inventories, templates, workflows, and webhooks.",
-  "Rechte": "Permissions",
-  "Zum Team hinzufügen": "Add to a team",
-  "KEY=Wert, eine Zeile je Variable": "KEY=value, one variable per line",
-  "Knoten": "Nodes",
-  "Knoten hinzufügen": "Add node",
-  "Knoten löschen": "Delete node",
-  "Knoten ziehen. Weitere Knoten rechts hinzufügen. Verbinden über die Auswahl am Knoten oder über Erfolg und Fehler auf der Karte.": "Drag nodes. Add more nodes on the right. Connect them from the node panel, or click success and failure on the card.",
-  "Dieser Knoten": "This node",
-  "Die Kante startet bei diesem Knoten.": "The edge starts at this node.",
-  "Erfolg führt zu": "On success, go to",
-  "Fehler führt zu": "On failure, go to",
-  "Immer führt zu": "Always go to",
-  "Kein Ziel": "No target",
-  "Verbinden": "Connect",
-  "Wähle einen Knoten, um ihn zu verbinden.": "Select a node to connect it.",
-  "Lauf": "Run",
-  "Zurück zum Workflow": "Back to the workflow",
-  "Laufzeit": "Runtime",
-  "LDAP-Gruppe": "LDAP group",
-  "LDAP-Gruppe: {group}": "LDAP group: {group}",
-  "LDAP- oder AD-Gruppe": "LDAP or AD group",
-  "LDAP hat das Passwort abgelehnt.": "LDAP rejected the password.",
-  "LDAP ist konfiguriert.": "LDAP is configured.",
-  "LDAP ist unvollständig konfiguriert.": "LDAP is not fully configured.",
-  "Leeres Passwort.": "Empty password.",
-  "Lege zuerst eine Vorlage oder einen Workflow an.": "Create a template or a workflow first.",
-  "Letzte Aufträge": "Recent jobs",
-  "Limit": "Limit",
-  "Limit enthält ein ungültiges Zeichen.": "Limit contains an invalid character.",
-  "Lokale Konten.": "Local accounts.",
-  "Lokales Konto": "Local account",
-  "Löschen": "Delete",
-  "Manuell": "Manual",
-  "Mein Konto": "My account",
-  "Mehrere": "Several",
-  "Mitglieder": "Members",
-  "Modulverzeichnis": "Module directory",
-  "Name": "Name",
-  "Name und E-Mail kommen aus dem Verzeichnis.": "Name and email come from the directory.",
-  "Name der Quelle": "Source name",
-  "Name fehlt oder ist zu lang.": "Name is missing or too long.",
-  "NetBox-Adresse muss http oder https sein.": "The NetBox address must be http or https.",
-  "NetBox-Antwort hat keine results.": "The NetBox response has no results.",
-  "NetBox-Antwort ist kein JSON.": "The NetBox response is not JSON.",
-  "NetBox-Antwort ist zu groß (Grenze 20 Seiten oder 2000 Hosts).": "The NetBox response is too large (limit 20 pages or 2000 hosts).",
-  "NetBox-Antwort verweist auf einen anderen Host.": "The NetBox response points at another host.",
-  "NetBox-Quelle ist unvollständig.": "The NetBox source is incomplete.",
-  "NetBox-Token fehlt.": "The NetBox token is missing.",
-  "NetBox-Token gehört zu einem anderen Team.": "The NetBox token belongs to another team.",
-  "NetBox-Token ist ungültig.": "The NetBox token is invalid.",
-  "NetBox-Zugang ist beschädigt.": "The NetBox credential is damaged.",
-  "NetBox braucht token.": "NetBox needs a token.",
-  "Neue Organisation mit dem Teamnamen": "New organization named after the team",
-  "Neue Vorlage": "New template",
-  "Neuer Workflow": "New workflow",
-  "Neues Team": "New team",
-  "Nicht gefunden.": "Not found.",
-  "Nichts vorhanden.": "Nothing here.",
-  "Noch keine Quelle.": "No source yet.",
-  "ohne": "skip",
-  "Ohne angehaktes Team dürfen alle Teams der Organisation das Projekt nutzen.": "With no team checked, every team in the organization can use the project.",
-  "Ohne Execution Environment läuft die Vorlage auf dem Controller. Im lokalen Runner-Modus wird ein gesetztes Image ignoriert.": "Without an execution environment the template runs on the controller. In local runner mode a set image is ignored.",
-  "OpenTofu": "OpenTofu",
-  "OpenTofu braucht ein Modulverzeichnis.": "OpenTofu needs a module directory.",
-  "OpenTofu init und plan oder apply. Provider liegen im Plugin-Cache.": "OpenTofu init, then plan or apply. Providers stay in the plugin cache.",
-  "Operator": "Operator",
-  "Organisation": "Organization",
-  "Organisation: {name}": "Organization: {name}",
-  "Organisation anlegen": "New organization",
-  "Organisation fehlt.": "Organization is missing.",
-  "Organisation verschieben": "Move organization",
-  "Organisation {name}. Sichtbarkeit: {grant}.": "Organization {name}. Visibility: {grant}.",
-  "Organisation · Team": "Organization · team",
-  "Organisationen": "Organizations",
-  "Organisationen suchen": "Search organizations",
-  "Passwort": "Password",
-  "Passwort braucht mindestens 8 Zeichen.": "Password needs at least 8 characters.",
-  "Pfad": "Path",
-  "Pfad fehlt.": "Path is missing.",
-  "Pfad ist keine Datei.": "Path is not a file.",
-  "Pfad verlässt das Projekt.": "Path leaves the project.",
-  "Playbook aus dem Projekt": "Playbook from the project",
-  "Playbook-Pfad": "Playbook path",
-  "Playbooks lassen sich nicht lesen.": "Playbooks cannot be read.",
-  "Plugin-Dateien werden nicht als Text übernommen. NetBox trägst du als eigene Quelle ein.": "Plugin files are not copied as text. Add NetBox as its own source.",
-  "Plugin-Dateien werden nicht als Text übernommen. NetBox trägst du als Quelle ein, andere Plugins führt dieser Prototyp nicht aus.": "Plugin files are not copied as text. Add NetBox as a source. This prototype does not run other plugins.",
-  "Privater Schlüssel": "Private key",
-  "Projekt": "Project",
-  "Projekt anlegen": "New project",
-  "Projekt enthält zu viele Dateien für einen Scan.": "The project has too many files to scan.",
-  "Projekt fehlt.": "Project is missing.",
-  "Projekt lässt sich nicht lesen.": "The project cannot be read.",
-  "Projekt löschen?": "Delete this project?",
-  "Projektpfad fehlt.": "Project path is missing.",
-  "Projektpfad ist kein Verzeichnis.": "The project path is not a directory.",
-  "Projektquelle ist unvollständig.": "The project source is incomplete.",
-  "Projekte": "Projects",
-  "Projekte suchen": "Search projects",
-  "Pull": "Pull",
-  "Pull-Policy ist if_not_present, always oder never.": "Pull policy is if_not_present, always, or never.",
-  "Quelle": "Source",
-  "Quelle entfernen?": "Remove this source?",
-  "Quelle hinzufügen": "Add source",
-  "Quelle ist manuell, Projekt oder NetBox.": "A source is manual, project, or NetBox.",
-  "Quelle ist path oder git.": "Source is path or git.",
-  "Quelle speichern": "Save source",
-  "Quellen": "Sources",
-  "Ressourcen": "Resources",
-  "Revision": "Revision",
-  "Revision darf nur Buchstaben, Ziffern, Punkt, Schrägstrich, Unterstrich und Bindestrich enthalten.": "Revision may contain only letters, digits, dot, slash, underscore, and hyphen.",
-  "Revision ist ungültig.": "Revision is invalid.",
-  "Rolle": "Role",
-  "Rolle ist viewer, operator oder owner.": "Role is viewer, operator, or owner.",
-  "Rollen": "Roles",
-  "Rollen im Cache": "Cached roles",
-  "Runner": "Runner",
-  "Seite": "Page",
-  "Shell": "Shell",
-  "Shell-Skript aus dem Projekt oder als Inline-Skript.": "Shell script from the project or as an inline script.",
-  "Shell braucht einen Pfad oder spec.script.": "Shell needs a path or spec.script.",
-  "Shell-Vorlage braucht ein Skript oder einen Einstiegspfad.": "A shell template needs a script or an entry path.",
-  "Sichtbarkeit": "Visibility",
-  "Sicherung": "Backup",
-  "Sicherung herunterladen": "Download backup",
-  "Sicherung einspielen": "Restore backup",
-  "Sicherung eingespielt. Die vorherige Installation liegt als restore-previous.zip im Datenverzeichnis. Bitte neu anmelden.": "Backup restored. The previous installation is restore-previous.zip in the data directory. Sign in again.",
-  "Koreograf speichert in SQLite. Die Sicherung enthält die Datenbank und den Schlüssel für die Zugänge. Cache, Git-Checkouts und Auftragsverzeichnisse bleiben außen vor.": "Koreograf stores data in SQLite. The backup contains the database and the key for credentials. Cache, git checkouts and job directories stay out.",
-  "PostgreSQL ist für eine spätere Firmen-Installation vorgesehen. Dieselbe Sicherung ist die Grundlage für den Umzug.": "PostgreSQL is planned for a later company install. This same backup is the basis for that move.",
-  "Das ersetzt Organisationen, Teams, Benutzer, Projekte, Inventare, Zugänge, Vorlagen, Workflows und Webhooks. Laufende Aufträge müssen vorher beendet sein. Danach ist eine neue Anmeldung nötig.": "This replaces organizations, teams, users, projects, inventories, credentials, templates, workflows and webhooks. Finish running jobs first. A new sign-in is required afterwards.",
-  "Datei": "File",
-  "Die aktuelle Installation wird ersetzt.": "The current installation will be replaced.",
-  "Bestätige das Ersetzen mit ERSETZEN.": "Confirm the replacement with ERSETZEN.",
-  "Es läuft noch ein Auftrag. Beende ihn vor dem Einspielen.": "A job is still running. Finish it before restoring.",
-  "Die Sicherung ist leer oder zu groß.": "The backup is empty or too large.",
-  "Die Sicherung lässt sich nicht lesen.": "The backup cannot be read.",
-  "Die Sicherung hat ein unbekanntes Format.": "The backup has an unknown format.",
-  "Die Sicherung enthält keine Koreograf-Datenbank.": "The backup does not contain a Koreograf database.",
-  "Die Sicherung enthält keinen Schlüssel.": "The backup does not contain a key.",
-  "Der Schlüssel in der Sicherung ist ungültig.": "The key in the backup is invalid.",
-  "Die Datenbank in der Sicherung ist beschädigt.": "The database in the backup is damaged.",
-  "Skript": "Script",
-  "Skript, wenn kein Einstiegspfad gesetzt ist": "Script, when no entry path is set",
-  "Skriptpfad": "Script path",
-  "spec muss ein Objekt sein.": "spec must be an object.",
-  "Speichern": "Save",
-  "Sprache": "Language",
-  "Starten": "Launch",
-  "SSH braucht private_key.": "SSH needs private_key.",
-  "Status": "Status",
-  "Status ist firing, resolved oder any.": "Status is firing, resolved, or any.",
-  "Sync fehlgeschlagen.": "Sync failed.",
-  "Synchron": "Synced",
-  "Synchronisieren": "Sync",
-  "Tag eingeben": "Enter a tag",
-  "Tag {name} entfernen": "Remove tag {name}",
-  "Tags": "Tags",
-  "Tags überspringen": "Skip tags",
-  "Team": "Team",
-  "Team anlegen": "New team",
-  "Team fehlt.": "Team is missing.",
-  "Team speichern": "Save team",
-  "Teams": "Teams",
-  "Teams werden geladen.": "Loading teams.",
-  "Test": "Test",
-  "Test-Alert": "Test alert",
-  "Text": "Text",
-  "Token": "Token",
-  "Token nur für Operatoren": "Token is visible to operators",
-  "Umgebung anlegen": "New environment",
-  "Variablen": "Variables",
-  "Vault braucht password.": "Vault needs a password.",
-  "Vault-Passwort": "Vault password",
-  "Version": "Version",
-  "Virtuelle Maschinen": "Virtual machines",
-  "Vorlage": "Template",
-  "Vorlage bearbeiten": "Edit template",
-  "Vorlage fehlt.": "Template is missing.",
-  "Vorlage gehört zu einem anderen Team.": "The template belongs to another team.",
-  "Vorlage löschen?": "Delete this template?",
-  "Vorlagen": "Templates",
-  "Vorlagen suchen": "Search templates",
-  "Wann": "When",
-  "Webhook": "Webhook",
-  "Webhook anlegen": "New webhook",
-  "Webhook löschen?": "Delete this webhook?",
-  "Webhook-Eingänge": "Webhook deliveries",
-  "Webhooks": "Webhooks",
-  "Webhooks suchen": "Search webhooks",
-  "Werkzeug": "Tool",
-  "Werkzeug ist ansible, opentofu oder shell.": "Tool is ansible, opentofu, or shell.",
-  "Werkzeuge": "Tools",
-  "Workflow": "Workflow",
-  "Workflow fehlt.": "Workflow is missing.",
-  "Workflow gehört zu einem anderen Team.": "The workflow belongs to another team.",
-  "Workflow löschen?": "Delete this workflow?",
-  "Workflow-Graph ist ungültig.": "The workflow graph is invalid.",
-  "Workflows": "Workflows",
-  "Workflows suchen": "Search workflows",
-  "X-Team-Id fehlt.": "X-Team-Id is missing.",
-  "Zeit": "Time",
-  "Zertifikat prüfen": "Verify certificate",
-  "Ziel": "Target",
-  "Zugang": "Credential",
-  "Zugang anlegen": "New credential",
-  "Zugang fehlt.": "Credential is missing.",
-  "Zugang gehört zu einem anderen Team.": "The credential belongs to another team.",
-  "Zugang ist doppelt.": "Credential is listed twice.",
-  "Zugänge": "Credentials",
-  "Zugänge suchen": "Search credentials",
-  "Zugangsdaten gehören zu einem anderen Team.": "The credential belongs to another team.",
-  "Zugangsdaten lassen sich nicht lesen.": "Credentials cannot be read.",
-  "Zugangsdaten sind kein JSON.": "Credentials are not JSON.",
-  "Zu viele Zugänge.": "Too many credentials.",
-  "Nur ein Vault-Zugang darf ohne Vault-Id sein.": "Only one vault credential may omit the vault id.",
-  "Pro Art ein Zugang. Vault-Zugänge wählst du über Auswählen. Sie stehen hier als Pillen.": "One credential of each kind. Choose vault credentials with Select. They show up here as pills.",
-  "Auswählen": "Select",
-  "Übernehmen": "Apply",
-  "Vaults suchen": "Search vaults",
-  "Keine Vault-Zugänge im Team.": "No vault credentials in this team.",
-  "Vault-Zugang {name} entfernen": "Remove vault credential {name}",
-  "Pro Art ist nur ein Zugang erlaubt.": "Only one credential of each kind is allowed.",
-  "Zugewiesene Teams müssen zur Organisation des Projekts gehören.": "Assigned teams must belong to the project organization.",
-  "Zuweisung": "Assignment",
-  "Zuweisung speichern": "Save assignment",
-  "Zum Team": "Open team",
-  "Zusammenfassung": "Summary",
-  "Zusammenführung": "Convergence",
-  "{count} Hosts": "{count} hosts",
-  "{count} Knoten": "{count} nodes",
-  "{count} Teams": "{count} teams",
-  "{files} wird hier nicht ausgeführt. NetBox legst du als eigene Quelle an.": "{files} is not executed here. Add NetBox as its own source.",
-  "Abgebrochen": "Canceled",
-  "Angenommen": "Accepted",
-  "Änderungen sind Operatoren vorbehalten.": "Changes are reserved for operators.",
-  "Anderer Pfad": "Other path",
-  "Anmeldung abgelehnt.": "Sign-in was rejected.",
-  "Anmeldung erforderlich.": "Sign-in is required.",
-  "ansible-playbook. Collections und Rollen bleiben im Team-Cache.": "ansible-playbook. Collections and roles stay in the team cache.",
-  "Aufträge suchen": "Search jobs",
-  "Benutzer anlegen": "New user",
-  "Branch, Tag oder Commit": "Branch, tag, or commit",
-  "CN oder DN, zum Beispiel Plattform": "CN or DN, for example Platform",
-  "Entfernen": "Remove",
-  "Einstellungen": "Settings",
-  "Einstellungen gespeichert.": "Settings saved.",
-  "Diese Werte sind gespeichert und gelten sofort.": "These values are saved and apply immediately.",
-  "Noch nichts gespeichert. Es gelten die Umgebungsvariablen vom Start.": "Nothing is saved yet. The environment variables from startup apply.",
-  "Speichern ersetzt die Umgebungsvariablen. Ein leeres Passwort bleibt erhalten.": "Saving replaces the environment variables. An empty password keeps the stored value.",
-  "Umgebungsvariablen verwenden": "Use environment variables",
-  "Gespeicherte Einstellungen verwerfen und wieder die Umgebungsvariablen vom Start nutzen?": "Discard the saved settings and use the environment variables from startup again?",
-  "Bind-Adresse, Datenverzeichnis und das erste Admin-Passwort bleiben am Prozess. Benutzer und die Sicherung haben eigene Seiten.": "The bind address, data directory, and first admin password stay on the process. Users and backup have their own pages.",
-  "Verzeichnis": "Directory",
-  "LDAP oder Active Directory. Eine leere Adresse schaltet die Anmeldung über das Verzeichnis aus. Das lokale Administratorkonto bleibt.": "LDAP or Active Directory. An empty address turns directory sign-in off. The local administrator account stays.",
-  "Modus": "Mode",
-  "Active Directory": "Active Directory",
-  "Bind-DN": "Bind DN",
-  "Bind-Passwort": "Bind password",
-  "Benutzerbasis": "User base",
-  "Benutzerfilter": "User filter",
-  "Benutzerattribut": "Username attribute",
-  "Gruppenattribut": "Group attribute",
-  "Gruppenbasis": "Group base",
-  "StartTLS": "StartTLS",
-  "Zertifikatsprüfung auslassen. Nur in einem Netz, dem du vertraust.": "Skip certificate checks. Only on a network you trust.",
-  "Proxy": "Proxy",
-  "Eine Adresse gilt für HTTP und HTTPS. Git über HTTP und HTTPS, NetBox und Aufträge nutzen sie. Im Execution Environment gilt das auch für Galaxy. SSH-Git geht nicht darüber. Ein Image-Pull nutzt den Proxy des Container-Daemons.": "One address is used for HTTP and HTTPS. Git over HTTP and HTTPS, NetBox, and jobs use it. Inside an execution environment, Galaxy does too. SSH git does not. An image pull uses the container daemon's proxy.",
-  "Eine leere Adresse schaltet den Proxy aus.": "An empty address turns the proxy off.",
-  "Proxy-Adresse": "Proxy address",
-  "Proxy-Benutzer": "Proxy user",
-  "Proxy-Passwort": "Proxy password",
-  "Ausnahmen": "Exceptions",
-  "Die Umgebung nutzt einen Proxy, der weder HTTP noch HTTPS ist. Speichern schaltet ihn für Git, NetBox und Aufträge aus.": "The environment uses a proxy that is neither HTTP nor HTTPS. Saving turns it off for git, NetBox, and jobs.",
-  "Der Modus und das Zeitlimit gelten für den nächsten Auftrag.": "The mode and the time limit apply to the next job.",
-  "Automatisch": "Automatic",
-  "Container": "Container",
-  "Zeitlimit in Sekunden": "Time limit in seconds",
-  "Automatisch nimmt ein Execution Environment, wenn Docker oder Podman erreichbar ist. Lokal bleibt auf diesem Rechner. Container bricht ab, wenn keine Laufzeitumgebung da ist.": "Automatic uses an execution environment when Docker or Podman is reachable. Local stays on this machine. Container stops when no runtime is available.",
-  "LDAP-Adresse muss ldap:// oder ldaps:// sein.": "The LDAP address must be ldap:// or ldaps://.",
-  "LDAP-Filter braucht {username}.": "The LDAP filter needs {username}.",
-  "LDAP-Modus ist ungültig.": "The LDAP mode is invalid.",
-  "Proxy-Adresse muss http:// oder https:// sein.": "The proxy address must be http:// or https://.",
-  "Zugangsdaten gehören in die eigenen Felder, nicht in die Proxy-Adresse.": "Put the credentials in their own fields, not in the proxy address.",
-  "Proxy-Benutzer fehlt.": "The proxy user is missing.",
-  "Proxy-Ausnahmen sind ungültig.": "The proxy exceptions are invalid.",
-  "Zeitlimit muss zwischen 30 und 86400 Sekunden liegen.": "The time limit must be between 30 and 86400 seconds.",
-  "Runner-Modus ist ungültig.": "The runner mode is invalid.",
-  "Das Platzhalterzeichen ist kein Passwort.": "The placeholder is not a password.",
-  "Gespeicherte Einstellung lässt sich nicht lesen.": "The saved setting cannot be read.",
-  "Der Wert ist zu lang.": "The value is too long.",
-  "Der Wert enthält ungültige Zeichen.": "The value contains invalid characters.",
-  "HTTP-Proxy aus der Umgebung.": "HTTP proxy from the environment.",
-  "Erfolgreich": "Successful",
-  "Fehlgeschlagen": "Failed",
-  "Filter „{line}“ braucht Schlüssel=Wert.": "Filter “{line}” needs key=value.",
-  "Filter „{line}“ ist ungültig.": "Filter “{line}” is invalid.",
-  "Gruppen": "Groups",
-  "Ignoriert": "Ignored",
-  "Läuft": "Running",
-  "Mitglied hinzufügen": "Add member",
-  "NetBox ist nicht erreichbar: {err}": "NetBox is not reachable: {err}",
-  "Quelle: {source}": "Source: {source}",
-  "Revision {revision}": "Revision {revision}",
-  "Übersprungen": "Skipped",
-  "Umgebungen suchen": "Search environments",
-  "Wartend": "Pending",
-  "Übersicht": "Overview",
-  "+ Benutzer": "+ User",
-  "+ Inventar": "+ Inventory",
-  "+ Manuell": "+ Manual",
-  "+ Mitglied": "+ Member",
-  "+ NetBox": "+ NetBox",
-  "+ Organisation": "+ Organization",
-  "+ Projekt": "+ Project",
-  "+ Team": "+ Team",
-  "+ Umgebung": "+ Environment",
-  "+ Vorlage": "+ Template",
-  "+ Webhook": "+ Webhook",
-  "+ Workflow": "+ Workflow",
-  "+ Zugang": "+ Credential",
-  "Adresse": "Address",
-  "Alertname fehlt.": "Alert name is missing.",
-  "Aktion ist plan oder apply.": "Action is plan or apply.",
-  "Ansible braucht ein Playbook als Einstieg.": "Ansible needs a playbook as the entry.",
-  "Aufträge, Workflows und Alarme für mehrere Teams. Lokales Konto oder LDAP.": "Jobs, workflows, and alerts for several teams. Local account or LDAP.",
-  "Hinweis": "Notice",
-  "alle Vorgänger": "all predecessors",
-  "ein Vorgänger": "one predecessor",
-};
+
 
 function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
@@ -653,11 +36,24 @@ function esc(value) {
   }[ch]));
 }
 
-function t(text, vars) {
-  let out = lang === "en" && Object.prototype.hasOwnProperty.call(EN, text) ? EN[text] : text;
+let messages = { de: {}, en: {} };
+
+function lookup(language, key) {
+  const table = messages[language] || {};
+  if (Object.prototype.hasOwnProperty.call(table, key)) return table[key];
+  if (language !== "de" && Object.prototype.hasOwnProperty.call(messages.de || {}, key)) {
+    return messages.de[key];
+  }
+  return key;
+}
+
+function t(key, vars) {
+  let out = lookup(lang, key);
   if (vars) {
-    Object.entries(vars).forEach(([key, value]) => {
-      out = out.replaceAll(`{${key}}`, String(value ?? ""));
+    Object.entries(vars).forEach(([name, value]) => {
+      const raw = String(value ?? "");
+      const text = name === "field" || name === "label" ? lookup(lang, raw) : raw;
+      out = out.replaceAll(`{${name}}`, text);
     });
   }
   return out;
@@ -690,7 +86,7 @@ function langSwitch() {
   const current = LANGUAGES.find((item) => item.id === lang) || LANGUAGES[0];
   const options = LANGUAGES.map(langOption).join("");
   return `<div class="lang-switch" data-lang-select>
-    <button class="lang-button" type="button" data-lang-button aria-haspopup="listbox" aria-expanded="false" aria-controls="lang-menu" aria-label="${h("Sprache")}">${flagMarkup(current.country)}<span class="lang-code">${esc(current.code)}</span><span class="lang-caret" aria-hidden="true"></span></button>
+    <button class="lang-button" type="button" data-lang-button aria-haspopup="listbox" aria-expanded="false" aria-controls="lang-menu" aria-label="${h("language")}">${flagMarkup(current.country)}<span class="lang-code">${esc(current.code)}</span><span class="lang-caret" aria-hidden="true"></span></button>
     <ul class="lang-menu" id="lang-menu" role="listbox" hidden>${options}</ul>
   </div>`;
 }
@@ -771,10 +167,10 @@ function addLink(href, label) {
 
 function deny(title, min) {
   const text = min === "admin"
-    ? "Dafür brauchst du ein Administratorkonto."
+    ? "you_need_an_administrator_account"
     : min === "owner"
-      ? "Dafür brauchst du die Rolle Besitzer."
-      : "Dafür brauchst du die Rolle Operator.";
+      ? "you_need_the_owner_role"
+      : "you_need_the_operator_role";
   shell(t(title), `<div class="card">${h(text)}</div>`);
 }
 
@@ -795,14 +191,14 @@ function can(min) {
 
 function roleLabel(role) {
   return {
-    viewer: t("Betrachter"),
-    operator: t("Operator"),
-    owner: t("Besitzer"),
+    viewer: t("viewer"),
+    operator: t("operator"),
+    owner: t("owner"),
   }[role] || role;
 }
 
 function roleOptions(selected) {
-  const labels = { viewer: "Betrachter", operator: "Operator", owner: "Besitzer" };
+  const labels = { viewer: "viewer", operator: "operator", owner: "owner" };
   return ["viewer", "operator", "owner"].map((role) =>
     `<option value="${role}"${role === selected ? " selected" : ""}>${h(labels[role])}</option>`
   ).join("");
@@ -810,8 +206,8 @@ function roleOptions(selected) {
 
 function sourceLabel(source) {
   if (source === "ldap") return "LDAP";
-  if (source === "manual") return t("Manuell");
-  if (source === "local") return t("Lokal");
+  if (source === "manual") return t("manual");
+  if (source === "local") return t("local");
   return source || "";
 }
 
@@ -821,23 +217,23 @@ function authSourceLabel(source) {
 
 function roleLegend() {
   return `<ul class="role-legend">
-    <li><strong>${h("Betrachter")}</strong> ${h("Betrachter sieht Projekte, Inventare, Vorlagen, Aufträge und Workflows.")}</li>
-    <li><strong>${h("Operator")}</strong> ${h("Operator startet Aufträge und pflegt Projekte, Inventare, Vorlagen, Workflows und Webhooks.")}</li>
-    <li><strong>${h("Besitzer")}</strong> ${h("Besitzer verwaltet zusätzlich Zugänge, Umgebungen und Mitglieder.")}</li>
-    <li><strong>${h("Administrator")}</strong> ${h("Administrator verwaltet Organisationen, Teams, Benutzer, Einstellungen und die Sicherung. Die Teamrolle wird dabei nicht geprüft.")}</li>
+    <li><strong>${h("viewer")}</strong> ${h("a_viewer_sees_projects_inventories_templates_jobs_and")}</li>
+    <li><strong>${h("operator")}</strong> ${h("an_operator_launches_jobs_and_maintains_projects_inventories")}</li>
+    <li><strong>${h("owner")}</strong> ${h("an_owner_also_manages_credentials_environments_and_members")}</li>
+    <li><strong>${h("administrator")}</strong> ${h("an_administrator_manages_organizations_teams_users_settings_and")}</li>
   </ul>`;
 }
 
 function statusLabel(status) {
   return {
-    pending: t("Wartend"),
-    running: t("Läuft"),
-    successful: t("Erfolgreich"),
-    failed: t("Fehlgeschlagen"),
-    canceled: t("Abgebrochen"),
-    skipped: t("Übersprungen"),
-    accepted: t("Angenommen"),
-    ignored: t("Ignoriert"),
+    pending: t("pending"),
+    running: t("running"),
+    successful: t("successful"),
+    failed: t("failed"),
+    canceled: t("canceled"),
+    skipped: t("skipped"),
+    accepted: t("accepted"),
+    ignored: t("ignored"),
   }[status] || status;
 }
 
@@ -912,8 +308,9 @@ async function api(method, path, body) {
     }
   }
   if (!response.ok) {
-    const error = new Error((data && data.error) || "Die Anfrage ist fehlgeschlagen.");
+    const error = new Error((data && data.error) || "request.failed");
     error.status = response.status;
+    error.vars = (data && data.vars) || null;
     throw error;
   }
   return data;
@@ -922,12 +319,12 @@ async function api(method, path, body) {
 function handle(error) {
   if (error && error.status === 401) {
     me = null;
-    renderLogin("Die Sitzung ist abgelaufen.");
+    renderLogin("session.expired");
     return;
   }
-  if (!document.querySelector(".main")) shell(t("Hinweis"), "");
+  if (!document.querySelector(".main")) shell(t("notice"), "");
   const main = document.querySelector(".main");
-  main.insertAdjacentHTML("afterbegin", `<div class="banner bad">${h(error.message || "Fehler")}</div>`);
+  main.insertAdjacentHTML("afterbegin", `<div class="banner bad">${h(error.message || "error.generic", error.vars)}</div>`);
 }
 
 function go(hash) {
@@ -944,23 +341,23 @@ function navActive(here, href) {
 function shell(title, body, actions) {
   const here = (location.hash || "#/").split("?")[0];
   const groups = [
-    [t("Automation"), [
-      ["#/", t("Übersicht")],
-      ["#/templates", t("Vorlagen")],
-      ["#/jobs", t("Aufträge")],
-      ["#/workflows", t("Workflows")],
-      ["#/hooks", t("Webhooks")],
+    [t("automation"), [
+      ["#/", t("overview")],
+      ["#/templates", t("templates")],
+      ["#/jobs", t("jobs")],
+      ["#/workflows", t("workflows")],
+      ["#/hooks", t("webhooks")],
     ]],
-    [t("Ressourcen"), [
-      ["#/projects", t("Projekte")],
-      ["#/inventories", t("Inventare")],
-      ["#/credentials", t("Zugänge")],
-      ["#/runtime", t("Laufzeit")],
+    [t("resources"), [
+      ["#/projects", t("projects")],
+      ["#/inventories", t("inventories")],
+      ["#/credentials", t("credentials")],
+      ["#/runtime", t("runtime")],
     ]],
-    [lang === "en" ? "Access" : "Zugang", [
-      ["#/organizations", t("Organisationen")],
-      ["#/team", t("Team")],
-      ...(me.is_admin ? [["#/settings", t("Einstellungen")], ["#/users", t("Benutzerkonten")], ["#/backup", t("Sicherung")]] : []),
+    [t("nav.access"), [
+      ["#/organizations", t("organizations")],
+      ["#/team", t("team")],
+      ...(me.is_admin ? [["#/settings", t("settings")], ["#/users", t("users")], ["#/backup", t("backup")]] : []),
     ]],
   ];
   const nav = groups.map(([label, links]) => `
@@ -976,12 +373,12 @@ function shell(title, body, actions) {
     <div class="shell">
       <aside class="side">
         <div class="brand-lockup"><span class="mark" aria-hidden="true"></span><p class="word">Koreograf</p></div>
-        <label class="field"><span class="small">${h("Organisation · Team")}</span><select id="team-select">${options || `<option value="">${h("Kein Team")}</option>`}</select></label>
+        <label class="field"><span class="small">${h("organization_team")}</span><select id="team-select">${options || `<option value="">${h("no_team")}</option>`}</select></label>
         <nav class="nav">${nav}</nav>
         <div class="side-foot">
           <a class="account-link" href="#/account">${esc(me.display_name)} · ${esc(roleLabel(roleOf()))}${me.auth_source === "ldap" ? " · LDAP" : ""}</a>
           ${langSwitch()}
-          <button class="btn ghost" id="logout" type="button">${h("Abmelden")}</button>
+          <button class="btn ghost" id="logout" type="button">${h("sign_out")}</button>
         </div>
       </aside>
       <main class="main">
@@ -1005,14 +402,14 @@ function shell(title, body, actions) {
 
 function needTeam() {
   if (teamId) return true;
-  shell(t("Team"), `<div class="card"><p>${h("Diesem Konto ist kein Team zugeordnet. Ein Administrator legt eines unter Team an.")}</p><p><a href="#/team">${h("Zum Team")}</a></p></div>`);
+  shell(t("team"), `<div class="card"><p>${h("this_account_has_no_team_an_administrator_creates")}</p><p><a href="#/team">${h("open_team")}</a></p></div>`);
   return false;
 }
 
 function table(headers, rows) {
   const body = rows.length
     ? rows.join("")
-    : `<tr><td class="muted" colspan="${headers.length}">${h("Nichts vorhanden.")}</td></tr>`;
+    : `<tr><td class="muted" colspan="${headers.length}">${h("nothing_here")}</td></tr>`;
   return `<table class="table"><thead><tr>${headers.map((item) => `<th>${esc(item)}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
@@ -1021,15 +418,19 @@ function jsonObject(text, label) {
   try {
     value = JSON.parse(text.trim() || "{}");
   } catch {
-    throw new Error(`${label} ist kein gültiges JSON.`);
+    const error = new Error("field.not_json");
+    error.vars = { field: label };
+    throw error;
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${label} muss ein JSON-Objekt sein.`);
+    const error = new Error("field.not_object");
+    error.vars = { field: label };
+    throw error;
   }
   return value;
 }
 
-function renderLogin(message, tone) {
+function renderLogin(message, tone, vars) {
   const kind = tone === "good" ? "good" : "bad";
   app.innerHTML = `
     <div class="login-wrap">
@@ -1038,12 +439,12 @@ function renderLogin(message, tone) {
           <div class="brand-lockup"><span class="mark" aria-hidden="true"></span><h1 class="word">Koreograf</h1></div>
           ${langSwitch()}
         </div>
-        <p class="lede">${h("Aufträge, Workflows und Alarme für mehrere Teams. Lokales Konto oder LDAP.")}</p>
-        ${message ? `<div class="banner ${kind}">${h(message)}</div>` : ""}
+        <p class="lede">${h("jobs_workflows_and_alerts_for_several_teams_local")}</p>
+        ${message ? `<div class="banner ${kind}">${h(message, vars)}</div>` : ""}
         <div class="form">
-          <label class="field"><span>${h("Benutzername")}</span><input name="username" autocomplete="username" required></label>
-          <label class="field"><span>${h("Passwort")}</span><input name="password" type="password" autocomplete="current-password" required></label>
-          <button class="btn primary" type="submit">${h("Anmelden")}</button>
+          <label class="field"><span>${h("username")}</span><input name="username" autocomplete="username" required></label>
+          <label class="field"><span>${h("password")}</span><input name="password" type="password" autocomplete="current-password" required></label>
+          <button class="btn primary" type="submit">${h("sign_in")}</button>
         </div>
       </form>
     </div>`;
@@ -1063,7 +464,7 @@ function renderLogin(message, tone) {
       localStorage.setItem("koreograf.team", teamId);
       go("#/");
     } catch (error) {
-      renderLogin(error.message || "Anmeldung abgelehnt.");
+      renderLogin(error.message || "login.rejected", "bad", error.vars);
     }
   });
 }
@@ -1077,23 +478,23 @@ async function pageDashboard() {
   const deliveries = (data.deliveries || []).map((item) =>
     `<tr><td>${esc(item.hook_name)}</td><td>${pill(item.status)}</td><td>${esc(item.summary)}</td></tr>`
   );
-  shell(t("Übersicht"), `
+  shell(t("overview"), `
     <div class="grid-3">
-      <article class="card stat"><span class="small muted">${h("Abhängigkeits-Cache")}</span><strong>${esc(bytes(data.cache_bytes))}</strong><p class="small muted">${h("Collections, Rollen und OpenTofu-Provider bleiben zwischen den Läufen liegen.")}</p></article>
-      <article class="card stat"><span class="small muted">${h("Workflow")}</span><strong>${data.workflow_id ? `<a href="#/workflows/${esc(data.workflow_id)}">${esc(data.workflow_name)}</a>` : "—"}</strong><p class="small muted">${h("Erfolgskanten und Fehlerkanten starten die nächsten Vorlagen.")}</p></article>
-      <article class="card stat"><span class="small muted">${h("Webhook")}</span><strong>${data.hook_id ? esc(data.hook_name) : "—"}</strong><p class="small muted">${data.ldap ? h("LDAP ist konfiguriert.") : h("Lokale Konten.")} ${h("Runner")}: ${esc(data.runner_mode)}${data.runtime ? `, ${esc(data.runtime)}` : ""}.</p></article>
+      <article class="card stat"><span class="small muted">${h("dependency_cache")}</span><strong>${esc(bytes(data.cache_bytes))}</strong><p class="small muted">${h("collections_roles_and_opentofu_providers_stay_between_runs")}</p></article>
+      <article class="card stat"><span class="small muted">${h("workflow")}</span><strong>${data.workflow_id ? `<a href="#/workflows/${esc(data.workflow_id)}">${esc(data.workflow_name)}</a>` : "—"}</strong><p class="small muted">${h("success_edges_and_failure_edges_start_the_next")}</p></article>
+      <article class="card stat"><span class="small muted">${h("webhook")}</span><strong>${data.hook_id ? esc(data.hook_name) : "—"}</strong><p class="small muted">${data.ldap ? h("ldap_is_configured") : h("local_accounts")} ${h("runner")}: ${esc(data.runner_mode)}${data.runtime ? `, ${esc(data.runtime)}` : ""}.</p></article>
     </div>
     <div class="stack" style="margin-top:14px">
       <section class="card">
-        <div class="spread"><h2>${h("Letzte Aufträge")}</h2><a href="#/jobs">${h("Alle")}</a></div>
-        ${table([t("Name"), t("Werkzeug"), t("Status"), t("Angelegt")], jobs)}
+        <div class="spread"><h2>${h("recent_jobs")}</h2><a href="#/jobs">${h("all")}</a></div>
+        ${table([t("name"), t("tool"), t("status"), t("created")], jobs)}
       </section>
       <section class="card">
         <div class="spread">
-          <h2>${h("Webhook-Eingänge")}</h2>
-          ${data.hook_id && can("operator") ? `<button class="btn primary" id="test-alert" type="button">${h("Test-Alert")}</button>` : ""}
+          <h2>${h("webhook_deliveries")}</h2>
+          ${data.hook_id && can("operator") ? `<button class="btn primary" id="test-alert" type="button">${h("test_alert")}</button>` : ""}
         </div>
-        ${table([t("Hook"), t("Status"), t("Zusammenfassung")], deliveries)}
+        ${table([t("hook"), t("status"), t("summary")], deliveries)}
       </section>
     </div>`);
   const test = document.querySelector("#test-alert");
@@ -1123,11 +524,11 @@ function selectOptions(items, selected, allowEmpty, label) {
 
 function verbosityLabel(level) {
   return [
-    "0 (Normal)",
-    "1 (Ausführlich)",
-    "2 (Ausführlicher)",
-    "3 (Debug)",
-    "4 (Verbindungs-Debug)",
+    "0_normal",
+    "1_verbose",
+    "2_more_verbose",
+    "3_debug",
+    "4_connection_debug",
   ][Number(level)] || "";
 }
 
@@ -1156,9 +557,9 @@ function readChips(box) {
 function renderChips(box, tokens) {
   const entry = box.querySelector(".chip-entry");
   box.querySelectorAll(".chip").forEach((node) => node.remove());
-  const html = tokens.map((token) => `<span class="chip"><span class="chip-text">${esc(token)}</span><button class="chip-remove" type="button" aria-label="${h("Tag {name} entfernen", { name: token })}">×</button></span>`).join("");
+  const html = tokens.map((token) => `<span class="chip"><span class="chip-text">${esc(token)}</span><button class="chip-remove" type="button" aria-label="${h("remove_tag_name", { name: token })}">×</button></span>`).join("");
   entry.insertAdjacentHTML("beforebegin", html);
-  entry.placeholder = tokens.length ? "" : t("Tag eingeben");
+  entry.placeholder = tokens.length ? "" : t("enter_a_tag");
   const hidden = box.parentElement.querySelector(`input[type="hidden"][name="${CSS.escape(box.dataset.chips)}"]`);
   if (hidden) hidden.value = tokens.join(",");
   box.querySelectorAll(".chip-remove").forEach((button) => {
@@ -1183,8 +584,8 @@ function addTokens(box, tokens) {
     if (!validTag(token) || tooLong) {
       if (error) {
         error.textContent = tooLong
-          ? t("Die Tags sind zu lang.")
-          : t("Der Tag „{part}“ ist ungültig. Erlaubt sind Buchstaben, Ziffern und _ . : -.", { part: token });
+          ? t("the_tags_are_too_long")
+          : t("the_tag_part_is_invalid_letters_digits_and", { part: token });
       }
       renderChips(box, chips);
       return { ok: false, keep: tokens.slice(index) };
@@ -1278,7 +679,7 @@ function templateSpec(form) {
     if (verbosity) spec.verbosity = verbosity;
     if (forks) {
       const parsed = Number(forks);
-      if (!Number.isInteger(parsed)) throw new Error("Forks ist eine ganze Zahl.");
+      if (!Number.isInteger(parsed)) throw new Error("forks_is_a_whole_number");
       spec.forks = parsed;
     }
     return spec;
@@ -1293,27 +694,27 @@ function templateSpec(form) {
 function templateOptionLine(item) {
   const spec = item.spec || {};
   if (item.tool === "ansible") {
-    const bits = [spec.job_type === "check" ? t("Check") : t("Lauf")];
+    const bits = [spec.job_type === "check" ? t("check") : t("run_2")];
     if (spec.verbosity) bits.push(t(verbosityLabel(spec.verbosity)));
-    if (spec.tags) bits.push(`${t("Tags")} ${spec.tags}`);
-    if (spec.skip_tags) bits.push(`${t("ohne")} ${spec.skip_tags}`);
-    if (spec.limit) bits.push(`${t("Limit")} ${spec.limit}`);
-    if (spec.diff) bits.push(t("Diff"));
+    if (spec.tags) bits.push(`${t("tags")} ${spec.tags}`);
+    if (spec.skip_tags) bits.push(`${t("skip")} ${spec.skip_tags}`);
+    if (spec.limit) bits.push(`${t("limit")} ${spec.limit}`);
+    if (spec.diff) bits.push(t("diff"));
     return bits.join(" · ");
   }
   if (item.tool === "opentofu") return spec.action === "apply" ? "apply" : "plan";
-  return item.entrypoint || t("Skript");
+  return item.entrypoint || t("script");
 }
 
 async function pageTemplates() {
   if (!needTeam()) return;
   const items = await api("GET", "/api/templates");
-  shell(t("Vorlagen"), `
+  shell(t("templates"), `
     <section class="card">
       <div class="spread">
-        <input class="search" id="template-search" placeholder="${h("Vorlagen suchen")}" autocomplete="off">
+        <input class="search" id="template-search" placeholder="${h("search_templates")}" autocomplete="off">
         <div class="choice-row" id="template-filters">
-          <button class="btn pill primary" type="button" data-tool="all">${h("Alle")}</button>
+          <button class="btn pill primary" type="button" data-tool="all">${h("all")}</button>
           <button class="btn pill" type="button" data-tool="ansible">Ansible</button>
           <button class="btn pill" type="button" data-tool="opentofu">OpenTofu</button>
           <button class="btn pill" type="button" data-tool="shell">Shell</button>
@@ -1321,7 +722,7 @@ async function pageTemplates() {
       </div>
       <div id="template-table"></div>
     </section>`,
-    can("operator") ? addLink("#/templates/new", "+ Vorlage") : "");
+    can("operator") ? addLink("#/templates/new", "template_2") : "");
   let tool = "all";
   let query = "";
   const draw = () => {
@@ -1341,9 +742,9 @@ async function pageTemplates() {
         <td class="tool">${esc(item.tool)}</td>
         <td class="mono">${esc(item.entrypoint || "—")}</td>
         <td class="small">${esc(templateOptionLine(item))}</td>
-        <td>${can("operator") ? `<button class="btn primary" type="button" data-launch="${esc(item.id)}">${h("Starten")}</button>` : ""}</td>
+        <td>${can("operator") ? `<button class="btn primary" type="button" data-launch="${esc(item.id)}">${h("launch")}</button>` : ""}</td>
       </tr>`);
-    document.querySelector("#template-table").innerHTML = table([t("Name"), t("Werkzeug"), t("Einstieg"), t("Lauf"), ""], rows);
+    document.querySelector("#template-table").innerHTML = table([t("name"), t("tool"), t("entry"), t("run_2"), ""], rows);
     document.querySelectorAll("[data-launch]").forEach((button) => {
       button.addEventListener("click", async () => {
         button.disabled = true;
@@ -1384,7 +785,7 @@ async function pageTemplateForm(id) {
   ]);
   const existing = id ? templates.find((item) => item.id === id) : null;
   if (id && !existing) {
-    shell(t("Vorlage"), `<div class="card">${h("Diese Vorlage gibt es nicht.")}</div>`);
+    shell(t("template"), `<div class="card">${h("this_template_does_not_exist")}</div>`);
     return;
   }
   const spec = (existing && existing.spec) || {};
@@ -1393,14 +794,14 @@ async function pageTemplateForm(id) {
     credential_id: "", credential_ids: [], environment_id: "", entrypoint: "", extra_vars: {}, spec: {},
   };
   const verbosity = Number(spec.verbosity) || 0;
-  shell(id ? t("Vorlage bearbeiten") : t("Neue Vorlage"), `
+  shell(id ? t("edit_template") : t("new_template"), `
     <form class="card form" id="template-form">
       <div class="form-section">
-        <h2>${h("Allgemein")}</h2>
-        <label class="field"><span>${h("Name")}</span><input name="name" required value="${esc(item.name)}"></label>
-        <label class="field"><span>${h("Beschreibung")}</span><input name="description" value="${esc(item.description)}"></label>
+        <h2>${h("general")}</h2>
+        <label class="field"><span>${h("name")}</span><input name="name" required value="${esc(item.name)}"></label>
+        <label class="field"><span>${h("description")}</span><input name="description" value="${esc(item.description)}"></label>
         <div class="field-row">
-          <label class="field"><span>${h("Werkzeug")}</span>
+          <label class="field"><span>${h("tool")}</span>
             <select class="fit" name="tool">
               <option value="ansible"${item.tool === "ansible" ? " selected" : ""}>Ansible</option>
               <option value="opentofu"${item.tool === "opentofu" ? " selected" : ""}>OpenTofu</option>
@@ -1410,49 +811,49 @@ async function pageTemplateForm(id) {
         </div>
       </div>
       <div class="form-section">
-        <h2>${h("Ziel")}</h2>
+        <h2>${h("target")}</h2>
         <div class="field-grid">
-          <label class="field"><span>${h("Projekt")}</span><select name="project_id">${selectOptions(projects, item.project_id, true, (row) => row.name)}</select></label>
-          <label class="field" id="inventory-field"${item.tool === "ansible" ? "" : " hidden"}><span>${h("Inventar")}</span><select name="inventory_id">${selectOptions(inventories, item.inventory_id, true, (row) => row.name)}</select></label>
-          <label class="field"><span>${h("Execution Environment")}</span><select name="environment_id">${selectOptions(environments, item.environment_id, true, (row) => `${row.name} (${scopeLabel(row)})`)}</select></label>
+          <label class="field"><span>${h("project")}</span><select name="project_id">${selectOptions(projects, item.project_id, true, (row) => row.name)}</select></label>
+          <label class="field" id="inventory-field"${item.tool === "ansible" ? "" : " hidden"}><span>${h("inventory")}</span><select name="inventory_id">${selectOptions(inventories, item.inventory_id, true, (row) => row.name)}</select></label>
+          <label class="field"><span>${h("execution_environment")}</span><select name="environment_id">${selectOptions(environments, item.environment_id, true, (row) => `${row.name} (${scopeLabel(row)})`)}</select></label>
         </div>
         ${templateCredentialFields(credentials, selectedCredentialIds(item))}
-        <label class="field" id="playbook-field" hidden><span>${h("Playbook aus dem Projekt")}</span><select name="playbook"><option value="">${h("Anderer Pfad")}</option></select></label>
+        <label class="field" id="playbook-field" hidden><span>${h("playbook_from_the_project")}</span><select name="playbook"><option value="">${h("other_path")}</option></select></label>
         <p class="small muted" id="entrypoint-note"></p>
-        <label class="field"><span id="entrypoint-label">${h("Einstiegspfad")}</span><input name="entrypoint" value="${esc(item.entrypoint)}" placeholder="site.yml"></label>
-        <p class="small muted">${h("Ohne Execution Environment läuft die Vorlage auf dem Controller. Im lokalen Runner-Modus wird ein gesetztes Image ignoriert.")}</p>
+        <label class="field"><span id="entrypoint-label">${h("entry_path")}</span><input name="entrypoint" value="${esc(item.entrypoint)}" placeholder="site.yml"></label>
+        <p class="small muted">${h("without_an_execution_environment_the_template_runs_on")}</p>
       </div>
       <div class="form-section" id="ansible-options"${item.tool === "ansible" ? "" : " hidden"}>
         <h2>Ansible</h2>
         <div class="field-row">
-          <label class="field"><span>${h("Art")}</span>
+          <label class="field"><span>${h("type")}</span>
             <select class="fit" name="job_type">
-              <option value="run"${spec.job_type === "check" ? "" : " selected"}>${h("Lauf")}</option>
-              <option value="check"${spec.job_type === "check" ? " selected" : ""}>${h("Check (Dry-Run)")}</option>
+              <option value="run"${spec.job_type === "check" ? "" : " selected"}>${h("run_2")}</option>
+              <option value="check"${spec.job_type === "check" ? " selected" : ""}>${h("check_dry_run")}</option>
             </select>
           </label>
-          <label class="field"><span>${h("Ausführlichkeit")}</span>
+          <label class="field"><span>${h("verbosity")}</span>
             <select class="fit" name="verbosity">
               ${[0, 1, 2, 3, 4].map((level) => `<option value="${level}"${verbosity === level ? " selected" : ""}>${h(verbosityLabel(level))}</option>`).join("")}
             </select>
           </label>
-          <label class="field"><span>${h("Forks")}</span><input class="tiny" name="forks" inputmode="numeric" value="${esc(spec.forks || "")}" placeholder="5"></label>
-          <label class="field check"><span>${h("Diff")}</span><input name="diff" type="checkbox"${spec.diff ? " checked" : ""}></label>
+          <label class="field"><span>${h("forks")}</span><input class="tiny" name="forks" inputmode="numeric" value="${esc(spec.forks || "")}" placeholder="5"></label>
+          <label class="field check"><span>${h("diff")}</span><input name="diff" type="checkbox"${spec.diff ? " checked" : ""}></label>
         </div>
         <div class="field-row">
-          ${chipBox("tags", "Tags", spec.tags)}
-          ${chipBox("skip_tags", "Tags überspringen", spec.skip_tags)}
+          ${chipBox("tags", "tags", spec.tags)}
+          ${chipBox("skip_tags", "skip_tags", spec.skip_tags)}
         </div>
-        <p class="small muted">${h("Ein Komma oder ein Leerzeichen macht den getippten Tag zu einer Pille.")}</p>
+        <p class="small muted">${h("a_comma_or_a_space_turns_the_typed")}</p>
         <div class="field-row">
-          <label class="field"><span>${h("Limit")}</span><input class="fit" name="limit" value="${esc(spec.limit || "")}" placeholder="web:&db"></label>
+          <label class="field"><span>${h("limit")}</span><input class="fit" name="limit" value="${esc(spec.limit || "")}" placeholder="web:&db"></label>
         </div>
-        <p class="small muted">${h("Check startet ansible-playbook mit --check. Tags, übersprungene Tags und Limit gelten für jeden Start dieser Vorlage.")}</p>
+        <p class="small muted">${h("check_starts_ansible_playbook_with_check_tags_skipped")}</p>
       </div>
       <div class="form-section" id="tofu-options"${item.tool === "opentofu" ? "" : " hidden"}>
         <h2>OpenTofu</h2>
         <div class="field-row">
-          <label class="field"><span>${h("Aktion")}</span>
+          <label class="field"><span>${h("action")}</span>
             <select class="fit" name="action">
               <option value="plan"${spec.action === "apply" ? "" : " selected"}>plan</option>
               <option value="apply"${spec.action === "apply" ? " selected" : ""}>apply</option>
@@ -1462,15 +863,15 @@ async function pageTemplateForm(id) {
       </div>
       <div class="form-section" id="shell-options"${item.tool === "shell" ? "" : " hidden"}>
         <h2>Shell</h2>
-        <label class="field"><span>${h("Skript, wenn kein Einstiegspfad gesetzt ist")}</span><textarea name="script">${esc(spec.script || "")}</textarea></label>
+        <label class="field"><span>${h("script_when_no_entry_path_is_set")}</span><textarea name="script">${esc(spec.script || "")}</textarea></label>
       </div>
       <div class="form-section">
-        <h2>${h("Variablen")}</h2>
-        <label class="field"><span>${h("Extra-Variablen (JSON)")}</span><textarea name="extra_vars">${esc(JSON.stringify(item.extra_vars || {}, null, 2))}</textarea></label>
+        <h2>${h("variables")}</h2>
+        <label class="field"><span>${h("extra_variables_json")}</span><textarea name="extra_vars">${esc(JSON.stringify(item.extra_vars || {}, null, 2))}</textarea></label>
       </div>
       <div class="row">
-        <button class="btn pill primary" type="submit">${id ? h("Speichern") : h("Anlegen")}</button>
-        ${id && can("operator") ? `<button class="btn danger" id="delete-template" type="button">${h("Löschen")}</button>` : ""}
+        <button class="btn pill primary" type="submit">${id ? h("save") : h("create")}</button>
+        ${id && can("operator") ? `<button class="btn danger" id="delete-template" type="button">${h("delete")}</button>` : ""}
       </div>
     </form>`);
   const form = document.querySelector("#template-form");
@@ -1492,7 +893,7 @@ async function pageTemplateForm(id) {
         ],
         environment_id: form.environment_id.value || null,
         entrypoint: form.tool.value === "ansible" && form.playbook.value ? form.playbook.value : form.entrypoint.value,
-        extra_vars: jsonObject(form.extra_vars.value, "Extra-Variablen"),
+        extra_vars: jsonObject(form.extra_vars.value, "extra_variables"),
         spec: templateSpec(form),
       };
       if (id) await api("PUT", `/api/templates/${encodeURIComponent(id)}`, body);
@@ -1518,14 +919,14 @@ async function pageTemplateForm(id) {
       const extra = current && !books.includes(current)
         ? `<option value="${esc(current)}">${esc(current)}</option>`
         : "";
-      select.innerHTML = `${known}${extra}<option value="">${h("Anderer Pfad")}</option>`;
+      select.innerHTML = `${known}${extra}<option value="">${h("other_path")}</option>`;
       select.value = current && (books.includes(current) || extra) ? current : "";
       if (!books.length) {
-        note.textContent = t("Keine Playbooks gefunden. Bei einem Git-Projekt zuerst synchronisieren. Den Pfad kannst du unten eintragen.");
+        note.textContent = t("no_playbooks_found_sync_the_git_project_first");
       }
     } catch (error) {
-      select.innerHTML = `<option value="">${h("Anderer Pfad")}</option>`;
-      note.textContent = t(error.message || "Playbooks lassen sich nicht lesen.");
+      select.innerHTML = `<option value="">${h("other_path")}</option>`;
+      note.textContent = t(error.message || "playbooks_cannot_be_read", error.vars);
     }
   };
   const showToolSections = () => {
@@ -1535,9 +936,9 @@ async function pageTemplateForm(id) {
     document.querySelector("#shell-options").hidden = tool !== "shell";
     document.querySelector("#inventory-field").hidden = tool !== "ansible";
     const label = document.querySelector("#entrypoint-label");
-    if (tool === "ansible") label.textContent = t("Playbook-Pfad");
-    else if (tool === "opentofu") label.textContent = t("Modulverzeichnis");
-    else label.textContent = t("Skriptpfad");
+    if (tool === "ansible") label.textContent = t("playbook_path");
+    else if (tool === "opentofu") label.textContent = t("module_directory");
+    else label.textContent = t("script_path");
   };
   form.tool.addEventListener("change", () => {
     showToolSections();
@@ -1552,7 +953,7 @@ async function pageTemplateForm(id) {
   const remove = document.querySelector("#delete-template");
   if (remove) {
     remove.addEventListener("click", async () => {
-      if (!confirm(t("Vorlage löschen?"))) return;
+      if (!confirm(t("delete_this_template"))) return;
       try {
         await api("DELETE", `/api/templates/${encodeURIComponent(id)}`);
         go("#/templates");
@@ -1566,9 +967,9 @@ async function pageTemplateForm(id) {
 async function pageJobs() {
   if (!needTeam()) return;
   const jobs = await api("GET", "/api/jobs");
-  shell(t("Aufträge"), `
+  shell(t("jobs"), `
     <section class="card">
-      <input class="search" id="job-search" placeholder="${h("Aufträge suchen")}" autocomplete="off">
+      <input class="search" id="job-search" placeholder="${h("search_jobs")}" autocomplete="off">
       <div id="job-table"></div>
     </section>`);
   const drawJobs = () => {
@@ -1577,7 +978,7 @@ async function pageJobs() {
     const filtered = shown.map((job) =>
       `<tr><td><a href="#/jobs/${esc(job.id)}">${esc(job.name)}</a></td><td class="tool">${esc(job.tool)}</td><td>${pill(job.status)}</td><td class="small">${esc(job.trigger)}</td><td class="small muted">${esc(job.created_at)}</td><td>${jobListActions(job)}</td></tr>`
     );
-    document.querySelector("#job-table").innerHTML = table([t("Name"), t("Werkzeug"), t("Status"), t("Auslöser"), t("Angelegt"), ""], filtered);
+    document.querySelector("#job-table").innerHTML = table([t("name"), t("tool"), t("status"), t("trigger"), t("created"), ""], filtered);
     document.querySelectorAll("[data-relaunch]").forEach((button) => {
       button.addEventListener("click", async () => {
         button.disabled = true;
@@ -1637,7 +1038,7 @@ function jobParameters(job) {
     const extra = job.extra_vars && Object.keys(job.extra_vars).length
       ? `<pre class="vars">${esc(JSON.stringify(job.extra_vars, null, 2))}</pre>`
       : "";
-    return `<p class="muted">${h("Für diesen Auftrag wurden keine Parameter gespeichert.")}</p>${extra}`;
+    return `<p class="muted">${h("no_parameters_were_stored_for_this_job")}</p>${extra}`;
   }
   const spec = params.spec || {};
   const templateId = params.template_id || job.template_id;
@@ -1647,31 +1048,31 @@ function jobParameters(job) {
     : esc(templateName);
   const credential = credentialSummary(params);
   const environment = [params.environment_name, params.environment_image].filter(Boolean).join(" · ");
-  const kind = spec.job_type === "check" ? t("Check") : spec.job_type === "run" ? t("Ausführen") : "";
-  const diff = spec.diff === true ? t("Ja") : spec.diff === false ? t("Nein") : "";
+  const kind = spec.job_type === "check" ? t("check") : spec.job_type === "run" ? t("run") : "";
+  const diff = spec.diff === true ? t("yes") : spec.diff === false ? t("no") : "";
   const hostLine = hosts.length
-    ? `<dt>${h("Fehlgeschlagene Hosts")}</dt><dd>${hosts.map((host) => esc(host)).join(", ")}</dd>`
+    ? `<dt>${h("failed_hosts")}</dt><dd>${hosts.map((host) => esc(host)).join(", ")}</dd>`
     : "";
   return `<dl class="kv">
-    <dt>${h("Vorlage")}</dt><dd>${template}</dd>
-    ${paramRow("Werkzeug", params.tool)}
-    ${paramRow("Einstieg", params.entrypoint)}
-    ${paramRow("Projekt", params.project_name)}
-    ${paramRow("Inventar", params.inventory_name)}
-    ${paramRow("Zugang", credential)}
-    ${paramRow("Execution Environment", environment)}
-    ${paramRow("Art", kind)}
-    ${paramRowHtml("Tags", chipReadout(spec.tags))}
-    ${paramRowHtml("Tags überspringen", chipReadout(spec.skip_tags))}
-    ${paramRow("Limit", spec.limit)}
-    ${paramRow("Diff", diff)}
-    ${paramRow("Ausführlichkeit", spec.verbosity === undefined || spec.verbosity === null || spec.verbosity === "" ? "" : t(verbosityLabel(spec.verbosity)))}
-    ${paramRow("Forks", spec.forks)}
-    ${paramRow("Aktion", spec.action)}
+    <dt>${h("template")}</dt><dd>${template}</dd>
+    ${paramRow("tool", params.tool)}
+    ${paramRow("entry", params.entrypoint)}
+    ${paramRow("project", params.project_name)}
+    ${paramRow("inventory", params.inventory_name)}
+    ${paramRow("nav.access", credential)}
+    ${paramRow("execution_environment", environment)}
+    ${paramRow("type", kind)}
+    ${paramRowHtml("tags", chipReadout(spec.tags))}
+    ${paramRowHtml("skip_tags", chipReadout(spec.skip_tags))}
+    ${paramRow("limit", spec.limit)}
+    ${paramRow("diff", diff)}
+    ${paramRow("verbosity", spec.verbosity === undefined || spec.verbosity === null || spec.verbosity === "" ? "" : t(verbosityLabel(spec.verbosity)))}
+    ${paramRow("forks", spec.forks)}
+    ${paramRow("action", spec.action)}
     ${hostLine}
   </dl>
-  ${spec.script ? `<h3>${h("Skript")}</h3><pre class="vars">${esc(spec.script)}</pre>` : ""}
-  <h3>${h("Extra-Variablen")}</h3>
+  ${spec.script ? `<h3>${h("script")}</h3><pre class="vars">${esc(spec.script)}</pre>` : ""}
+  <h3>${h("extra_variables")}</h3>
   <pre class="vars">${esc(JSON.stringify(params.extra_vars || {}, null, 2))}</pre>`;
 }
 
@@ -1679,21 +1080,21 @@ function jobListActions(job) {
   if (!can("operator") || job.status !== "failed") return "";
   const hosts = Array.isArray(job.failed_hosts) ? job.failed_hosts : [];
   const failedHosts = job.tool === "ansible" && hosts.length
-    ? `<button class="btn" type="button" data-relaunch="${esc(job.id)}" data-failed="1">${h("Nur fehlgeschlagene Hosts")}</button>`
+    ? `<button class="btn" type="button" data-relaunch="${esc(job.id)}" data-failed="1">${h("failed_hosts_only")}</button>`
     : "";
-  return `<div class="row"><button class="btn" type="button" data-relaunch="${esc(job.id)}" data-failed="0">${h("Erneut starten")}</button>${failedHosts}</div>`;
+  return `<div class="row"><button class="btn" type="button" data-relaunch="${esc(job.id)}" data-failed="0">${h("relaunch")}</button>${failedHosts}</div>`;
 }
 
 function jobActions(job) {
   const running = job.status === "pending" || job.status === "running";
   const hosts = Array.isArray(job.failed_hosts) ? job.failed_hosts : [];
   if (!can("operator")) return "";
-  if (running) return `<button class="btn danger" type="button" data-action="cancel">${h("Abbrechen")}</button>`;
+  if (running) return `<button class="btn danger" type="button" data-action="cancel">${h("cancel")}</button>`;
   if (job.status !== "failed") return "";
   const failedHosts = job.tool === "ansible" && hosts.length
-    ? `<button class="btn" type="button" data-action="relaunch-failed">${h("Nur fehlgeschlagene Hosts")}</button>`
+    ? `<button class="btn" type="button" data-action="relaunch-failed">${h("failed_hosts_only")}</button>`
     : "";
-  return `<button class="btn primary" type="button" data-action="relaunch">${h("Erneut starten")}</button>${failedHosts}`;
+  return `<button class="btn primary" type="button" data-action="relaunch">${h("relaunch")}</button>${failedHosts}`;
 }
 
 async function pageJob(id) {
@@ -1707,12 +1108,12 @@ async function pageJob(id) {
     </div>
     <div class="spread tab-bar">
       <div class="tabs">
-        <button class="btn pill primary" type="button" data-job-tab="output">${h("Ausgabe")}</button>
-        <button class="btn pill" type="button" data-job-tab="parameters">${h("Parameter")}</button>
+        <button class="btn pill primary" type="button" data-job-tab="output">${h("output")}</button>
+        <button class="btn pill" type="button" data-job-tab="parameters">${h("parameters")}</button>
       </div>
       <div class="row">
         ${actions}
-        <button class="btn" type="button" id="download-output">${h("Ausgabe herunterladen")}</button>
+        <button class="btn" type="button" id="download-output">${h("download_output")}</button>
       </div>
     </div>
     <div id="panel-output"><div class="log" id="log"></div></div>
@@ -1774,10 +1175,16 @@ async function pageJob(id) {
       const blob = await response.blob();
       if (!response.ok) {
         const text = await blob.text();
-        let message = "Die Anfrage ist fehlgeschlagen.";
-        try { message = JSON.parse(text).error || message; } catch { /* keep */ }
+        let message = "request.failed";
+        let vars = null;
+        try {
+          const data = JSON.parse(text);
+          message = data.error || message;
+          vars = data.vars || null;
+        } catch { /* keep */ }
         const error = new Error(message);
         error.status = response.status;
+        error.vars = vars;
         throw error;
       }
       const match = /filename="([^"]+)"/.exec(response.headers.get("content-disposition") || "");
@@ -1819,22 +1226,22 @@ async function pageJob(id) {
 async function pageWorkflows() {
   if (!needTeam()) return;
   const items = await api("GET", "/api/workflows");
-  shell(t("Workflows"), `
+  shell(t("workflows"), `
     <section class="card">
-      <input class="search" id="workflow-search" placeholder="${h("Workflows suchen")}" autocomplete="off">
+      <input class="search" id="workflow-search" placeholder="${h("search_workflows")}" autocomplete="off">
       <div id="workflow-table"></div>
     </section>`,
-    can("operator") ? addLink("#/workflows/new", "+ Workflow") : "");
+    can("operator") ? addLink("#/workflows/new", "workflow_2") : "");
   const drawWorkflows = () => {
     const needle = document.querySelector("#workflow-search").value.trim().toLowerCase();
     const shown = items.filter((item) => !needle || `${item.name} ${item.description}`.toLowerCase().includes(needle));
     const filtered = shown.map((item) => `
       <tr>
         <td><a href="#/workflows/${esc(item.id)}">${esc(item.name)}</a><div class="small muted">${esc(item.description)}</div></td>
-        <td>${h("{count} Knoten", { count: (item.graph.nodes || []).length })}</td>
-        <td>${can("operator") ? `<button class="btn primary" type="button" data-launch="${esc(item.id)}">${h("Starten")}</button>` : ""}</td>
+        <td>${h("count_nodes", { count: (item.graph.nodes || []).length })}</td>
+        <td>${can("operator") ? `<button class="btn primary" type="button" data-launch="${esc(item.id)}">${h("launch")}</button>` : ""}</td>
       </tr>`);
-    document.querySelector("#workflow-table").innerHTML = table([t("Name"), t("Knoten"), ""], filtered);
+    document.querySelector("#workflow-table").innerHTML = table([t("name"), t("nodes"), ""], filtered);
     document.querySelectorAll("[data-launch]").forEach((button) => {
       button.addEventListener("click", async () => {
         button.disabled = true;
@@ -1855,14 +1262,14 @@ async function pageWorkflows() {
 async function pageWorkflowNew() {
   if (!needTeam()) return;
   if (!can("operator")) {
-    deny("Workflow", "operator");
+    deny("workflow", "operator");
     return;
   }
-  shell(t("Neuer Workflow"), `
+  shell(t("new_workflow"), `
     <form class="card form" id="workflow-new">
-      <label class="field"><span>${h("Name")}</span><input name="name" required></label>
-      <label class="field"><span>${h("Beschreibung")}</span><input name="description"></label>
-      <button class="btn pill primary" type="submit">${h("Anlegen und öffnen")}</button>
+      <label class="field"><span>${h("name")}</span><input name="name" required></label>
+      <label class="field"><span>${h("description")}</span><input name="description"></label>
+      <button class="btn pill primary" type="submit">${h("create_and_open")}</button>
     </form>`);
   document.querySelector("#workflow-new").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1910,26 +1317,26 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
   let drag = null;
   let flushNode = () => true;
   const back = readonly && workflow.workflow_id
-    ? `<a class="btn" href="#/workflows/${esc(workflow.workflow_id)}">${h("Zurück zum Workflow")}</a>`
+    ? `<a class="btn" href="#/workflows/${esc(workflow.workflow_id)}">${h("back_to_the_workflow")}</a>`
     : "";
-  shell(readonly ? workflow.name : t("Workflow"), `
+  shell(readonly ? workflow.name : t("workflow"), `
     <div class="editor-stack">
     <div class="editor-body">
       <div>
         ${readonly ? "" : `
           <div class="row" style="margin-bottom:10px">
             <input id="wf-name" value="${esc(workflow.name)}" ${can("operator") ? "" : "disabled"}>
-            <input id="wf-description" value="${esc(workflow.description)}" placeholder="${h("Beschreibung")}" ${can("operator") ? "" : "disabled"}>
+            <input id="wf-description" value="${esc(workflow.description)}" placeholder="${h("description")}" ${can("operator") ? "" : "disabled"}>
           </div>`}
-        <p class="small muted" id="wf-hint">${readonly ? h("Farben zeigen den Lauf. Ein Klick zeigt die Ausgabe.") : h("Knoten ziehen. Weitere Knoten rechts hinzufügen. Verbinden über die Auswahl am Knoten oder über Erfolg und Fehler auf der Karte.")}</p>
+        <p class="small muted" id="wf-hint">${readonly ? h("colors_show_the_run_a_click_shows_the") : h("drag_nodes_add_more_nodes_on_the_right")}</p>
         <div class="canvas" id="canvas"><div id="board" style="position:relative;min-width:100%;min-height:560px"><svg class="edges" id="edges"></svg><div id="nodes"></div></div></div>
       </div>
       <aside class="card inspector" id="inspector"></aside>
     </div>
     ${readonly ? `<section class="card run-log" id="run-log" aria-live="polite"></section>` : ""}
     </div>`, readonly ? back : `
-      ${can("operator") ? `<button class="btn" id="wf-save" type="button">${h("Speichern")}</button><button class="btn primary" id="wf-launch" type="button">${h("Starten")}</button>` : ""}
-      ${can("operator") ? `<button class="btn danger" id="wf-delete" type="button">${h("Löschen")}</button>` : ""}`);
+      ${can("operator") ? `<button class="btn" id="wf-save" type="button">${h("save")}</button><button class="btn primary" id="wf-launch" type="button">${h("launch")}</button>` : ""}
+      ${can("operator") ? `<button class="btn danger" id="wf-delete" type="button">${h("delete")}</button>` : ""}`);
 
   const board = document.querySelector("#board");
   const svg = document.querySelector("#edges");
@@ -1955,12 +1362,12 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
   }
 
   function nodeCaption(node) {
-    const join = node.convergence === "all" ? t("alle Vorgänger") : t("ein Vorgänger");
+    const join = node.convergence === "all" ? t("all_predecessors_2") : t("one_predecessor");
     const inventoryId = node.overrides && Object.prototype.hasOwnProperty.call(node.overrides, "inventory_id")
       ? node.overrides.inventory_id
       : undefined;
     if (inventoryId === undefined) return join;
-    if (!inventoryId) return `${join} · ${t("Ohne Inventar")}`;
+    if (!inventoryId) return `${join} · ${t("no_inventory")}`;
     const inventory = lists.inventories.find((item) => item.id === inventoryId);
     return inventory ? `${join} · ${inventory.name}` : join;
   }
@@ -1982,27 +1389,27 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
     let toolFields = "";
     if (template.tool === "ansible") {
       toolFields = `
-        <label class="field"><span>${h("Inventar")}</span><select class="fit" id="node-inventory">${selectOptions(lists.inventories, inventoryId, true, (row) => row.name)}</select></label>
-        <label class="field"><span>${h("Art")}</span>
+        <label class="field"><span>${h("inventory")}</span><select class="fit" id="node-inventory">${selectOptions(lists.inventories, inventoryId, true, (row) => row.name)}</select></label>
+        <label class="field"><span>${h("type")}</span>
           <select class="fit" id="node-job-type">
-            <option value="run"${jobType === "check" ? "" : " selected"}>${h("Lauf")}</option>
-            <option value="check"${jobType === "check" ? " selected" : ""}>${h("Check (Dry-Run)")}</option>
+            <option value="run"${jobType === "check" ? "" : " selected"}>${h("run_2")}</option>
+            <option value="check"${jobType === "check" ? " selected" : ""}>${h("check_dry_run")}</option>
           </select>
         </label>
-        <label class="field"><span>${h("Ausführlichkeit")}</span>
+        <label class="field"><span>${h("verbosity")}</span>
           <select class="fit" id="node-verbosity">
             ${[0, 1, 2, 3, 4].map((level) => `<option value="${level}"${verbosity === level ? " selected" : ""}>${h(verbosityLabel(level))}</option>`).join("")}
           </select>
         </label>
-        <label class="field"><span>${h("Forks")}</span><input class="tiny" id="node-forks" inputmode="numeric" value="${esc(spec.forks ?? "")}"></label>
-        <label class="field check"><span>${h("Diff")}</span><input id="node-diff" type="checkbox"${spec.diff ? " checked" : ""}></label>
-        <label class="field"><span>${h("Tags")}</span><input id="node-tags" value="${esc(spec.tags || "")}"></label>
-        <label class="field"><span>${h("Tags überspringen")}</span><input id="node-skip-tags" value="${esc(spec.skip_tags || "")}"></label>
-        <label class="field"><span>${h("Limit")}</span><input id="node-limit" value="${esc(spec.limit || "")}"></label>`;
+        <label class="field"><span>${h("forks")}</span><input class="tiny" id="node-forks" inputmode="numeric" value="${esc(spec.forks ?? "")}"></label>
+        <label class="field check"><span>${h("diff")}</span><input id="node-diff" type="checkbox"${spec.diff ? " checked" : ""}></label>
+        <label class="field"><span>${h("tags")}</span><input id="node-tags" value="${esc(spec.tags || "")}"></label>
+        <label class="field"><span>${h("skip_tags")}</span><input id="node-skip-tags" value="${esc(spec.skip_tags || "")}"></label>
+        <label class="field"><span>${h("limit")}</span><input id="node-limit" value="${esc(spec.limit || "")}"></label>`;
     } else if (template.tool === "opentofu") {
       const action = spec.action === "apply" ? "apply" : "plan";
       toolFields = `
-        <label class="field"><span>${h("Aktion")}</span>
+        <label class="field"><span>${h("action")}</span>
           <select class="fit" id="node-action">
             <option value="plan"${action === "apply" ? "" : " selected"}>plan</option>
             <option value="apply"${action === "apply" ? " selected" : ""}>apply</option>
@@ -2011,11 +1418,11 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
     }
     return `
       <details class="node-params" open>
-        <summary>${h("Parameter")}</summary>
-        <p class="small muted">${h("Gilt nur für diesen Knoten. Die Vorlage bleibt unverändert. Ein anderer Zugang ersetzt nur dieselbe Art.")}</p>
+        <summary>${h("parameters")}</summary>
+        <p class="small muted">${h("applies_only_to_this_node_the_template_stays")}</p>
         ${toolFields}
-        <label class="field"><span>${h("Zugang")}</span><select class="fit" id="node-credential">${selectOptions(lists.credentials, credentialId, true, (row) => `${row.name} (${credentialKindLabel(row.kind)})`)}</select></label>
-        <label class="field"><span>${h("Extra-Variablen (JSON)")}</span><textarea id="node-extra">${esc(JSON.stringify(extra, null, 2))}</textarea></label>
+        <label class="field"><span>${h("nav.access")}</span><select class="fit" id="node-credential">${selectOptions(lists.credentials, credentialId, true, (row) => `${row.name} (${credentialKindLabel(row.kind)})`)}</select></label>
+        <label class="field"><span>${h("extra_variables_json")}</span><textarea id="node-extra">${esc(JSON.stringify(extra, null, 2))}</textarea></label>
       </details>`;
   }
 
@@ -2044,7 +1451,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
       const selectedClass = selected === node.id ? " selected" : "";
       const runClass = readonly ? " run-node" : "";
       const armed = link && link.from === node.id ? link.when : "";
-      const ports = editable ? `<div class="ports"><button type="button" class="port success${armed === "success" ? " armed" : ""}" data-port="success">${h("Erfolg")}</button><button type="button" class="port failure${armed === "failure" ? " armed" : ""}" data-port="failure">${h("Fehler")}</button></div>` : "";
+      const ports = editable ? `<div class="ports"><button type="button" class="port success${armed === "success" ? " armed" : ""}" data-port="success">${h("success")}</button><button type="button" class="port failure${armed === "failure" ? " armed" : ""}" data-port="failure">${h("error.generic")}</button></div>` : "";
       return `<div class="wf-node${selectedClass}${phaseClass}${runClass}" data-id="${esc(node.id)}" style="left:${Number(node.x) || 0}px;top:${Number(node.y) || 0}px"><strong>${esc(node.name)}</strong><span class="small muted">${esc(nodeCaption(node))}</span>${ports}</div>`;
     }).join("");
     nodes.querySelectorAll(".wf-node").forEach((element) => {
@@ -2070,7 +1477,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
           link = null;
           selected = fromId;
           selectedEdge = null;
-          document.querySelector("#wf-hint").textContent = t("Kante gesetzt.");
+          document.querySelector("#wf-hint").textContent = t("edge_added");
           renderNodes();
           renderInspector();
           return;
@@ -2101,8 +1508,8 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
           link = { from: node.id, when: port.dataset.port };
           nodes.querySelectorAll(".port").forEach((item) => item.classList.toggle("armed", item === port));
           document.querySelector("#wf-hint").textContent = port.dataset.port === "failure"
-            ? t("Fehlerkante: Zielknoten anklicken.")
-            : t("Erfolgskante: Zielknoten anklicken.");
+            ? t("failure_edge_click_the_target_node")
+            : t("success_edge_click_the_target_node");
         });
       });
     });
@@ -2125,7 +1532,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
 
   function targetOptions(fromId, when) {
     const current = outgoingTarget(fromId, when);
-    const options = [`<option value="">${h("Kein Ziel")}</option>`];
+    const options = [`<option value="">${h("no_target")}</option>`];
     graph.nodes.forEach((item) => {
       if (item.id === fromId) return;
       options.push(`<option value="${esc(item.id)}"${item.id === current ? " selected" : ""}>${esc(item.name)}</option>`);
@@ -2135,9 +1542,9 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
 
   function addNodeControls() {
     return `<div class="inspector-block">
-      <h2>${h("Knoten")}</h2>
-      <label class="field"><span>${h("Vorlage")}</span><select class="fit" id="add-template">${selectOptions(templates, "", false, (row) => `${row.name} · ${row.tool}`)}</select></label>
-      <button class="btn pill" id="add-node" type="button">${h("Knoten hinzufügen")}</button>
+      <h2>${h("nodes")}</h2>
+      <label class="field"><span>${h("template")}</span><select class="fit" id="add-template">${selectOptions(templates, "", false, (row) => `${row.name} · ${row.tool}`)}</select></label>
+      <button class="btn pill" id="add-node" type="button">${h("add_node")}</button>
     </div>`;
   }
 
@@ -2148,7 +1555,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
       const template = templates.find((item) => item.id === templateId);
       if (!template) {
         const hint = document.querySelector("#wf-hint");
-        if (hint) hint.textContent = t("Lege zuerst eine Vorlage oder einen Workflow an.");
+        if (hint) hint.textContent = t("create_a_template_or_a_workflow_first");
         return;
       }
       const index = graph.nodes.length;
@@ -2212,11 +1619,11 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
       } else {
         const forks = Number(forksRaw);
         if (!Number.isInteger(forks)) {
-          note(t("Forks ist eine ganze Zahl."));
+          note(t("forks_is_a_whole_number"));
           return false;
         }
         if (forks < 1 || forks > 50) {
-          note(t("Forks ist eine Zahl von 1 bis 50."));
+          note(t("forks_is_a_number_from_1_to_50"));
           return false;
         }
         if (forks !== templateForks) spec.forks = forks;
@@ -2239,9 +1646,9 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
     if (credentialId !== (template.credential_id || "")) over.credential_id = credentialId;
     let extra;
     try {
-      extra = jsonObject(extraField.value, "Extra-Variablen");
+      extra = jsonObject(extraField.value, "extra_variables");
     } catch (error) {
-      note(t(error.message));
+      note(t(error.message, error.vars));
       return false;
     }
     if (!sameJson(extra, template.extra_vars || {})) over.extra_vars = extra;
@@ -2249,7 +1656,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
     else delete node.overrides;
     paintCaption(node);
     const hint = document.querySelector("#wf-hint");
-    if (hint && (hint.textContent === t("Forks ist eine ganze Zahl.") || hint.textContent === t("Forks ist eine Zahl von 1 bis 50.") || hint.textContent === t("Extra-Variablen ist kein gültiges JSON.") || hint.textContent === t("Extra-Variablen muss ein JSON-Objekt sein."))) {
+    if (hint && (hint.textContent === t("forks_is_a_whole_number") || hint.textContent === t("forks_is_a_number_from_1_to_50") || hint.textContent === t("extra_variables_are_not_valid_json") || hint.textContent === t("extra_variables_must_be_a_json_object"))) {
       hint.textContent = "";
     }
     return true;
@@ -2260,11 +1667,11 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
     flushNode = () => true;
     const host = document.querySelector("#inspector");
     if (readonly) {
-      host.innerHTML = `<h2>${h("Lauf")}</h2><p class="small"><span id="run-state" class="pill ${esc(workflow.status || "pending")}">${esc(statusLabel(workflow.status || "pending"))}</span></p>${back}<p class="small muted">${h("Grün ist erfolgreich, Rot ist fehlgeschlagen, Blau läuft.")}</p>`;
+      host.innerHTML = `<h2>${h("run_2")}</h2><p class="small"><span id="run-state" class="pill ${esc(workflow.status || "pending")}">${esc(statusLabel(workflow.status || "pending"))}</span></p>${back}<p class="small muted">${h("green_is_successful_red_is_failed_blue_is")}</p>`;
       return;
     }
     if (!editable) {
-      host.innerHTML = `<h2>${h("Ansicht")}</h2><p class="small muted">${h("Änderungen sind Operatoren vorbehalten.")}</p>`;
+      host.innerHTML = `<h2>${h("view")}</h2><p class="small muted">${h("changes_are_reserved_for_operators")}</p>`;
       return;
     }
     const node = graph.nodes.find((item) => item.id === selected);
@@ -2272,15 +1679,15 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
       const edge = graph.edges[selectedEdge];
       host.innerHTML = `${addNodeControls()}
         <div class="inspector-block">
-          <h2>${h("Kante")}</h2>
-          <label class="field"><span>${h("Wann")}</span>
+          <h2>${h("edge")}</h2>
+          <label class="field"><span>${h("when")}</span>
             <select class="fit" id="edge-when">
-              <option value="success"${edge.when === "success" ? " selected" : ""}>${h("Erfolg")}</option>
-              <option value="failure"${edge.when === "failure" ? " selected" : ""}>${h("Fehler")}</option>
-              <option value="always"${edge.when === "always" ? " selected" : ""}>${h("Immer")}</option>
+              <option value="success"${edge.when === "success" ? " selected" : ""}>${h("success")}</option>
+              <option value="failure"${edge.when === "failure" ? " selected" : ""}>${h("error.generic")}</option>
+              <option value="always"${edge.when === "always" ? " selected" : ""}>${h("always")}</option>
             </select>
           </label>
-          <button class="btn danger" id="edge-delete" type="button">${h("Kante löschen")}</button>
+          <button class="btn danger" id="edge-delete" type="button">${h("delete_edge")}</button>
         </div>`;
       bindAddNode(host);
       host.querySelector("#edge-when").addEventListener("change", (event) => {
@@ -2297,29 +1704,29 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
     }
     if (!node) {
       host.innerHTML = `${addNodeControls()}
-        <p class="small muted">${h("Ein leerer Graph lässt sich speichern, aber nicht starten.")}</p>
-        <p class="small muted">${h("Wähle einen Knoten, um ihn zu verbinden.")}</p>`;
+        <p class="small muted">${h("an_empty_graph_can_be_saved_but_not")}</p>
+        <p class="small muted">${h("select_a_node_to_connect_it")}</p>`;
       bindAddNode(host);
       return;
     }
     host.innerHTML = `${addNodeControls()}
       <div class="inspector-block">
-        <h2>${h("Dieser Knoten")}</h2>
-        <label class="field"><span>${h("Name")}</span><input id="node-name" value="${esc(node.name)}"></label>
-        <label class="field"><span>${h("Vorlage")}</span><select class="fit" id="node-template">${selectOptions(templates, node.template_id, false, (row) => row.name)}</select></label>
-        <label class="field"><span>${h("Zusammenführung")}</span>
+        <h2>${h("this_node")}</h2>
+        <label class="field"><span>${h("name")}</span><input id="node-name" value="${esc(node.name)}"></label>
+        <label class="field"><span>${h("template")}</span><select class="fit" id="node-template">${selectOptions(templates, node.template_id, false, (row) => row.name)}</select></label>
+        <label class="field"><span>${h("convergence")}</span>
           <select class="fit" id="node-join">
-            <option value="any"${node.convergence !== "all" ? " selected" : ""}>${h("Irgendein Vorgänger")}</option>
-            <option value="all"${node.convergence === "all" ? " selected" : ""}>${h("Alle Vorgänger")}</option>
+            <option value="any"${node.convergence !== "all" ? " selected" : ""}>${h("any_predecessor")}</option>
+            <option value="all"${node.convergence === "all" ? " selected" : ""}>${h("all_predecessors")}</option>
           </select>
         </label>
         ${nodeParams(node, templates.find((item) => item.id === node.template_id))}
-        <h2>${h("Verbinden")}</h2>
-        <label class="field"><span>${h("Erfolg führt zu")}</span><select class="fit" id="link-success">${targetOptions(node.id, "success")}</select></label>
-        <label class="field"><span>${h("Fehler führt zu")}</span><select class="fit" id="link-failure">${targetOptions(node.id, "failure")}</select></label>
-        <label class="field"><span>${h("Immer führt zu")}</span><select class="fit" id="link-always">${targetOptions(node.id, "always")}</select></label>
-        <p class="small muted">${h("Die Kante startet bei diesem Knoten.")}</p>
-        <button class="btn danger" id="node-delete" type="button">${h("Knoten löschen")}</button>
+        <h2>${h("connect")}</h2>
+        <label class="field"><span>${h("on_success_go_to")}</span><select class="fit" id="link-success">${targetOptions(node.id, "success")}</select></label>
+        <label class="field"><span>${h("on_failure_go_to")}</span><select class="fit" id="link-failure">${targetOptions(node.id, "failure")}</select></label>
+        <label class="field"><span>${h("always_go_to")}</span><select class="fit" id="link-always">${targetOptions(node.id, "always")}</select></label>
+        <p class="small muted">${h("the_edge_starts_at_this_node")}</p>
+        <button class="btn danger" id="node-delete" type="button">${h("delete_node")}</button>
       </div>`;
     bindAddNode(host);
     host.querySelector("#node-name").addEventListener("input", (event) => {
@@ -2405,7 +1812,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
           description: document.querySelector("#wf-description").value,
           graph,
         });
-        document.querySelector("#wf-hint").textContent = t("Gespeichert.");
+        document.querySelector("#wf-hint").textContent = t("saved");
       } catch (error) {
         handle(error);
       }
@@ -2431,7 +1838,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
   const remove = document.querySelector("#wf-delete");
   if (remove) {
     remove.addEventListener("click", async () => {
-      if (!confirm(t("Workflow löschen?"))) return;
+      if (!confirm(t("delete_this_workflow"))) return;
       try {
         await api("DELETE", `/api/workflows/${encodeURIComponent(workflow.id)}`);
         go("#/workflows");
@@ -2504,14 +1911,14 @@ async function pageRun(id) {
       </button>`;
     }).join("");
     host.innerHTML = `
-      <h2>${h("Status")}</h2>
+      <h2>${h("status")}</h2>
       <div class="run-lines">
         <div class="run-line head">
-          <span>${h("Start")}</span>
-          <span>${h("Name")}</span>
-          <span>${h("Status")}</span>
-          <span>${h("Ende")}</span>
-          <span>${h("Dauer")}</span>
+          <span>${h("start")}</span>
+          <span>${h("name")}</span>
+          <span>${h("status")}</span>
+          <span>${h("end")}</span>
+          <span>${h("duration")}</span>
         </div>
         ${rows}
       </div>`;
@@ -2529,7 +1936,7 @@ async function pageRun(id) {
     const end = phase && phase.finished_at ? phase.finished_at : "";
     const tool = phase && phase.tool ? `<span class="tool">${esc(phase.tool)}</span>` : "";
     const link = phase && phase.job_id
-      ? `<a href="#/jobs/${esc(phase.job_id)}">${h("Auftrag öffnen")}</a>`
+      ? `<a href="#/jobs/${esc(phase.job_id)}">${h("open_the_job")}</a>`
       : "";
     return `${pill(status)} ${tool} <span class="small muted">${esc(clock(start))} – ${esc(clock(end))} · ${esc(spanText(start, end, status))}</span> ${link}`;
   }
@@ -2563,7 +1970,7 @@ async function pageRun(id) {
           <div class="overlay-card" role="dialog" aria-modal="true" aria-labelledby="overlay-title">
             <div class="spread">
               <h2 id="overlay-title"></h2>
-              <button class="btn" type="button" id="overlay-close">${h("Schließen")}</button>
+              <button class="btn" type="button" id="overlay-close">${h("close")}</button>
             </div>
             <p class="small row" id="overlay-meta"></p>
             <div class="log" id="log"></div>
@@ -2587,15 +1994,15 @@ async function pageRun(id) {
     };
     if (!jobId) {
       note(phase && phase.phase === "skipped"
-        ? t("Dieser Knoten wurde übersprungen.")
-        : t("Dieser Knoten hat noch keine Ausgabe."));
+        ? t("this_node_was_skipped")
+        : t("this_node_has_no_output_yet"));
       return;
     }
     try {
       const job = await api("GET", `/api/jobs/${encodeURIComponent(jobId)}`);
       if (token !== outputToken || live !== generation) return;
       (job.events || []).forEach(appendLog);
-      if (!log.childNodes.length) note(t("Dieser Knoten hat noch keine Ausgabe."));
+      if (!log.childNodes.length) note(t("this_node_has_no_output_yet"));
       const running = job.status === "pending" || job.status === "running";
       if (!running) return;
       const last = (job.events || []).reduce((max, event) => Math.max(max, event.id), 0);
@@ -2680,24 +2087,24 @@ async function pageHooks() {
   const incoming = deliveryRows.map((item) =>
     `<tr><td>${esc(item.hook_name)}</td><td>${pill(item.status)}</td><td>${esc(item.summary)}</td><td class="small muted">${esc(item.created_at)}</td></tr>`
   );
-  shell(t("Webhooks"), `
+  shell(t("webhooks"), `
     <section class="card" style="margin-bottom:14px">
-      <input class="search" id="hook-search" placeholder="${h("Webhooks suchen")}" autocomplete="off">
+      <input class="search" id="hook-search" placeholder="${h("search_webhooks")}" autocomplete="off">
       <div id="hook-table"></div>
     </section>
-    <section class="card"><h2>${h("Eingänge")}</h2>${table([t("Hook"), t("Status"), t("Zusammenfassung"), t("Zeit")], incoming)}</section>`,
-    can("operator") ? addLink("#/hooks/new", "+ Webhook") : "");
+    <section class="card"><h2>${h("deliveries")}</h2>${table([t("hook"), t("status"), t("summary"), t("time")], incoming)}</section>`,
+    can("operator") ? addLink("#/hooks/new", "webhook_2") : "");
   const drawHooks = () => {
     const needle = document.querySelector("#hook-search").value.trim().toLowerCase();
     const rows = hooks.filter((hook) => !needle || `${hook.name} ${hook.match_alertname} ${hook.match_status}`.toLowerCase().includes(needle)).map((hook) => {
       const url = hook.token ? `${origin}/hooks/${hook.id}/${hook.token}` : "";
       return `<tr>
         <td>${esc(hook.name)}<div class="small muted">${esc(hook.match_alertname)} · ${esc(hook.match_status)}</div></td>
-        <td class="mono">${url ? esc(url) : h("Token nur für Operatoren")}</td>
-        <td>${can("operator") ? `<button class="btn" type="button" data-test="${esc(hook.id)}">${h("Test")}</button> <button class="btn danger" type="button" data-delete="${esc(hook.id)}">${h("Löschen")}</button>` : ""}</td>
+        <td class="mono">${url ? esc(url) : h("token_is_visible_to_operators")}</td>
+        <td>${can("operator") ? `<button class="btn" type="button" data-test="${esc(hook.id)}">${h("test")}</button> <button class="btn danger" type="button" data-delete="${esc(hook.id)}">${h("delete")}</button>` : ""}</td>
       </tr>`;
     });
-    document.querySelector("#hook-table").innerHTML = table([t("Hook"), t("Adresse"), ""], rows);
+    document.querySelector("#hook-table").innerHTML = table([t("hook"), t("address"), ""], rows);
     document.querySelectorAll("[data-test]").forEach((button) => {
       button.addEventListener("click", async () => {
         try {
@@ -2712,7 +2119,7 @@ async function pageHooks() {
     });
     document.querySelectorAll("[data-delete]").forEach((button) => {
       button.addEventListener("click", async () => {
-        if (!confirm(t("Webhook löschen?"))) return;
+        if (!confirm(t("delete_this_webhook"))) return;
         try {
           await api("DELETE", `/api/hooks/${encodeURIComponent(button.dataset.delete)}`);
           route();
@@ -2729,30 +2136,30 @@ async function pageHooks() {
 async function pageHookNew() {
   if (!needTeam()) return;
   if (!can("operator")) {
-    deny("Webhook", "operator");
+    deny("webhook", "operator");
     return;
   }
   const [templates, workflows] = await Promise.all([
     api("GET", "/api/templates"),
     api("GET", "/api/workflows"),
   ]);
-  shell(t("Webhook anlegen"), `
+  shell(t("new_webhook"), `
     <form class="card form" id="hook-form">
-      <label class="field"><span>${h("Name")}</span><input name="name" required></label>
+      <label class="field"><span>${h("name")}</span><input name="name" required></label>
       <div class="field-row">
-        <label class="field"><span>${h("Alertname")}</span><input class="fit" name="match_alertname" required placeholder="DiskSpaceLow"></label>
-        <label class="field"><span>${h("Status")}</span>
+        <label class="field"><span>${h("alert_name")}</span><input class="fit" name="match_alertname" required placeholder="DiskSpaceLow"></label>
+        <label class="field"><span>${h("status")}</span>
           <select class="fit" name="match_status"><option value="firing">firing</option><option value="resolved">resolved</option><option value="any">any</option></select>
         </label>
       </div>
-      <label class="field"><span>${h("Ziel")}</span>
+      <label class="field"><span>${h("target")}</span>
         <select name="target">
-          <optgroup label="${h("Workflow")}">${workflows.map((item) => `<option value="workflow:${esc(item.id)}">${esc(item.name)}</option>`).join("")}</optgroup>
-          <optgroup label="${h("Vorlage")}">${templates.map((item) => `<option value="template:${esc(item.id)}">${esc(item.name)}</option>`).join("")}</optgroup>
+          <optgroup label="${h("workflow")}">${workflows.map((item) => `<option value="workflow:${esc(item.id)}">${esc(item.name)}</option>`).join("")}</optgroup>
+          <optgroup label="${h("template")}">${templates.map((item) => `<option value="template:${esc(item.id)}">${esc(item.name)}</option>`).join("")}</optgroup>
         </select>
       </label>
-      <label class="field"><span>${h("Extra-Variablen (JSON)")}</span><textarea name="extra_vars">{}</textarea></label>
-      <button class="btn pill primary" type="submit">${h("Anlegen")}</button>
+      <label class="field"><span>${h("extra_variables_json")}</span><textarea name="extra_vars">{}</textarea></label>
+      <button class="btn pill primary" type="submit">${h("create")}</button>
     </form>`);
   document.querySelector("#hook-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -2760,14 +2167,14 @@ async function pageHookNew() {
     try {
       const rawTarget = form.target.value;
       const splitAt = rawTarget.indexOf(":");
-      if (splitAt < 1) throw new Error("Lege zuerst eine Vorlage oder einen Workflow an.");
+      if (splitAt < 1) throw new Error("create_a_template_or_a_workflow_first");
       const kind = rawTarget.slice(0, splitAt);
       const targetId = rawTarget.slice(splitAt + 1);
       await api("POST", "/api/hooks", {
         name: form.name.value,
         match_alertname: form.match_alertname.value,
         match_status: form.match_status.value,
-        extra_vars: jsonObject(form.extra_vars.value, "Extra-Variablen"),
+        extra_vars: jsonObject(form.extra_vars.value, "extra_variables"),
         template_id: kind === "template" ? targetId : null,
         workflow_id: kind === "workflow" ? targetId : null,
       });
@@ -2788,28 +2195,28 @@ async function pageRuntime() {
   const collectionRows = (cache.collections || []).map((item) => `<tr><td>${esc(item.name)}</td><td>${esc(item.version)}</td></tr>`);
   const roleRows = (cache.roles || []).map((item) => `<tr><td>${esc(item.name)}</td><td>${esc(item.version)}</td></tr>`);
   const pluginRows = plugins.map((item) => `<tr><td class="tool">${esc(item.id)}</td><td>${esc(t(item.summary))}</td></tr>`);
-  shell(t("Laufzeit"), `
+  shell(t("runtime"), `
     <section class="card" style="margin-bottom:14px">
-      <h2>${h("Execution Environments")}</h2>
-      <input class="search" id="environment-search" placeholder="${h("Umgebungen suchen")}" autocomplete="off">
+      <h2>${h("execution_environments")}</h2>
+      <input class="search" id="environment-search" placeholder="${h("search_environments")}" autocomplete="off">
       <div id="environment-table"></div>
     </section>
     <div class="grid-3" style="margin-bottom:14px">
-      <article class="card stat"><span class="small muted">${h("Collections")}</span><strong>${esc(bytes(cache.collections_bytes))}</strong></article>
-      <article class="card stat"><span class="small muted">${h("Rollen")}</span><strong>${esc(bytes(cache.roles_bytes))}</strong></article>
-      <article class="card stat"><span class="small muted">${h("OpenTofu")}</span><strong>${esc(bytes(cache.tofu_bytes))}</strong></article>
+      <article class="card stat"><span class="small muted">${h("collections")}</span><strong>${esc(bytes(cache.collections_bytes))}</strong></article>
+      <article class="card stat"><span class="small muted">${h("roles")}</span><strong>${esc(bytes(cache.roles_bytes))}</strong></article>
+      <article class="card stat"><span class="small muted">${h("opentofu")}</span><strong>${esc(bytes(cache.tofu_bytes))}</strong></article>
     </div>
     <p class="small muted" style="margin-top:0">${esc(t(cache.note || ""))}</p>
-    <section class="card" style="margin-bottom:14px"><h2>${h("Werkzeuge")}</h2>${table([t("Id"), t("Beschreibung")], pluginRows)}</section>
-    <section class="card" style="margin-bottom:14px"><h2>${h("Collections im Cache")}</h2>${table([t("Name"), t("Version")], collectionRows)}</section>
-    <section class="card" style="margin-bottom:14px"><h2>${h("Rollen im Cache")}</h2>${table([t("Name"), t("Version")], roleRows)}</section>`,
-    can("owner") ? addLink("#/environments/new", "+ Umgebung") : "");
+    <section class="card" style="margin-bottom:14px"><h2>${h("tools")}</h2>${table([t("id"), t("description")], pluginRows)}</section>
+    <section class="card" style="margin-bottom:14px"><h2>${h("cached_collections")}</h2>${table([t("name"), t("version")], collectionRows)}</section>
+    <section class="card" style="margin-bottom:14px"><h2>${h("cached_roles")}</h2>${table([t("name"), t("version")], roleRows)}</section>`,
+    can("owner") ? addLink("#/environments/new", "environment") : "");
   const drawEnvironments = () => {
     const needle = document.querySelector("#environment-search").value.trim().toLowerCase();
     const rows = environments.filter((item) => !needle || `${item.name} ${item.image} ${item.pull_policy} ${item.scope || ""} ${scopeLabel(item)}`.toLowerCase().includes(needle)).map((item) =>
-      `<tr><td><a href="#/environments/${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(scopeLabel(item))}</td><td class="mono">${esc(item.image)}</td><td>${esc(item.pull_policy)}</td><td>${canManageEnvironment(item) ? `<button class="btn danger" type="button" data-env="${esc(item.id)}">${h("Löschen")}</button>` : ""}</td></tr>`
+      `<tr><td><a href="#/environments/${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(scopeLabel(item))}</td><td class="mono">${esc(item.image)}</td><td>${esc(item.pull_policy)}</td><td>${canManageEnvironment(item) ? `<button class="btn danger" type="button" data-env="${esc(item.id)}">${h("delete")}</button>` : ""}</td></tr>`
     );
-    document.querySelector("#environment-table").innerHTML = table([t("Name"), t("Gilt für"), t("Image"), t("Pull"), ""], rows);
+    document.querySelector("#environment-table").innerHTML = table([t("name"), t("applies_to"), t("image"), t("pull"), ""], rows);
     document.querySelectorAll("[data-env]").forEach((button) => {
       button.addEventListener("click", async () => {
         try {
@@ -2832,17 +2239,17 @@ function canManageEnvironment(item) {
 }
 
 function scopeLabel(item) {
-  if (!item || item.scope === "global") return t("Global");
-  if (item.scope === "organization") return t("Organisation · {name}", { name: item.organization_name || "" });
-  return t("Team · {name}", { name: item.team_name || "" });
+  if (!item || item.scope === "global") return t("global");
+  if (item.scope === "organization") return t("organization_name", { name: item.organization_name || "" });
+  return t("team_name", { name: item.team_name || "" });
 }
 
 function environmentScopeOptions(selected) {
   const choices = [
-    ["team", "Dieses Team"],
-    ["organization", "Diese Organisation"],
+    ["team", "this_team"],
+    ["organization", "this_organization"],
   ];
-  if (me.is_admin) choices.push(["global", "Global"]);
+  if (me.is_admin) choices.push(["global", "global"]);
   return choices.map(([value, label]) =>
     `<option value="${value}"${value === selected ? " selected" : ""}>${h(label)}</option>`
   ).join("");
@@ -2853,15 +2260,15 @@ function environmentForm(item) {
   const scope = item && item.scope ? item.scope : "team";
   const option = (value) => `<option value="${value}"${policy === value ? " selected" : ""}>${value}</option>`;
   return `<form class="card form" id="env-form">
-    <label class="field"><span>${h("Name")}</span><input name="name" required value="${item ? esc(item.name) : ""}"></label>
-    <label class="field"><span>${h("Image")}</span><input name="image" required value="${item ? esc(item.image) : ""}" placeholder="quay.io/ansible/awx-ee:latest"></label>
+    <label class="field"><span>${h("name")}</span><input name="name" required value="${item ? esc(item.name) : ""}"></label>
+    <label class="field"><span>${h("image")}</span><input name="image" required value="${item ? esc(item.image) : ""}" placeholder="quay.io/ansible/awx-ee:latest"></label>
     <div class="field-row">
-      <label class="field"><span>${h("Pull")}</span><select class="fit" name="pull_policy">${option("if_not_present")}${option("always")}${option("never")}</select></label>
-      <label class="field"><span>${h("Gilt für")}</span><select class="fit" name="scope">${environmentScopeOptions(scope)}</select></label>
+      <label class="field"><span>${h("pull")}</span><select class="fit" name="pull_policy">${option("if_not_present")}${option("always")}${option("never")}</select></label>
+      <label class="field"><span>${h("applies_to")}</span><select class="fit" name="scope">${environmentScopeOptions(scope)}</select></label>
     </div>
-    <p class="small muted">${h("Global gilt für jedes Team. Die Organisation gilt für alle Teams darin. Ein Team bleibt privat.")}</p>
-    <label class="field"><span>${h("Beschreibung")}</span><input name="description" value="${item ? esc(item.description) : ""}"></label>
-    <button class="btn pill primary" type="submit">${item ? h("Speichern") : h("Anlegen")}</button>
+    <p class="small muted">${h("global_applies_to_every_team_the_organization_applies")}</p>
+    <label class="field"><span>${h("description")}</span><input name="description" value="${item ? esc(item.description) : ""}"></label>
+    <button class="btn pill primary" type="submit">${item ? h("save") : h("create")}</button>
   </form>`;
 }
 
@@ -2889,10 +2296,10 @@ function bindEnvironmentForm(id) {
 async function pageEnvironmentNew() {
   if (!needTeam()) return;
   if (!can("owner")) {
-    deny("Execution Environment", "owner");
+    deny("execution_environment", "owner");
     return;
   }
-  shell(t("Umgebung anlegen"), environmentForm(null));
+  shell(t("new_environment"), environmentForm(null));
   bindEnvironmentForm(null);
 }
 
@@ -2901,15 +2308,15 @@ async function pageEnvironment(id) {
   const item = await api("GET", `/api/environments/${encodeURIComponent(id)}`);
   if (!canManageEnvironment(item)) {
     shell(item.name, `<section class="card"><dl class="kv">
-      ${paramRow("Name", item.name)}
-      ${paramRow("Gilt für", scopeLabel(item))}
-      ${paramRow("Image", item.image)}
-      ${paramRow("Pull", item.pull_policy)}
-      ${paramRow("Beschreibung", item.description)}
+      ${paramRow("name", item.name)}
+      ${paramRow("applies_to", scopeLabel(item))}
+      ${paramRow("image", item.image)}
+      ${paramRow("pull", item.pull_policy)}
+      ${paramRow("description", item.description)}
     </dl></section>`);
     return;
   }
-  shell(item.name, environmentForm(item), `<button class="btn danger" id="delete-env" type="button">${h("Löschen")}</button>`);
+  shell(item.name, environmentForm(item), `<button class="btn danger" id="delete-env" type="button">${h("delete")}</button>`);
   bindEnvironmentForm(id);
   document.querySelector("#delete-env").addEventListener("click", async () => {
     try {
@@ -2923,8 +2330,8 @@ async function pageEnvironment(id) {
 
 function grantLabel(item) {
   return item.team_ids && item.team_ids.length
-    ? t("{count} Teams", { count: item.team_ids.length })
-    : t("Alle Teams der Organisation");
+    ? t("count_teams", { count: item.team_ids.length })
+    : t("all_teams_in_the_organization");
 }
 
 function orgOptions(organizations, selected) {
@@ -2935,7 +2342,7 @@ function orgOptions(organizations, selected) {
 
 function teamBoxes(teams, selected) {
   const chosen = new Set(selected || []);
-  if (!teams.length) return `<p class="small muted">${h("In dieser Organisation gibt es noch kein Team.")}</p>`;
+  if (!teams.length) return `<p class="small muted">${h("this_organization_has_no_team_yet")}</p>`;
   return teams.map((team) =>
     `<label class="row"><input type="checkbox" name="team_ids" value="${esc(team.id)}"${chosen.has(team.id) ? " checked" : ""}> ${esc(team.name)}</label>`
   ).join("");
@@ -2944,18 +2351,18 @@ function teamBoxes(teams, selected) {
 async function pageProjects() {
   if (!needTeam()) return;
   const projects = await api("GET", "/api/projects");
-  shell(t("Projekte"), `
+  shell(t("projects"), `
     <section class="card">
-      <input class="search" id="project-search" placeholder="${h("Projekte suchen")}" autocomplete="off">
+      <input class="search" id="project-search" placeholder="${h("search_projects")}" autocomplete="off">
       <div id="project-table"></div>
     </section>`,
-    can("operator") ? addLink("#/projects/new", "+ Projekt") : "");
+    can("operator") ? addLink("#/projects/new", "project_2") : "");
   const drawProjects = () => {
     const needle = document.querySelector("#project-search").value.trim().toLowerCase();
     const rows = projects.filter((item) => !needle || `${item.name} ${item.organization_name || ""} ${item.source_type} ${grantLabel(item)}`.toLowerCase().includes(needle)).map((item) =>
       `<tr><td><a href="#/projects/${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(item.organization_name || "")}</td><td>${esc(item.source_type)}</td><td class="small muted">${esc(grantLabel(item))}</td></tr>`
     );
-    document.querySelector("#project-table").innerHTML = table([t("Name"), t("Organisation"), t("Art"), t("Sichtbarkeit")], rows);
+    document.querySelector("#project-table").innerHTML = table([t("name"), t("organization"), t("type"), t("visibility")], rows);
   };
   document.querySelector("#project-search").addEventListener("input", drawProjects);
   drawProjects();
@@ -2964,21 +2371,21 @@ async function pageProjects() {
 async function pageProjectNew() {
   if (!needTeam()) return;
   if (!can("operator")) {
-    deny("Projekt", "operator");
+    deny("project", "operator");
     return;
   }
   const organizations = me.is_admin ? await api("GET", "/api/organizations") : [];
   const current = (me.teams || []).find((team) => team.id === teamId);
-  shell(t("Projekt anlegen"), `
+  shell(t("new_project"), `
     <form class="card form" id="project-form">
-      <label class="field"><span>${h("Name")}</span><input name="name" required></label>
+      <label class="field"><span>${h("name")}</span><input name="name" required></label>
       <div class="field-row">
-        <label class="field"><span>${h("Art")}</span><select class="fit" name="source_type"><option value="path">${h("Pfad")}</option><option value="git">Git</option></select></label>
-        <label class="field"><span>${h("Revision")}</span><input class="fit" name="revision" placeholder="${h("Branch, Tag oder Commit")}"></label>
+        <label class="field"><span>${h("type")}</span><select class="fit" name="source_type"><option value="path">${h("path")}</option><option value="git">Git</option></select></label>
+        <label class="field"><span>${h("revision")}</span><input class="fit" name="revision" placeholder="${h("branch_tag_or_commit")}"></label>
       </div>
-      <label class="field"><span>${h("Quelle")}</span><input name="source" required placeholder="https://… oder file://…"></label>
-      ${me.is_admin ? `<label class="field"><span>${h("Organisation")}</span><select name="organization_id">${orgOptions(organizations, current && current.organization_id)}</select></label>` : ""}
-      <button class="btn pill primary" type="submit">${h("Anlegen")}</button>
+      <label class="field"><span>${h("source_2")}</span><input name="source" required placeholder="${h("https_or_file")}"></label>
+      ${me.is_admin ? `<label class="field"><span>${h("organization")}</span><select name="organization_id">${orgOptions(organizations, current && current.organization_id)}</select></label>` : ""}
+      <button class="btn pill primary" type="submit">${h("create")}</button>
     </form>`);
   document.querySelector("#project-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -3005,20 +2412,20 @@ async function pageProject(id) {
   const org = await api("GET", `/api/organizations/${encodeURIComponent(project.organization_id)}`);
   shell(project.name, `
     <section class="card" style="margin-bottom:14px">
-      <p class="muted">${h("Quelle: {source}", { source: `${project.source_type} · ${project.source}` })}</p>
-      ${project.revision ? `<p class="small">${h("Revision {revision}", { revision: project.revision })}</p>` : ""}
-      ${can("operator") && project.source_type === "git" ? `<div class="row"><button class="btn" id="sync" type="button">${h("Synchronisieren")}</button></div><p class="small" id="sync-note"></p>` : ""}
+      <p class="muted">${h("source_source", { source: `${project.source_type} · ${project.source}` })}</p>
+      ${project.revision ? `<p class="small">${h("revision_revision", { revision: project.revision })}</p>` : ""}
+      ${can("operator") && project.source_type === "git" ? `<div class="row"><button class="btn" id="sync" type="button">${h("sync")}</button></div><p class="small" id="sync-note"></p>` : ""}
     </section>
     <section class="card">
-      <h2>${h("Zuweisung")}</h2>
-      <p class="small muted">${h("Ohne angehaktes Team dürfen alle Teams der Organisation das Projekt nutzen.")}</p>
+      <h2>${h("assignment")}</h2>
+      <p class="small muted">${h("with_no_team_checked_every_team_in_the")}</p>
       ${can("operator") ? `<form class="form" id="assign-form">
-        <label class="field"><span>${h("Organisation")}</span><select name="organization_id"${me.is_admin ? "" : " disabled"}>${orgOptions(organizations, project.organization_id)}</select></label>
+        <label class="field"><span>${h("organization")}</span><select name="organization_id"${me.is_admin ? "" : " disabled"}>${orgOptions(organizations, project.organization_id)}</select></label>
         <div class="stack" id="team-boxes">${teamBoxes(org.teams || [], project.team_ids)}</div>
-        <button class="btn pill primary" type="submit">${h("Zuweisung speichern")}</button>
-      </form>` : `<p>${h("Organisation {name}. Sichtbarkeit: {grant}.", { name: project.organization_name || "", grant: grantLabel(project) })}</p>`}
+        <button class="btn pill primary" type="submit">${h("save_assignment")}</button>
+      </form>` : `<p>${h("organization_name_visibility_grant", { name: project.organization_name || "", grant: grantLabel(project) })}</p>`}
     </section>`,
-    can("operator") ? `<button class="btn danger" id="delete-project" type="button">${h("Löschen")}</button>` : "");
+    can("operator") ? `<button class="btn danger" id="delete-project" type="button">${h("delete")}</button>` : "");
   const sync = document.querySelector("#sync");
   if (sync) {
     sync.addEventListener("click", async () => {
@@ -3026,11 +2433,11 @@ async function pageProject(id) {
       const note = document.querySelector("#sync-note");
       try {
         const result = await api("POST", `/api/projects/${encodeURIComponent(id)}/sync`, {});
-        note.textContent = t("Checkout: {path}", { path: result.path });
-        sync.textContent = t("Synchron");
+        note.textContent = t("checkout_path", { path: result.path });
+        sync.textContent = t("synced");
       } catch (error) {
         sync.disabled = false;
-        if (note) note.textContent = t(error.message || "Sync fehlgeschlagen.");
+        if (note) note.textContent = t(error.message || "sync_failed", error.vars);
         handle(error);
       }
     });
@@ -3039,7 +2446,7 @@ async function pageProject(id) {
   if (form) {
     form.organization_id.addEventListener("change", async () => {
       const box = document.querySelector("#team-boxes");
-      box.innerHTML = `<p class="small muted">${h("Teams werden geladen.")}</p>`;
+      box.innerHTML = `<p class="small muted">${h("loading_teams")}</p>`;
       try {
         const next = await api("GET", `/api/organizations/${encodeURIComponent(form.organization_id.value)}`);
         box.innerHTML = teamBoxes(next.teams || [], []);
@@ -3060,7 +2467,7 @@ async function pageProject(id) {
   const remove = document.querySelector("#delete-project");
   if (remove) {
     remove.addEventListener("click", async () => {
-      if (!confirm(t("Projekt löschen?"))) return;
+      if (!confirm(t("delete_this_project"))) return;
       try {
         await api("DELETE", `/api/projects/${encodeURIComponent(id)}`);
         go("#/projects");
@@ -3070,14 +2477,14 @@ async function pageProject(id) {
 }
 
 function sourceKindLabel(kind) {
-  return { ini: "INI", project: t("Projekt"), netbox: "NetBox", mixed: t("Mehrere") }[kind] || kind || "INI";
+  return { ini: "INI", project: t("project"), netbox: t("netbox"), mixed: t("several") }[kind] || kind || "INI";
 }
 
 function sourceSummary(item) {
   const data = item.source || {};
-  if (item.kind === "netbox") return data.api_endpoint || "NetBox";
-  if (item.kind === "project") return data.path || t("Projekt");
-  return t("Text");
+  if (item.kind === "netbox") return data.api_endpoint || t("netbox");
+  if (item.kind === "project") return data.path || t("project");
+  return t("text");
 }
 
 function mountSourceDraft(container, projects, kind, preset) {
@@ -3087,27 +2494,27 @@ function mountSourceDraft(container, projects, kind, preset) {
   card.dataset.kind = kind;
   card.style.marginTop = "10px";
   const projectOptions = projects.map((item) => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join("");
-  const title = kind === "ini" ? t("Manuell") : kind === "project" ? t("Projekt") : "NetBox";
+  const title = kind === "ini" ? t("manual") : kind === "project" ? t("project") : "netbox";
   let fields = "";
   if (kind === "ini") {
-    fields = `<label class="field"><span>${h("INI oder YAML")}</span><textarea name="body" required>${esc(data.body || "[all]\nlocalhost ansible_connection=local")}</textarea></label>`;
+    fields = `<label class="field"><span>${h("ini_or_yaml")}</span><textarea name="body" required>${esc(data.body || "[all]\nlocalhost ansible_connection=local")}</textarea></label>`;
   } else if (kind === "project") {
-    fields = `<label class="field"><span>${h("Projekt")}</span><select name="project_id"><option value="">—</option>${projectOptions}</select></label>
-      <label class="field"><span>${h("Inventardatei")}</span><select name="path"><option value="">—</option></select></label>
+    fields = `<label class="field"><span>${h("project")}</span><select name="project_id"><option value="">—</option>${projectOptions}</select></label>
+      <label class="field"><span>${h("inventory_file")}</span><select name="path"><option value="">—</option></select></label>
       <p class="small muted" data-plugin-note></p>`;
   } else {
     const groupBy = Array.isArray(data.group_by) ? data.group_by.join(", ") : (data.group_by || "");
     const filters = Array.isArray(data.query_filters) ? data.query_filters.join("\n") : (data.query || "");
-    fields = `<label class="field"><span>${h("API-Adresse")}</span><input name="api_endpoint" required value="${esc(data.api_endpoint || "")}" placeholder="https://netbox.example.com"></label>
-      <label class="field"><span>${h("Token")}</span><input name="token" type="password" required autocomplete="off"></label>
-      <label class="field"><span>${h("Gruppierung")}</span><input name="group_by" value="${esc(groupBy)}" placeholder="sites, device_roles"></label>
-      <label class="field"><span>${h("Filter, eine Zeile je Schlüssel=Wert")}</span><textarea name="query">${esc(filters)}</textarea></label>
-      <label class="field"><span>${h("Zertifikat prüfen")}</span><input name="validate_certs" type="checkbox"${data.validate_certs === false ? "" : " checked"}></label>
-      <label class="field"><span>${h("Virtuelle Maschinen")}</span><input name="virtual_machines" type="checkbox"${data.virtual_machines === false ? "" : " checked"}></label>`;
+    fields = `<label class="field"><span>${h("api_address")}</span><input name="api_endpoint" required value="${esc(data.api_endpoint || "")}" placeholder="https://netbox.example.com"></label>
+      <label class="field"><span>${h("token")}</span><input name="token" type="password" required autocomplete="off"></label>
+      <label class="field"><span>${h("group_by")}</span><input name="group_by" value="${esc(groupBy)}" placeholder="sites, device_roles"></label>
+      <label class="field"><span>${h("filters_one_key_value_per_line")}</span><textarea name="query">${esc(filters)}</textarea></label>
+      <label class="field"><span>${h("verify_certificate")}</span><input name="validate_certs" type="checkbox"${data.validate_certs === false ? "" : " checked"}></label>
+      <label class="field"><span>${h("virtual_machines")}</span><input name="virtual_machines" type="checkbox"${data.virtual_machines === false ? "" : " checked"}></label>`;
   }
-  card.innerHTML = `<div class="spread"><h2>${esc(title)}</h2><button class="btn ghost" type="button" data-remove-draft>${h("Entfernen")}</button></div>
+  card.innerHTML = `<div class="spread"><h2>${esc(title)}</h2><button class="btn ghost" type="button" data-remove-draft>${h("remove")}</button></div>
     <div class="form">${fields}
-      <label class="field"><span>${h("Name der Quelle")}</span><input name="source_name" value="${esc(data.name || "")}" placeholder="${esc(title)}"></label>
+      <label class="field"><span>${h("source_name")}</span><input name="source_name" value="${esc(data.name || "")}" placeholder="${esc(title)}"></label>
     </div>`;
   container.appendChild(card);
   card.querySelector("[data-remove-draft]").addEventListener("click", () => card.remove());
@@ -3126,14 +2533,14 @@ function mountSourceDraft(container, projects, kind, preset) {
         files.innerHTML = `<option value="">—</option>${staticFiles.map((file) => `<option value="${esc(file.path)}">${esc(file.path)}</option>`).join("")}`;
         const plugins = inventories.filter((file) => file.format === "plugin");
         if (plugins.length) {
-          note.textContent = t("{files} wird hier nicht ausgeführt. NetBox legst du als eigene Quelle an.", {
+          note.textContent = t("files_is_not_executed_here_add_netbox_as", {
             files: plugins.map((file) => `${file.path} (${file.plugin || "Plugin"})`).join(", "),
           });
         } else if (!staticFiles.length) {
-          note.textContent = t("Keine Inventardateien. Bei einem Git-Projekt zuerst synchronisieren.");
+          note.textContent = t("no_inventory_files_sync_the_git_project_first");
         }
       } catch (error) {
-        note.textContent = t(error.message || "Projekt lässt sich nicht lesen.");
+        note.textContent = t(error.message || "the_project_cannot_be_read", error.vars);
       }
     });
   }
@@ -3175,12 +2582,12 @@ function bindSourcePicks(projects) {
 async function pageInventories() {
   if (!needTeam()) return;
   const items = await api("GET", "/api/inventories");
-  shell(t("Inventare"), `
+  shell(t("inventories"), `
     <section class="card">
-      <input class="search" id="inventory-search" placeholder="${h("Inventare suchen")}" autocomplete="off">
+      <input class="search" id="inventory-search" placeholder="${h("search_inventories")}" autocomplete="off">
       <div id="inventory-table"></div>
     </section>`,
-    can("operator") ? addLink("#/inventories/new", "+ Inventar") : "");
+    can("operator") ? addLink("#/inventories/new", "inventory_2") : "");
   const draw = () => {
     const needle = document.querySelector("#inventory-search").value.trim().toLowerCase();
     const shown = items.filter((item) => {
@@ -3194,7 +2601,7 @@ async function pageInventories() {
       const count = item.source_count != null ? item.source_count : kinds.length;
       return `<tr><td><a href="#/inventories/${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(count)}</td><td>${esc(label)}</td><td>${esc(item.host_count)}</td></tr>`;
     });
-    document.querySelector("#inventory-table").innerHTML = table([t("Name"), t("Quellen"), t("Art"), t("Hosts")], rows);
+    document.querySelector("#inventory-table").innerHTML = table([t("name"), t("sources"), t("type"), t("hosts")], rows);
   };
   document.querySelector("#inventory-search").addEventListener("input", draw);
   draw();
@@ -3203,24 +2610,24 @@ async function pageInventories() {
 async function pageInventoryNew() {
   if (!needTeam()) return;
   if (!can("operator")) {
-    deny("Inventar", "operator");
+    deny("inventory", "operator");
     return;
   }
   const projects = await api("GET", "/api/projects");
-  shell(t("Inventar anlegen"), `
+  shell(t("new_inventory"), `
     <form class="card form" id="inventory-create">
-      <label class="field"><span>${h("Name")}</span><input name="name" required></label>
+      <label class="field"><span>${h("name")}</span><input name="name" required></label>
       <div>
-        <h2>${h("Quellen")}</h2>
-        <p class="small muted">${h("Ein Inventar kann mehrere Quellen haben. Sie werden zusammen an Ansible übergeben.")}</p>
+        <h2>${h("sources")}</h2>
+        <p class="small muted">${h("an_inventory_can_have_several_sources_they_are")}</p>
         <div class="choice-row">
-          <button class="btn pill" type="button" data-add-kind="ini">${h("+ Manuell")}</button>
-          <button class="btn pill" type="button" data-add-kind="project">${h("+ Projekt")}</button>
-          <button class="btn pill" type="button" data-add-kind="netbox">${h("+ NetBox")}</button>
+          <button class="btn pill" type="button" data-add-kind="ini">${h("manual_2")}</button>
+          <button class="btn pill" type="button" data-add-kind="project">${h("project_2")}</button>
+          <button class="btn pill" type="button" data-add-kind="netbox">${h("netbox_2")}</button>
         </div>
         <div id="source-drafts"></div>
       </div>
-      <button class="btn pill primary" type="submit">${h("Anlegen")}</button>
+      <button class="btn pill primary" type="submit">${h("create")}</button>
     </form>`);
   bindSourcePicks(projects);
   document.querySelector("#inventory-create").addEventListener("submit", async (event) => {
@@ -3250,42 +2657,42 @@ async function pageInventory(id) {
       <div class="spread">
         <div><strong>${esc(source.name)}</strong> <span class="small muted">${esc(sourceKindLabel(source.kind))} · ${esc(sourceSummary(source))}</span></div>
         <div class="row">
-          ${can("operator") && source.kind !== "ini" ? `<button class="btn" type="button" data-sync-source="${esc(source.id)}">${h("Aktualisieren")}</button>` : ""}
-          ${can("operator") ? `<button class="btn danger" type="button" data-drop-source="${esc(source.id)}">${h("Entfernen")}</button>` : ""}
+          ${can("operator") && source.kind !== "ini" ? `<button class="btn" type="button" data-sync-source="${esc(source.id)}">${h("refresh")}</button>` : ""}
+          ${can("operator") ? `<button class="btn danger" type="button" data-drop-source="${esc(source.id)}">${h("remove")}</button>` : ""}
         </div>
       </div>
-      <p class="small muted">${h("{count} Hosts", { count: source.host_count })}</p>
+      <p class="small muted">${h("count_hosts", { count: source.host_count })}</p>
       ${can("operator") && source.kind === "ini" ? `<form class="form" data-ini-source="${esc(source.id)}">
-        <label class="field"><span>${h("Text")}</span><textarea name="body" required>${esc(source.body || "")}</textarea></label>
-        <button class="btn" type="submit">${h("Quelle speichern")}</button>
+        <label class="field"><span>${h("text")}</span><textarea name="body" required>${esc(source.body || "")}</textarea></label>
+        <button class="btn" type="submit">${h("save_source")}</button>
       </form>` : `<pre class="mono">${esc(source.body || "")}</pre>`}
     </section>`).join("");
   shell(item.name, `
     <section class="card" style="margin-bottom:14px">
       <div class="spread">
-        <h2>${h("Hosts")}</h2>
-        ${external && can("operator") ? `<button class="btn" id="sync-inventory" type="button">${h("Alle Quellen aktualisieren")}</button>` : ""}
+        <h2>${h("hosts")}</h2>
+        ${external && can("operator") ? `<button class="btn" id="sync-inventory" type="button">${h("refresh_all_sources")}</button>` : ""}
       </div>
-      ${table([t("Name"), t("Gruppen"), t("Variablen")], rows)}
+      ${table([t("name"), t("groups"), t("variables")], rows)}
     </section>
     <section>
       <div class="spread">
-        <h2>${h("Quellen")}</h2>
-        ${can("operator") ? `<button class="btn danger" id="delete-inventory" type="button">${h("Inventar löschen")}</button>` : ""}
+        <h2>${h("sources")}</h2>
+        ${can("operator") ? `<button class="btn danger" id="delete-inventory" type="button">${h("delete_inventory")}</button>` : ""}
       </div>
-      ${sourceCards || `<p class="small muted">${h("Noch keine Quelle.")}</p>`}
+      ${sourceCards || `<p class="small muted">${h("no_source_yet")}</p>`}
       ${can("operator") ? `<div class="card" style="margin-top:14px">
-        <h2>${h("Quelle hinzufügen")}</h2>
+        <h2>${h("add_source")}</h2>
         <div class="choice-row">
-          <button class="btn pill" type="button" data-add-kind="ini">${h("+ Manuell")}</button>
-          <button class="btn pill" type="button" data-add-kind="project">${h("+ Projekt")}</button>
-          <button class="btn pill" type="button" data-add-kind="netbox">${h("+ NetBox")}</button>
+          <button class="btn pill" type="button" data-add-kind="ini">${h("manual_2")}</button>
+          <button class="btn pill" type="button" data-add-kind="project">${h("project_2")}</button>
+          <button class="btn pill" type="button" data-add-kind="netbox">${h("netbox_2")}</button>
         </div>
         <div id="source-drafts"></div>
-        <button class="btn pill primary" id="add-sources" type="button" style="margin-top:12px">${h("Hinzufügen")}</button>
+        <button class="btn pill primary" id="add-sources" type="button" style="margin-top:12px">${h("add")}</button>
       </div>` : ""}
     </section>`,
-    can("operator") ? `<a class="btn pill" href="#/inventories/new">${h("+ Inventar")}</a>` : "");
+    can("operator") ? `<a class="btn pill" href="#/inventories/new">${h("inventory_2")}</a>` : "");
   const sync = document.querySelector("#sync-inventory");
   if (sync) {
     sync.addEventListener("click", async () => {
@@ -3313,7 +2720,7 @@ async function pageInventory(id) {
   });
   document.querySelectorAll("[data-drop-source]").forEach((button) => {
     button.addEventListener("click", async () => {
-      if (!confirm(t("Quelle entfernen?"))) return;
+      if (!confirm(t("remove_this_source"))) return;
       try {
         await api("DELETE", `/api/inventories/${encodeURIComponent(id)}/sources/${encodeURIComponent(button.dataset.dropSource)}`);
         route();
@@ -3344,7 +2751,7 @@ async function pageInventory(id) {
       } catch (error) { handle(error); }
     });
     document.querySelector("#delete-inventory").addEventListener("click", async () => {
-      if (!confirm(t("Inventar löschen?"))) return;
+      if (!confirm(t("delete_this_inventory"))) return;
       try {
         await api("DELETE", `/api/inventories/${encodeURIComponent(id)}`);
         go("#/inventories");
@@ -3353,23 +2760,23 @@ async function pageInventory(id) {
   }
 }
 const CREDENTIAL_KINDS = [
-  ["ssh", "Maschine (SSH)", "Schlüssel oder Passwort, auch beides."],
-  ["vault", "Ansible Vault", ""],
-  ["scm", "Quellcode", "Gilt im Auftrag. Der Projekt-Sync nutzt diesen Zugang noch nicht."],
-  ["net", "Netzwerk", ""],
-  ["aws", "Amazon Web Services", ""],
-  ["azure", "Microsoft Azure", ""],
-  ["gce", "Google Compute Engine", ""],
-  ["vmware", "VMware vCenter", ""],
-  ["openstack", "OpenStack", "Leer setzt die Domain auf Default."],
-  ["registry", "Container-Registry", "Der Auftrag sieht Host, Benutzer und Passwort. Docker selbst wird nicht angemeldet."],
-  ["github", "GitHub-Token", ""],
-  ["gitlab", "GitLab-Token", ""],
-  ["galaxy", "Ansible Galaxy", "Leer lässt https://galaxy.ansible.com."],
-  ["kubernetes", "Kubernetes", ""],
-  ["insights", "Red Hat Insights", ""],
-  ["env", "Umgebungsvariablen", ""],
-  ["netbox", "NetBox", ""],
+  ["ssh", "machine_ssh", "a_key_or_a_password_or_both"],
+  ["vault", "ansible_vault", ""],
+  ["scm", "source_control", "applies_to_the_job_project_sync_does_not"],
+  ["net", "network", ""],
+  ["aws", "amazon_web_services", ""],
+  ["azure", "microsoft_azure", ""],
+  ["gce", "google_compute_engine", ""],
+  ["vmware", "vmware_vcenter", ""],
+  ["openstack", "openstack", "empty_sets_the_domain_to_default"],
+  ["registry", "container_registry", "the_job_sees_the_host_username_and_password"],
+  ["github", "github_token", ""],
+  ["gitlab", "gitlab_token", ""],
+  ["galaxy", "ansible_galaxy", "empty_keeps_https_galaxy_ansible_com"],
+  ["kubernetes", "kubernetes", ""],
+  ["insights", "red_hat_insights", ""],
+  ["env", "environment_variables", ""],
+  ["netbox", "netbox", ""],
 ];
 
 function credentialKindLabel(kind) {
@@ -3395,13 +2802,13 @@ function templateCredentialFields(credentials, selectedIds) {
     })
     .join("");
   const grid = selects ? `<div class="field-grid">${selects}</div>` : "";
-  const empty = credentials.length ? "" : `<p class="small muted">${h("Keine Zugänge im Team.")}</p>`;
-  return `${empty}<p class="small muted">${h("Pro Art ein Zugang. Vault-Zugänge wählst du über Auswählen. Sie stehen hier als Pillen.")}</p>${grid}
+  const empty = credentials.length ? "" : `<p class="small muted">${h("no_credentials_in_this_team")}</p>`;
+  return `${empty}<p class="small muted">${h("one_credential_of_each_kind_choose_vault_credentials")}</p>${grid}
     <div class="field">
       <span>${esc(credentialKindLabel("vault"))}</span>
       <div class="vault-row">
         <div class="chips" id="vault-pills"></div>
-        <button class="btn pill" id="vault-add" type="button">${h("Auswählen")}</button>
+        <button class="btn pill" id="vault-add" type="button">${h("select")}</button>
       </div>
     </div>`;
 }
@@ -3411,7 +2818,7 @@ function renderVaultPills(box, credentials, ids) {
   box.innerHTML = ids.map((id) => {
     const row = byId.get(id);
     if (!row) return "";
-    return `<span class="chip" data-vault-id="${esc(id)}"><span class="chip-text">${esc(row.name)}</span><button class="chip-remove" type="button" aria-label="${h("Vault-Zugang {name} entfernen", { name: row.name })}">×</button></span>`;
+    return `<span class="chip" data-vault-id="${esc(id)}"><span class="chip-text">${esc(row.name)}</span><button class="chip-remove" type="button" aria-label="${h("remove_vault_credential_name", { name: row.name })}">×</button></span>`;
   }).join("");
   box.querySelectorAll(".chip-remove").forEach((button) => {
     button.addEventListener("click", () => {
@@ -3447,19 +2854,19 @@ function openVaultPicker(credentials, selected, onApply) {
       <span>${esc(row.name)}</span>
     </label>`).join("");
   const body = vaults.length
-    ? `<input class="search" id="vault-search" placeholder="${h("Vaults suchen")}" autocomplete="off">
+    ? `<input class="search" id="vault-search" placeholder="${h("search_vaults")}" autocomplete="off">
        <div class="vault-choices" id="vault-choices">${rows}</div>
        <div class="row">
-         <button class="btn pill primary" type="button" id="vault-apply">${h("Übernehmen")}</button>
-         <button class="btn" type="button" id="vault-cancel">${h("Abbrechen")}</button>
+         <button class="btn pill primary" type="button" id="vault-apply">${h("apply")}</button>
+         <button class="btn" type="button" id="vault-cancel">${h("cancel")}</button>
        </div>`
-    : `<p class="muted">${h("Keine Vault-Zugänge im Team.")}</p>`;
+    : `<p class="muted">${h("no_vault_credentials_in_this_team")}</p>`;
   document.querySelector(".main").insertAdjacentHTML("beforeend", `
     <div class="overlay" id="vault-picker">
       <div class="overlay-card vault-picker" role="dialog" aria-modal="true" aria-labelledby="vault-picker-title">
         <div class="spread">
           <h2 id="vault-picker-title">${esc(credentialKindLabel("vault"))}</h2>
-          <button class="btn" type="button" id="vault-picker-close">${h("Schließen")}</button>
+          <button class="btn" type="button" id="vault-picker-close">${h("close")}</button>
         </div>
         ${body}
       </div>
@@ -3538,38 +2945,38 @@ function credHint(text) {
 function becomeSelect(selected) {
   const current = selected || "";
   const methods = ["sudo", "su", "pbrun", "pfexec", "doas", "dzdo", "ksu", "runas"];
-  const options = [`<option value="">${h("Keine")}</option>`].concat(
+  const options = [`<option value="">${h("none")}</option>`].concat(
     methods.map((method) => `<option value="${method}"${method === current ? " selected" : ""}>${esc(method)}</option>`)
   );
-  return `<label class="field"><span>${h("Become-Methode")}</span><select class="fit" name="become_method">${options.join("")}</select></label>`;
+  return `<label class="field"><span>${h("become_method")}</span><select class="fit" name="become_method">${options.join("")}</select></label>`;
 }
 
 const FIELD_LABELS = {
-  username: "Benutzer",
-  password: "Passwort",
-  private_key: "Privater Schlüssel",
-  passphrase: "Passphrase",
-  become_method: "Become-Methode",
-  become_username: "Become-Benutzer",
-  become_password: "Become-Passwort",
-  vault_id: "Vault-Id",
-  authorize: "Authorize",
-  authorize_password: "Authorize-Passwort",
-  access_key: "Access Key",
-  secret_key: "Secret Key",
-  security_token: "Session-Token",
-  subscription_id: "Subscription",
-  client_id: "Client",
-  secret: "Geheimnis",
-  tenant: "Tenant",
-  service_account: "Dienstkonto",
-  host: "Host",
-  auth_url: "API-Adresse",
-  project: "Projekt",
-  domain: "Domain",
-  url: "API-Adresse",
-  token: "Token",
-  verify_ssl: "Zertifikat prüfen",
+  username: "user",
+  password: "password",
+  private_key: "private_key",
+  passphrase: "passphrase",
+  become_method: "become_method",
+  become_username: "become_user",
+  become_password: "become_password",
+  vault_id: "vault_id",
+  authorize: "authorize",
+  authorize_password: "authorize_password",
+  access_key: "access_key",
+  secret_key: "secret_key",
+  security_token: "session_token",
+  subscription_id: "subscription",
+  client_id: "client",
+  secret: "secret",
+  tenant: "tenant",
+  service_account: "service_account",
+  host: "host",
+  auth_url: "api_address",
+  project: "project",
+  domain: "domain",
+  url: "api_address",
+  token: "token",
+  verify_ssl: "verify_certificate",
 };
 
 function fieldLabel(key) {
@@ -3578,7 +2985,7 @@ function fieldLabel(key) {
 
 function secretControl(name, label, widget, stored) {
   const clear = stored
-    ? `<label class="field check"><input type="checkbox" data-clear="${esc(name)}"><span>${h("Entfernen")}</span></label>`
+    ? `<label class="field check"><input type="checkbox" data-clear="${esc(name)}"><span>${h("remove")}</span></label>`
     : "";
   return `<label class="field"><span>${h(label)}</span>${widget}</label>${clear}`;
 }
@@ -3611,102 +3018,102 @@ function credentialFields(kind, current) {
   if (kind === "ssh") {
     return [
       credHint(hint),
-      text("username", "Benutzer"),
-      secretInput("password", "Passwort", "password", has("password")),
-      secretArea("private_key", "Privater Schlüssel", has("private_key")),
-      secretInput("passphrase", "Passphrase", "password", has("passphrase")),
+      text("username", "user"),
+      secretInput("password", "password", "password", has("password")),
+      secretArea("private_key", "private_key", has("private_key")),
+      secretInput("passphrase", "passphrase", "password", has("passphrase")),
       becomeSelect(fields.become_method),
-      text("become_username", "Become-Benutzer"),
-      secretInput("become_password", "Become-Passwort", "password", has("become_password")),
+      text("become_username", "become_user"),
+      secretInput("become_password", "become_password", "password", has("become_password")),
     ].join("");
   }
   if (kind === "scm") {
     return [
       credHint(hint),
-      text("username", "Benutzer"),
-      secretInput("password", "Passwort", "password", has("password")),
-      secretArea("private_key", "Privater Schlüssel", has("private_key")),
-      secretInput("passphrase", "Passphrase", "password", has("passphrase")),
+      text("username", "user"),
+      secretInput("password", "password", "password", has("password")),
+      secretArea("private_key", "private_key", has("private_key")),
+      secretInput("passphrase", "passphrase", "password", has("passphrase")),
     ].join("");
   }
   if (kind === "vault") {
     return [
-      secretInput("password", "Vault-Passwort", "password", has("password")),
-      text("vault_id", "Vault-Id"),
+      secretInput("password", "vault_password", "password", has("password")),
+      text("vault_id", "vault_id"),
     ].join("");
   }
   if (kind === "net") {
     return [
-      text("username", "Benutzer"),
-      secretInput("password", "Passwort", "password", has("password")),
-      secretArea("private_key", "Privater Schlüssel", has("private_key")),
-      credCheck("authorize", "Authorize", Boolean(fields.authorize)),
-      secretInput("authorize_password", "Authorize-Passwort", "password", has("authorize_password")),
+      text("username", "user"),
+      secretInput("password", "password", "password", has("password")),
+      secretArea("private_key", "private_key", has("private_key")),
+      credCheck("authorize", "authorize", Boolean(fields.authorize)),
+      secretInput("authorize_password", "authorize_password", "password", has("authorize_password")),
     ].join("");
   }
   if (kind === "aws") {
     return [
-      text("access_key", "Access Key"),
-      secretInput("secret_key", "Secret Key", "password", has("secret_key")),
-      secretInput("security_token", "Session-Token", "password", has("security_token")),
+      text("access_key", "access_key"),
+      secretInput("secret_key", "secret_key", "password", has("secret_key")),
+      secretInput("security_token", "session_token", "password", has("security_token")),
     ].join("");
   }
   if (kind === "azure") {
     return [
-      text("subscription_id", "Subscription"),
-      text("client_id", "Client"),
-      secretInput("secret", "Geheimnis", "password", has("secret")),
-      text("tenant", "Tenant"),
+      text("subscription_id", "subscription"),
+      text("client_id", "client"),
+      secretInput("secret", "secret", "password", has("secret")),
+      text("tenant", "tenant"),
     ].join("");
   }
-  if (kind === "gce") return secretArea("service_account", "Dienstkonto", has("service_account"));
+  if (kind === "gce") return secretArea("service_account", "service_account", has("service_account"));
   if (kind === "vmware") {
     return [
-      text("host", "Host"),
-      text("username", "Benutzer"),
-      secretInput("password", "Passwort", "password", has("password")),
+      text("host", "host"),
+      text("username", "user"),
+      secretInput("password", "password", "password", has("password")),
     ].join("");
   }
   if (kind === "openstack") {
     return [
       credHint(hint),
-      text("auth_url", "API-Adresse"),
-      text("username", "Benutzer"),
-      secretInput("password", "Passwort", "password", has("password")),
-      text("project", "Projekt"),
-      text("domain", "Domain"),
+      text("auth_url", "api_address"),
+      text("username", "user"),
+      secretInput("password", "password", "password", has("password")),
+      text("project", "project"),
+      text("domain", "domain"),
     ].join("");
   }
   if (kind === "registry") {
     return [
       credHint(hint),
-      text("host", "Host"),
-      text("username", "Benutzer"),
-      secretInput("password", "Passwort", "password", has("password")),
+      text("host", "host"),
+      text("username", "user"),
+      secretInput("password", "password", "password", has("password")),
     ].join("");
   }
-  if (kind === "github" || kind === "gitlab") return secretInput("token", "Token", "password", has("token"));
+  if (kind === "github" || kind === "gitlab") return secretInput("token", "token", "password", has("token"));
   if (kind === "galaxy") {
-    return [credHint(hint), text("url", "API-Adresse"), secretInput("token", "Token", "password", has("token"))].join("");
+    return [credHint(hint), text("url", "api_address"), secretInput("token", "token", "password", has("token"))].join("");
   }
   if (kind === "kubernetes") {
     return [
-      text("host", "API-Adresse"),
-      secretInput("token", "Token", "password", has("token")),
-      credCheck("verify_ssl", "Zertifikat prüfen", current ? fields.verify_ssl !== false : true),
+      text("host", "api_address"),
+      secretInput("token", "token", "password", has("token")),
+      credCheck("verify_ssl", "verify_certificate", current ? fields.verify_ssl !== false : true),
     ].join("");
   }
   if (kind === "insights") {
-    return [text("username", "Benutzer"), secretInput("password", "Passwort", "password", has("password"))].join("");
+    return [text("username", "user"), secretInput("password", "password", "password", has("password"))].join("");
   }
   if (kind === "netbox") {
-    return [text("url", "API-Adresse"), secretInput("token", "Token", "password", has("token"))].join("");
+    return [text("url", "api_address"), secretInput("token", "token", "password", has("token"))].join("");
   }
   const listed = [...stored].map((name) =>
-    `<label class="field check"><input type="checkbox" data-clear="${esc(name)}"><span>${esc(name)} ${h("Entfernen")}</span></label>`
+    `<label class="field check"><input type="checkbox" data-clear="${esc(name)}"><span>${esc(name)} ${h("remove")}</span></label>`
   ).join("");
-  const keep = stored.size ? credHint("Leer lassen, um den Wert zu behalten.") : "";
-  return `${keep}${listed}${credArea("env", "KEY=Wert, eine Zeile je Variable")}`;
+  const keep = stored.size ? credHint("leave_empty_to_keep_the_stored_value") : "";
+  return `${keep}${listed}${credArea("env", "key_value_one_variable_per_line")}`;
 }
 
 function inputText(form, name) {
@@ -3722,7 +3129,7 @@ function credentialSecret(form) {
       const trimmed = line.trim();
       if (!trimmed) return;
       const eq = trimmed.indexOf("=");
-      if (eq < 1) throw new Error("Env-Zeile braucht KEY=Wert.");
+      if (eq < 1) throw new Error("an_env_line_needs_key_value");
       secret[trimmed.slice(0, eq)] = trimmed.slice(eq + 1);
     });
     return secret;
@@ -3767,19 +3174,19 @@ function bindCredentialKind(form) {
 async function pageCredentials() {
   if (!needTeam()) return;
   const credentials = await api("GET", "/api/credentials");
-  shell(t("Zugänge"), `
+  shell(t("credentials"), `
     <section class="card">
-      <p class="small muted">${h("Geheimnisse werden verschlüsselt gespeichert und nicht wieder angezeigt.")}</p>
-      <input class="search" id="credential-search" placeholder="${h("Zugänge suchen")}" autocomplete="off">
+      <p class="small muted">${h("secrets_are_stored_encrypted_and_are_not_shown")}</p>
+      <input class="search" id="credential-search" placeholder="${h("search_credentials")}" autocomplete="off">
       <div id="credential-table"></div>
     </section>`,
-    can("owner") ? addLink("#/credentials/new", "+ Zugang") : "");
+    can("owner") ? addLink("#/credentials/new", "credential") : "");
   const drawCredentials = () => {
     const needle = document.querySelector("#credential-search").value.trim().toLowerCase();
     const rows = credentials.filter((item) => !needle || `${item.name} ${item.kind} ${credentialKindLabel(item.kind)}`.toLowerCase().includes(needle)).map((item) =>
-      `<tr><td><a href="#/credentials/${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(credentialKindLabel(item.kind))}</td><td>${can("owner") ? `<button class="btn danger" type="button" data-credential="${esc(item.id)}">${h("Löschen")}</button>` : ""}</td></tr>`
+      `<tr><td><a href="#/credentials/${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(credentialKindLabel(item.kind))}</td><td>${can("owner") ? `<button class="btn danger" type="button" data-credential="${esc(item.id)}">${h("delete")}</button>` : ""}</td></tr>`
     );
-    document.querySelector("#credential-table").innerHTML = table([t("Name"), t("Art"), ""], rows);
+    document.querySelector("#credential-table").innerHTML = table([t("name"), t("type"), ""], rows);
     document.querySelectorAll("[data-credential]").forEach((button) => {
       button.addEventListener("click", async () => {
         try {
@@ -3820,7 +3227,7 @@ function credentialUpdateBody(form, kind) {
       const trimmed = line.trim();
       if (!trimmed) return;
       const eq = trimmed.indexOf("=");
-      if (eq < 1) throw new Error("Env-Zeile braucht KEY=Wert.");
+      if (eq < 1) throw new Error("an_env_line_needs_key_value");
       secret[trimmed.slice(0, eq)] = trimmed.slice(eq + 1);
     });
     return { secret, clear };
@@ -3862,11 +3269,11 @@ function credentialUpdateBody(form, kind) {
 
 function credentialEditForm(item) {
   return `<form class="card form" id="credential-form" data-kind="${esc(item.kind)}">
-    <label class="field"><span>${h("Name")}</span><input name="name" required value="${esc(item.name)}"></label>
-    <label class="field"><span>${h("Art")}</span><input value="${esc(credentialKindLabel(item.kind))}" disabled></label>
-    <p class="small muted">${h("Die Art lässt sich nicht ändern.")}</p>
+    <label class="field"><span>${h("name")}</span><input name="name" required value="${esc(item.name)}"></label>
+    <label class="field"><span>${h("type")}</span><input value="${esc(credentialKindLabel(item.kind))}" disabled></label>
+    <p class="small muted">${h("the_type_cannot_be_changed")}</p>
     ${credentialFields(item.kind, item)}
-    <button class="btn pill primary" type="submit">${h("Speichern")}</button>
+    <button class="btn pill primary" type="submit">${h("save")}</button>
   </form>`;
 }
 
@@ -3875,14 +3282,14 @@ async function pageCredential(id) {
   const item = await api("GET", `/api/credentials/${encodeURIComponent(id)}`);
   if (!can("owner")) {
     const visible = Object.entries(item.fields || {}).map(([key, value]) => {
-      const shown = typeof value === "boolean" ? t(value ? "Ja" : "Nein") : String(value);
+      const shown = typeof value === "boolean" ? t(value ? "yes" : "no") : String(value);
       return paramRow(fieldLabel(key), shown);
     }).join("");
     const stored = (item.set || []).map((key) => paramRowHtml(fieldLabel(key), `<input type="password" value="********" disabled tabindex="-1">`)).join("");
-    shell(item.name, `<section class="card"><dl class="kv">${paramRow("Name", item.name)}${paramRow("Art", credentialKindLabel(item.kind))}${visible}${stored}</dl></section>`);
+    shell(item.name, `<section class="card"><dl class="kv">${paramRow("name", item.name)}${paramRow("type", credentialKindLabel(item.kind))}${visible}${stored}</dl></section>`);
     return;
   }
-  shell(item.name, credentialEditForm(item), `<button class="btn danger" id="delete-credential" type="button">${h("Löschen")}</button>`);
+  shell(item.name, credentialEditForm(item), `<button class="btn danger" id="delete-credential" type="button">${h("delete")}</button>`);
   const form = document.querySelector("#credential-form");
   form.querySelectorAll("[data-stored-mask]").forEach((field) => {
     field.addEventListener("focus", () => {
@@ -3915,18 +3322,18 @@ async function pageCredential(id) {
 async function pageCredentialNew() {
   if (!needTeam()) return;
   if (!can("owner")) {
-    deny("Zugang", "owner");
+    deny("nav.access", "owner");
     return;
   }
   const kindOptions = CREDENTIAL_KINDS.map(([id, label]) => `<option value="${esc(id)}">${h(label)}</option>`).join("");
-  shell(t("Zugang anlegen"), `
+  shell(t("new_credential"), `
     <form class="card form" id="credential-form">
-      <label class="field"><span>${h("Name")}</span><input name="name" required></label>
+      <label class="field"><span>${h("name")}</span><input name="name" required></label>
       <div class="field-row">
-        <label class="field"><span>${h("Art")}</span><select class="fit" name="kind">${kindOptions}</select></label>
+        <label class="field"><span>${h("type")}</span><select class="fit" name="kind">${kindOptions}</select></label>
       </div>
       <div id="credential-fields"></div>
-      <button class="btn pill primary" type="submit">${h("Anlegen")}</button>
+      <button class="btn pill primary" type="submit">${h("create")}</button>
     </form>`);
   const form = document.querySelector("#credential-form");
   bindCredentialKind(form);
@@ -3945,18 +3352,18 @@ async function pageCredentialNew() {
 
 async function pageOrganizations() {
   const items = await api("GET", "/api/organizations");
-  shell(t("Organisationen"), `
+  shell(t("organizations"), `
     <section class="card">
-      <input class="search" id="organization-search" placeholder="${h("Organisationen suchen")}" autocomplete="off">
+      <input class="search" id="organization-search" placeholder="${h("search_organizations")}" autocomplete="off">
       <div id="organization-table"></div>
     </section>`,
-    me.is_admin ? addLink("#/organizations/new", "+ Organisation") : "");
+    me.is_admin ? addLink("#/organizations/new", "organization_2") : "");
   const drawOrganizations = () => {
     const needle = document.querySelector("#organization-search").value.trim().toLowerCase();
     const rows = items.filter((item) => !needle || `${item.name} ${item.description || ""}`.toLowerCase().includes(needle)).map((item) =>
       `<tr><td><a href="#/organizations/${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(item.description || "")}</td></tr>`
     );
-    document.querySelector("#organization-table").innerHTML = table([t("Name"), t("Beschreibung")], rows);
+    document.querySelector("#organization-table").innerHTML = table([t("name"), t("description")], rows);
   };
   document.querySelector("#organization-search").addEventListener("input", drawOrganizations);
   drawOrganizations();
@@ -3964,14 +3371,14 @@ async function pageOrganizations() {
 
 async function pageOrganizationNew() {
   if (!me.is_admin) {
-    deny("Organisation", "admin");
+    deny("organization", "admin");
     return;
   }
-  shell(t("Organisation anlegen"), `
+  shell(t("new_organization"), `
     <form class="card form" id="org-form">
-      <label class="field"><span>${h("Name")}</span><input name="name" required></label>
-      <label class="field"><span>${h("Beschreibung")}</span><input name="description"></label>
-      <button class="btn pill primary" type="submit">${h("Anlegen")}</button>
+      <label class="field"><span>${h("name")}</span><input name="name" required></label>
+      <label class="field"><span>${h("description")}</span><input name="description"></label>
+      <button class="btn pill primary" type="submit">${h("create")}</button>
     </form>`);
   document.querySelector("#org-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -3991,14 +3398,14 @@ async function pageOrganization(id) {
   shell(item.name, `
     <section class="card" style="margin-bottom:14px">
       ${me.is_admin ? `<form class="form" id="org-edit">
-        <label class="field"><span>${h("Name")}</span><input name="name" value="${esc(item.name)}" required></label>
-        <label class="field"><span>${h("Beschreibung")}</span><input name="description" value="${esc(item.description || "")}"></label>
-        <button class="btn pill primary" type="submit">${h("Speichern")}</button>
+        <label class="field"><span>${h("name")}</span><input name="name" value="${esc(item.name)}" required></label>
+        <label class="field"><span>${h("description")}</span><input name="description" value="${esc(item.description || "")}"></label>
+        <button class="btn pill primary" type="submit">${h("save")}</button>
       </form>` : `<p class="muted">${esc(item.description || "")}</p>`}
     </section>
     <section class="card">
-      <h2>${h("Teams")}</h2>
-      ${table([t("Name"), t("Beschreibung"), t("LDAP-Gruppe")], rows)}
+      <h2>${h("teams")}</h2>
+      ${table([t("name"), t("description"), t("ldap_group")], rows)}
     </section>`);
   const form = document.querySelector("#org-edit");
   if (form) {
@@ -4030,36 +3437,36 @@ async function pageTeam() {
       ? `<select data-member-role="${esc(member.username)}" data-current="${esc(member.role)}">${roleOptions(member.role)}</select>`
       : esc(roleLabel(member.role));
     const sourceCell = member.source === "ldap"
-      ? `${esc(sourceLabel(member.source))} <span class="small muted">${h("Kommt aus dem Verzeichnis.")}</span>`
+      ? `${esc(sourceLabel(member.source))} <span class="small muted">${h("comes_from_the_directory")}</span>`
       : esc(sourceLabel(member.source));
     const remove = can("owner")
-      ? `<button class="btn danger" type="button" data-member="${esc(member.user_id)}">${h("Entfernen")}</button>`
+      ? `<button class="btn danger" type="button" data-member="${esc(member.user_id)}">${h("remove")}</button>`
       : "";
     return `<tr><td>${name} <span class="small muted">${esc(member.username)}</span></td><td>${roleCell}</td><td>${sourceCell}</td><td>${remove}</td></tr>`;
   });
   const actions = [
-    teamId && can("owner") ? addLink("#/team/members/new", "+ Mitglied") : "",
-    me.is_admin ? addLink("#/team/new", "+ Team") : "",
-    me.is_admin ? addLink("#/users/new", "+ Benutzer") : "",
+    teamId && can("owner") ? addLink("#/team/members/new", "member") : "",
+    me.is_admin ? addLink("#/team/new", "team_2") : "",
+    me.is_admin ? addLink("#/users/new", "user_2") : "",
   ].join("");
-  shell(t("Team"), `
+  shell(t("team"), `
     ${current ? `<section class="card" style="margin-bottom:14px">
       <h2>${esc(current.name)}</h2>
       <p class="muted">${esc(current.description || "")}</p>
-      <p class="small">${h("Organisation: {name}", { name: current.organization_name || "—" })}</p>
+      <p class="small">${h("organization_name_2", { name: current.organization_name || "—" })}</p>
       ${can("owner") ? `<form class="form" id="team-form">
-        <label class="field"><span>${h("Name")}</span><input name="name" value="${esc(current.name)}" required></label>
-        <label class="field"><span>${h("Beschreibung")}</span><input name="description" value="${esc(current.description || "")}"></label>
-        <label class="field"><span>${h("LDAP- oder AD-Gruppe")}</span><input name="ldap_group" value="${esc(current.ldap_group || "")}" placeholder="${h("CN oder DN, zum Beispiel Plattform")}"></label>
-        ${me.is_admin ? `<label class="field"><span>${h("Organisation verschieben")}</span><select name="organization_id">${orgOptions(organizations, current.organization_id)}</select></label>` : ""}
-        <button class="btn pill primary" type="submit">${h("Team speichern")}</button>
-      </form>` : `<p class="small">${h("LDAP-Gruppe: {group}", { group: current.ldap_group || "—" })}</p>`}
+        <label class="field"><span>${h("name")}</span><input name="name" value="${esc(current.name)}" required></label>
+        <label class="field"><span>${h("description")}</span><input name="description" value="${esc(current.description || "")}"></label>
+        <label class="field"><span>${h("ldap_or_ad_group")}</span><input name="ldap_group" value="${esc(current.ldap_group || "")}" placeholder="${h("cn_or_dn_for_example_platform")}"></label>
+        ${me.is_admin ? `<label class="field"><span>${h("move_organization")}</span><select name="organization_id">${orgOptions(organizations, current.organization_id)}</select></label>` : ""}
+        <button class="btn pill primary" type="submit">${h("save_team")}</button>
+      </form>` : `<p class="small">${h("ldap_group_group", { group: current.ldap_group || "—" })}</p>`}
     </section>
     <section class="card">
-      <h2>${h("Mitglieder")}</h2>
+      <h2>${h("members")}</h2>
       ${roleLegend()}
-      ${table([t("Name"), t("Rolle"), t("Herkunft"), ""], memberRows)}
-    </section>` : `<div class="card">${h("Kein Team ausgewählt.")}</div>`}`, actions);
+      ${table([t("name"), t("role"), t("source"), ""], memberRows)}
+    </section>` : `<div class="card">${h("no_team_selected")}</div>`}`, actions);
   const teamForm = document.querySelector("#team-form");
   if (teamForm) {
     teamForm.addEventListener("submit", async (event) => {
@@ -4104,22 +3511,22 @@ async function pageTeam() {
 
 async function pageMemberNew() {
   if (!teamId) {
-    shell(t("Team"), `<div class="card">${h("Kein Team ausgewählt.")}</div>`);
+    shell(t("team"), `<div class="card">${h("no_team_selected")}</div>`);
     return;
   }
   if (!can("owner")) {
-    deny("Mitglieder", "owner");
+    deny("members", "owner");
     return;
   }
-  shell(t("Mitglied hinzufügen"), `
+  shell(t("add_member"), `
     <form class="card form" id="member-form">
-      <label class="field"><span>${h("Benutzername")}</span><input name="username" required></label>
+      <label class="field"><span>${h("username")}</span><input name="username" required></label>
       <div class="field-row">
-        <label class="field"><span>${h("Rolle")}</span>
-          <select class="fit" name="role"><option value="viewer">${h("Betrachter")}</option><option value="operator" selected>${h("Operator")}</option><option value="owner">${h("Besitzer")}</option></select>
+        <label class="field"><span>${h("role")}</span>
+          <select class="fit" name="role"><option value="viewer">${h("viewer")}</option><option value="operator" selected>${h("operator")}</option><option value="owner">${h("owner")}</option></select>
         </label>
       </div>
-      <button class="btn pill primary" type="submit">${h("Hinzufügen")}</button>
+      <button class="btn pill primary" type="submit">${h("add")}</button>
     </form>`);
   document.querySelector("#member-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -4136,18 +3543,18 @@ async function pageMemberNew() {
 
 async function pageTeamNew() {
   if (!me.is_admin) {
-    deny("Team", "admin");
+    deny("team", "admin");
     return;
   }
   const organizations = await api("GET", "/api/organizations");
   const current = (me.teams || []).find((team) => team.id === teamId);
-  shell(t("Team anlegen"), `
+  shell(t("new_team_2"), `
     <form class="card form" id="create-team">
-      <label class="field"><span>${h("Name")}</span><input name="name" required></label>
-      <label class="field"><span>${h("Beschreibung")}</span><input name="description"></label>
-      <label class="field"><span>${h("Organisation")}</span><select name="organization_id"><option value="">${h("Neue Organisation mit dem Teamnamen")}</option>${orgOptions(organizations, current && current.organization_id)}</select></label>
-      <label class="field"><span>${h("LDAP-Gruppe")}</span><input name="ldap_group"></label>
-      <button class="btn pill primary" type="submit">${h("Anlegen")}</button>
+      <label class="field"><span>${h("name")}</span><input name="name" required></label>
+      <label class="field"><span>${h("description")}</span><input name="description"></label>
+      <label class="field"><span>${h("organization")}</span><select name="organization_id"><option value="">${h("new_organization_named_after_the_team")}</option>${orgOptions(organizations, current && current.organization_id)}</select></label>
+      <label class="field"><span>${h("ldap_group")}</span><input name="ldap_group"></label>
+      <button class="btn pill primary" type="submit">${h("create")}</button>
     </form>`);
   document.querySelector("#create-team").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -4169,7 +3576,7 @@ async function pageTeamNew() {
 }
 
 function emailLine(email) {
-  return email ? esc(email) : `<span class="muted">${h("Keine E-Mail hinterlegt.")}</span>`;
+  return email ? esc(email) : `<span class="muted">${h("no_email_is_stored")}</span>`;
 }
 
 async function pageAccount() {
@@ -4181,26 +3588,26 @@ async function pageAccount() {
   const local = me.auth_source === "local";
   const identity = local ? `
     <form class="card form" id="account-form">
-      <h2>${h("Konto")}</h2>
-      <p class="small muted">${h("Benutzername")}: ${esc(me.username)} · ${esc(authSourceLabel(me.auth_source))}${me.is_admin ? ` · ${h("Administrator")}` : ""}</p>
-      <label class="field"><span>${h("Anzeigename")}</span><input name="display_name" value="${esc(me.display_name)}" required></label>
-      <label class="field"><span>${h("E-Mail")}</span><input name="email" type="email" value="${esc(me.email || "")}" autocomplete="email"></label>
-      <label class="field"><span>${h("Neues Passwort")}</span><input name="password" type="password" minlength="8" autocomplete="new-password" placeholder="${h("Leer lassen, um das Passwort zu behalten.")}"></label>
-      <button class="btn pill primary" type="submit">${h("Speichern")}</button>
+      <h2>${h("account")}</h2>
+      <p class="small muted">${h("username")}: ${esc(me.username)} · ${esc(authSourceLabel(me.auth_source))}${me.is_admin ? ` · ${h("administrator")}` : ""}</p>
+      <label class="field"><span>${h("display_name")}</span><input name="display_name" value="${esc(me.display_name)}" required></label>
+      <label class="field"><span>${h("email")}</span><input name="email" type="email" value="${esc(me.email || "")}" autocomplete="email"></label>
+      <label class="field"><span>${h("new_password")}</span><input name="password" type="password" minlength="8" autocomplete="new-password" placeholder="${h("leave_empty_to_keep_the_password")}"></label>
+      <button class="btn pill primary" type="submit">${h("save")}</button>
     </form>` : `
     <section class="card">
-      <h2>${h("Konto")}</h2>
-      <p class="small muted">${h("Benutzername")}: ${esc(me.username)} · ${esc(authSourceLabel(me.auth_source))}${me.is_admin ? ` · ${h("Administrator")}` : ""}</p>
-      <p>${h("Anzeigename")}: ${esc(me.display_name)}</p>
-      <p>${h("E-Mail")}: ${emailLine(me.email)}</p>
-      <p class="muted">${h("Name und E-Mail kommen aus dem Verzeichnis.")}</p>
+      <h2>${h("account")}</h2>
+      <p class="small muted">${h("username")}: ${esc(me.username)} · ${esc(authSourceLabel(me.auth_source))}${me.is_admin ? ` · ${h("administrator")}` : ""}</p>
+      <p>${h("display_name")}: ${esc(me.display_name)}</p>
+      <p>${h("email")}: ${emailLine(me.email)}</p>
+      <p class="muted">${h("name_and_email_come_from_the_directory")}</p>
     </section>`;
-  shell(t("Mein Konto"), `
+  shell(t("my_account"), `
     <div class="stack">
       ${identity}
       <section class="card">
-        <h2>${h("Mitgliedschaften")}</h2>
-        ${table([t("Organisation"), t("Team"), t("Rolle"), t("Herkunft")], rows)}
+        <h2>${h("memberships")}</h2>
+        ${table([t("organization"), t("team"), t("role"), t("source")], rows)}
       </section>
     </div>`);
   const form = document.querySelector("#account-form");
@@ -4222,16 +3629,16 @@ async function pageAccount() {
 
 async function pageUsers() {
   if (!me.is_admin) {
-    deny("Benutzerkonten", "admin");
+    deny("users", "admin");
     return;
   }
   const items = await api("GET", "/api/users");
-  shell(t("Benutzerkonten"), `
+  shell(t("users"), `
     <section class="card">
-      <input class="search" id="user-search" placeholder="${h("Benutzer suchen")}" autocomplete="off">
+      <input class="search" id="user-search" placeholder="${h("search_users")}" autocomplete="off">
       <div id="user-table"></div>
     </section>`,
-    addLink("#/users/new", "+ Benutzer"));
+    addLink("#/users/new", "user_2"));
   const draw = () => {
     const needle = document.querySelector("#user-search").value.trim().toLowerCase();
     const shown = items.filter((item) => {
@@ -4240,8 +3647,8 @@ async function pageUsers() {
     });
     const rows = shown.map((item) => {
       const flags = [
-        item.is_admin ? `<span class="pill">${h("Administrator")}</span>` : "",
-        item.disabled ? `<span class="pill failed">${h("Deaktiviert")}</span>` : "",
+        item.is_admin ? `<span class="pill">${h("administrator")}</span>` : "",
+        item.disabled ? `<span class="pill failed">${h("disabled")}</span>` : "",
       ].filter(Boolean).join(" ");
       const when = String(item.created_at || "").slice(0, 10);
       return `<tr>
@@ -4253,7 +3660,7 @@ async function pageUsers() {
       </tr>`;
     });
     document.querySelector("#user-table").innerHTML = table(
-      [t("Name"), t("Benutzername"), t("Herkunft"), t("Teams"), t("Angelegt")],
+      [t("name"), t("username"), t("source"), t("teams"), t("created")],
       rows
     );
   };
@@ -4263,7 +3670,7 @@ async function pageUsers() {
 
 async function pageUser(id) {
   if (!me.is_admin) {
-    deny("Benutzerkonten", "admin");
+    deny("users", "admin");
     return;
   }
   const item = await api("GET", `/api/users/${encodeURIComponent(id)}`);
@@ -4275,15 +3682,15 @@ async function pageUser(id) {
     const org = row.organization_name ? `${row.organization_name} · ` : "";
     const roleCell = row.source === "manual"
       ? `<select data-role="${esc(row.team_id)}" data-current="${esc(row.role)}">${roleOptions(row.role)}</select>`
-      : `${esc(roleLabel(row.role))} <span class="small muted">${h("Kommt aus dem Verzeichnis.")}</span>`;
+      : `${esc(roleLabel(row.role))} <span class="small muted">${h("comes_from_the_directory")}</span>`;
     const remove = row.source === "manual"
-      ? `<button class="btn danger" type="button" data-leave="${esc(row.team_id)}">${h("Entfernen")}</button>`
+      ? `<button class="btn danger" type="button" data-leave="${esc(row.team_id)}">${h("remove")}</button>`
       : "";
     return `<tr><td>${esc(org + row.team_name)}</td><td>${roleCell}</td><td>${esc(sourceLabel(row.source))}</td><td>${remove}</td></tr>`;
   });
   const passwordField = item.auth_source === "local"
-    ? `<label class="field"><span>${h("Neues Passwort")}</span><input name="password" type="password" minlength="8" autocomplete="new-password" placeholder="${h("Leer lassen, um das Passwort zu behalten.")}"></label>`
-    : `<p class="small muted">${h("Das Passwort kommt aus LDAP oder Active Directory.")}</p>`;
+    ? `<label class="field"><span>${h("new_password")}</span><input name="password" type="password" minlength="8" autocomplete="new-password" placeholder="${h("leave_empty_to_keep_the_password")}"></label>`
+    : `<p class="small muted">${h("the_password_comes_from_ldap_or_active_directory")}</p>`;
   const teamChoices = openTeams.map((team) => {
     const label = team.organization_name ? `${team.organization_name} · ${team.name}` : team.name;
     return `<option value="${esc(team.id)}">${esc(label)}</option>`;
@@ -4291,33 +3698,33 @@ async function pageUser(id) {
   shell(item.display_name, `
     <div class="stack">
       <form class="card form" id="user-form">
-        <h2>${h("Konto")}</h2>
-        <p class="small muted">${h("Benutzername")}: ${esc(item.username)} · ${esc(authSourceLabel(item.auth_source))}</p>
-        <p class="small">${h("E-Mail")}: ${emailLine(item.email)}</p>
-        <label class="field"><span>${h("Anzeigename")}</span><input name="display_name" value="${esc(item.display_name)}" required></label>
-        <label class="row"><input name="is_admin" type="checkbox"${item.is_admin ? " checked" : ""}> ${h("Administrator")}</label>
-        <label class="row"><input name="account_disabled" type="checkbox"${item.disabled ? " checked" : ""}${self ? " disabled" : ""}> ${h("Konto deaktivieren")}</label>
+        <h2>${h("account")}</h2>
+        <p class="small muted">${h("username")}: ${esc(item.username)} · ${esc(authSourceLabel(item.auth_source))}</p>
+        <p class="small">${h("email")}: ${emailLine(item.email)}</p>
+        <label class="field"><span>${h("display_name")}</span><input name="display_name" value="${esc(item.display_name)}" required></label>
+        <label class="row"><input name="is_admin" type="checkbox"${item.is_admin ? " checked" : ""}> ${h("administrator")}</label>
+        <label class="row"><input name="account_disabled" type="checkbox"${item.disabled ? " checked" : ""}${self ? " disabled" : ""}> ${h("disable_account")}</label>
         ${passwordField}
         <div class="row">
-          <button class="btn pill primary" type="submit">${h("Speichern")}</button>
-          ${self ? "" : `<button class="btn danger" id="delete-user" type="button">${h("Löschen")}</button>`}
+          <button class="btn pill primary" type="submit">${h("save")}</button>
+          ${self ? "" : `<button class="btn danger" id="delete-user" type="button">${h("delete")}</button>`}
         </div>
       </form>
       <section class="card">
-        <h2>${h("Rechte")}</h2>
+        <h2>${h("permissions")}</h2>
         ${roleLegend()}
       </section>
       <section class="card">
-        <h2>${h("Mitgliedschaften")}</h2>
-        ${table([t("Team"), t("Rolle"), t("Herkunft"), ""], rows)}
+        <h2>${h("memberships")}</h2>
+        ${table([t("team"), t("role"), t("source"), ""], rows)}
         ${openTeams.length ? `<form class="form" id="grant-form">
-          <h2>${h("Zum Team hinzufügen")}</h2>
-          <label class="field"><span>${h("Team")}</span><select name="team_id">${teamChoices}</select></label>
+          <h2>${h("add_to_a_team")}</h2>
+          <label class="field"><span>${h("team")}</span><select name="team_id">${teamChoices}</select></label>
           <div class="field-row">
-            <label class="field"><span>${h("Rolle")}</span><select class="fit" name="role">${roleOptions("operator")}</select></label>
+            <label class="field"><span>${h("role")}</span><select class="fit" name="role">${roleOptions("operator")}</select></label>
           </div>
-          <button class="btn pill primary" type="submit">${h("Hinzufügen")}</button>
-        </form>` : `<p class="muted">${h("Der Benutzer ist in jedem Team.")}</p>`}
+          <button class="btn pill primary" type="submit">${h("add")}</button>
+        </form>` : `<p class="muted">${h("the_user_is_in_every_team")}</p>`}
       </section>
     </div>`);
   document.querySelector("#user-form").addEventListener("submit", async (event) => {
@@ -4338,7 +3745,7 @@ async function pageUser(id) {
   const deleteButton = document.querySelector("#delete-user");
   if (deleteButton) {
     deleteButton.addEventListener("click", async () => {
-      if (!window.confirm(t("Dieses Konto wirklich löschen?"))) return;
+      if (!window.confirm(t("delete_this_account"))) return;
       try {
         await api("DELETE", `/api/users/${encodeURIComponent(id)}`);
         go("#/users");
@@ -4385,17 +3792,17 @@ async function pageUser(id) {
 
 async function pageUserNew() {
   if (!me.is_admin) {
-    deny("Benutzer", "admin");
+    deny("user", "admin");
     return;
   }
-  shell(t("Benutzer anlegen"), `
+  shell(t("new_user"), `
     <form class="card form" id="create-user">
-      <label class="field"><span>${h("Benutzername")}</span><input name="username" required autocomplete="off"></label>
-      <p class="small muted">${h("Benutzername: 2–64 Zeichen, a-z, 0-9, Punkt, Unterstrich, Bindestrich.")}</p>
-      <label class="field"><span>${h("Anzeigename")}</span><input name="display_name" required></label>
-      <label class="field"><span>${h("Passwort")}</span><input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
-      <label class="row"><input name="is_admin" type="checkbox"> ${h("Administrator")}</label>
-      <button class="btn pill primary" type="submit">${h("Anlegen")}</button>
+      <label class="field"><span>${h("username")}</span><input name="username" required autocomplete="off"></label>
+      <p class="small muted">${h("username_2_64_characters_a_z_0_9")}</p>
+      <label class="field"><span>${h("display_name")}</span><input name="display_name" required></label>
+      <label class="field"><span>${h("password")}</span><input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
+      <label class="row"><input name="is_admin" type="checkbox"> ${h("administrator")}</label>
+      <button class="btn pill primary" type="submit">${h("create")}</button>
     </form>`);
   document.querySelector("#create-user").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -4462,7 +3869,7 @@ function bindStoredMasks(form) {
 
 async function pageSettings(notice) {
   if (!me.is_admin) {
-    deny("Einstellungen", "admin");
+    deny("settings", "admin");
     return;
   }
   const item = await api("GET", "/api/settings");
@@ -4471,71 +3878,71 @@ async function pageSettings(notice) {
   const mode = ldap.mode === "ad" ? "ad" : "ldap";
   const runner = ["auto", "docker", "local"].includes(item.runner) ? item.runner : "auto";
   const source = item.source === "saved"
-    ? "Diese Werte sind gespeichert und gelten sofort."
-    : "Noch nichts gespeichert. Es gelten die Umgebungsvariablen vom Start.";
+    ? "these_values_are_saved_and_apply_immediately"
+    : "nothing_is_saved_yet_the_environment_variables_from";
   const unsupported = proxy.unsupported_env
-    ? `<p class="banner warn">${h("Die Umgebung nutzt einen Proxy, der weder HTTP noch HTTPS ist. Speichern schaltet ihn für Git, NetBox und Aufträge aus.")}</p>`
+    ? `<p class="banner warn">${h("the_environment_uses_a_proxy_that_is_neither")}</p>`
     : "";
   const saved = notice ? `<p class="banner good">${h(notice)}</p>` : "";
-  shell(t("Einstellungen"), `<form class="card form" id="settings-form">
+  shell(t("settings"), `<form class="card form" id="settings-form">
     ${saved}
     <p class="small muted">${h(source)}</p>
-    <p class="small muted">${h("Bind-Adresse, Datenverzeichnis und das erste Admin-Passwort bleiben am Prozess. Benutzer und die Sicherung haben eigene Seiten.")}</p>
+    <p class="small muted">${h("the_bind_address_data_directory_and_first_admin")}</p>
     <section class="form-section">
-      <h2>${h("Verzeichnis")}</h2>
-      <p class="small muted">${h("LDAP oder Active Directory. Eine leere Adresse schaltet die Anmeldung über das Verzeichnis aus. Das lokale Administratorkonto bleibt.")}</p>
+      <h2>${h("directory")}</h2>
+      <p class="small muted">${h("ldap_or_active_directory_an_empty_address_turns")}</p>
       <div class="field-row">
-        <label class="field"><span>${h("Modus")}</span>
+        <label class="field"><span>${h("mode")}</span>
           <select class="fit" name="ldap_mode">
             <option value="ldap"${optionSelected(mode, "ldap")}>LDAP</option>
-            <option value="ad"${optionSelected(mode, "ad")}>${h("Active Directory")}</option>
+            <option value="ad"${optionSelected(mode, "ad")}>${h("active_directory")}</option>
           </select>
         </label>
       </div>
-      <label class="field"><span>${h("Adresse")}</span><input name="ldap_url" value="${esc(ldap.url || "")}" placeholder="ldap://ldap.example.com" autocomplete="off" spellcheck="false"></label>
-      <label class="field"><span>${h("Bind-DN")}</span><input name="ldap_bind_dn" value="${esc(ldap.bind_dn || "")}" placeholder="cn=svc,dc=example,dc=com" autocomplete="off" spellcheck="false"></label>
-      ${secretInput("ldap_bind_password", "Bind-Passwort", "password", Boolean(ldap.bind_password_set))}
-      <label class="field"><span>${h("Benutzerbasis")}</span><input name="ldap_user_base" value="${esc(ldap.user_base || "")}" placeholder="ou=users,dc=example,dc=com" autocomplete="off" spellcheck="false"></label>
+      <label class="field"><span>${h("address")}</span><input name="ldap_url" value="${esc(ldap.url || "")}" placeholder="ldap://ldap.example.com" autocomplete="off" spellcheck="false"></label>
+      <label class="field"><span>${h("bind_dn")}</span><input name="ldap_bind_dn" value="${esc(ldap.bind_dn || "")}" placeholder="cn=svc,dc=example,dc=com" autocomplete="off" spellcheck="false"></label>
+      ${secretInput("ldap_bind_password", "bind_password", "password", Boolean(ldap.bind_password_set))}
+      <label class="field"><span>${h("user_base")}</span><input name="ldap_user_base" value="${esc(ldap.user_base || "")}" placeholder="ou=users,dc=example,dc=com" autocomplete="off" spellcheck="false"></label>
       <div class="field-grid">
-        <label class="field"><span>${h("Benutzerfilter")}</span><input name="ldap_user_filter" value="${esc(ldap.user_filter || "")}" spellcheck="false"></label>
-        <label class="field"><span>${h("Benutzerattribut")}</span><input name="ldap_username_attr" value="${esc(ldap.username_attr || "")}" spellcheck="false"></label>
-        <label class="field"><span>${h("Gruppenattribut")}</span><input name="ldap_group_attr" value="${esc(ldap.group_attr || "")}" spellcheck="false"></label>
-        <label class="field"><span>${h("Gruppenbasis")}</span><input name="ldap_group_base" value="${esc(ldap.group_base || "")}" autocomplete="off" spellcheck="false"></label>
+        <label class="field"><span>${h("user_filter")}</span><input name="ldap_user_filter" value="${esc(ldap.user_filter || "")}" spellcheck="false"></label>
+        <label class="field"><span>${h("username_attribute")}</span><input name="ldap_username_attr" value="${esc(ldap.username_attr || "")}" spellcheck="false"></label>
+        <label class="field"><span>${h("group_attribute")}</span><input name="ldap_group_attr" value="${esc(ldap.group_attr || "")}" spellcheck="false"></label>
+        <label class="field"><span>${h("group_base")}</span><input name="ldap_group_base" value="${esc(ldap.group_base || "")}" autocomplete="off" spellcheck="false"></label>
       </div>
-      <label class="row"><input name="ldap_starttls" type="checkbox"${ldap.starttls ? " checked" : ""}> ${h("StartTLS")}</label>
-      <label class="row"><input name="ldap_tls_insecure" type="checkbox"${ldap.tls_insecure ? " checked" : ""}> ${h("Zertifikatsprüfung auslassen. Nur in einem Netz, dem du vertraust.")}</label>
+      <label class="row"><input name="ldap_starttls" type="checkbox"${ldap.starttls ? " checked" : ""}> ${h("starttls")}</label>
+      <label class="row"><input name="ldap_tls_insecure" type="checkbox"${ldap.tls_insecure ? " checked" : ""}> ${h("skip_certificate_checks_only_on_a_network_you")}</label>
     </section>
     <section class="form-section">
-      <h2>${h("Proxy")}</h2>
-      <p class="small muted">${h("Eine Adresse gilt für HTTP und HTTPS. Git über HTTP und HTTPS, NetBox und Aufträge nutzen sie. Im Execution Environment gilt das auch für Galaxy. SSH-Git geht nicht darüber. Ein Image-Pull nutzt den Proxy des Container-Daemons.")}</p>
-      <p class="small muted">${h("Eine leere Adresse schaltet den Proxy aus.")}</p>
+      <h2>${h("proxy")}</h2>
+      <p class="small muted">${h("one_address_is_used_for_http_and_https")}</p>
+      <p class="small muted">${h("an_empty_address_turns_the_proxy_off")}</p>
       ${unsupported}
-      <label class="field"><span>${h("Proxy-Adresse")}</span><input name="proxy_url" value="${esc(proxy.url || "")}" placeholder="http://proxy.example:3128" autocomplete="off" spellcheck="false"></label>
+      <label class="field"><span>${h("proxy_address")}</span><input name="proxy_url" value="${esc(proxy.url || "")}" placeholder="http://proxy.example:3128" autocomplete="off" spellcheck="false"></label>
       <div class="field-row">
-        <label class="field"><span>${h("Proxy-Benutzer")}</span><input class="fit" name="proxy_username" value="${esc(proxy.username || "")}" autocomplete="off" spellcheck="false"></label>
-        ${secretInput("proxy_password", "Proxy-Passwort", "password", Boolean(proxy.password_set))}
+        <label class="field"><span>${h("proxy_user")}</span><input class="fit" name="proxy_username" value="${esc(proxy.username || "")}" autocomplete="off" spellcheck="false"></label>
+        ${secretInput("proxy_password", "proxy_password", "password", Boolean(proxy.password_set))}
       </div>
-      <label class="field"><span>${h("Ausnahmen")}</span><input name="proxy_no_proxy" value="${esc(proxy.no_proxy || "")}" placeholder="localhost,127.0.0.1,.internal" autocomplete="off" spellcheck="false"></label>
+      <label class="field"><span>${h("exceptions")}</span><input name="proxy_no_proxy" value="${esc(proxy.no_proxy || "")}" placeholder="localhost,127.0.0.1,.internal" autocomplete="off" spellcheck="false"></label>
     </section>
     <section class="form-section">
-      <h2>${h("Aufträge")}</h2>
-      <p class="small muted">${h("Der Modus und das Zeitlimit gelten für den nächsten Auftrag.")}</p>
+      <h2>${h("jobs")}</h2>
+      <p class="small muted">${h("the_mode_and_the_time_limit_apply_to")}</p>
       <div class="field-row">
-        <label class="field"><span>${h("Runner")}</span>
+        <label class="field"><span>${h("runner")}</span>
           <select class="fit" name="runner">
-            <option value="auto"${optionSelected(runner, "auto")}>${h("Automatisch")}</option>
-            <option value="docker"${optionSelected(runner, "docker")}>${h("Container")}</option>
-            <option value="local"${optionSelected(runner, "local")}>${h("Lokal")}</option>
+            <option value="auto"${optionSelected(runner, "auto")}>${h("automatic")}</option>
+            <option value="docker"${optionSelected(runner, "docker")}>${h("container")}</option>
+            <option value="local"${optionSelected(runner, "local")}>${h("local")}</option>
           </select>
         </label>
-        <label class="field"><span>${h("Zeitlimit in Sekunden")}</span><input class="tiny" name="job_timeout_secs" type="number" min="30" max="86400" required value="${esc(String(item.job_timeout_secs || 1800))}"></label>
+        <label class="field"><span>${h("time_limit_in_seconds")}</span><input class="tiny" name="job_timeout_secs" type="number" min="30" max="86400" required value="${esc(String(item.job_timeout_secs || 1800))}"></label>
       </div>
-      <p class="small muted">${h("Automatisch nimmt ein Execution Environment, wenn Docker oder Podman erreichbar ist. Lokal bleibt auf diesem Rechner. Container bricht ab, wenn keine Laufzeitumgebung da ist.")}</p>
+      <p class="small muted">${h("automatic_uses_an_execution_environment_when_docker_or")}</p>
     </section>
-    <p class="small muted">${h("Speichern ersetzt die Umgebungsvariablen. Ein leeres Passwort bleibt erhalten.")}</p>
+    <p class="small muted">${h("saving_replaces_the_environment_variables_an_empty_password")}</p>
     <div class="choice-row">
-      <button class="btn pill primary" type="submit">${h("Speichern")}</button>
-      <button class="btn pill" id="settings-reset" type="button">${h("Umgebungsvariablen verwenden")}</button>
+      <button class="btn pill primary" type="submit">${h("save")}</button>
+      <button class="btn pill" id="settings-reset" type="button">${h("use_environment_variables")}</button>
     </div>
   </form>`);
   const form = document.querySelector("#settings-form");
@@ -4559,13 +3966,13 @@ async function pageSettings(notice) {
     event.preventDefault();
     try {
       await api("PUT", "/api/settings", settingsBody(form));
-      await pageSettings("Einstellungen gespeichert.");
+      await pageSettings("settings_saved");
     } catch (error) {
       handle(error);
     }
   });
   document.querySelector("#settings-reset").addEventListener("click", async () => {
-    if (!window.confirm(t("Gespeicherte Einstellungen verwerfen und wieder die Umgebungsvariablen vom Start nutzen?"))) return;
+    if (!window.confirm(t("discard_the_saved_settings_and_use_the_environment"))) return;
     try {
       await api("PUT", "/api/settings", { reset: true });
       await pageSettings();
@@ -4577,21 +3984,21 @@ async function pageSettings(notice) {
 
 async function pageBackup() {
   if (!me.is_admin) {
-    deny("Sicherung", "admin");
+    deny("backup", "admin");
     return;
   }
-  shell(t("Sicherung"), `<div class="stack">
+  shell(t("backup"), `<div class="stack">
     <div class="card">
-      <p>${h("Koreograf speichert in SQLite. Die Sicherung enthält die Datenbank und den Schlüssel für die Zugänge. Cache, Git-Checkouts und Auftragsverzeichnisse bleiben außen vor.")}</p>
-      <p class="muted">${h("PostgreSQL ist für eine spätere Firmen-Installation vorgesehen. Dieselbe Sicherung ist die Grundlage für den Umzug.")}</p>
-      <div><button class="btn pill primary" id="backup-download" type="button">${h("Sicherung herunterladen")}</button></div>
+      <p>${h("koreograf_stores_data_in_sqlite_the_backup_contains")}</p>
+      <p class="muted">${h("postgresql_is_planned_for_a_later_company_install")}</p>
+      <div><button class="btn pill primary" id="backup-download" type="button">${h("download_backup")}</button></div>
     </div>
     <form class="card form" id="backup-restore">
-      <h2>${h("Sicherung einspielen")}</h2>
-      <p>${h("Das ersetzt Organisationen, Teams, Benutzer, Projekte, Inventare, Zugänge, Vorlagen, Workflows und Webhooks. Laufende Aufträge müssen vorher beendet sein. Danach ist eine neue Anmeldung nötig.")}</p>
-      <label class="field"><span>${h("Datei")}</span><input name="file" type="file" accept=".zip,application/zip" required></label>
-      <label class="row"><input name="confirm" type="checkbox" required> ${h("Die aktuelle Installation wird ersetzt.")}</label>
-      <button class="btn pill primary" type="submit">${h("Sicherung einspielen")}</button>
+      <h2>${h("restore_backup")}</h2>
+      <p>${h("this_replaces_organizations_teams_users_projects_inventories_credentials")}</p>
+      <label class="field"><span>${h("file")}</span><input name="file" type="file" accept=".zip,application/zip" required></label>
+      <label class="row"><input name="confirm" type="checkbox" required> ${h("the_current_installation_will_be_replaced")}</label>
+      <button class="btn pill primary" type="submit">${h("restore_backup")}</button>
     </form>
   </div>`);
   document.querySelector("#backup-download").addEventListener("click", async () => {
@@ -4604,9 +4011,16 @@ async function pageBackup() {
       const blob = await response.blob();
       if (!response.ok) {
         const text = await blob.text();
-        let message = "Die Anfrage ist fehlgeschlagen.";
-        try { message = JSON.parse(text).error || message; } catch { /* keep */ }
-        throw new Error(message);
+        let message = "request.failed";
+        let vars = null;
+        try {
+          const data = JSON.parse(text);
+          message = data.error || message;
+          vars = data.vars || null;
+        } catch { /* keep */ }
+        const error = new Error(message);
+        error.vars = vars;
+        throw error;
       }
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
@@ -4637,9 +4051,13 @@ async function pageBackup() {
         credentials: "same-origin",
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "Die Anfrage ist fehlgeschlagen.");
+      if (!response.ok) {
+        const error = new Error(data.error || "request.failed");
+        error.vars = data.vars || null;
+        throw error;
+      }
       me = null;
-      renderLogin("Sicherung eingespielt. Die vorherige Installation liegt als restore-previous.zip im Datenverzeichnis. Bitte neu anmelden.", "good");
+      renderLogin("backup_restored_the_previous_installation_is_restore_previous", "good");
     } catch (error) {
       handle(error);
       button.disabled = false;
@@ -4698,13 +4116,22 @@ async function route() {
     else if (parts[0] === "settings") await pageSettings();
     else if (parts[0] === "backup") await pageBackup();
     else if (parts[0] === "team") await pageTeam();
-    else shell(t("Seite"), `<div class="card">${h("Diese Seite gibt es nicht.")}</div>`);
+    else shell(t("page"), `<div class="card">${h("this_page_does_not_exist")}</div>`);
   } catch (error) {
     handle(error);
   }
 }
 
 async function boot() {
+  try {
+    const [german, english] = await Promise.all([
+      fetch("/i18n/de.json").then((response) => response.json()),
+      fetch("/i18n/en.json").then((response) => response.json()),
+    ]);
+    messages = { de: german, en: english };
+  } catch {
+    messages = { de: {}, en: {} };
+  }
   try {
     me = await api("GET", "/api/me");
     const known = (me.teams || []).some((team) => team.id === teamId);

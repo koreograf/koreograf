@@ -43,9 +43,10 @@ pub struct ProjectContents {
 
 pub fn scan_project(root: &Path) -> Result<ProjectContents, String> {
     if !root.is_dir() {
-        return Err(format!(
-            "Projektpfad {} ist kein Verzeichnis.",
-            root.display()
+        let shown = root.display().to_string();
+        return Err(crate::error::message(
+            "project.path_not_directory",
+            &[("path", &shown)],
         ));
     }
     let mut playbooks = Vec::new();
@@ -91,7 +92,7 @@ fn walk(
         }
         *seen += 1;
         if *seen > MAX_FILES {
-            return Err("Projekt enthält zu viele Dateien für einen Scan.".into());
+            return Err("the_project_has_too_many_files_to_scan".into());
         }
         let full = entry.path();
         let Ok(rel) = full.strip_prefix(root) else {

@@ -308,9 +308,9 @@ fn migrate(c: &Connection) -> AppResult<()> {
          SELECT i.id || '-quelle', i.id,
             CASE i.source_kind
                 WHEN 'netbox' THEN 'NetBox'
-                WHEN 'project' THEN 'Projekt'
-                WHEN 'mixed' THEN 'Gemischt'
-                ELSE 'Manuell'
+                WHEN 'project' THEN 'Project'
+                WHEN 'mixed' THEN 'Mixed'
+                ELSE 'Manual'
             END,
             CASE WHEN i.source_kind = 'mixed' THEN 'ini' ELSE i.source_kind END,
             COALESCE(NULLIF(i.source_json, ''), '{}'),
@@ -753,7 +753,7 @@ pub fn grant_manual_membership(
 ) -> AppResult<()> {
     if membership_source(c, team_id, user_id)?.as_deref() == Some("ldap") {
         return Err(ApiError::bad(
-            "Die Mitgliedschaft kommt aus LDAP oder Active Directory.",
+            "the_membership_comes_from_ldap_or_active_directory",
         ));
     }
     upsert_membership(c, team_id, user_id, role, "manual")
@@ -2343,7 +2343,10 @@ mod tests {
         insert_user(&conn, "user", "ada", "Ada", None, "ldap", false).unwrap();
         upsert_membership(&conn, "team", "user", "operator", "ldap").unwrap();
         let err = grant_manual_membership(&conn, "team", "user", "owner").unwrap_err();
-        assert!(err.to_string().contains("LDAP"));
+        assert_eq!(
+            err.to_string(),
+            "the_membership_comes_from_ldap_or_active_directory"
+        );
         let members = list_members(&conn, "team").unwrap();
         assert_eq!(members[0].role, "operator");
         assert_eq!(members[0].source, "ldap");

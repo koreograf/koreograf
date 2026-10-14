@@ -46,7 +46,7 @@ pub async fn restore(
         .and_then(|value| value.to_str().ok())
         != Some("ERSETZEN")
     {
-        return Err(ApiError::bad("Bestätige das Ersetzen mit ERSETZEN."));
+        return Err(ApiError::bad("confirm_the_replacement_with_ersetzen"));
     }
     backup::restore(&state, &body)?;
     let mut response = (

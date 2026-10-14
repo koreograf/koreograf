@@ -411,14 +411,12 @@ fn validate(input: &SettingsWrite, current: &Effective) -> AppResult<Draft> {
         "ldap" => "ldap",
         "ad" => "ad",
         "" => "ldap",
-        _ => return Err(ApiError::bad("LDAP-Modus ist ungültig.")),
+        _ => return Err(ApiError::bad("the_ldap_mode_is_invalid")),
     };
     let ad = ldap_mode == "ad";
     let ldap_url = plain(&input.ldap_url, 400)?;
     if !valid_ldap_url(&ldap_url) {
-        return Err(ApiError::bad(
-            "LDAP-Adresse muss ldap:// oder ldaps:// sein.",
-        ));
+        return Err(ApiError::bad("the_ldap_address_must_be_ldap_or_ldaps"));
     }
     let ldap_bind_dn = plain(&input.ldap_bind_dn, 400)?;
     let ldap_user_base = plain(&input.ldap_user_base, 400)?;
@@ -427,22 +425,22 @@ fn validate(input: &SettingsWrite, current: &Effective) -> AppResult<Draft> {
     if ldap_user_filter.is_empty() {
         ldap_user_filter = filter_default(ad).to_string();
     } else if !ldap_user_filter.contains("{username}") {
-        return Err(ApiError::bad("LDAP-Filter braucht {username}."));
+        return Err(ApiError::bad("the_ldap_filter_needs_username"));
     }
     let mut ldap_username_attr = plain(&input.ldap_username_attr, 80)?;
     if ldap_username_attr.is_empty() {
         ldap_username_attr = attr_default(ad).to_string();
     } else if !valid_attr(&ldap_username_attr) {
-        return Err(ApiError::bad("Der Wert enthält ungültige Zeichen."));
+        return Err(ApiError::bad("the_value_contains_invalid_characters"));
     }
     let mut ldap_group_attr = plain(&input.ldap_group_attr, 80)?;
     if ldap_group_attr.is_empty() {
         ldap_group_attr = "memberOf".to_string();
     } else if !valid_attr(&ldap_group_attr) {
-        return Err(ApiError::bad("Der Wert enthält ungültige Zeichen."));
+        return Err(ApiError::bad("the_value_contains_invalid_characters"));
     }
     if !ldap_url.is_empty() && (ldap_bind_dn.is_empty() || ldap_user_base.is_empty()) {
-        return Err(ApiError::bad("LDAP ist unvollständig konfiguriert."));
+        return Err(ApiError::bad("ldap_is_not_fully_configured"));
     }
     let current_ldap_password = current.ldap.bind_password.as_str();
     let ldap_bind_password = resolve_secret(
@@ -452,19 +450,15 @@ fn validate(input: &SettingsWrite, current: &Effective) -> AppResult<Draft> {
     )?;
     let proxy_url = plain(&input.proxy_url, 300)?;
     if proxy_url.contains('@') {
-        return Err(ApiError::bad(
-            "Zugangsdaten gehören in die eigenen Felder, nicht in die Proxy-Adresse.",
-        ));
+        return Err(ApiError::bad("put_the_credentials_in_their_own_fields_not"));
     }
     if !valid_proxy_url(&proxy_url) {
-        return Err(ApiError::bad(
-            "Proxy-Adresse muss http:// oder https:// sein.",
-        ));
+        return Err(ApiError::bad("the_proxy_address_must_be_http_or_https"));
     }
     let proxy_username = plain(&input.proxy_username, 200)?;
     let proxy_no_proxy = plain(&input.proxy_no_proxy, 500)?;
     if !valid_no_proxy(&proxy_no_proxy) {
-        return Err(ApiError::bad("Proxy-Ausnahmen sind ungültig."));
+        return Err(ApiError::bad("the_proxy_exceptions_are_invalid"));
     }
     let proxy_password = resolve_secret(
         &input.proxy_password,
@@ -472,18 +466,16 @@ fn validate(input: &SettingsWrite, current: &Effective) -> AppResult<Draft> {
         &current.proxy.password,
     )?;
     if !proxy_url.is_empty() && proxy_username.is_empty() && !proxy_password.is_empty() {
-        return Err(ApiError::bad("Proxy-Benutzer fehlt."));
+        return Err(ApiError::bad("the_proxy_user_is_missing"));
     }
     let runner = match input.runner.trim() {
         "auto" => RunnerMode::Auto,
         "docker" => RunnerMode::Docker,
         "local" => RunnerMode::Local,
-        _ => return Err(ApiError::bad("Runner-Modus ist ungültig.")),
+        _ => return Err(ApiError::bad("the_runner_mode_is_invalid")),
     };
     if !(30..=86_400).contains(&input.job_timeout_secs) {
-        return Err(ApiError::bad(
-            "Zeitlimit muss zwischen 30 und 86400 Sekunden liegen.",
-        ));
+        return Err(ApiError::bad("the_time_limit_must_be_between_30_and"));
     }
     Ok(Draft {
         ldap_url,
@@ -510,18 +502,18 @@ fn resolve_secret(incoming: &str, clear: bool, current: &str) -> AppResult<Strin
     let incoming = incoming.trim();
     if !incoming.is_empty() && incoming != SECRET_MARK {
         if incoming.chars().count() > 1024 {
-            return Err(ApiError::bad("Der Wert ist zu lang."));
+            return Err(ApiError::bad("the_value_is_too_long"));
         }
         if incoming
             .chars()
             .any(|ch| ch == '\0' || ch == '\n' || ch == '\r')
         {
-            return Err(ApiError::bad("Der Wert enthält ungültige Zeichen."));
+            return Err(ApiError::bad("the_value_contains_invalid_characters"));
         }
         return Ok(incoming.to_string());
     }
     if incoming == SECRET_MARK && current.is_empty() {
-        return Err(ApiError::bad("Das Platzhalterzeichen ist kein Passwort."));
+        return Err(ApiError::bad("the_placeholder_is_not_a_password"));
     }
     if clear {
         return Ok(String::new());
@@ -546,7 +538,7 @@ fn decrypt_secret(state: &Shared, raw: Option<&String>) -> AppResult<String> {
     }
     state
         .decrypt(raw)
-        .map_err(|_| ApiError::bad("Gespeicherte Einstellung lässt sich nicht lesen."))
+        .map_err(|_| ApiError::bad("the_saved_setting_cannot_be_read"))
 }
 
 fn read_rows(db: &Connection) -> AppResult<HashMap<String, String>> {
@@ -685,10 +677,10 @@ fn valid_attr(value: &str) -> bool {
 fn plain(value: &str, max: usize) -> AppResult<String> {
     let value = value.trim();
     if value.chars().count() > max {
-        return Err(ApiError::bad("Der Wert ist zu lang."));
+        return Err(ApiError::bad("the_value_is_too_long"));
     }
     if value.chars().any(|ch| ch.is_control()) {
-        return Err(ApiError::bad("Der Wert enthält ungültige Zeichen."));
+        return Err(ApiError::bad("the_value_contains_invalid_characters"));
     }
     Ok(value.to_string())
 }
@@ -914,7 +906,7 @@ mod tests {
         let err = save(&state, &bad).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Zugangsdaten gehören in die eigenen Felder, nicht in die Proxy-Adresse."
+            "put_the_credentials_in_their_own_fields_not"
         );
         assert_eq!(load(&state).unwrap().proxy.url, "http://proxy.example:3128");
     }

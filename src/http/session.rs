@@ -70,7 +70,7 @@ pub async fn login(
                 return session_response(&state, &user);
             }
             Err(err) => {
-                tracing::info!(error = %err, "LDAP-Anmeldung abgelehnt");
+                tracing::info!(error = %err, "LDAP sign-in rejected");
             }
         }
     }
@@ -109,7 +109,7 @@ pub async fn update_me(
     let existing = db::user_by_id(&db, &user.id)?.ok_or(ApiError::NotFound)?;
     if existing.auth_source != "local" && !body.password.is_empty() {
         return Err(ApiError::bad(
-            "Das Passwort kommt aus LDAP oder Active Directory.",
+            "the_password_comes_from_ldap_or_active_directory",
         ));
     }
     let email = profile_email(
@@ -165,17 +165,15 @@ pub async fn create_user(
         .all(|ch| ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-')
         || !(2..=64).contains(&username.len())
     {
-        return Err(ApiError::bad(
-            "Benutzername: 2–64 Zeichen, a-z, 0-9, Punkt, Unterstrich, Bindestrich.",
-        ));
+        return Err(ApiError::bad("username_2_64_characters_a_z_0_9"));
     }
     if body.password.len() < 8 {
-        return Err(ApiError::bad("Passwort braucht mindestens 8 Zeichen."));
+        return Err(ApiError::bad("password_needs_at_least_8_characters"));
     }
     let display = trimmed_display(&body.display_name)?;
     let db = state.db()?;
     if db::user_by_username(&db, &username)?.is_some() {
-        return Err(ApiError::bad("Der Benutzername ist schon vergeben."));
+        return Err(ApiError::bad("that_username_is_already_used"));
     }
     db::insert_user(
         &db,
@@ -201,9 +199,7 @@ pub async fn update_user(
     let db = state.db()?;
     let existing = db::user_by_id(&db, &id)?.ok_or(ApiError::NotFound)?;
     if body.disabled && id == user.id {
-        return Err(ApiError::bad(
-            "Du kannst dein eigenes Konto nicht deaktivieren.",
-        ));
+        return Err(ApiError::bad("you_cannot_disable_your_own_account"));
     }
     ensure_last_admin(
         &existing,
@@ -235,7 +231,7 @@ pub async fn delete_user(
 ) -> AppResult<Response> {
     require_admin(&user)?;
     if id == user.id {
-        return Err(ApiError::bad("Du kannst dein eigenes Konto nicht löschen."));
+        return Err(ApiError::bad("you_cannot_delete_your_own_account"));
     }
     let db = state.db()?;
     let existing = db::user_by_id(&db, &id)?.ok_or(ApiError::NotFound)?;
@@ -274,7 +270,7 @@ fn provision_ldap(state: &Shared, identity: ldap::LdapIdentity) -> AppResult<Use
 
 fn session_response(state: &Shared, user: &User) -> AppResult<Response> {
     if user.disabled {
-        return Err(ApiError::bad("Das Konto ist deaktiviert."));
+        return Err(ApiError::bad("the_account_is_disabled"));
     }
     let token = crypto::random_token();
     let db = state.db()?;
@@ -331,7 +327,7 @@ fn require_admin(user: &AuthUser) -> AppResult<()> {
 fn trimmed_display(value: &str) -> AppResult<&str> {
     let display = value.trim();
     if display.is_empty() {
-        Err(ApiError::bad("Anzeigename fehlt."))
+        Err(ApiError::bad("display_name_is_missing"))
     } else {
         Ok(display)
     }
@@ -346,7 +342,7 @@ fn ensure_last_admin(
     let was_active = existing.is_admin && !existing.disabled;
     let stays_active = is_admin && !disabled;
     if was_active && !stays_active && others == 0 {
-        Err(ApiError::bad("Der letzte Administrator bleibt erhalten."))
+        Err(ApiError::bad("the_last_administrator_stays"))
     } else {
         Ok(())
     }
@@ -358,11 +354,11 @@ fn new_password(existing: &User, password: &str) -> AppResult<Option<String>> {
     }
     if existing.auth_source != "local" {
         return Err(ApiError::bad(
-            "Das Passwort kommt aus LDAP oder Active Directory.",
+            "the_password_comes_from_ldap_or_active_directory",
         ));
     }
     if password.len() < 8 {
-        return Err(ApiError::bad("Passwort braucht mindestens 8 Zeichen."));
+        return Err(ApiError::bad("password_needs_at_least_8_characters"));
     }
     Ok(Some(hash_password(password)))
 }
@@ -403,7 +399,7 @@ fn profile_email(
             .eq_ignore_ascii_case(current.unwrap_or(""));
         if !same {
             return Err(ApiError::bad(
-                "Die E-Mail kommt aus LDAP oder Active Directory.",
+                "the_email_comes_from_ldap_or_active_directory",
             ));
         }
     }
@@ -416,7 +412,7 @@ fn normalize_email(value: &str) -> AppResult<Option<String>> {
         return Ok(None);
     }
     let Some((local, domain)) = value.split_once('@') else {
-        return Err(ApiError::bad("E-Mail ist ungültig."));
+        return Err(ApiError::bad("email_is_invalid"));
     };
     if local.is_empty()
         || domain.is_empty()
@@ -427,7 +423,7 @@ fn normalize_email(value: &str) -> AppResult<Option<String>> {
             .chars()
             .any(|ch| ch.is_whitespace() || ch.is_control())
     {
-        return Err(ApiError::bad("E-Mail ist ungültig."));
+        return Err(ApiError::bad("email_is_invalid"));
     }
     Ok(Some(value.to_string()))
 }
@@ -435,7 +431,7 @@ fn normalize_email(value: &str) -> AppResult<Option<String>> {
 fn normalize(username: &str) -> AppResult<String> {
     let name = username.trim().to_ascii_lowercase();
     if name.is_empty() || name.len() > 128 || name.chars().any(|ch| ch.is_control()) {
-        return Err(ApiError::bad("Benutzername ist ungültig."));
+        return Err(ApiError::bad("username_is_invalid"));
     }
     Ok(name)
 }
@@ -459,7 +455,10 @@ mod tests {
     fn ldap_email_stays_with_the_directory() {
         let err =
             profile_email("ldap", Some("ada@example.com"), Some("other@example.com")).unwrap_err();
-        assert!(err.to_string().contains("LDAP"));
+        assert_eq!(
+            err.to_string(),
+            "the_email_comes_from_ldap_or_active_directory"
+        );
         assert_eq!(
             profile_email("ldap", Some("Ada@Example.com"), Some("ada@example.com"))
                 .unwrap()

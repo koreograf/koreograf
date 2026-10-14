@@ -171,7 +171,7 @@ pub async fn launch_template(
     gate(&state, &user, &team, Role::Operator)?;
     let extra = body.extra_vars;
     if !extra.is_object() {
-        return Err(ApiError::bad("extra_vars muss ein Objekt sein."));
+        return Err(ApiError::bad("extra_vars_must_be_an_object"));
     }
     let job_id = jobs::launch(
         &state,
@@ -255,7 +255,7 @@ fn render_job_output(db: &rusqlite::Connection, job_id: &str) -> AppResult<Strin
             after = event.id;
             let extra = event.line.len() + 1;
             if out.len().saturating_add(extra) > OUTPUT_LIMIT {
-                out.push_str("… Ausgabe gekürzt.\n");
+                out.push_str("… output truncated.\n");
                 return Ok(out);
             }
             out.push_str(&event.line);
@@ -458,7 +458,7 @@ pub async fn launch_workflow(
     gate(&state, &user, &team, Role::Operator)?;
     let extra = body.extra_vars;
     if !extra.is_object() {
-        return Err(ApiError::bad("extra_vars muss ein Objekt sein."));
+        return Err(ApiError::bad("extra_vars_must_be_an_object"));
     }
     let run_id = jobs::launch_workflow(&state, &team, &id, extra, &user.username, "manual")?;
     let db = state.db()?;
@@ -553,7 +553,7 @@ pub async fn test_hook(
                 "instance": "web-1",
                 "severity": "warning"
             },
-            "annotations": {"summary": "Testauslösung aus der Koreograf-Oberfläche"}
+            "annotations": {"summary": "Test delivery from the Koreograf UI"}
         }]
     });
     let dispatch = jobs::accept_hook(&state, &hook, &payload)?;
@@ -604,34 +604,32 @@ fn build_template(
 ) -> AppResult<(Template, Vec<String>)> {
     let requested_ids = requested_credential_ids(&body);
     if !runner::known_tool(&body.tool) {
-        return Err(ApiError::bad("Werkzeug ist ansible, opentofu oder shell."));
+        return Err(ApiError::bad("tool_is_ansible_opentofu_or_shell"));
     }
     runner::check_relative(body.entrypoint.trim()).map_err(ApiError::bad)?;
     let extra = body.extra_vars.unwrap_or_else(|| json!({}));
     let spec = body.spec.unwrap_or_else(|| json!({}));
     if !extra.is_object() || !spec.is_object() {
-        return Err(ApiError::bad(
-            "extra_vars und spec müssen JSON-Objekte sein.",
-        ));
+        return Err(ApiError::bad("template.vars_not_objects"));
     }
     if body.tool == "ansible" {
         runner::check_ansible_spec(&spec).map_err(ApiError::bad)?;
     }
     if let Some(action) = spec.get("action").and_then(Value::as_str) {
         if !matches!(action, "plan" | "apply") {
-            return Err(ApiError::bad("Aktion ist plan oder apply."));
+            return Err(ApiError::bad("action_is_plan_or_apply"));
         }
     }
     let entrypoint = body.entrypoint.trim().to_string();
     let inline = spec.get("script").and_then(Value::as_str).unwrap_or("");
     if body.tool == "ansible" && entrypoint.is_empty() {
-        return Err(ApiError::bad("Ansible braucht ein Playbook als Einstieg."));
+        return Err(ApiError::bad("ansible_needs_a_playbook_as_the_entry"));
     }
     if body.tool == "opentofu" && entrypoint.is_empty() {
-        return Err(ApiError::bad("OpenTofu braucht ein Modulverzeichnis."));
+        return Err(ApiError::bad("opentofu_needs_a_module_directory"));
     }
     if body.tool == "shell" && entrypoint.is_empty() && inline.is_empty() {
-        return Err(ApiError::bad("Shell braucht einen Pfad oder spec.script."));
+        return Err(ApiError::bad("shell_needs_a_path_or_spec_script"));
     }
     let project_id = blank(body.project_id);
     let inventory_id = blank(body.inventory_id);
@@ -639,27 +637,25 @@ fn build_template(
     let (created_at, loaded) = {
         let db = state.db()?;
         if let Some(project_id) = &project_id {
-            db::project(&db, project_id)?.ok_or_else(|| ApiError::bad("Projekt fehlt."))?;
+            db::project(&db, project_id)?.ok_or_else(|| ApiError::bad("project_is_missing"))?;
             if !db::project_visible(&db, project_id, team)? {
-                return Err(ApiError::bad(
-                    "Das Projekt ist für dieses Team nicht sichtbar.",
-                ));
+                return Err(ApiError::bad("this_project_is_not_visible_to_this_team"));
             }
         }
         if let Some(inventory_id) = &inventory_id {
             let inventory = db::inventory(&db, inventory_id)?
-                .ok_or_else(|| ApiError::bad("Inventar fehlt."))?;
+                .ok_or_else(|| ApiError::bad("inventory_is_missing"))?;
             if inventory.team_id != team {
-                return Err(ApiError::bad("Inventar gehört zu einem anderen Team."));
+                return Err(ApiError::bad("the_inventory_belongs_to_another_team"));
             }
         }
         if let Some(environment_id) = &environment_id {
             let environment = db::environment(&db, environment_id)?
-                .ok_or_else(|| ApiError::bad("Execution Environment fehlt."))?;
+                .ok_or_else(|| ApiError::bad("execution_environment_is_missing"))?;
             let owner = db::team_by_id(&db, team)?.ok_or(ApiError::NotFound)?;
             if !db::environment_visible(&environment, &owner) {
                 return Err(ApiError::bad(
-                    "Execution Environment ist für dieses Team nicht sichtbar.",
+                    "the_execution_environment_is_not_visible_to_this",
                 ));
             }
         }
@@ -673,7 +669,7 @@ fn build_template(
         let mut loaded = Vec::with_capacity(requested_ids.len());
         for credential_id in &requested_ids {
             let credential = db::credential(&db, credential_id)?
-                .ok_or_else(|| ApiError::bad("Zugang fehlt."))?;
+                .ok_or_else(|| ApiError::bad("credential_is_missing"))?;
             loaded.push(credential);
         }
         (created_at, loaded)
@@ -721,14 +717,14 @@ fn assign_credentials(state: &Shared, team: &str, loaded: &[Credential]) -> AppR
     let mut vault_labels = Vec::with_capacity(loaded.len());
     for credential in loaded {
         if credential.team_id != team {
-            return Err(ApiError::bad("Zugang gehört zu einem anderen Team."));
+            return Err(ApiError::bad("the_credential_belongs_to_another_team"));
         }
         let vault_id = if credential.kind == "vault" {
             let plain = state
                 .decrypt(&credential.secret_blob)
-                .map_err(|_| ApiError::bad("Zugangsdaten lassen sich nicht lesen."))?;
+                .map_err(|_| ApiError::bad("credentials_cannot_be_read"))?;
             let secret: Value = serde_json::from_str(&plain)
-                .map_err(|_| ApiError::bad("Zugangsdaten sind kein JSON."))?;
+                .map_err(|_| ApiError::bad("credentials_are_not_json"))?;
             credentials::check("vault", &secret).map_err(ApiError::bad)?;
             secret
                 .get("vault_id")
@@ -763,25 +759,27 @@ fn check_node_overrides(
 ) -> AppResult<()> {
     let over = &node.overrides;
     if let Some(id) = over.inventory_id.as_deref().filter(|id| !id.is_empty()) {
-        let inventory = db::inventory(db, id)?.ok_or_else(|| ApiError::bad("Inventar fehlt."))?;
+        let inventory =
+            db::inventory(db, id)?.ok_or_else(|| ApiError::bad("inventory_is_missing"))?;
         if inventory.team_id != team {
-            return Err(ApiError::bad("Inventar gehört zu einem anderen Team."));
+            return Err(ApiError::bad("the_inventory_belongs_to_another_team"));
         }
     }
     if let Some(id) = over.credential_id.as_deref().filter(|id| !id.is_empty()) {
-        let credential = db::credential(db, id)?.ok_or_else(|| ApiError::bad("Zugang fehlt."))?;
+        let credential =
+            db::credential(db, id)?.ok_or_else(|| ApiError::bad("credential_is_missing"))?;
         if credential.team_id != team {
-            return Err(ApiError::bad("Zugang gehört zu einem anderen Team."));
+            return Err(ApiError::bad("the_credential_belongs_to_another_team"));
         }
     }
     if let Some(extra) = &over.extra_vars {
         if !extra.is_object() {
-            return Err(ApiError::bad("Extra-Variablen muss ein JSON-Objekt sein."));
+            return Err(ApiError::bad("extra_variables_must_be_a_json_object"));
         }
     }
     if let Some(spec) = &over.spec {
         if !spec.is_object() {
-            return Err(ApiError::bad("spec muss ein Objekt sein."));
+            return Err(ApiError::bad("spec_must_be_an_object"));
         }
     }
     if over.spec.is_some() {
@@ -795,7 +793,7 @@ fn check_node_overrides(
         if template.tool == "opentofu" {
             if let Some(action) = spec.get("action").and_then(Value::as_str) {
                 if !matches!(action, "plan" | "apply") {
-                    return Err(ApiError::bad("Aktion ist plan oder apply."));
+                    return Err(ApiError::bad("action_is_plan_or_apply"));
                 }
             }
         }
@@ -804,7 +802,7 @@ fn check_node_overrides(
         .map_err(|err| ApiError::Internal(err.to_string()))?
         .len();
     if size > 64 * 1024 {
-        return Err(ApiError::bad("Parameter sind zu groß."));
+        return Err(ApiError::bad("parameters_are_too_large"));
     }
     Ok(())
 }
@@ -818,10 +816,11 @@ fn build_workflow(
     workflow::validate(&body.graph).map_err(ApiError::bad)?;
     let db = state.db()?;
     for node in &body.graph.nodes {
-        let template = db::template(&db, &node.template_id)?
-            .ok_or_else(|| ApiError::bad(format!("Vorlage für „{}“ fehlt.", node.name)))?;
+        let template = db::template(&db, &node.template_id)?.ok_or_else(|| {
+            ApiError::bad_vars("template.missing_named", [("name", node.name.as_str())])
+        })?;
         if template.team_id != team {
-            return Err(ApiError::bad("Eine Vorlage gehört zu einem anderen Team."));
+            return Err(ApiError::bad("a_template_belongs_to_another_team"));
         }
         check_node_overrides(&db, team, &template, node)?;
     }
@@ -847,42 +846,34 @@ fn build_hook(state: &Shared, team: &str, body: HookBody) -> AppResult<Hook> {
     let template_id = blank(body.template_id);
     let workflow_id = blank(body.workflow_id);
     match (&template_id, &workflow_id) {
-        (Some(_), Some(_)) => {
-            return Err(ApiError::bad(
-                "Hook hat entweder eine Vorlage oder einen Workflow.",
-            ))
-        }
-        (None, None) => {
-            return Err(ApiError::bad(
-                "Hook braucht eine Vorlage oder einen Workflow.",
-            ))
-        }
+        (Some(_), Some(_)) => return Err(ApiError::bad("hook.one_target")),
+        (None, None) => return Err(ApiError::bad("hook.needs_target")),
         _ => {}
     }
     if !matches!(body.match_status.as_str(), "firing" | "resolved" | "any") {
-        return Err(ApiError::bad("Status ist firing, resolved oder any."));
+        return Err(ApiError::bad("status_is_firing_resolved_or_any"));
     }
     let alertname = body.match_alertname.trim();
     if alertname.is_empty() {
-        return Err(ApiError::bad("Alertname fehlt."));
+        return Err(ApiError::bad("alert_name_is_missing"));
     }
     let extra = body.extra_vars.unwrap_or_else(|| json!({}));
     if !extra.is_object() {
-        return Err(ApiError::bad("extra_vars muss ein Objekt sein."));
+        return Err(ApiError::bad("extra_vars_must_be_an_object"));
     }
     let db = state.db()?;
     if let Some(template_id) = &template_id {
         let template =
-            db::template(&db, template_id)?.ok_or_else(|| ApiError::bad("Vorlage fehlt."))?;
+            db::template(&db, template_id)?.ok_or_else(|| ApiError::bad("template_is_missing"))?;
         if template.team_id != team {
-            return Err(ApiError::bad("Vorlage gehört zu einem anderen Team."));
+            return Err(ApiError::bad("the_template_belongs_to_another_team"));
         }
     }
     if let Some(workflow_id) = &workflow_id {
         let item =
-            db::workflow(&db, workflow_id)?.ok_or_else(|| ApiError::bad("Workflow fehlt."))?;
+            db::workflow(&db, workflow_id)?.ok_or_else(|| ApiError::bad("workflow_is_missing"))?;
         if item.team_id != team {
-            return Err(ApiError::bad("Workflow gehört zu einem anderen Team."));
+            return Err(ApiError::bad("the_workflow_belongs_to_another_team"));
         }
     }
     Ok(Hook {

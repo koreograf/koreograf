@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.89"
 license = "MIT"
-description = "Team-fähige Automation mit Execution Environments, Abhängigkeits-Cache und Workflows"
+description = "Prototype for team-scoped automation with a dependency cache and workflows"
 publish = false
 
 [dependencies]

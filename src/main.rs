@@ -21,7 +21,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(
         mode = cfg.runner.as_str(),
         ldap = cfg.ldap.is_some(),
-        "Konfiguration gelesen"
+        "configuration loaded"
     );
     koreograf::serve(cfg).await
 }

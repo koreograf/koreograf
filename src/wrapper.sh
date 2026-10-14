@@ -27,7 +27,7 @@ ensure_container_user() {
     return 0
   fi
   if [ ! -w /etc/passwd ]; then
-    log "UID ${uid} fehlt in /etc/passwd und die Datei ist nicht schreibbar. SSH bricht dann mit 'No user exists for uid' ab."
+    log "UID ${uid} is missing from /etc/passwd and the file is not writable. SSH then fails with 'No user exists for uid'."
     return 0
   fi
   gid=$(id -g)
@@ -40,7 +40,7 @@ ensure_container_user() {
     fi
   fi
   printf '%s\n' "${uid}:x:${uid}:${gid}:container user:${home}:/bin/sh" >> /etc/passwd
-  log "UID ${uid} fehlte in /etc/passwd und wurde ergänzt."
+  log "UID ${uid} was missing from /etc/passwd and was added."
 }
 
 if [ "${KOREOGRAF_WORK}" = "/runner/work" ]; then
@@ -84,20 +84,20 @@ cache_roles() {
     name=$(basename "$d")
     dest="$KOREOGRAF_ROLES/$name"
     if [ -d "$dest" ]; then
-      log "Rolle aus Cache: $name"
+      log "Role from cache: $name"
     else
       cp -a "$d" "$dest"
-      log "Rolle neu in den Cache gelegt: $name"
+      log "Role added to the cache: $name"
     fi
   done
 }
 
 run_ansible() {
   cd "$KOREOGRAF_PROJECT" || exit 1
-  log "Collection-Cache vor dem Lauf:"
+  log "Collection cache before the run:"
   before=$(list_cols || true)
   if [ -z "$before" ]; then
-    log "  (leer)"
+    log "  (empty)"
   else
     printf '%s\n' "$before" | while IFS= read -r line; do
       log "  $line"
@@ -113,21 +113,21 @@ run_ansible() {
   if [ -n "$req" ]; then
     log "ansible-galaxy collection install -r $req"
     if ! ansible-galaxy collection install -r "$req" -p "$KOREOGRAF_COLLECTIONS"; then
-      log "Galaxy-Install fehlgeschlagen. Vorhandener Cache wird trotzdem verwendet."
+      log "Galaxy install failed. The existing cache is used anyway."
     fi
     if grep -q '^roles:' "$req"; then
       log "ansible-galaxy role install -r $req"
       if ! ansible-galaxy role install -r "$req" -p "$KOREOGRAF_ROLES"; then
-        log "Rollen-Install fehlgeschlagen. Vorhandener Cache wird trotzdem verwendet."
+        log "Role install failed. The existing cache is used anyway."
       fi
     fi
   else
-    log "Keine requirements.yml, Galaxy-Schritt übersprungen."
+    log "No requirements.yml, Galaxy step skipped."
   fi
-  log "Collection-Cache nach dem Lauf:"
+  log "Collection cache after the run:"
   after=$(list_cols || true)
   if [ -z "$after" ]; then
-    log "  (leer)"
+    log "  (empty)"
   else
     printf '%s\n' "$after" | while IFS= read -r line; do
       log "  $line"
@@ -241,12 +241,12 @@ run_tofu() {
   mkdir -p "$stage"
   cp -a "$src"/. "$stage"/
   cd "$stage" || exit 1
-  log "OpenTofu Plugin-Cache: $TF_PLUGIN_CACHE_DIR"
+  log "OpenTofu plugin cache: $TF_PLUGIN_CACHE_DIR"
   before=$(find "$TF_PLUGIN_CACHE_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')
-  log "Plugin-Dateien im Cache vorher: $before"
+  log "Plugin files in the cache before: $before"
   tofu init -input=false -no-color
   after=$(find "$TF_PLUGIN_CACHE_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')
-  log "Plugin-Dateien im Cache nachher: $after"
+  log "Plugin files in the cache after: $after"
   if [ "$KOREOGRAF_ACTION" = "apply" ]; then
     log "tofu apply"
     exec tofu apply -input=false -auto-approve -no-color
@@ -258,7 +258,7 @@ run_tofu() {
 run_shell() {
   cd "$KOREOGRAF_PROJECT" || exit 1
   log "Shell-Skript: $KOREOGRAF_ENTRYPOINT"
-  log "Cache-Verzeichnis: $KOREOGRAF_COLLECTIONS"
+  log "Cache directory: $KOREOGRAF_COLLECTIONS"
   exec sh "$KOREOGRAF_ENTRYPOINT"
 }
 

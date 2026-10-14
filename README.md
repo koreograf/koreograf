@@ -8,7 +8,7 @@ Koreograf is a prototype for team-scoped automation. One Rust binary serves the 
 
 This is an early prototype, not a replacement for AWX and not a rebuild of Semaphore. There are no surveys, no schedules, no Receptor, and no high-availability setup. The database today is one SQLite file with one writer. PostgreSQL is not connected yet.
 
-The browser UI is German by default. A language menu in the sidebar and on the sign-in page lists each language with a flag and a short code, for example GER and ENG.
+The browser UI is German by default. A language menu in the sidebar and on the sign-in page lists each language with a flag and a short code, for example GER and ENG. Visible copy lives in `web/i18n/de.json` and `web/i18n/en.json`. The API returns a message key in `error`, and logs stay English.
 
 ## What the cache changes
 
@@ -41,7 +41,7 @@ The lines contain no credentials, no tokens, and no extra variables.
 | `koreograf::cache` | when a job starts | collection and role counts, bytes for collections, roles, and OpenTofu |
 | `koreograf::role` | Ansible role finished, and immediately on `failed` or `unreachable` | `playbook`, `role`, `result`, or the counters `ok`, `changed`, `failed`, `unreachable`, `skipped` |
 
-For Ansible, `playbook` is the playbook path. For shell and OpenTofu it is the entry path. Koreograf reads roles from Ansible's default callback output (`TASK [role : task]`, `RUNNING HANDLER`, `ok:`, `changed:`, `fatal:`, `unreachable:`, `skipping:`). `KOREOGRAF Rolle aus Cache` means the role was already in the cache. A task name that contains ` : ` outside a role can look like a role.
+For Ansible, `playbook` is the playbook path. For shell and OpenTofu it is the entry path. Koreograf reads roles from Ansible's default callback output (`TASK [role : task]`, `RUNNING HANDLER`, `ok:`, `changed:`, `fatal:`, `unreachable:`, `skipping:`). `KOREOGRAF Role from cache` means the role was already in the cache. A task name that contains ` : ` outside a role can look like a role.
 
 `GET /metrics` is open, like `/healthz`, and returns Prometheus text. Counters live in memory and start at zero after a restart. Prometheus treats that jump as a restart. Cache numbers are read from disk on each scrape, even when no job is running. The time of a role is the log line. `koreograf_role_results_total` counts results and has no timestamp.
 

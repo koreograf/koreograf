@@ -35,11 +35,11 @@ pub fn database_choice(url: &str) -> Result<(), &'static str> {
     } else if lower.starts_with("postgres://") || lower.starts_with("postgresql://") {
         Err(POSTGRES_LATER)
     } else {
-        Err("KOREOGRAF_DATABASE_URL wird nicht unterstützt. Leer lassen für SQLite.")
+        Err("KOREOGRAF_DATABASE_URL is not supported. Leave it empty to use SQLite.")
     }
 }
 
-const POSTGRES_LATER: &str = "PostgreSQL ist noch nicht angebunden. Koreograf nutzt SQLite. Eine Sicherung aus der Admin-Oberfläche enthält die Datenbank und den Schlüssel für einen späteren Umzug.";
+const POSTGRES_LATER: &str = "PostgreSQL is not connected yet. Koreograf uses SQLite. A backup from the admin UI contains the database and the key for a later move.";
 
 #[derive(Clone)]
 pub struct LdapConfig {

@@ -21,13 +21,13 @@ pub struct Cipher {
 impl Cipher {
     pub fn encrypt(&self, plain: &str) -> AppResult<String> {
         let cipher = Aes256Gcm::new_from_slice(&self.key)
-            .map_err(|_| ApiError::Internal("Schlüssel ungültig.".into()))?;
+            .map_err(|_| ApiError::Internal("key is invalid".into()))?;
         let mut nonce_bytes = [0u8; 12];
         rand::rngs::OsRng.fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
         let ct = cipher
             .encrypt(nonce, plain.as_bytes())
-            .map_err(|_| ApiError::Internal("Verschlüsselung fehlgeschlagen.".into()))?;
+            .map_err(|_| ApiError::Internal("encryption failed".into()))?;
         let mut packed = nonce_bytes.to_vec();
         packed.extend(ct);
         Ok(B64.encode(packed))
@@ -36,22 +36,22 @@ impl Cipher {
     pub fn decrypt(&self, packed: &str) -> AppResult<String> {
         let bytes = B64
             .decode(packed.trim())
-            .map_err(|_| ApiError::Internal("Geheimnis ist kein gültiger Datensatz.".into()))?;
+            .map_err(|_| ApiError::Internal("secret is not a valid record".into()))?;
         if bytes.len() < 13 {
-            return Err(ApiError::Internal("Geheimnis ist zu kurz.".into()));
+            return Err(ApiError::Internal("secret is too short".into()));
         }
         let (nonce_bytes, ct) = bytes.split_at(12);
         let cipher = Aes256Gcm::new_from_slice(&self.key)
-            .map_err(|_| ApiError::Internal("Schlüssel ungültig.".into()))?;
+            .map_err(|_| ApiError::Internal("key is invalid".into()))?;
         let plain = cipher
             .decrypt(Nonce::from_slice(nonce_bytes), ct)
-            .map_err(|_| ApiError::Internal("Geheimnis lässt sich nicht lesen.".into()))?;
-        String::from_utf8(plain).map_err(|_| ApiError::Internal("Geheimnis ist kein Text.".into()))
+            .map_err(|_| ApiError::Internal("secret cannot be read".into()))?;
+        String::from_utf8(plain).map_err(|_| ApiError::Internal("secret is not text".into()))
     }
 }
 
 pub(crate) fn parse_key(raw: &[u8]) -> AppResult<[u8; 32]> {
-    decode_key(raw).map_err(|_| ApiError::bad("Der Schlüssel in der Sicherung ist ungültig."))
+    decode_key(raw).map_err(|_| ApiError::bad("the_key_in_the_backup_is_invalid"))
 }
 
 pub(crate) fn install_key(data_dir: &Path, raw: &[u8]) -> AppResult<Cipher> {

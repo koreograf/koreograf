@@ -98,10 +98,10 @@ pub async fn authenticate(
     password: &str,
 ) -> Result<LdapIdentity, String> {
     if password.is_empty() {
-        return Err("Leeres Passwort.".into());
+        return Err("empty_password".into());
     }
     if cfg.bind_dn.is_empty() || cfg.user_base.is_empty() {
-        return Err("LDAP ist unvollständig konfiguriert.".into());
+        return Err("ldap_is_not_fully_configured".into());
     }
     let settings = LdapConnSettings::new()
         .set_starttls(cfg.starttls)
@@ -109,14 +109,14 @@ pub async fn authenticate(
         .set_conn_timeout(Duration::from_secs(8));
     let (conn, mut ldap) = LdapConnAsync::with_settings(settings, &cfg.url)
         .await
-        .map_err(|e| format!("LDAP-Verbindung: {e}"))?;
+        .map_err(|e| format!("LDAP connection: {e}"))?;
     ldap3::drive!(conn);
 
     ldap.simple_bind(&cfg.bind_dn, &cfg.bind_password)
         .await
-        .map_err(|e| format!("Service-Bind: {e}"))?
+        .map_err(|e| format!("service bind: {e}"))?
         .success()
-        .map_err(|e| format!("Service-Bind abgelehnt: {e}"))?;
+        .map_err(|e| format!("service bind rejected: {e}"))?;
 
     let filter = cfg
         .user_filter
@@ -132,16 +132,16 @@ pub async fn authenticate(
     let (entries, _) = ldap
         .search(&cfg.user_base, Scope::Subtree, &filter, attrs)
         .await
-        .map_err(|e| format!("Benutzersuche: {e}"))?
+        .map_err(|e| format!("user search: {e}"))?
         .success()
-        .map_err(|e| format!("Benutzersuche abgelehnt: {e}"))?;
+        .map_err(|e| format!("user search rejected: {e}"))?;
     if entries.len() != 1 {
         let _ = ldap.unbind().await;
-        return Err("Benutzer wurde nicht eindeutig gefunden.".into());
+        return Err("the_user_was_not_found_uniquely".into());
     }
     let Some(raw_entry) = entries.into_iter().next() else {
         let _ = ldap.unbind().await;
-        return Err("Benutzer wurde nicht eindeutig gefunden.".into());
+        return Err("the_user_was_not_found_uniquely".into());
     };
     let entry = SearchEntry::construct(raw_entry);
     let user_dn = entry.dn.clone();
@@ -155,9 +155,9 @@ pub async fn authenticate(
 
     ldap.simple_bind(&user_dn, password)
         .await
-        .map_err(|e| format!("Anmeldung: {e}"))?
+        .map_err(|e| format!("LDAP bind failed: {e}"))?
         .success()
-        .map_err(|_| "LDAP hat das Passwort abgelehnt.".to_string())?;
+        .map_err(|_| "ldap_rejected_the_password".to_string())?;
 
     if groups.is_empty() {
         let base = if cfg.group_base.is_empty() {

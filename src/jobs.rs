@@ -86,16 +86,14 @@ pub fn relaunch(
         let db = state.db()?;
         let job = db::job(&db, source_id)?.ok_or(ApiError::NotFound)?;
         if job.status != "failed" {
-            return Err(ApiError::bad(
-                "Nur ein fehlgeschlagener Auftrag kann erneut gestartet werden.",
-            ));
+            return Err(ApiError::bad("only_a_failed_job_can_be_relaunched"));
         }
         let template_id = job
             .template_id
             .clone()
-            .ok_or_else(|| ApiError::bad("Die Vorlage dieses Auftrags fehlt."))?;
+            .ok_or_else(|| ApiError::bad("this_job_s_template_is_missing"))?;
         let template = db::template(&db, &template_id)?
-            .ok_or_else(|| ApiError::bad("Die Vorlage dieses Auftrags fehlt."))?;
+            .ok_or_else(|| ApiError::bad("this_job_s_template_is_missing"))?;
         if template.team_id != job.team_id {
             return Err(ApiError::Forbidden);
         }
@@ -110,9 +108,7 @@ pub fn relaunch(
         };
         if only_failed_hosts {
             if job.tool != "ansible" {
-                return Err(ApiError::bad(
-                    "Nur Ansible-Aufträge haben fehlgeschlagene Hosts.",
-                ));
+                return Err(ApiError::bad("only_ansible_jobs_have_failed_hosts"));
             }
             let hosts = runner::failed_host_names(&job.failed_hosts);
             let limit = runner::limit_from_hosts(&hosts).map_err(ApiError::bad)?;
@@ -143,12 +139,12 @@ pub fn relaunch(
 
 fn stored_parameters(raw: &str) -> AppResult<String> {
     if raw.len() > 512 * 1024 {
-        return Err(ApiError::bad("Parameter sind zu groß."));
+        return Err(ApiError::bad("parameters_are_too_large"));
     }
     let value: Value =
-        serde_json::from_str(raw).map_err(|_| ApiError::bad("Parameter sind ungültig."))?;
+        serde_json::from_str(raw).map_err(|_| ApiError::bad("parameters_are_invalid"))?;
     if !value.is_object() {
-        return Err(ApiError::bad("Parameter sind ungültig."));
+        return Err(ApiError::bad("parameters_are_invalid"));
     }
     Ok(value.to_string())
 }
@@ -164,7 +160,7 @@ fn parameters_for_node(
     let had_spec = node.overrides.spec.is_some();
     {
         let Some(map) = params.as_object_mut() else {
-            return Err(ApiError::bad("Parameter sind ungültig."));
+            return Err(ApiError::bad("parameters_are_invalid"));
         };
         workflow::apply_overrides(map, &node.overrides);
         if had_extra {
@@ -192,13 +188,13 @@ fn parameters_for_node(
             .and_then(Value::as_str)
         {
             if !matches!(action, "plan" | "apply") {
-                return Err(ApiError::bad("Aktion ist plan oder apply."));
+                return Err(ApiError::bad("action_is_plan_or_apply"));
             }
         }
     }
     let raw = serde_json::to_string(&params).map_err(|err| ApiError::Internal(err.to_string()))?;
     if raw.len() > 512 * 1024 {
-        return Err(ApiError::bad("Parameter sind zu groß."));
+        return Err(ApiError::bad("parameters_are_too_large"));
     }
     Ok(raw)
 }
@@ -211,9 +207,9 @@ fn refresh_inventory(
     match params.get("inventory_id").and_then(Value::as_str) {
         Some(id) if !id.is_empty() => {
             let inventory =
-                db::inventory(db, id)?.ok_or_else(|| ApiError::bad("Inventar fehlt."))?;
+                db::inventory(db, id)?.ok_or_else(|| ApiError::bad("inventory_is_missing"))?;
             if inventory.team_id != team_id {
-                return Err(ApiError::bad("Inventar gehört zu einem anderen Team."));
+                return Err(ApiError::bad("the_inventory_belongs_to_another_team"));
             }
             params.insert("inventory_id".into(), json!(inventory.id));
             params.insert("inventory_name".into(), json!(inventory.name));
@@ -243,9 +239,10 @@ fn refresh_credential(
         params.insert("credentials".into(), json!([]));
         return Ok(());
     };
-    let credential = db::credential(db, &id)?.ok_or_else(|| ApiError::bad("Zugang fehlt."))?;
+    let credential =
+        db::credential(db, &id)?.ok_or_else(|| ApiError::bad("credential_is_missing"))?;
     if credential.team_id != team_id {
-        return Err(ApiError::bad("Zugang gehört zu einem anderen Team."));
+        return Err(ApiError::bad("the_credential_belongs_to_another_team"));
     }
     let mut list = params
         .get("credentials")
@@ -422,19 +419,20 @@ pub fn launch_workflow(
             return Err(ApiError::Forbidden);
         }
         let graph: workflow::Graph = serde_json::from_str(&item.graph)
-            .map_err(|_| ApiError::bad("Workflow-Graph ist ungültig."))?;
+            .map_err(|_| ApiError::bad("the_workflow_graph_is_invalid"))?;
         if graph.nodes.is_empty() {
-            return Err(ApiError::bad("Der Workflow hat noch keine Knoten."));
+            return Err(ApiError::bad("the_workflow_has_no_nodes_yet"));
         }
         workflow::validate(&graph).map_err(ApiError::bad)?;
         for node in &graph.nodes {
-            let template = db::template(&db, &node.template_id)?
-                .ok_or_else(|| ApiError::bad(format!("Vorlage für „{}“ fehlt.", node.name)))?;
+            let template = db::template(&db, &node.template_id)?.ok_or_else(|| {
+                ApiError::bad_vars("template.missing_named", [("name", node.name.as_str())])
+            })?;
             if template.team_id != team_id {
-                return Err(ApiError::bad(format!(
-                    "Vorlage für „{}“ gehört zu einem anderen Team.",
-                    node.name
-                )));
+                return Err(ApiError::bad_vars(
+                    "template.other_team_named",
+                    [("name", node.name.as_str())],
+                ));
             }
         }
         let run = WorkflowJob {
@@ -474,7 +472,7 @@ async fn drive(state: Shared, wf_job_id: String) -> AppResult<()> {
         let item = db::workflow(&db, run.workflow_id.as_deref().unwrap_or(""))?
             .ok_or(ApiError::NotFound)?;
         let graph: workflow::Graph = serde_json::from_str(&item.graph)
-            .map_err(|_| ApiError::bad("Workflow-Graph ist ungültig."))?;
+            .map_err(|_| ApiError::bad("the_workflow_graph_is_invalid"))?;
         (graph, run.team_id, db::json_object(&run.extra_vars))
     };
     for _ in 0..4_000 {
@@ -577,7 +575,7 @@ fn apply_step(
                     },
                 ),
                 Err(err) => {
-                    tracing::warn!(error = %err, node = %node_id, "Knoten-Parameter");
+                    tracing::warn!(error = %err, node = %node_id, "node parameters");
                     Err(err)
                 }
             };
@@ -635,7 +633,7 @@ pub fn accept_hook(state: &Shared, hook: &Hook, payload: &Value) -> AppResult<Di
                 id: &id,
                 hook_id: &hook.id,
                 status: "ignored",
-                summary: "Hook ist deaktiviert.",
+                summary: "Hook is disabled.",
                 payload: &payload_text,
                 job_id: None,
                 workflow_job_id: None,
@@ -643,7 +641,7 @@ pub fn accept_hook(state: &Shared, hook: &Hook, payload: &Value) -> AppResult<Di
         )?;
         return Ok(Dispatch {
             status: "ignored".into(),
-            summary: "Hook ist deaktiviert.".into(),
+            summary: "Hook is disabled.".into(),
             job_id: None,
             workflow_job_id: None,
         });
@@ -651,10 +649,10 @@ pub fn accept_hook(state: &Shared, hook: &Hook, payload: &Value) -> AppResult<Di
     if matched.is_empty() {
         let id = Uuid::new_v4().to_string();
         let summary = if events.is_empty() {
-            "Keine Alerts in der Nutzlast erkannt.".to_string()
+            "No alerts found in the payload.".to_string()
         } else {
             format!(
-                "Kein Alert passt auf {} / {}.",
+                "No alert matches {} / {}.",
                 hook.match_alertname, hook.match_status
             )
         };
@@ -713,11 +711,11 @@ pub fn accept_hook(state: &Shared, hook: &Hook, payload: &Value) -> AppResult<Di
                 first_job = Some(id);
             }
         } else {
-            return Err(ApiError::bad("Hook hat kein Ziel."));
+            return Err(ApiError::bad("the_hook_has_no_target"));
         }
     }
     let summary = format!(
-        "{} Alert(s) gestartet, zuerst {}.",
+        "{} alert(s) started, first {}.",
         matched.len(),
         matched[0].alertname
     );
@@ -849,9 +847,14 @@ mod tests {
             .expect("status");
         }
         let shell = relaunch(&state, "src-failed", "admin", true).expect_err("shell");
-        assert!(shell.to_string().contains("Ansible"), "{shell}");
+        assert!(shell.to_string().contains("ansible"), "{shell}");
         let running = relaunch(&state, &copy, "admin", false).expect_err("not failed");
-        assert!(running.to_string().contains("fehlgeschlagen"), "{running}");
+        assert!(
+            running
+                .to_string()
+                .contains("only_a_failed_job_can_be_relaunched"),
+            "{running}"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }

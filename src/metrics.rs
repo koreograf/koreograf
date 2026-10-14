@@ -129,7 +129,7 @@ impl Metrics {
             tool = %open.tool,
             playbook = %open.playbook,
             template = %open.template,
-            "Auftrag gestartet"
+            "job started"
         );
     }
 
@@ -156,7 +156,7 @@ impl Metrics {
             template = %closed.template,
             status = %closed.status,
             duration_ms = closed.duration_ms,
-            "Auftrag beendet"
+            "job finished"
         );
     }
 
@@ -683,7 +683,7 @@ fatal: [web-3]: FAILED! => {"password":"s3cret"}
 skipping: [web-4]
 unreachable: [web-5]
 
-KOREOGRAF Rolle aus Cache: web
+KOREOGRAF Role from cache: web
 
 RUNNING HANDLER [web : restart nginx] ***
 changed: [web-1]
@@ -748,7 +748,7 @@ ok: [web-1]
         ));
         assert!(!text.contains("Gathering Facts"));
         assert!(!text.contains("s3cret"));
-        assert!(!text.contains("Rolle aus Cache"));
+        assert!(!text.contains("Role from cache"));
     }
 
     #[test]

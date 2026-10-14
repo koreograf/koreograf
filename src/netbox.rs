@@ -63,11 +63,16 @@ pub fn parse_filters(lines: &[String]) -> Result<Vec<(String, String)>, String> 
         let (key, value) = line
             .split_once('=')
             .or_else(|| line.split_once(':'))
-            .ok_or_else(|| format!("Filter „{line}“ braucht Schlüssel=Wert."))?;
+            .ok_or_else(|| {
+                crate::error::message("filter_line_needs_key_value", &[("line", line)])
+            })?;
         let key = key.trim();
         let value = value.trim().trim_matches('"').trim_matches('\'');
         if key.is_empty() || value.is_empty() || key.contains(' ') {
-            return Err(format!("Filter „{line}“ ist ungültig."));
+            return Err(crate::error::message(
+                "filter_line_is_invalid",
+                &[("line", line)],
+            ));
         }
         query.push((key.to_string(), value.to_string()));
     }
@@ -80,15 +85,16 @@ pub async fn fetch_ini(
     proxy: &crate::settings::ProxySettings,
 ) -> Result<String, String> {
     if !valid_endpoint(&source.api_endpoint) {
-        return Err("NetBox-Adresse muss http oder https sein.".into());
+        return Err("the_netbox_address_must_be_http_or_https".into());
     }
     if !valid_token(token) {
-        return Err("NetBox-Token ist ungültig.".into());
+        return Err("the_netbox_token_is_invalid".into());
     }
     for key in &source.group_by {
         if !known_group(key) {
-            return Err(format!(
-                "Gruppierung „{key}“ wird nicht unterstützt. Möglich sind sites, device_roles, role, platform, tenant, tags, status, cluster, region, location, manufacturer, device_type, site_group und is_virtual."
+            return Err(crate::error::message(
+                "grouping_key_is_not_supported_allowed_values_are",
+                &[("key", key)],
             ));
         }
     }
@@ -165,13 +171,13 @@ async fn collect(page: &PageQuery<'_>, hosts: &mut Vec<NbHost>) -> Result<(), St
     while let Some(current) = url.take() {
         pages += 1;
         if pages > MAX_PAGES || hosts.len() >= MAX_HOSTS {
-            return Err("NetBox-Antwort ist zu groß (Grenze 20 Seiten oder 2000 Hosts).".into());
+            return Err("the_netbox_response_is_too_large_limit_20".into());
         }
         let body = get_json(page.client, &current, page.token).await?;
         let results = body
             .get("results")
             .and_then(Value::as_array)
-            .ok_or_else(|| "NetBox-Antwort hat keine results.".to_string())?;
+            .ok_or_else(|| "the_netbox_response_has_no_results".to_string())?;
         for item in results {
             if hosts.len() >= MAX_HOSTS {
                 break;
@@ -183,7 +189,7 @@ async fn collect(page: &PageQuery<'_>, hosts: &mut Vec<NbHost>) -> Result<(), St
         url = match body.get("next") {
             Some(Value::String(next)) if !next.is_empty() => {
                 if origin(page.endpoint) != origin(next) {
-                    return Err("NetBox-Antwort verweist auf einen anderen Host.".into());
+                    return Err("the_netbox_response_points_at_another_host".into());
                 }
                 Some(next.clone())
             }
@@ -389,17 +395,24 @@ async fn get_json(client: &reqwest::Client, url: &str, token: &str) -> Result<Va
         .header("Accept", "application/json")
         .send()
         .await
-        .map_err(|err| format!("NetBox ist nicht erreichbar: {err}"))?;
+        .map_err(|err| {
+            let detail = err.to_string();
+            crate::error::message("netbox_is_not_reachable_err", &[("err", &detail)])
+        })?;
     let status = response.status();
-    let text = response
-        .text()
-        .await
-        .map_err(|err| format!("NetBox-Antwort lässt sich nicht lesen: {err}"))?;
+    let text = response.text().await.map_err(|err| {
+        let detail = err.to_string();
+        crate::error::message("netbox.response_unreadable", &[("detail", &detail)])
+    })?;
     if !status.is_success() {
         let snippet: String = text.chars().take(240).collect();
-        return Err(format!("NetBox antwortet mit {status}: {snippet}"));
+        let code = status.as_u16().to_string();
+        return Err(crate::error::message(
+            "netbox.bad_status",
+            &[("status", &code), ("snippet", &snippet)],
+        ));
     }
-    serde_json::from_str(&text).map_err(|_| "NetBox-Antwort ist kein JSON.".to_string())
+    serde_json::from_str(&text).map_err(|_| "the_netbox_response_is_not_json".to_string())
 }
 
 fn scalar(text: &str, key: &str) -> Option<String> {

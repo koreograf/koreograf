@@ -162,6 +162,8 @@ pub fn router(state: Shared) -> Router {
         .route("/", get(index))
         .route("/app.js", get(script))
         .route("/app.css", get(style))
+        .route("/i18n/de.json", get(messages_de))
+        .route("/i18n/en.json", get(messages_en))
         .route("/hooks/{id}/{token}", post(work::ingest))
         .nest("/api", api)
         .layer(TraceLayer::new_for_http())
@@ -220,6 +222,22 @@ async fn style(State(state): State<Shared>) -> Response {
     .await
 }
 
+async fn messages_de(State(state): State<Shared>) -> Response {
+    file(
+        &state.cfg.web_dir.join("i18n/de.json"),
+        "application/json; charset=utf-8",
+    )
+    .await
+}
+
+async fn messages_en(State(state): State<Shared>) -> Response {
+    file(
+        &state.cfg.web_dir.join("i18n/en.json"),
+        "application/json; charset=utf-8",
+    )
+    .await
+}
+
 async fn file(path: &Path, content_type: &'static str) -> Response {
     match tokio::fs::read(path).await {
         Ok(bytes) => (
@@ -227,7 +245,7 @@ async fn file(path: &Path, content_type: &'static str) -> Response {
             bytes,
         )
             .into_response(),
-        Err(_) => (StatusCode::NOT_FOUND, "Datei fehlt").into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, "Not found.").into_response(),
     }
 }
 
@@ -238,7 +256,7 @@ pub fn team_header(headers: &HeaderMap) -> AppResult<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
-        .ok_or_else(|| ApiError::bad("X-Team-Id fehlt."))
+        .ok_or_else(|| ApiError::bad("x_team_id_is_missing"))
 }
 
 pub fn gate(state: &Shared, user: &AuthUser, team_id: &str, min: Role) -> AppResult<()> {
@@ -252,7 +270,7 @@ pub fn gate(state: &Shared, user: &AuthUser, team_id: &str, min: Role) -> AppRes
 pub fn require_name(name: &str) -> AppResult<String> {
     let name = name.trim();
     if name.is_empty() || name.len() > 120 {
-        return Err(ApiError::bad("Name fehlt oder ist zu lang."));
+        return Err(ApiError::bad("name_is_missing_or_too_long"));
     }
     Ok(name.to_string())
 }

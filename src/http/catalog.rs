@@ -188,7 +188,7 @@ pub async fn update_team(
             return Err(ApiError::Forbidden);
         }
         db::organization(&db, &organization_id)?
-            .ok_or_else(|| ApiError::bad("Organisation fehlt."))?;
+            .ok_or_else(|| ApiError::bad("organization_is_missing"))?;
         db::set_team_organization(&db, &id, &organization_id)?;
     }
     db::update_team(
@@ -209,7 +209,7 @@ fn organization_for_new_team(
 ) -> AppResult<String> {
     if let Some(organization_id) = blank(requested) {
         db::organization(db, &organization_id)?
-            .ok_or_else(|| ApiError::bad("Organisation fehlt."))?;
+            .ok_or_else(|| ApiError::bad("organization_is_missing"))?;
         return Ok(organization_id);
     }
     if let Some(existing) = db::organization_by_name(db, team_name)? {
@@ -238,12 +238,12 @@ pub async fn add_member(
     Json(body): Json<MemberBody>,
 ) -> AppResult<axum::response::Response> {
     gate(&state, &user, &id, Role::Owner)?;
-    let role = Role::parse(&body.role)
-        .ok_or_else(|| ApiError::bad("Rolle ist viewer, operator oder owner."))?;
+    let role =
+        Role::parse(&body.role).ok_or_else(|| ApiError::bad("role_is_viewer_operator_or_owner"))?;
     let username = body.username.trim().to_ascii_lowercase();
     let db = state.db()?;
     let member = db::user_by_username(&db, &username)?
-        .ok_or_else(|| ApiError::bad("Benutzer ist unbekannt. Lege ihn zuerst an."))?;
+        .ok_or_else(|| ApiError::bad("unknown_user_create_the_account_first"))?;
     db::grant_manual_membership(&db, &id, &member.id, role.as_str())?;
     Ok(created(
         json!({"user_id": member.id, "role": role.as_str()}),
@@ -257,9 +257,7 @@ pub async fn remove_member(
 ) -> AppResult<axum::response::Response> {
     gate(&state, &user, &id, Role::Owner)?;
     if user_id == user.id && !user.is_admin {
-        return Err(ApiError::bad(
-            "Du kannst dich nicht selbst aus dem Team nehmen.",
-        ));
+        return Err(ApiError::bad("you_cannot_remove_yourself_from_the_team"));
     }
     let db = state.db()?;
     db::delete_membership(&db, &id, &user_id)?;
@@ -308,15 +306,14 @@ pub async fn update_project(
     }
     let organization_id = body.organization_id.trim();
     if organization_id.is_empty() {
-        return Err(ApiError::bad("Organisation fehlt."));
+        return Err(ApiError::bad("organization_is_missing"));
     }
     let current = db::team_by_id(&db, &team)?.ok_or(ApiError::NotFound)?;
     if !user.is_admin && current.organization_id != organization_id {
-        return Err(ApiError::bad(
-            "Ein Projekt bleibt in der Organisation des gewählten Teams.",
-        ));
+        return Err(ApiError::bad("a_project_stays_in_the_organization_of_the"));
     }
-    db::organization(&db, organization_id)?.ok_or_else(|| ApiError::bad("Organisation fehlt."))?;
+    db::organization(&db, organization_id)?
+        .ok_or_else(|| ApiError::bad("organization_is_missing"))?;
     check_team_ids(&db, organization_id, &body.team_ids)?;
     db::set_project_organization(&db, &id, organization_id)?;
     db::replace_project_teams(&db, &id, &body.team_ids)?;
@@ -339,12 +336,10 @@ pub async fn create_project(
     let organization_id = match blank(body.organization_id) {
         Some(organization_id) => {
             if !user.is_admin && organization_id != current.organization_id {
-                return Err(ApiError::bad(
-                    "Ein Projekt bleibt in der Organisation des gewählten Teams.",
-                ));
+                return Err(ApiError::bad("a_project_stays_in_the_organization_of_the"));
             }
             db::organization(&db, &organization_id)?
-                .ok_or_else(|| ApiError::bad("Organisation fehlt."))?;
+                .ok_or_else(|| ApiError::bad("organization_is_missing"))?;
             organization_id
         }
         None => current.organization_id,
@@ -353,23 +348,21 @@ pub async fn create_project(
     let revision = body.revision.trim();
     if !runner::valid_revision(revision) {
         return Err(ApiError::bad(
-            "Revision darf nur Buchstaben, Ziffern, Punkt, Schrägstrich, Unterstrich und Bindestrich enthalten.",
+            "revision_may_contain_only_letters_digits_dot_slash",
         ));
     }
     match body.source_type.as_str() {
         "path" => {
             if !std::path::Path::new(source).is_dir() {
-                return Err(ApiError::bad("Projektpfad ist kein Verzeichnis."));
+                return Err(ApiError::bad("the_project_path_is_not_a_directory"));
             }
         }
         "git" => {
             if !runner::valid_git(source) {
-                return Err(ApiError::bad(
-                    "Git-Adresse muss http(s), ssh, git@ oder file sein.",
-                ));
+                return Err(ApiError::bad("the_git_address_must_be_http_s_ssh"));
             }
         }
-        _ => return Err(ApiError::bad("Quelle ist path oder git.")),
+        _ => return Err(ApiError::bad("source_is_path_or_git")),
     }
     let project = Project {
         id: Uuid::new_v4().to_string(),
@@ -394,10 +387,10 @@ fn check_team_ids(
     team_ids: &[String],
 ) -> AppResult<()> {
     for team_id in team_ids {
-        let team = db::team_by_id(db, team_id)?.ok_or_else(|| ApiError::bad("Team fehlt."))?;
+        let team = db::team_by_id(db, team_id)?.ok_or_else(|| ApiError::bad("team_is_missing"))?;
         if team.organization_id != organization_id {
             return Err(ApiError::bad(
-                "Zugewiesene Teams müssen zur Organisation des Projekts gehören.",
+                "assigned_teams_must_belong_to_the_project_organization",
             ));
         }
     }
@@ -488,14 +481,12 @@ pub async fn update_inventory(
     if !body.body.trim().is_empty() {
         if sources.len() > 1 {
             return Err(ApiError::bad(
-                "Dieses Inventar hat mehrere Quellen. Den Text bearbeitest du an der einzelnen Quelle.",
+                "this_inventory_has_several_sources_edit_the_text",
             ));
         }
         if let Some(source) = sources.first() {
             if source.kind != "ini" {
-                return Err(ApiError::bad(
-                    "Diese Quelle kommt aus einem Projekt oder aus NetBox. Aktualisieren holt sie neu.",
-                ));
+                return Err(ApiError::bad("this_source_comes_from_a_project_or_from"));
             }
         }
     }
@@ -540,7 +531,7 @@ pub async fn create_inventory(
         Some(db::InventorySource {
             id: Uuid::new_v4().to_string(),
             inventory_id: item.id.clone(),
-            name: "Manuell".into(),
+            name: "manual".into(),
             kind: "ini".into(),
             source_json: "{}".into(),
             credential_id: None,
@@ -633,13 +624,13 @@ pub async fn create_credential(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Owner)?;
     if !crate::credentials::known_kind(&body.kind) {
-        return Err(ApiError::bad("Unbekannte Zugangsart."));
+        return Err(ApiError::bad("unknown_credential_type"));
     }
     if let Err(message) = crate::credentials::check(&body.kind, &body.secret) {
         return Err(ApiError::bad(message));
     }
     if body.secret.to_string().len() > 256 * 1024 {
-        return Err(ApiError::bad("Geheimnis ist zu groß."));
+        return Err(ApiError::bad("the_secret_is_too_large"));
     }
     let blob = state.encrypt(&body.secret.to_string())?;
     let item = Credential {
@@ -681,9 +672,9 @@ fn open_credential(state: &Shared, id: &str, team: &str) -> AppResult<(Credentia
     };
     let plain = state
         .decrypt(&item.secret_blob)
-        .map_err(|_| ApiError::bad("Zugangsdaten lassen sich nicht lesen."))?;
+        .map_err(|_| ApiError::bad("credentials_cannot_be_read"))?;
     let secret =
-        serde_json::from_str(&plain).map_err(|_| ApiError::bad("Zugangsdaten sind kein JSON."))?;
+        serde_json::from_str(&plain).map_err(|_| ApiError::bad("credentials_are_not_json"))?;
     Ok((item, secret))
 }
 
@@ -728,7 +719,7 @@ pub async fn update_credential(
     }
     let raw = secret.to_string();
     if raw.len() > 256 * 1024 {
-        return Err(ApiError::bad("Geheimnis ist zu groß."));
+        return Err(ApiError::bad("the_secret_is_too_large"));
     }
     item.name = require_name(&body.name)?;
     item.secret_blob = state.encrypt(&raw)?;
@@ -754,9 +745,7 @@ fn environment_scope(raw: Option<&str>, fallback: &str) -> AppResult<String> {
     let scope = if raw.is_empty() { fallback } else { raw };
     match scope {
         "team" | "organization" | "global" => Ok(scope.to_string()),
-        _ => Err(ApiError::bad(
-            "Geltungsbereich ist team, organization oder global.",
-        )),
+        _ => Err(ApiError::bad("scope_is_team_organization_or_global")),
     }
 }
 
@@ -772,7 +761,7 @@ fn apply_environment_scope(item: &mut Environment, scope: &str, team: &db::Team)
         }
         "organization" => {
             if team.organization_id.is_empty() {
-                return Err(ApiError::bad("Organisation fehlt."));
+                return Err(ApiError::bad("organization_is_missing"));
             }
             item.team_id = None;
             item.organization_id = Some(team.organization_id.clone());
@@ -782,9 +771,7 @@ fn apply_environment_scope(item: &mut Environment, scope: &str, team: &db::Team)
             item.organization_id = None;
         }
         _ => {
-            return Err(ApiError::bad(
-                "Geltungsbereich ist team, organization oder global.",
-            ));
+            return Err(ApiError::bad("scope_is_team_organization_or_global"));
         }
     }
     Ok(())
@@ -803,13 +790,11 @@ fn environment_fields(body: &EnvironmentBody) -> AppResult<(String, String, Stri
         body.pull_policy.as_str(),
         "if_not_present" | "always" | "never"
     ) {
-        return Err(ApiError::bad(
-            "Pull-Policy ist if_not_present, always oder never.",
-        ));
+        return Err(ApiError::bad("pull_policy_is_if_not_present_always_or"));
     }
     let image = body.image.trim();
     if !runner::valid_image(image) {
-        return Err(ApiError::bad("Image-Name ist ungültig."));
+        return Err(ApiError::bad("the_image_name_is_invalid"));
     }
     Ok((
         require_name(&body.name)?,
@@ -926,7 +911,7 @@ pub async fn cache(
         "tofu_bytes": report.tofu_bytes,
         "collections": report.collections,
         "roles": report.roles,
-        "note": "Der Cache liegt unter data/cache und bleibt zwischen den Läufen erhalten.",
+        "note": "the_cache_lives_under_data_cache_and_stays",
     })))
 }
 

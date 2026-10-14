@@ -175,36 +175,45 @@ pub fn validate(graph: &Graph) -> Result<(), String> {
     let mut ids = HashSet::new();
     for node in &graph.nodes {
         if node.id.trim().is_empty() {
-            return Err("Ein Knoten hat keine ID.".into());
+            return Err("a_node_has_no_id".into());
         }
         if node.template_id.trim().is_empty() {
-            return Err(format!("Knoten {} hat keine Auftragsvorlage.", node.id));
+            return Err(crate::error::message(
+                "workflow.node_template",
+                &[("id", node.id.as_str())],
+            ));
         }
         if node.name.trim().is_empty() {
-            return Err(format!("Knoten {} hat keinen Namen.", node.id));
+            return Err(crate::error::message(
+                "workflow.node_name",
+                &[("id", node.id.as_str())],
+            ));
         }
         if !ids.insert(node.id.clone()) {
-            return Err(format!("Doppelte Knoten-ID {}.", node.id));
+            return Err(crate::error::message(
+                "workflow.node_duplicate",
+                &[("id", node.id.as_str())],
+            ));
         }
     }
     let mut seen = HashSet::new();
     for edge in &graph.edges {
         if !ids.contains(&edge.from) || !ids.contains(&edge.to) {
-            return Err("Eine Kante verweist auf einen unbekannten Knoten.".into());
+            return Err("an_edge_points_at_an_unknown_node".into());
         }
         if edge.from == edge.to {
-            return Err("Eine Kante darf nicht auf denselben Knoten zeigen.".into());
+            return Err("an_edge_cannot_point_at_the_same_node".into());
         }
         let key = format!("{}->{}:{:?}", edge.from, edge.to, edge.when);
         if !seen.insert(key) {
-            return Err("Dieselbe Kante ist doppelt vorhanden.".into());
+            return Err("the_same_edge_is_present_twice".into());
         }
     }
     let mut visiting = HashSet::new();
     let mut done = HashSet::new();
     for node in &graph.nodes {
         if has_cycle(graph, &node.id, &mut visiting, &mut done) {
-            return Err("Der Workflow enthält einen Zyklus.".into());
+            return Err("the_workflow_contains_a_cycle".into());
         }
     }
     Ok(())
@@ -414,7 +423,7 @@ mod tests {
     fn overrides_replace_inventory_and_keep_other_spec_keys() {
         let mut params = serde_json::json!({
             "inventory_id": "inv-template",
-            "inventory_name": "Vorlage",
+            "inventory_name": "template",
             "credential_id": "cred-1",
             "extra_vars": {"stage": "template"},
             "spec": {"limit": "old", "job_type": "run", "forks": 5}
@@ -454,7 +463,7 @@ mod tests {
             "inventory_id": "inv",
             "inventory_name": "Alt",
             "credential_id": "cred",
-            "credential_name": "Schlüssel",
+            "credential_name": "stored-key",
             "credential_kind": "ssh"
         });
         let map = params.as_object_mut().expect("object");

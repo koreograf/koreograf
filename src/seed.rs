@@ -37,7 +37,7 @@ fn ensure_admin(conn: &Connection, cfg: &Config) -> AppResult<Option<String>> {
         }
     };
     if password.len() < 8 {
-        tracing::warn!("Das Admin-Passwort ist kürzer als 8 Zeichen.");
+        tracing::warn!("The admin password is shorter than 8 characters.");
     }
     db::insert_user(
         conn,
@@ -70,20 +70,21 @@ fn write_password_file(path: &Path, password: &str) -> AppResult<()> {
         .map_err(|err| crate::error::ApiError::Internal(err.to_string()))?;
     tracing::warn!(
         path = %path.display(),
-        "Initiales Admin-Passwort liegt in dieser Datei. Danach löschen."
+        "The initial admin password is in this file. Delete it after reading."
     );
     Ok(())
 }
 
 fn seed_demo(conn: &Connection, cfg: &Config) -> AppResult<()> {
-    let admin = db::user_by_username(conn, &cfg.admin_user)?
-        .ok_or_else(|| crate::error::ApiError::Internal("Admin fehlt nach dem Anlegen.".into()))?;
+    let admin = db::user_by_username(conn, &cfg.admin_user)?.ok_or_else(|| {
+        crate::error::ApiError::Internal("Admin user is missing after creation.".into())
+    })?;
     let organization_id = Uuid::new_v4().to_string();
     db::insert_organization(
         conn,
         &organization_id,
         "Plattform",
-        "Beispiel-Organisation für das Demo-Team.",
+        "Demo organization for the sample team.",
     )?;
     let team_id = Uuid::new_v4().to_string();
     db::insert_team(
@@ -91,7 +92,7 @@ fn seed_demo(conn: &Connection, cfg: &Config) -> AppResult<()> {
         &team_id,
         &organization_id,
         "Plattform",
-        "Beispiel-Team. LDAP-Gruppe kann später auf den Gruppennamen gesetzt werden.",
+        "Sample team. An LDAP group can later use this group name.",
         None,
     )?;
     db::upsert_membership(conn, &team_id, &admin.id, "owner", "manual")?;
@@ -120,7 +121,7 @@ fn seed_demo(conn: &Connection, cfg: &Config) -> AppResult<()> {
         &Inventory {
             id: inventory_id.clone(),
             team_id: team_id.clone(),
-            name: "Lokal".into(),
+            name: "local".into(),
             body: "[all]\nlocalhost ansible_connection=local\n".into(),
             created_at: db::now(),
             source_kind: "ini".into(),
@@ -133,7 +134,7 @@ fn seed_demo(conn: &Connection, cfg: &Config) -> AppResult<()> {
         &InventorySource {
             id: Uuid::new_v4().to_string(),
             inventory_id: inventory_id.clone(),
-            name: "Manuell".into(),
+            name: "manual".into(),
             kind: "ini".into(),
             source_json: "{}".into(),
             credential_id: None,
@@ -153,7 +154,7 @@ fn seed_demo(conn: &Connection, cfg: &Config) -> AppResult<()> {
             name: "AWX-EE".into(),
             image: "quay.io/ansible/awx-ee:latest".into(),
             pull_policy: "if_not_present".into(),
-            description: "Gleiches Prinzip wie ein AWX Execution Environment. Der Galaxy-Cache bleibt auf dem Host gemountet und wird nicht pro Lauf geleert.".into(),
+            description: "Same idea as an AWX execution environment. The Galaxy cache stays mounted on the host and is not cleared after a run.".into(),
             created_at: db::now(),
             scope: "team".into(),
             organization_name: String::new(),
@@ -175,7 +176,7 @@ fn seed_demo(conn: &Connection, cfg: &Config) -> AppResult<()> {
             project_id: &project_id,
             inventory_id: None,
             name: "Healthcheck",
-            description: "Schneller Shell-Check, läuft ohne Ansible.",
+            description: "A short shell check that runs without Ansible.",
             tool: "shell",
             entrypoint: "health.sh",
             extra_vars: "{}",
@@ -189,7 +190,7 @@ fn seed_demo(conn: &Connection, cfg: &Config) -> AppResult<()> {
             project_id: &project_id,
             inventory_id: Some(&inventory_id),
             name: "Self-Heal",
-            description: "Playbook schreibt einen Bericht und löscht nur explizit genannte Dateinamen im Job-Verzeichnis.",
+            description: "The playbook writes a report and deletes only file names that are named explicitly in the job directory.",
             tool: "ansible",
             entrypoint: "site.yml",
             extra_vars: &heal_vars,
@@ -203,7 +204,7 @@ fn seed_demo(conn: &Connection, cfg: &Config) -> AppResult<()> {
             project_id: &project_id,
             inventory_id: None,
             name: "Eskalation",
-            description: "Läuft, wenn der Healthcheck fehlschlägt.",
+            description: "Runs when the health check fails.",
             tool: "shell",
             entrypoint: "escalate.sh",
             extra_vars: "{}",
@@ -243,7 +244,7 @@ fn seed_demo(conn: &Connection, cfg: &Config) -> AppResult<()> {
             id: workflow_id.clone(),
             team_id: team_id.clone(),
             name: "Self-Heal Ablauf".into(),
-            description: "Healthcheck, bei Erfolg das Playbook, bei Fehler die Eskalation.".into(),
+            description: "Health check, then the playbook, or the escalation when it fails.".into(),
             graph: graph.to_string(),
             created_at: db::now(),
         },

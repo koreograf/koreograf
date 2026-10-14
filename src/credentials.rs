@@ -52,7 +52,7 @@ pub struct AssignedCredential<'a> {
 /// One credential of each kind. Vault may repeat when each vault id is unique.
 pub fn check_assignment(items: &[AssignedCredential<'_>]) -> Result<(), String> {
     if items.len() > 32 {
-        return Err("Zu viele Zugänge.".into());
+        return Err("too_many_credentials".into());
     }
     let mut seen_ids = HashSet::new();
     let mut seen_kinds = HashSet::new();
@@ -60,22 +60,22 @@ pub fn check_assignment(items: &[AssignedCredential<'_>]) -> Result<(), String> 
     let mut default_vaults = 0usize;
     for item in items {
         if item.id.is_empty() {
-            return Err("Zugang fehlt.".into());
+            return Err("credential_is_missing".into());
         }
         if !seen_ids.insert(item.id) {
-            return Err("Zugang ist doppelt.".into());
+            return Err("credential_is_listed_twice".into());
         }
         if item.kind == "vault" {
             if item.vault_id.is_empty() {
                 default_vaults += 1;
                 if default_vaults > 1 {
-                    return Err("Nur ein Vault-Zugang darf ohne Vault-Id sein.".into());
+                    return Err("only_one_vault_credential_may_omit_the_vault".into());
                 }
             } else if !seen_vault_ids.insert(item.vault_id) {
-                return Err("Diese Vault-Id ist schon gewählt.".into());
+                return Err("this_vault_id_is_already_selected".into());
             }
         } else if !seen_kinds.insert(item.kind) {
-            return Err("Pro Art ist nur ein Zugang erlaubt.".into());
+            return Err("only_one_credential_of_each_kind_is_allowed".into());
         }
     }
     Ok(())
@@ -148,7 +148,7 @@ pub fn merge_secret(
     clear: &[String],
 ) -> Result<Value, String> {
     if !incoming.is_null() && !incoming.is_object() {
-        return Err("Geheimnis muss ein JSON-Objekt sein.".into());
+        return Err("the_secret_must_be_a_json_object".into());
     }
     let mut base = previous.as_object().cloned().unwrap_or_default();
     for key in clear {
@@ -192,10 +192,10 @@ pub fn merge_secret(
 
 pub fn check(kind: &str, secret: &Value) -> Result<(), String> {
     if !known_kind(kind) {
-        return Err("Unbekannte Zugangsart.".into());
+        return Err("unknown_credential_type".into());
     }
     if !secret.is_object() {
-        return Err("Geheimnis muss ein JSON-Objekt sein.".into());
+        return Err("the_secret_must_be_a_json_object".into());
     }
     match kind {
         "ssh" => check_ssh(secret),
@@ -214,7 +214,7 @@ pub fn check(kind: &str, secret: &Value) -> Result<(), String> {
         "insights" => check_login(secret),
         "env" => Ok(()),
         "netbox" => check_netbox(secret),
-        _ => Err("Unbekannte Zugangsart.".into()),
+        _ => Err("unknown_credential_type".into()),
     }
 }
 
@@ -360,7 +360,7 @@ pub fn prepare(
             push_env(&mut env, "NETBOX_API", text(secret, "url"));
             push_env(&mut env, "NETBOX_URL", text(secret, "url"));
         }
-        _ => return Err("Unbekannte Zugangsart.".into()),
+        _ => return Err("unknown_credential_type".into()),
     }
     Ok(PreparedCredential { env, files })
 }
@@ -369,28 +369,28 @@ fn check_ssh(secret: &Value) -> Result<(), String> {
     let key = text(secret, "private_key");
     let password = text(secret, "password");
     if key.is_empty() && password.is_empty() {
-        return Err("SSH braucht einen Schlüssel oder ein Passwort.".into());
+        return Err("ssh_needs_a_key_or_a_password".into());
     }
-    one_line(text(secret, "username"), "Benutzer")?;
-    one_line(password, "Passwort")?;
-    limited(key, 65_536, "Privater Schlüssel")?;
-    one_line(text(secret, "passphrase"), "Passphrase")?;
+    one_line(text(secret, "username"), "user")?;
+    one_line(password, "password")?;
+    limited(key, 65_536, "private_key")?;
+    one_line(text(secret, "passphrase"), "passphrase")?;
     if !text(secret, "passphrase").is_empty() && key.is_empty() {
-        return Err("Passphrase braucht einen privaten Schlüssel.".into());
+        return Err("a_passphrase_needs_a_private_key".into());
     }
     let method = text(secret, "become_method");
     if !method.is_empty() && !BECOME_METHODS.contains(&method) {
-        return Err("Become-Methode ist ungültig.".into());
+        return Err("the_become_method_is_invalid".into());
     }
-    one_line(text(secret, "become_username"), "Become-Benutzer")?;
-    one_line(text(secret, "become_password"), "Become-Passwort")?;
+    one_line(text(secret, "become_username"), "become_user")?;
+    one_line(text(secret, "become_password"), "become_password")?;
     Ok(())
 }
 
 fn check_vault(secret: &Value) -> Result<(), String> {
     let password = text(secret, "password");
-    require(password, "Vault braucht password.")?;
-    one_line(password, "Passwort")?;
+    require(password, "vault_needs_a_password")?;
+    one_line(password, "password")?;
     let vault_id = text(secret, "vault_id");
     if vault_id.is_empty() {
         return Ok(());
@@ -402,7 +402,7 @@ fn check_vault(secret: &Value) -> Result<(), String> {
     if ok {
         Ok(())
     } else {
-        Err("Vault-Id ist ungültig.".into())
+        Err("the_vault_id_is_invalid".into())
     }
 }
 
@@ -410,51 +410,51 @@ fn check_scm(secret: &Value) -> Result<(), String> {
     let key = text(secret, "private_key");
     let password = text(secret, "password");
     if key.is_empty() && password.is_empty() {
-        return Err("Quellcode braucht einen Schlüssel oder ein Passwort.".into());
+        return Err("source_control_needs_a_key_or_a_password".into());
     }
-    one_line(text(secret, "username"), "Benutzer")?;
-    one_line(password, "Passwort")?;
-    limited(key, 65_536, "Privater Schlüssel")?;
-    one_line(text(secret, "passphrase"), "Passphrase")?;
+    one_line(text(secret, "username"), "user")?;
+    one_line(password, "password")?;
+    limited(key, 65_536, "private_key")?;
+    one_line(text(secret, "passphrase"), "passphrase")?;
     if !text(secret, "passphrase").is_empty() && key.is_empty() {
-        return Err("Passphrase braucht einen privaten Schlüssel.".into());
+        return Err("a_passphrase_needs_a_private_key".into());
     }
     Ok(())
 }
 
 fn check_net(secret: &Value) -> Result<(), String> {
     if text(secret, "username").is_empty() && text(secret, "password").is_empty() {
-        return Err("Netzwerk braucht einen Benutzer oder ein Passwort.".into());
+        return Err("network_needs_a_username_or_a_password".into());
     }
-    one_line(text(secret, "username"), "Benutzer")?;
-    one_line(text(secret, "password"), "Passwort")?;
-    limited(text(secret, "private_key"), 65_536, "Privater Schlüssel")?;
-    one_line(text(secret, "authorize_password"), "Authorize-Passwort")?;
+    one_line(text(secret, "username"), "user")?;
+    one_line(text(secret, "password"), "password")?;
+    limited(text(secret, "private_key"), 65_536, "private_key")?;
+    one_line(text(secret, "authorize_password"), "authorize_password")?;
     Ok(())
 }
 
 fn check_aws(secret: &Value) -> Result<(), String> {
-    require(text(secret, "access_key"), "AWS braucht access_key.")?;
-    require(text(secret, "secret_key"), "AWS braucht secret_key.")?;
-    one_line(text(secret, "access_key"), "Access Key")?;
-    one_line(text(secret, "secret_key"), "Secret Key")?;
-    one_line(text(secret, "security_token"), "Session-Token")?;
+    require(text(secret, "access_key"), "aws_needs_access_key")?;
+    require(text(secret, "secret_key"), "aws_needs_secret_key")?;
+    one_line(text(secret, "access_key"), "access_key")?;
+    one_line(text(secret, "secret_key"), "secret_key")?;
+    one_line(text(secret, "security_token"), "session_token")?;
     Ok(())
 }
 
 fn check_azure(secret: &Value) -> Result<(), String> {
     require(
         text(secret, "subscription_id"),
-        "Azure braucht subscription_id.",
+        "azure_needs_subscription_id",
     )?;
-    require(text(secret, "client_id"), "Azure braucht client_id.")?;
-    require(text(secret, "secret"), "Azure braucht secret.")?;
-    require(text(secret, "tenant"), "Azure braucht tenant.")?;
+    require(text(secret, "client_id"), "azure_needs_client_id")?;
+    require(text(secret, "secret"), "azure_needs_secret")?;
+    require(text(secret, "tenant"), "azure_needs_tenant")?;
     for (key, label) in [
-        ("subscription_id", "Subscription"),
-        ("client_id", "Client"),
-        ("secret", "Geheimnis"),
-        ("tenant", "Tenant"),
+        ("subscription_id", "subscription"),
+        ("client_id", "client"),
+        ("secret", "secret"),
+        ("tenant", "tenant"),
     ] {
         one_line(text(secret, key), label)?;
     }
@@ -463,50 +463,50 @@ fn check_azure(secret: &Value) -> Result<(), String> {
 
 fn check_gce(secret: &Value) -> Result<(), String> {
     let body = text(secret, "service_account");
-    require(body, "Dienstkonto fehlt.")?;
-    limited(body, 65_536, "Dienstkonto")?;
+    require(body, "the_service_account_is_missing")?;
+    limited(body, 65_536, "service_account")?;
     match serde_json::from_str::<Value>(body) {
         Ok(Value::Object(_)) => Ok(()),
-        _ => Err("Dienstkonto ist kein JSON-Objekt.".into()),
+        _ => Err("the_service_account_is_not_a_json_object".into()),
     }
 }
 
 fn check_vmware(secret: &Value) -> Result<(), String> {
-    require(text(secret, "host"), "VMware braucht host.")?;
+    require(text(secret, "host"), "vmware_needs_a_host")?;
     check_login(secret)?;
-    one_line(text(secret, "host"), "Host")?;
+    one_line(text(secret, "host"), "host")?;
     Ok(())
 }
 
 fn check_openstack(secret: &Value) -> Result<(), String> {
-    require(text(secret, "auth_url"), "OpenStack braucht auth_url.")?;
+    require(text(secret, "auth_url"), "openstack_needs_auth_url")?;
     https_url(text(secret, "auth_url"))?;
-    require(text(secret, "project"), "OpenStack braucht project.")?;
+    require(text(secret, "project"), "openstack_needs_project")?;
     check_login(secret)?;
-    one_line(text(secret, "project"), "Projekt")?;
-    one_line(text(secret, "domain"), "Domain")?;
+    one_line(text(secret, "project"), "project")?;
+    one_line(text(secret, "domain"), "domain")?;
     Ok(())
 }
 
 fn check_registry(secret: &Value) -> Result<(), String> {
-    require(text(secret, "host"), "Registry braucht host.")?;
+    require(text(secret, "host"), "the_registry_needs_a_host")?;
     check_login(secret)?;
-    one_line(text(secret, "host"), "Host")?;
+    one_line(text(secret, "host"), "host")?;
     Ok(())
 }
 
 fn check_kubernetes(secret: &Value) -> Result<(), String> {
-    require(text(secret, "host"), "Kubernetes braucht host.")?;
+    require(text(secret, "host"), "kubernetes_needs_a_host")?;
     https_url(text(secret, "host"))?;
-    require(text(secret, "token"), "Token fehlt.")?;
-    one_line(text(secret, "token"), "Token")?;
+    require(text(secret, "token"), "token_is_missing")?;
+    one_line(text(secret, "token"), "token")?;
     Ok(())
 }
 
 fn check_token(secret: &Value) -> Result<(), String> {
     let token = text(secret, "token");
-    require(token, "Token fehlt.")?;
-    one_line(token, "Token")
+    require(token, "token_is_missing")?;
+    one_line(token, "token")
 }
 
 fn check_galaxy(secret: &Value) -> Result<(), String> {
@@ -515,27 +515,27 @@ fn check_galaxy(secret: &Value) -> Result<(), String> {
     if url.is_empty() {
         Ok(())
     } else {
-        one_line(url, "Adresse")
+        one_line(url, "address")
     }
 }
 
 fn check_netbox(secret: &Value) -> Result<(), String> {
     let token = text(secret, "token");
-    require(token, "NetBox braucht token.")?;
-    one_line(token, "Token")?;
+    require(token, "netbox_needs_a_token")?;
+    one_line(token, "token")?;
     let url = text(secret, "url");
     if url.is_empty() {
         Ok(())
     } else {
-        one_line(url, "Adresse")
+        one_line(url, "address")
     }
 }
 
 fn check_login(secret: &Value) -> Result<(), String> {
-    require(text(secret, "username"), "Benutzer fehlt.")?;
-    require(text(secret, "password"), "Passwort fehlt.")?;
-    one_line(text(secret, "username"), "Benutzer")?;
-    one_line(text(secret, "password"), "Passwort")?;
+    require(text(secret, "username"), "username_is_missing")?;
+    require(text(secret, "password"), "password_is_missing")?;
+    one_line(text(secret, "username"), "user")?;
+    one_line(text(secret, "password"), "password")?;
     Ok(())
 }
 
@@ -664,7 +664,7 @@ fn scm_material(
 
 fn env_material(secret: &Value, env: &mut Vec<(String, String)>) -> Result<(), String> {
     let Some(map) = secret.as_object() else {
-        return Err("Env-Zugang muss ein JSON-Objekt sein.".into());
+        return Err("the_env_credential_must_be_a_json_object".into());
     };
     for (key, value) in map {
         if !safe_ident(key) {
@@ -672,9 +672,7 @@ fn env_material(secret: &Value, env: &mut Vec<(String, String)>) -> Result<(), S
         }
         let Some(text) = value.as_str() else { continue };
         if text.contains('\n') || text.contains('\0') || text.contains('\r') {
-            return Err(format!(
-                "Umgebungsvariable {key} enthält einen Zeilenumbruch."
-            ));
+            return Err(crate::error::message("env.var_newline", &[("key", key)]));
         }
         env.push((key.clone(), text.to_string()));
     }
@@ -730,27 +728,27 @@ fn require(value: &str, message: &str) -> Result<(), String> {
 fn one_line(value: &str, label: &str) -> Result<(), String> {
     limited(value, 1024, label)?;
     if value.contains('\n') || value.contains('\r') {
-        return Err(format!("{label} enthält einen Zeilenumbruch."));
+        return Err(crate::error::message("field.newline", &[("field", label)]));
     }
     Ok(())
 }
 
 fn limited(value: &str, max: usize, label: &str) -> Result<(), String> {
     if value.contains('\0') {
-        return Err(format!("{label} ist ungültig."));
+        return Err(crate::error::message("field.invalid", &[("field", label)]));
     }
     if value.len() > max {
-        return Err(format!("{label} ist zu lang."));
+        return Err(crate::error::message("field.too_long", &[("field", label)]));
     }
     Ok(())
 }
 
 fn https_url(value: &str) -> Result<(), String> {
-    one_line(value, "Adresse")?;
+    one_line(value, "address")?;
     if value.starts_with("https://") && !value.contains(' ') {
         Ok(())
     } else {
-        Err("Adresse muss mit https:// beginnen.".into())
+        Err("the_address_must_start_with_https".into())
     }
 }
 
@@ -880,7 +878,7 @@ mod tests {
         };
         assert_eq!(
             check_assignment(&[ssh, other]).unwrap_err(),
-            "Pro Art ist nur ein Zugang erlaubt."
+            "only_one_credential_of_each_kind_is_allowed"
         );
         let again = AssignedCredential {
             id: "vault-prod-2",
@@ -889,7 +887,7 @@ mod tests {
         };
         assert_eq!(
             check_assignment(&[prod, again]).unwrap_err(),
-            "Diese Vault-Id ist schon gewählt."
+            "this_vault_id_is_already_selected"
         );
         let plain = AssignedCredential {
             id: "vault-plain",
@@ -903,7 +901,7 @@ mod tests {
         };
         assert_eq!(
             check_assignment(&[plain, plain_two]).unwrap_err(),
-            "Nur ein Vault-Zugang darf ohne Vault-Id sein."
+            "only_one_vault_credential_may_omit_the_vault"
         );
         assert!(check_assignment(&[ssh, plain, prod]).is_ok());
     }

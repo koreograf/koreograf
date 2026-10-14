@@ -107,17 +107,15 @@ pub async fn import_inventory(
     let path = body.path.trim();
     runner::check_relative(path).map_err(ApiError::bad)?;
     if path.is_empty() {
-        return Err(ApiError::bad("Pfad fehlt."));
+        return Err(ApiError::bad("path_is_missing"));
     }
     let project = visible_project(&state, &body.project_id, &team)?;
     let root = project_dir(&state, &project)?;
     let text = read_project_file(&root, path)?;
     let found = scan::classify_inventory(path, &text)
-        .ok_or_else(|| ApiError::bad("Die Datei ist kein Inventar."))?;
+        .ok_or_else(|| ApiError::bad("the_file_is_not_an_inventory"))?;
     if found.format == "plugin" {
-        return Err(ApiError::bad(
-            "Plugin-Dateien werden nicht als Text übernommen. NetBox trägst du als Quelle ein, andere Plugins führt dieser Prototyp nicht aus.",
-        ));
+        return Err(ApiError::bad("plugin_files_are_not_copied_as_text_add_2"));
     }
     let name = match blank(body.name) {
         Some(name) => require_name(&name)?,
@@ -187,7 +185,7 @@ pub async fn create_netbox(
     let source_row = db::InventorySource {
         id: Uuid::new_v4().to_string(),
         inventory_id: item.id.clone(),
-        name: "NetBox".into(),
+        name: "netbox".into(),
         kind: "netbox".into(),
         source_json: item.source_json.clone(),
         credential_id: Some(credential_id.clone()),
@@ -245,7 +243,7 @@ pub async fn sync_inventory(
         }
     }
     if fresh.is_empty() {
-        return Err(ApiError::bad("Dieses Inventar hat keine externe Quelle."));
+        return Err(ApiError::bad("this_inventory_has_no_external_source"));
     }
     let db = state.db()?;
     for (source_id, body) in &fresh {
@@ -261,11 +259,11 @@ fn refresh_project(state: &Shared, team: &str, source_json: &str) -> AppResult<S
     let project_id = source
         .get("project_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| ApiError::bad("Projektquelle ist unvollständig."))?;
+        .ok_or_else(|| ApiError::bad("the_project_source_is_incomplete"))?;
     let path = source
         .get("path")
         .and_then(Value::as_str)
-        .ok_or_else(|| ApiError::bad("Projektquelle ist unvollständig."))?;
+        .ok_or_else(|| ApiError::bad("the_project_source_is_incomplete"))?;
     let project = visible_project(state, project_id, team)?;
     let root = project_dir(state, &project)?;
     read_project_file(&root, path)
@@ -278,16 +276,16 @@ async fn refresh_netbox(
     source_json: &str,
 ) -> AppResult<String> {
     let stored: StoredNetbox = serde_json::from_str(source_json)
-        .map_err(|_| ApiError::bad("NetBox-Quelle ist unvollständig."))?;
+        .map_err(|_| ApiError::bad("the_netbox_source_is_incomplete"))?;
     let credential_id = credential_id
         .as_deref()
-        .ok_or_else(|| ApiError::bad("NetBox-Token fehlt."))?;
+        .ok_or_else(|| ApiError::bad("the_netbox_token_is_missing"))?;
     let token = {
         let db = state.db()?;
         let credential = db::credential(&db, credential_id)?
-            .ok_or_else(|| ApiError::bad("NetBox-Token fehlt."))?;
+            .ok_or_else(|| ApiError::bad("the_netbox_token_is_missing"))?;
         if credential.team_id != team_id || credential.kind != "netbox" {
-            return Err(ApiError::bad("NetBox-Token gehört zu einem anderen Team."));
+            return Err(ApiError::bad("the_netbox_token_belongs_to_another_team"));
         }
         let plain = state.decrypt(&credential.secret_blob)?;
         token_from_secret(&plain)?
@@ -310,11 +308,11 @@ async fn fetch_netbox(state: &Shared, source: &NetboxSource, token: &str) -> App
 }
 
 fn token_from_secret(plain: &str) -> AppResult<String> {
-    let value: Value =
-        serde_json::from_str(plain).map_err(|_| ApiError::bad("NetBox-Zugang ist beschädigt."))?;
+    let value: Value = serde_json::from_str(plain)
+        .map_err(|_| ApiError::bad("the_netbox_credential_is_damaged"))?;
     let token = value.get("token").and_then(Value::as_str).unwrap_or("");
     if !netbox::valid_token(token) {
-        return Err(ApiError::bad("NetBox-Token ist ungültig."));
+        return Err(ApiError::bad("the_netbox_token_is_invalid"));
     }
     Ok(token.to_string())
 }
@@ -322,10 +320,10 @@ fn token_from_secret(plain: &str) -> AppResult<String> {
 fn netbox_source(body: &NetboxBody) -> AppResult<NetboxSource> {
     let endpoint = body.api_endpoint.trim().trim_end_matches('/').to_string();
     if !netbox::valid_endpoint(&endpoint) {
-        return Err(ApiError::bad("NetBox-Adresse muss http oder https sein."));
+        return Err(ApiError::bad("the_netbox_address_must_be_http_or_https"));
     }
     if !netbox::valid_token(body.token.trim()) {
-        return Err(ApiError::bad("NetBox-Token ist ungültig."));
+        return Err(ApiError::bad("the_netbox_token_is_invalid"));
     }
     let group_by = body
         .group_by
@@ -360,30 +358,33 @@ fn project_dir(state: &Shared, project: &Project) -> AppResult<PathBuf> {
             if dest.join(".git").is_dir() {
                 Ok(dest)
             } else {
-                Err(ApiError::bad("Git-Projekt zuerst synchronisieren."))
+                Err(ApiError::bad("sync_the_git_project_first"))
             }
         }
-        other => Err(ApiError::bad(format!("Unbekannte Projektquelle {other}."))),
+        other => Err(ApiError::bad_vars(
+            "project.unknown_source",
+            [("source", other)],
+        )),
     }
 }
 
 fn read_project_file(root: &std::path::Path, rel: &str) -> AppResult<String> {
     let root = root
         .canonicalize()
-        .map_err(|_| ApiError::bad("Projektpfad fehlt."))?;
+        .map_err(|_| ApiError::bad("project_path_is_missing"))?;
     let full = root.join(rel);
     let full = full
         .canonicalize()
-        .map_err(|_| ApiError::bad("Datei fehlt im Projekt."))?;
+        .map_err(|_| ApiError::bad("file_is_missing_from_the_project"))?;
     if !full.starts_with(&root) {
-        return Err(ApiError::bad("Pfad verlässt das Projekt."));
+        return Err(ApiError::bad("path_leaves_the_project"));
     }
     let meta = std::fs::metadata(&full).map_err(|err| ApiError::bad(err.to_string()))?;
     if !meta.is_file() {
-        return Err(ApiError::bad("Pfad ist keine Datei."));
+        return Err(ApiError::bad("path_is_not_a_file"));
     }
     if meta.len() > 1_000_000 {
-        return Err(ApiError::bad("Inventardatei ist größer als 1 MB."));
+        return Err(ApiError::bad("the_inventory_file_is_larger_than_1_mb"));
     }
     std::fs::read_to_string(full).map_err(|err| ApiError::bad(err.to_string()))
 }
@@ -406,7 +407,7 @@ pub(super) async fn create_with_sources(
     inputs: Vec<SourceInput>,
 ) -> AppResult<axum::response::Response> {
     if inputs.len() > MAX_SOURCES {
-        return Err(ApiError::bad("Höchstens 8 Quellen."));
+        return Err(ApiError::bad("at_most_8_sources"));
     }
     let mut resolved = Vec::with_capacity(inputs.len());
     for input in &inputs {
@@ -460,7 +461,7 @@ pub async fn add_source(
         }
         let count = db::list_inventory_sources(&db, &id)?.len();
         if count >= MAX_SOURCES {
-            return Err(ApiError::bad("Höchstens 8 Quellen."));
+            return Err(ApiError::bad("at_most_8_sources"));
         }
         count as i64
     };
@@ -487,9 +488,7 @@ pub async fn update_source(
     owned_source(&db, &inventory_id, &source_id, &team)?;
     let source = db::inventory_source(&db, &source_id)?.ok_or(ApiError::NotFound)?;
     if !body.body.trim().is_empty() && source.kind != "ini" {
-        return Err(ApiError::bad(
-            "Diese Quelle kommt aus einem Projekt oder aus NetBox. Aktualisieren holt sie neu.",
-        ));
+        return Err(ApiError::bad("this_source_comes_from_a_project_or_from"));
     }
     if !body.name.trim().is_empty() {
         db::rename_inventory_source(&db, &source_id, &require_name(&body.name)?)?;
@@ -540,7 +539,7 @@ pub async fn sync_source(
         "netbox" => {
             refresh_netbox(&state, &source.credential_id, &team, &source.source_json).await?
         }
-        _ => return Err(ApiError::bad("Dieses Inventar hat keine externe Quelle.")),
+        _ => return Err(ApiError::bad("this_inventory_has_no_external_source")),
     };
     let db = state.db()?;
     db::set_inventory_source_body(&db, &source_id, &body)?;
@@ -627,10 +626,10 @@ async fn resolve_source(
     match input.kind.as_str() {
         "ini" => {
             if input.body.trim().is_empty() {
-                return Err(ApiError::bad("Die manuelle Quelle ist leer."));
+                return Err(ApiError::bad("the_manual_source_is_empty"));
             }
             Ok(ResolvedSource {
-                name: source_label(&input.name, "Manuell")?,
+                name: source_label(&input.name, "manual")?,
                 kind: "ini".into(),
                 source_json: "{}".into(),
                 body: input.body.clone(),
@@ -642,22 +641,20 @@ async fn resolve_source(
             let path = input.path.trim();
             runner::check_relative(path).map_err(ApiError::bad)?;
             if path.is_empty() {
-                return Err(ApiError::bad("Pfad fehlt."));
+                return Err(ApiError::bad("path_is_missing"));
             }
             let project = visible_project(state, input.project_id.trim(), team)?;
             let root = project_dir(state, &project)?;
             let text = read_project_file(&root, path)?;
             let found = scan::classify_inventory(path, &text)
-                .ok_or_else(|| ApiError::bad("Die Datei ist kein Inventar."))?;
+                .ok_or_else(|| ApiError::bad("the_file_is_not_an_inventory"))?;
             if found.format == "plugin" {
-                return Err(ApiError::bad(
-                    "Plugin-Dateien werden nicht als Text übernommen. NetBox trägst du als eigene Quelle ein.",
-                ));
+                return Err(ApiError::bad("plugin_files_are_not_copied_as_text_add"));
             }
             let name = if input.name.trim().is_empty() {
                 let stem = file_stem(path);
                 if stem.trim().is_empty() {
-                    "Projekt".into()
+                    "project".into()
                 } else {
                     stem
                 }
@@ -684,7 +681,7 @@ async fn resolve_source(
                 virtual_machines: input.virtual_machines,
             })?;
             let ini = fetch_netbox(state, &parsed, input.token.trim()).await?;
-            let name = source_label(&input.name, "NetBox")?;
+            let name = source_label(&input.name, "netbox")?;
             let secret = json!({"token": input.token.trim()}).to_string();
             let blob = state.encrypt(&secret)?;
             Ok(ResolvedSource {
@@ -703,7 +700,7 @@ async fn resolve_source(
                 body: ini,
             })
         }
-        _ => Err(ApiError::bad("Quelle ist manuell, Projekt oder NetBox.")),
+        _ => Err(ApiError::bad("a_source_is_manual_project_or_netbox")),
     }
 }
 

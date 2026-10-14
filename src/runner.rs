@@ -45,15 +45,15 @@ pub struct Tool {
 const TOOLS: &[Tool] = &[
     Tool {
         id: "ansible",
-        summary: "ansible-playbook. Collections und Rollen bleiben im Team-Cache.",
+        summary: "ansible_playbook_collections_and_roles_stay_in_the",
     },
     Tool {
         id: "opentofu",
-        summary: "OpenTofu init und plan oder apply. Provider liegen im Plugin-Cache.",
+        summary: "opentofu_init_then_plan_or_apply_providers_stay",
     },
     Tool {
         id: "shell",
-        summary: "Shell-Skript aus dem Projekt oder als Inline-Skript.",
+        summary: "shell_script_from_the_project_or_as_an",
     },
 ];
 
@@ -67,31 +67,31 @@ pub fn known_tool(tool: &str) -> bool {
 
 pub fn check_ansible_spec(spec: &Value) -> Result<(), String> {
     if !spec.is_object() {
-        return Err("spec muss ein Objekt sein.".into());
+        return Err("spec_must_be_an_object".into());
     }
     match spec.get("job_type") {
         None | Some(Value::Null) => {}
         Some(Value::String(job_type)) if job_type == "run" || job_type == "check" => {}
-        _ => return Err("Art ist run oder check.".into()),
+        _ => return Err("type_is_run_or_check".into()),
     }
-    check_tag_list(spec, "tags", "Tags")?;
-    check_tag_list(spec, "skip_tags", "Tags überspringen")?;
+    check_tag_list(spec, "tags", "tags")?;
+    check_tag_list(spec, "skip_tags", "skip_tags")?;
     if let Some(limit) = optional_text(spec, "limit")? {
         check_limit(&limit)?;
     }
     if let Some(diff) = spec.get("diff") {
         if !diff.is_boolean() {
-            return Err("Diff ist ja oder nein.".into());
+            return Err("diff_is_yes_or_no".into());
         }
     }
     if let Some(verbosity) = optional_u64(spec, "verbosity")? {
         if verbosity > 4 {
-            return Err("Ausführlichkeit ist 0 bis 4.".into());
+            return Err("verbosity_is_0_to_4".into());
         }
     }
     if let Some(forks) = optional_u64(spec, "forks")? {
         if !(1..=50).contains(&forks) {
-            return Err("Forks ist eine Zahl von 1 bis 50.".into());
+            return Err("forks_is_a_number_from_1_to_50".into());
         }
     }
     Ok(())
@@ -133,7 +133,7 @@ fn optional_text(spec: &Value, key: &str) -> Result<Option<String>, String> {
     match spec.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(text)) => Ok(Some(text.clone())),
-        Some(_) => Err(format!("{key} muss Text sein.")),
+        Some(_) => Err(crate::error::message("field.text", &[("field", key)])),
     }
 }
 
@@ -143,8 +143,8 @@ fn optional_u64(spec: &Value, key: &str) -> Result<Option<u64>, String> {
         Some(Value::Number(number)) => number
             .as_u64()
             .map(Some)
-            .ok_or_else(|| format!("{key} muss eine ganze Zahl sein.")),
-        Some(_) => Err(format!("{key} muss eine ganze Zahl sein.")),
+            .ok_or_else(|| crate::error::message("field.integer", &[("field", key)])),
+        Some(_) => Err(crate::error::message("field.integer", &[("field", key)])),
     }
 }
 
@@ -156,7 +156,7 @@ fn check_tag_list(spec: &Value, key: &str, label: &str) -> Result<(), String> {
         return Ok(());
     }
     if text.len() > 300 {
-        return Err(format!("{label} ist zu lang."));
+        return Err(crate::error::message("field.too_long", &[("field", label)]));
     }
     for part in text.split(',') {
         let part = part.trim();
@@ -167,7 +167,10 @@ fn check_tag_list(spec: &Value, key: &str, label: &str) -> Result<(), String> {
                 .chars()
                 .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | ':' | '-'));
         if !token {
-            return Err(format!("{label} „{part}“ ist ungültig."));
+            return Err(crate::error::message(
+                "field.part_invalid",
+                &[("field", label), ("part", part)],
+            ));
         }
     }
     Ok(())
@@ -185,7 +188,7 @@ fn check_limit(text: &str) -> Result<(), String> {
             )
     });
     if text.len() > 4_000 || text.starts_with('-') || !allowed {
-        return Err("Limit enthält ein ungültiges Zeichen.".into());
+        return Err("limit_contains_an_invalid_character".into());
     }
     Ok(())
 }
@@ -212,7 +215,7 @@ pub fn failed_host_names(stored: &str) -> Vec<String> {
 
 pub fn limit_from_hosts(hosts: &[String]) -> Result<String, String> {
     if hosts.is_empty() {
-        return Err("Für diesen Auftrag sind keine fehlgeschlagenen Hosts gespeichert.".into());
+        return Err("no_failed_hosts_are_stored_for_this_job".into());
     }
     for host in hosts {
         let token = !host.is_empty()
@@ -222,8 +225,9 @@ pub fn limit_from_hosts(hosts: &[String]) -> Result<String, String> {
                 .chars()
                 .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-' | ':'));
         if !token {
-            return Err(format!(
-                "Host „{host}“ kann nicht als Limit verwendet werden."
+            return Err(crate::error::message(
+                "limit.host_invalid",
+                &[("host", host)],
             ));
         }
     }
@@ -237,7 +241,7 @@ pub fn parameters_with_limit(parameters: &str, limit: &str) -> Result<String, St
     let mut params = db::json_object(parameters);
     {
         let Some(root) = params.as_object_mut() else {
-            return Err("Parameter sind ungültig.".into());
+            return Err("parameters_are_invalid".into());
         };
         let spec = root
             .entry("spec")
@@ -246,7 +250,7 @@ pub fn parameters_with_limit(parameters: &str, limit: &str) -> Result<String, St
             *spec = Value::Object(Default::default());
         }
         let Some(spec) = spec.as_object_mut() else {
-            return Err("Parameter sind ungültig.".into());
+            return Err("parameters_are_invalid".into());
         };
         spec.insert("limit".into(), Value::String(limit.to_string()));
     }
@@ -366,9 +370,7 @@ pub fn check_relative(path: &str) -> Result<(), String> {
         || path.contains('\\')
         || path.split('/').any(|part| part == ".." || part.is_empty())
     {
-        return Err(
-            "Der Einstiegspfad muss relativ sein und darf das Projekt nicht verlassen.".into(),
-        );
+        return Err("the_entry_path_must_be_relative_and_must".into());
     }
     Ok(())
 }
@@ -475,18 +477,18 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
         let db = state.db().map_err(|e| e.to_string())?;
         let job = db::job(&db, job_id)
             .map_err(|e| e.to_string())?
-            .ok_or_else(|| "Auftrag fehlt.".to_string())?;
+            .ok_or_else(|| "Job is missing.".to_string())?;
         let template = match &job.template_id {
             Some(id) => db::template(&db, id)
                 .map_err(|e| e.to_string())?
-                .ok_or_else(|| "Auftragsvorlage fehlt.".to_string())?,
-            None => return Err("Auftrag ohne Vorlage.".into()),
+                .ok_or_else(|| "Job template is missing.".to_string())?,
+            None => return Err("Job has no template.".into()),
         };
         (job, template)
     };
     let template = with_saved_parameters(template, &job);
     if !known_tool(&template.tool) {
-        return Err(format!("Unbekanntes Werkzeug {}.", template.tool));
+        return Err(format!("Unknown tool {}.", template.tool));
     }
     check_relative(&template.entrypoint)?;
 
@@ -504,10 +506,10 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
             state,
             job_id,
             "system",
-            &format!("HTTP-Proxy {}.", settings.proxy.url),
+            &format!("HTTP proxy {}.", settings.proxy.url),
         );
     } else if !settings.proxy.explicit && !settings.proxy.job_pairs().is_empty() {
-        log(state, job_id, "system", "HTTP-Proxy aus der Umgebung.");
+        log(state, job_id, "system", "HTTP proxy from the environment.");
     }
     let project = load_project(state, &template).await?;
     if let Some(project) = &project {
@@ -518,14 +520,15 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
     let mut entrypoint = template.entrypoint.clone();
     let spec: Value = serde_json::from_str(&template.spec).unwrap_or(Value::Null);
     if template.tool == "shell" && entrypoint.is_empty() {
-        let script = spec.get("script").and_then(Value::as_str).ok_or_else(|| {
-            "Shell-Vorlage braucht ein Skript oder einen Einstiegspfad.".to_string()
-        })?;
+        let script = spec
+            .get("script")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "A shell template needs a script or an entry path.".to_string())?;
         fs::write(stage.join("inline.sh"), script).map_err(|e| e.to_string())?;
         entrypoint = "inline.sh".into();
     }
     if entrypoint.is_empty() {
-        return Err("Einstiegspfad fehlt.".into());
+        return Err("Entry path is missing.".into());
     }
     check_relative(&entrypoint)?;
 
@@ -560,7 +563,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
         (true, Some(bin), Some(env)) => Some((bin, env)),
         (true, None, Some(_)) if settings.runner == RunnerMode::Docker => {
             return Err(
-                "Execution Environment ist gesetzt, aber weder Docker noch Podman ist erreichbar."
+                "An execution environment is set, but neither Docker nor Podman is reachable."
                     .into(),
             );
         }
@@ -569,7 +572,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
                 state,
                 job_id,
                 "system",
-                "Keine Container-Runtime erreichbar. Der Lauf bleibt auf dem Controller.",
+                "No container runtime is reachable. The run stays on the controller.",
             );
             None
         }
@@ -579,7 +582,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
                     state,
                     job_id,
                     "system",
-                    "Runner-Modus ist lokal. Das Execution Environment wird ignoriert.",
+                    "Runner mode is local. The execution environment is ignored.",
                 );
             }
             None
@@ -657,7 +660,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
         job_id,
         "system",
         &format!(
-            "Werkzeug {} · Cache vorher {} Bytes",
+            "Tool {} · cache before {} bytes",
             template.tool, cache_before
         ),
     );
@@ -678,7 +681,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
         )
         .await?
     } else {
-        log(state, job_id, "system", "Lokaler Lauf auf dem Controller.");
+        log(state, job_id, "system", "Local run on the controller.");
         let mut cmd = Command::new("sh");
         cmd.arg(work.join("wrapper.sh"))
             .current_dir(&work)
@@ -686,9 +689,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let child = cmd
-            .spawn()
-            .map_err(|e| format!("Start fehlgeschlagen: {e}"))?;
+        let child = cmd.spawn().map_err(|e| format!("Start failed: {e}"))?;
         let pid = child.id().unwrap_or(0);
         remember(
             state,
@@ -715,21 +716,16 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
         state,
         job_id,
         "system",
-        &format!("Cache nachher {cache_after} Bytes (vorher {cache_before})."),
+        &format!("Cache afterwards {cache_after} bytes (before {cache_before})."),
     );
     if cache_after == cache_before && cache_before > 0 {
-        log(
-            state,
-            job_id,
-            "system",
-            "Cache wiederverwendet, kein neues Wachstum.",
-        );
+        log(state, job_id, "system", "Cache reused, no new growth.");
     } else if cache_after > cache_before {
         log(
             state,
             job_id,
             "system",
-            "Cache gewachsen. Der nächste Lauf verwendet diese Artefakte.",
+            "Cache grew. The next run uses these artifacts.",
         );
     }
     finish(state, job_id, exit == 0);
@@ -867,16 +863,16 @@ fn apply_credentials(
             let db = state.db().map_err(|e| e.to_string())?;
             db::credential(&db, id)
                 .map_err(|e| e.to_string())?
-                .ok_or_else(|| "Zugangsdaten fehlen.".to_string())?
+                .ok_or_else(|| "Credential is missing.".to_string())?
         };
         if credential.team_id != template.team_id {
-            return Err("Zugangsdaten gehören zu einem anderen Team.".into());
+            return Err("The credential belongs to another team.".into());
         }
         let plain = state
             .decrypt(&credential.secret_blob)
-            .map_err(|_| "Zugangsdaten lassen sich nicht lesen.".to_string())?;
+            .map_err(|_| "Credentials cannot be read.".to_string())?;
         let secret: Value =
-            serde_json::from_str(&plain).map_err(|_| "Zugangsdaten sind kein JSON.".to_string())?;
+            serde_json::from_str(&plain).map_err(|_| "Credentials are not JSON.".to_string())?;
         let prepared =
             crate::credentials::prepare(credential.kind.as_str(), &secret, container, work)?;
         let mut part = prepared.env;
@@ -900,14 +896,14 @@ fn apply_credentials(
             write_secret(&work.join(&unique), &body)?;
         }
         if credential.kind == "vault" {
-            let name = vault_name.ok_or_else(|| "Vault-Datei fehlt.".to_string())?;
+            let name = vault_name.ok_or_else(|| "Vault file is missing.".to_string())?;
             let label = secret
                 .get("vault_id")
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .trim();
             if label.contains(['\t', '\n', '\r', '@']) {
-                return Err("Vault-Id ist ungültig.".into());
+                return Err("Vault id is invalid.".into());
             }
             let path = guest_path(container, work, &name);
             vault_lines.push(format!("{label}\t{path}"));
@@ -968,10 +964,10 @@ async fn load_project(state: &Shared, template: &Template) -> Result<Option<Proj
     let db = state.db().map_err(|e| e.to_string())?;
     let project = db::project(&db, id)
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| "Projekt fehlt.".to_string())?;
+        .ok_or_else(|| "Project is missing.".to_string())?;
     let visible = db::project_visible(&db, id, &template.team_id).map_err(|e| e.to_string())?;
     if !visible {
-        return Err("Das Projekt ist für dieses Team nicht sichtbar.".into());
+        return Err("This project is not visible to this team.".into());
     }
     Ok(Some(project))
 }
@@ -984,9 +980,9 @@ fn write_job_inventory(state: &Shared, template: &Template, work: &Path) -> Resu
     let db = state.db().map_err(|e| e.to_string())?;
     let inventory = db::inventory(&db, id)
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| "Inventar fehlt.".to_string())?;
+        .ok_or_else(|| "Inventory is missing.".to_string())?;
     if inventory.team_id != template.team_id {
-        return Err("Inventar gehört zu einem anderen Team.".into());
+        return Err("The inventory belongs to another team.".into());
     }
     let sources = db::list_inventory_sources(&db, id).map_err(|e| e.to_string())?;
     if sources.len() <= 1 {
@@ -1043,15 +1039,15 @@ fn load_environment(state: &Shared, template: &Template) -> Result<Option<Enviro
     let db = state.db().map_err(|e| e.to_string())?;
     let environment = db::environment(&db, id)
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| "Execution Environment fehlt.".to_string())?;
+        .ok_or_else(|| "execution_environment_is_missing".to_string())?;
     let team = db::team_by_id(&db, &template.team_id)
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| "Team fehlt.".to_string())?;
+        .ok_or_else(|| "team_is_missing".to_string())?;
     if !db::environment_visible(&environment, &team) {
-        return Err("Execution Environment ist für dieses Team nicht sichtbar.".into());
+        return Err("the_execution_environment_is_not_visible_to_this".into());
     }
     if !valid_image(&environment.image) {
-        return Err("Image-Name ist ungültig.".into());
+        return Err("the_image_name_is_invalid".into());
     }
     Ok(Some(environment))
 }
@@ -1073,22 +1069,26 @@ pub async fn materialize_project(
         "path" => {
             let path = PathBuf::from(&project.source);
             if !path.is_dir() {
-                return Err(format!(
-                    "Projektpfad {} ist kein Verzeichnis.",
-                    path.display()
+                let shown = path.display().to_string();
+                return Err(crate::error::message(
+                    "project.path_not_directory",
+                    &[("path", &shown)],
                 ));
             }
             Ok(path)
         }
         "git" => {
             if !valid_git(&project.source) {
-                return Err("Git-Adresse ist ungültig.".into());
+                return Err("the_git_address_is_invalid".into());
             }
             let dest = data_dir.join("checkouts").join(&project.id);
             git_sync(&project.source, &project.revision, &dest, proxy).await?;
             Ok(dest)
         }
-        other => Err(format!("Unbekannte Projektquelle {other}.")),
+        other => Err(crate::error::message(
+            "project.unknown_source",
+            &[("source", other)],
+        )),
     }
 }
 
@@ -1145,7 +1145,7 @@ fn git_text(output: &std::process::Output) -> String {
         joined = joined.chars().skip(skip).collect();
     }
     if joined.is_empty() {
-        format!("Git ist mit Status {} fehlgeschlagen.", output.status)
+        format!("Git failed with status {}.", output.status)
     } else {
         format!("Git:\n{joined}")
     }
@@ -1156,7 +1156,7 @@ async fn git_run(mut cmd: Command) -> Result<(), String> {
     let output = match finished {
         Ok(result) => result.map_err(|err| format!("git: {err}"))?,
         Err(_) => {
-            return Err("Git hat das Zeitlimit von 120 Sekunden überschritten.".into());
+            return Err("git_exceeded_the_120_second_time_limit".into());
         }
     };
     if output.status.success() {
@@ -1230,11 +1230,11 @@ async fn git_sync(
     proxy: &crate::settings::ProxySettings,
 ) -> Result<(), String> {
     if !valid_revision(revision) {
-        return Err("Revision ist ungültig.".into());
+        return Err("revision_is_invalid".into());
     }
     if dest.exists() && !dest.join(".git").is_dir() {
         fs::remove_dir_all(dest)
-            .map_err(|err| format!("Unvollständiges Checkout lässt sich nicht entfernen: {err}"))?;
+            .map_err(|err| format!("Incomplete checkout cannot be removed: {err}"))?;
     }
     if dest.join(".git").is_dir() {
         return git_update(revision, dest, proxy).await;
@@ -1288,9 +1288,7 @@ fn copy_inner(src: &Path, dst: &Path, files: &mut u32, bytes: &mut u64) -> Resul
         let len = entry.metadata().map(|meta| meta.len()).unwrap_or(0);
         *bytes += len;
         if *files > MAX_FILES || *bytes > MAX_BYTES {
-            return Err(
-                "Projekt ist zu groß für einen Lauf (Grenze 4000 Dateien oder 200 MB).".into(),
-            );
+            return Err("Project is too large for a run (limit 4000 files or 200 MB).".into());
         }
         fs::copy(entry.path(), &to).map_err(|e| e.to_string())?;
     }
@@ -1360,9 +1358,7 @@ async fn run_container(state: &Shared, job_id: &str, run: ContainerRun<'_>) -> R
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let child = cmd
-        .spawn()
-        .map_err(|e| format!("{bin} run fehlgeschlagen: {e}"))?;
+    let child = cmd.spawn().map_err(|e| format!("{bin} run failed: {e}"))?;
     let pid = child.id().unwrap_or(0);
     remember(
         state,
@@ -1388,9 +1384,7 @@ fn write_env_file(path: &Path, env: &[(String, String)]) -> Result<(), String> {
     let mut body = String::new();
     for (key, value) in env {
         if value.contains('\n') {
-            return Err(format!(
-                "Variable {key} lässt sich nicht an den Container übergeben."
-            ));
+            return Err(format!("Variable {key} cannot be passed to the container."));
         }
         body.push_str(key);
         body.push('=');
@@ -1433,11 +1427,11 @@ async fn pull_image(bin: &str, image: &str) -> Result<(), String> {
         .stderr(Stdio::piped())
         .status()
         .await
-        .map_err(|e| format!("Image-Pull: {e}"))?;
+        .map_err(|e| format!("Image pull: {e}"))?;
     if status.success() {
         Ok(())
     } else {
-        Err(format!("Image {image} konnte nicht gezogen werden."))
+        Err(format!("Image {image} could not be pulled."))
     }
 }
 
@@ -1464,11 +1458,11 @@ async fn wait_child(
     let stdout = child
         .stdout
         .take()
-        .ok_or_else(|| "stdout fehlt".to_string())?;
+        .ok_or_else(|| "stdout is missing".to_string())?;
     let stderr = child
         .stderr
         .take()
-        .ok_or_else(|| "stderr fehlt".to_string())?;
+        .ok_or_else(|| "stderr is missing".to_string())?;
     let out = tokio::spawn(pump(
         state.clone(),
         job_id.to_string(),
@@ -1484,13 +1478,13 @@ async fn wait_child(
     let timeout = Duration::from_secs(timeout_secs);
     let status = match tokio::time::timeout(timeout, child.wait()).await {
         Ok(Ok(status)) => status,
-        Ok(Err(err)) => return Err(format!("Prozess: {err}")),
+        Ok(Err(err)) => return Err(format!("Process: {err}")),
         Err(_) => {
             log(
                 state,
                 job_id,
                 "system",
-                "Zeitlimit erreicht, Prozess wird beendet.",
+                "Time limit reached, stopping the process.",
             );
             let _ = child.start_kill();
             let _ = child.wait().await;
@@ -1530,7 +1524,7 @@ where
                             &state,
                             &job_id,
                             "system",
-                            "Weitere Ausgabe wird verworfen (Grenze 8000 Zeilen).",
+                            "Further output is discarded (limit 8000 lines).",
                         );
                     }
                     continue;
