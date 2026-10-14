@@ -808,7 +808,7 @@ mod tests {
         let previous = json!({
             "username": "deploy",
             "password": "old-pass",
-            "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----",
+            "private_key": "stored-key-material",
             "become_method": "sudo"
         });
         let merged = merge_secret(
@@ -837,7 +837,7 @@ mod tests {
         assert_eq!(set, vec!["password".to_string(), "private_key".to_string()]);
         let rendered = format!("{fields} {}", set.join(","));
         assert!(!rendered.contains("new-pass"));
-        assert!(!rendered.contains("OPENSSH"));
+        assert!(!rendered.contains("stored-key-material"));
         let env = merge_secret(
             "env",
             &json!({"A": "1", "B": "2"}),

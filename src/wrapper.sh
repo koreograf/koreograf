@@ -27,7 +27,7 @@ ensure_container_user() {
     return 0
   fi
   if [ ! -w /etc/passwd ]; then
-    log "UID ${uid} fehlt in /etc/passwd und die Datei ist nicht schreibbar. SSH bricht dann mit „No user exists for uid“ ab."
+    log "UID ${uid} fehlt in /etc/passwd und die Datei ist nicht schreibbar. SSH bricht dann mit 'No user exists for uid' ab."
     return 0
   fi
   gid=$(id -g)
