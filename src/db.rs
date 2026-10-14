@@ -114,6 +114,7 @@ CREATE TABLE IF NOT EXISTS templates (
   extra_vars TEXT NOT NULL DEFAULT '{}',
   spec TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL,
+  update_on_launch INTEGER NOT NULL DEFAULT 1,
   UNIQUE (team_id, name)
 );
 CREATE TABLE IF NOT EXISTS template_credentials (
@@ -354,6 +355,12 @@ fn migrate(c: &Connection) -> AppResult<()> {
             [],
         )?;
     }
+    if !column_exists(c, "templates", "update_on_launch")? {
+        c.execute(
+            "ALTER TABLE templates ADD COLUMN update_on_launch INTEGER NOT NULL DEFAULT 1",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -496,6 +503,7 @@ pub struct Template {
     pub extra_vars: String,
     pub spec: String,
     pub created_at: String,
+    pub update_on_launch: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1683,8 +1691,8 @@ pub fn insert_template(c: &Connection, item: &Template) -> AppResult<()> {
     c.execute(
         "INSERT INTO templates (
             id, team_id, name, description, tool, project_id, inventory_id, credential_id,
-            environment_id, entrypoint, extra_vars, spec, created_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            environment_id, entrypoint, extra_vars, spec, created_at, update_on_launch
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             item.id,
             item.team_id,
@@ -1698,7 +1706,8 @@ pub fn insert_template(c: &Connection, item: &Template) -> AppResult<()> {
             item.entrypoint,
             item.extra_vars,
             item.spec,
-            item.created_at
+            item.created_at,
+            item.update_on_launch as i64
         ],
     )?;
     Ok(())
@@ -1707,7 +1716,8 @@ pub fn insert_template(c: &Connection, item: &Template) -> AppResult<()> {
 pub fn update_template(c: &Connection, item: &Template) -> AppResult<()> {
     let n = c.execute(
         "UPDATE templates SET name=?3, description=?4, tool=?5, project_id=?6, inventory_id=?7,
-         credential_id=?8, environment_id=?9, entrypoint=?10, extra_vars=?11, spec=?12
+         credential_id=?8, environment_id=?9, entrypoint=?10, extra_vars=?11, spec=?12,
+         update_on_launch=?13
          WHERE id=?1 AND team_id=?2",
         params![
             item.id,
@@ -1721,7 +1731,8 @@ pub fn update_template(c: &Connection, item: &Template) -> AppResult<()> {
             item.environment_id,
             item.entrypoint,
             item.extra_vars,
-            item.spec
+            item.spec,
+            item.update_on_launch as i64
         ],
     )?;
     if n == 0 {
@@ -1733,7 +1744,7 @@ pub fn update_template(c: &Connection, item: &Template) -> AppResult<()> {
 pub fn list_templates(c: &Connection, team_id: &str) -> AppResult<Vec<Template>> {
     let mut stmt = c.prepare(
         "SELECT id, team_id, name, description, tool, project_id, inventory_id, credential_id,
-                environment_id, entrypoint, extra_vars, spec, created_at
+                environment_id, entrypoint, extra_vars, spec, created_at, update_on_launch
          FROM templates WHERE team_id = ?1 ORDER BY name",
     )?;
     let rows = stmt.query_map([team_id], map_template)?;
@@ -1743,7 +1754,7 @@ pub fn list_templates(c: &Connection, team_id: &str) -> AppResult<Vec<Template>>
 pub fn template(c: &Connection, id: &str) -> AppResult<Option<Template>> {
     c.query_row(
         "SELECT id, team_id, name, description, tool, project_id, inventory_id, credential_id,
-                environment_id, entrypoint, extra_vars, spec, created_at
+                environment_id, entrypoint, extra_vars, spec, created_at, update_on_launch
          FROM templates WHERE id = ?1",
         [id],
         map_template,
@@ -1767,6 +1778,7 @@ fn map_template(row: &rusqlite::Row<'_>) -> rusqlite::Result<Template> {
         extra_vars: row.get(10)?,
         spec: row.get(11)?,
         created_at: row.get(12)?,
+        update_on_launch: flag(row.get(13)?),
     })
 }
 
@@ -2266,6 +2278,38 @@ pub fn json_object(text: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_old_template_updates_on_launch() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-template-sync-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = open(&dir.join("koreograf.db")).unwrap();
+        conn.execute("PRAGMA foreign_keys = OFF", []).unwrap();
+        conn.execute("ALTER TABLE templates DROP COLUMN update_on_launch", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO templates (
+                id, team_id, name, description, tool, entrypoint, extra_vars, spec, created_at
+             ) VALUES ('t1', 'team', 'Alt', '', 'shell', '', '{}', '{}', '2020-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        ensure_schema(&conn).unwrap();
+        let value: i64 = conn
+            .query_row(
+                "SELECT update_on_launch FROM templates WHERE id = 't1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(value, 1);
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn migrates_existing_teams_into_organizations() {

@@ -23,7 +23,7 @@ Home labs and this prototype stay on SQLite (`data/koreograf.db`, WAL, one write
 An administrator opens **Backup** in the sidebar. In the German UI the link is **Sicherung**.
 
 - **Download** writes `koreograf-backup.zip`. Inside are `manifest.json` (`format` 1, `engine` sqlite), a consistent database (`koreograf.db`, copied through the SQLite backup API), and `secret.key`. Without the key, credentials cannot be read after a restore.
-- **Left out** are the cache, git checkouts, and job directories. The next run fetches collections and roles again, and git projects are cloned again. Projects that use a local path need that same path on the target machine.
+- **Left out** are the cache, git checkouts, and job directories. The next run fetches collections and roles again, and git projects are cloned again. A template that does not update on launch needs a project sync after a restore. Projects that use a local path need that same path on the target machine.
 - **Restore** replaces the installation. Finish running jobs first. The request sends the zip body and the header `X-Restore-Confirm: ERSETZEN`. A new sign-in is required afterwards. The previous installation stays as `restore-previous.zip` in the data directory (mode `0600`) and can be restored the same way.
 - The file is secret: it contains users, hooks, and the key for every credential. The upload limit is 256 MiB.
 
@@ -203,6 +203,8 @@ Secrets are stored with AES-GCM. The list API returns the name and the kind, nev
 ## Playbooks and inventory sources
 
 `GET /api/projects/{id}/contents` reads an Ansible project and lists playbooks. A file counts when it ends in `.yml` or `.yaml`, the first content line is a list, and `hosts:` appears somewhere. `requirements.yml`, `galaxy.yml`, and role directories such as `tasks`, `handlers`, and `group_vars` stay out. A git project has to be synced first. The template offers the files that were found. Another path can still be typed by hand.
+
+A template updates its git project on every launch. Turn **Update the project on launch** off to run the checkout from the last sync, including when the remote cannot be reached. A revision pinned on the project stays as it is on disk until the next sync. In the German UI the checkbox is **Projekt vor dem Start aktualisieren**. The project still needs one successful sync. The Sync button on the project page is unchanged.
 
 Inventory files are named `hosts` or `inventory`, or they live in `inventory/` and `inventories/`. A relative `inventory=` entry under `[defaults]` in `ansible.cfg` is included. `POST /api/inventories/import` stores the file text. INI and the usual YAML inventory show up in the host list. Ansible receives the same text.
 

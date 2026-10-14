@@ -45,6 +45,12 @@ pub struct TemplateBody {
     entrypoint: String,
     extra_vars: Option<Value>,
     spec: Option<Value>,
+    #[serde(default = "default_true")]
+    update_on_launch: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Deserialize)]
@@ -700,6 +706,7 @@ fn build_template(
             extra_vars: extra.to_string(),
             spec: spec.to_string(),
             created_at,
+            update_on_launch: body.update_on_launch,
         },
         credential_ids,
     ))
@@ -916,6 +923,7 @@ fn template_json(template: &Template, credential_ids: &[String]) -> Value {
         "extra_vars": db::json_object(&template.extra_vars),
         "spec": db::json_object(&template.spec),
         "created_at": template.created_at,
+        "update_on_launch": template.update_on_launch,
     })
 }
 

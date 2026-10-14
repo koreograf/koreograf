@@ -513,7 +513,22 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
     }
     let project = load_project(state, &template).await?;
     if let Some(project) = &project {
-        let source = materialize_project(project, &state.cfg.data_dir, &settings.proxy).await?;
+        let source = materialize_project(
+            project,
+            &state.cfg.data_dir,
+            &settings.proxy,
+            template.update_on_launch,
+        )
+        .await
+        .map_err(sync_log_line)?;
+        if project.source_type == "git" && !template.update_on_launch {
+            log(
+                state,
+                job_id,
+                "system",
+                "Using the checkout from the last sync.",
+            );
+        }
         copy_tree(&source, &stage)?;
     }
 
@@ -1060,10 +1075,19 @@ pub fn valid_image(image: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || "/:._-@".contains(ch))
 }
 
+fn sync_log_line(err: String) -> String {
+    if err == "sync_the_git_project_first" {
+        "Sync the Git project first.".into()
+    } else {
+        err
+    }
+}
+
 pub async fn materialize_project(
     project: &Project,
     data_dir: &Path,
     proxy: &crate::settings::ProxySettings,
+    update: bool,
 ) -> Result<PathBuf, String> {
     match project.source_type.as_str() {
         "path" => {
@@ -1082,6 +1106,13 @@ pub async fn materialize_project(
                 return Err("the_git_address_is_invalid".into());
             }
             let dest = data_dir.join("checkouts").join(&project.id);
+            if !update {
+                return if dest.join(".git").is_dir() {
+                    Ok(dest)
+                } else {
+                    Err("sync_the_git_project_first".into())
+                };
+            }
             git_sync(&project.source, &project.revision, &dest, proxy).await?;
             Ok(dest)
         }
@@ -1583,6 +1614,9 @@ fn with_saved_parameters(mut template: Template, job: &db::Job) -> Template {
     template.inventory_id = saved_id(&params, "inventory_id");
     template.credential_id = saved_id(&params, "credential_id");
     template.environment_id = saved_id(&params, "environment_id");
+    if let Some(update) = params.get("update_on_launch").and_then(Value::as_bool) {
+        template.update_on_launch = update;
+    }
     template
 }
 
@@ -1614,6 +1648,43 @@ fn close_observation(state: &Shared, job_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_saved_checkout_can_run_without_a_pull() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-offline-{nanos}"));
+        let checkout = dir.join("checkouts").join("offline");
+        std::fs::create_dir_all(checkout.join(".git")).unwrap();
+        let project = db::Project {
+            id: "offline".into(),
+            team_id: "team".into(),
+            organization_id: String::new(),
+            organization_name: String::new(),
+            name: "Offline".into(),
+            source_type: "git".into(),
+            source: "https://example.invalid/offline.git".into(),
+            revision: String::new(),
+            created_at: String::new(),
+            team_ids: Vec::new(),
+        };
+        let proxy = crate::settings::ProxySettings::inherit();
+        let path = materialize_project(&project, &dir, &proxy, false)
+            .await
+            .unwrap();
+        assert_eq!(path, checkout);
+        let missing = db::Project {
+            id: "absent".into(),
+            ..project
+        };
+        let err = materialize_project(&missing, &dir, &proxy, false)
+            .await
+            .unwrap_err();
+        assert_eq!(err, "sync_the_git_project_first");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn image_names_allow_a_digest_reference() {

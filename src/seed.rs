@@ -303,6 +303,7 @@ fn insert_template(conn: &Connection, item: DemoTemplate<'_>) -> AppResult<Strin
             extra_vars: item.extra_vars.to_string(),
             spec: item.spec.to_string(),
             created_at: db::now(),
+            update_on_launch: true,
         },
     )?;
     Ok(id)

@@ -814,6 +814,10 @@ async function pageTemplateForm(id) {
         <h2>${h("target")}</h2>
         <div class="field-grid">
           <label class="field"><span>${h("project")}</span><select name="project_id">${selectOptions(projects, item.project_id, true, (row) => row.name)}</select></label>
+          <div id="update-on-launch" hidden>
+            <label class="field check"><span>${h("update_the_project_on_launch")}</span><input name="update_on_launch" type="checkbox"${item.update_on_launch === false ? "" : " checked"}></label>
+            <p class="small muted">${h("off_uses_the_checkout_from_the_last_sync")}</p>
+          </div>
           <label class="field" id="inventory-field"${item.tool === "ansible" ? "" : " hidden"}><span>${h("inventory")}</span><select name="inventory_id">${selectOptions(inventories, item.inventory_id, true, (row) => row.name)}</select></label>
           <label class="field"><span>${h("execution_environment")}</span><select name="environment_id">${selectOptions(environments, item.environment_id, true, (row) => `${row.name} (${scopeLabel(row)})`)}</select></label>
         </div>
@@ -881,6 +885,7 @@ async function pageTemplateForm(id) {
     event.preventDefault();
     if (!flushChips(form)) return;
     try {
+      const selectedProject = projects.find((item) => item.id === form.project_id.value);
       const body = {
         name: form.name.value,
         description: form.description.value,
@@ -892,6 +897,7 @@ async function pageTemplateForm(id) {
           ...[...form.querySelectorAll("#vault-pills [data-vault-id]")].map((node) => node.dataset.vaultId),
         ],
         environment_id: form.environment_id.value || null,
+        update_on_launch: selectedProject && selectedProject.source_type === "git" ? form.update_on_launch.checked : true,
         entrypoint: form.tool.value === "ansible" && form.playbook.value ? form.playbook.value : form.entrypoint.value,
         extra_vars: jsonObject(form.extra_vars.value, "extra_variables"),
         spec: templateSpec(form),
@@ -945,7 +951,16 @@ async function pageTemplateForm(id) {
     loadPlaybooks();
   });
   showToolSections();
-  form.project_id.addEventListener("change", loadPlaybooks);
+  const showProjectUpdate = () => {
+    const row = projects.find((item) => item.id === form.project_id.value);
+    const box = document.querySelector("#update-on-launch");
+    if (box) box.hidden = !(row && row.source_type === "git");
+  };
+  form.project_id.addEventListener("change", () => {
+    showProjectUpdate();
+    loadPlaybooks();
+  });
+  showProjectUpdate();
   form.playbook.addEventListener("change", () => {
     if (form.playbook.value) form.entrypoint.value = form.playbook.value;
   });
@@ -1058,6 +1073,7 @@ function jobParameters(job) {
     ${paramRow("tool", params.tool)}
     ${paramRow("entry", params.entrypoint)}
     ${paramRow("project", params.project_name)}
+    ${typeof params.update_on_launch === "boolean" && params.project_name ? paramRow("project_update", t(params.update_on_launch ? "on_launch" : "use_the_last_sync")) : ""}
     ${paramRow("inventory", params.inventory_name)}
     ${paramRow("nav.access", credential)}
     ${paramRow("execution_environment", environment)}
