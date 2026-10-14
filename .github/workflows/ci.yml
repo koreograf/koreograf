@@ -119,4 +119,5 @@ jobs:
           chmod +x /tmp/hadolint
           /tmp/hadolint Dockerfile
       - name: Build the image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: docker build --tag koreograf:ci .

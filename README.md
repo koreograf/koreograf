@@ -1,5 +1,9 @@
 # Koreograf
 
+[![ci](https://github.com/koreograf/koreograf/actions/workflows/ci.yml/badge.svg)](https://github.com/koreograf/koreograf/actions/workflows/ci.yml)
+
+Alpha [0.1.0-alpha.1](CHANGELOG.md) is at <https://github.com/koreograf/koreograf>.
+
 Koreograf is a prototype for team-scoped automation. One Rust binary serves the API, the browser UI, and the job runner. Ansible, OpenTofu, and shell run as jobs. Collections, roles, and OpenTofu providers stay in a cache. Workflows are directed graphs. Webhooks from Alertmanager or Grafana start those graphs.
 
 This is an early prototype, not a replacement for AWX and not a rebuild of Semaphore. There are no surveys, no schedules, no Receptor, and no high-availability setup. The database today is one SQLite file with one writer. PostgreSQL is not connected yet.
@@ -84,7 +88,7 @@ Environment variables: see `.env.example`. Comments in that file are still Germa
 docker compose up --build
 ```
 
-The image contains Ansible from Debian, the Docker client, and OpenTofu 1.12.1 for `linux/amd64`. The process runs as root because a mounted Docker socket is root on the host.
+Compose builds the image on your machine. The published image `ghcr.io/koreograf/koreograf:0.1.0-alpha.1` exists after the git tag `v0.1.0-alpha.1`. The image is `linux/amd64`. It contains Ansible from Debian, the Docker client, and OpenTofu 1.12.1. The process runs as root because a mounted Docker socket is root on the host.
 
 The socket is commented out in `docker-compose.yml`. Execution environments need that line. Without the socket the runner stays local, and the demo health check still runs.
 
@@ -96,13 +100,15 @@ Data lives in the volume `koreograf-data`. Compose reads `.env` for variable sub
 helm upgrade --install koreograf deploy/helm/koreograf
 ```
 
-`replicaCount` is 1. A second pod on the same SQLite file loses writes. The image must be reachable in the cluster (`image.repository`). The Docker socket is off by default (`runner.dockerSocket.enabled`).
+The chart pulls `ghcr.io/koreograf/koreograf:0.1.0-alpha.1`. That tag is published with the git tag `v0.1.0-alpha.1`. GitHub keeps a new package private until its visibility is public. Until the package exists and is public, build the image yourself and set `image.repository` and `image.tag` to that build.
+
+`replicaCount` is 1. A second pod on the same SQLite file loses writes. The Docker socket is off by default (`runner.dockerSocket.enabled`).
 
 Probes call `/healthz`. Prometheus can scrape `GET /metrics` on the same port. The counters belong to this one replica and live only in memory. If `admin.password` is empty, the first password is in the volume at `/var/lib/koreograf/initial-admin-password`.
 
 ## Checks on GitHub
 
-Every push and every pull request starts GitHub Actions. The runs check formatting and Clippy, the Rust tests, the Rust docs, the syntax of `web/app.js`, Shellcheck, Hadolint, the pre-commit hooks, the Helm chart, and the image build. The image is not published, and nothing is deployed. `cargo check` also runs on Rust 1.89, the minimum version in `Cargo.toml`. The image build uses Rust 1.96, like the Dockerfile.
+Every push and every pull request starts GitHub Actions. The runs check formatting and Clippy, the Rust tests, the Rust docs, the syntax of `web/app.js`, Shellcheck, Hadolint, the pre-commit hooks, and the Helm chart. `cargo check` also runs on Rust 1.89, the minimum version in `Cargo.toml`. A push to `main` builds the image with Rust 1.96, like the Dockerfile. A tag `v*` publishes `ghcr.io/koreograf/koreograf` for `linux/amd64`. Nothing is deployed.
 
 Commit messages are English and follow Conventional Commits. On pull requests, commitlint checks the messages. `data/` stays out of git: it holds the SQLite file, `secret.key`, and the first admin password.
 

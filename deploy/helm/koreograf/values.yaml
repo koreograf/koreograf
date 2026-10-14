@@ -5,8 +5,8 @@ nameOverride: ""
 fullnameOverride: ""
 
 image:
-  repository: koreograf
-  tag: "0.1.0"
+  repository: ghcr.io/koreograf/koreograf
+  tag: "0.1.0-alpha.1"
   pullPolicy: IfNotPresent
 
 service:

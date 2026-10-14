@@ -1,0 +1,15 @@
+name: Idea
+description: A change you want in Koreograf
+title: "feat: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: Do not paste passwords, tokens, keys, extra variables, or a backup zip.
+  - type: textarea
+    id: idea
+    attributes:
+      label: Idea
+      description: What should change, and how you would use it.
+    validations:
+      required: true

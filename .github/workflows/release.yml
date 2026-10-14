@@ -1,0 +1,33 @@
+# Publishes the alpha image. This workflow does not deploy.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    name: image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Build and push
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          docker build \
+            --tag "ghcr.io/koreograf/koreograf:${version}" \
+            --tag "ghcr.io/koreograf/koreograf:${GITHUB_REF_NAME}" \
+            .
+          docker push "ghcr.io/koreograf/koreograf:${version}"
+          docker push "ghcr.io/koreograf/koreograf:${GITHUB_REF_NAME}"

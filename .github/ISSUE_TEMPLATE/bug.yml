@@ -1,0 +1,33 @@
+name: Bug
+description: Something in Koreograf failed
+title: "fix: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: Do not paste passwords, tokens, keys, extra variables, or a backup zip.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and the error text with secrets removed.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Git tag or commit, for example v0.1.0-alpha.1.
+      placeholder: v0.1.0-alpha.1
+    validations:
+      required: true
+  - type: dropdown
+    id: runner
+    attributes:
+      label: Runner
+      options:
+        - local
+        - docker or podman
+        - not sure
+    validations:
+      required: true
