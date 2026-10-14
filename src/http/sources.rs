@@ -162,9 +162,7 @@ pub async fn create_netbox(
     gate(&state, &user, &team, Role::Operator)?;
     let name = require_name(&body.name)?;
     let source = netbox_source(&body)?;
-    let ini = netbox::fetch_ini(&source, body.token.trim())
-        .await
-        .map_err(ApiError::bad)?;
+    let ini = fetch_netbox(&state, &source, body.token.trim()).await?;
     let secret = json!({"token": body.token.trim()}).to_string();
     let blob = state.encrypt(&secret)?;
     let credential_id = Uuid::new_v4().to_string();
@@ -301,7 +299,12 @@ async fn refresh_netbox(
         query: stored.query,
         virtual_machines: stored.virtual_machines,
     };
-    netbox::fetch_ini(&source, &token)
+    fetch_netbox(state, &source, &token).await
+}
+
+async fn fetch_netbox(state: &Shared, source: &NetboxSource, token: &str) -> AppResult<String> {
+    let proxy = crate::settings::load(state)?.proxy;
+    netbox::fetch_ini(source, token, &proxy)
         .await
         .map_err(ApiError::bad)
 }
@@ -680,9 +683,7 @@ async fn resolve_source(
                 query_filters: input.query_filters.clone(),
                 virtual_machines: input.virtual_machines,
             })?;
-            let ini = netbox::fetch_ini(&parsed, input.token.trim())
-                .await
-                .map_err(ApiError::bad)?;
+            let ini = fetch_netbox(state, &parsed, input.token.trim()).await?;
             let name = source_label(&input.name, "NetBox")?;
             let secret = json!({"token": input.token.trim()}).to_string();
             let blob = state.encrypt(&secret)?;

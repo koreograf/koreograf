@@ -13,6 +13,8 @@ services:
       KOREOGRAF_RUNNER: ${KOREOGRAF_RUNNER:-auto}
       KOREOGRAF_JOB_TIMEOUT_SECS: ${KOREOGRAF_JOB_TIMEOUT_SECS:-1800}
       KOREOGRAF_SECRET_KEY: ${KOREOGRAF_SECRET_KEY:-}
+      # Verzeichnis, Proxy, Runner und Zeitlimit gelten bis zum ersten Speichern
+      # unter Einstellungen. Danach ersetzt die Datenbank diese Variablen.
       KOREOGRAF_LDAP_URL: ${KOREOGRAF_LDAP_URL:-}
       KOREOGRAF_LDAP_MODE: ${KOREOGRAF_LDAP_MODE:-ldap}
       KOREOGRAF_LDAP_BIND_DN: ${KOREOGRAF_LDAP_BIND_DN:-}

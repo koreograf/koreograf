@@ -29,7 +29,7 @@ const EN = {
   "Abbrechen": "Cancel",
   "Abhängigkeits-Cache": "Dependency cache",
   "Administrator": "Administrator",
-  "Administrator verwaltet Organisationen, Teams, Benutzer und die Sicherung. Die Teamrolle wird dabei nicht geprüft.": "An administrator manages organizations, teams, users, and backup. The team role is not checked.",
+  "Administrator verwaltet Organisationen, Teams, Benutzer, Einstellungen und die Sicherung. Die Teamrolle wird dabei nicht geprüft.": "An administrator manages organizations, teams, users, settings, and backup. The team role is not checked.",
   "Aktion": "Action",
   "Aktualisieren": "Refresh",
   "Alertname": "Alert name",
@@ -548,6 +548,54 @@ const EN = {
   "Branch, Tag oder Commit": "Branch, tag, or commit",
   "CN oder DN, zum Beispiel Plattform": "CN or DN, for example Platform",
   "Entfernen": "Remove",
+  "Einstellungen": "Settings",
+  "Einstellungen gespeichert.": "Settings saved.",
+  "Diese Werte sind gespeichert und gelten sofort.": "These values are saved and apply immediately.",
+  "Noch nichts gespeichert. Es gelten die Umgebungsvariablen vom Start.": "Nothing is saved yet. The environment variables from startup apply.",
+  "Speichern ersetzt die Umgebungsvariablen. Ein leeres Passwort bleibt erhalten.": "Saving replaces the environment variables. An empty password keeps the stored value.",
+  "Umgebungsvariablen verwenden": "Use environment variables",
+  "Gespeicherte Einstellungen verwerfen und wieder die Umgebungsvariablen vom Start nutzen?": "Discard the saved settings and use the environment variables from startup again?",
+  "Bind-Adresse, Datenverzeichnis und das erste Admin-Passwort bleiben am Prozess. Benutzer und die Sicherung haben eigene Seiten.": "The bind address, data directory, and first admin password stay on the process. Users and backup have their own pages.",
+  "Verzeichnis": "Directory",
+  "LDAP oder Active Directory. Eine leere Adresse schaltet die Anmeldung über das Verzeichnis aus. Das lokale Administratorkonto bleibt.": "LDAP or Active Directory. An empty address turns directory sign-in off. The local administrator account stays.",
+  "Modus": "Mode",
+  "Active Directory": "Active Directory",
+  "Bind-DN": "Bind DN",
+  "Bind-Passwort": "Bind password",
+  "Benutzerbasis": "User base",
+  "Benutzerfilter": "User filter",
+  "Benutzerattribut": "Username attribute",
+  "Gruppenattribut": "Group attribute",
+  "Gruppenbasis": "Group base",
+  "StartTLS": "StartTLS",
+  "Zertifikatsprüfung auslassen. Nur in einem Netz, dem du vertraust.": "Skip certificate checks. Only on a network you trust.",
+  "Proxy": "Proxy",
+  "Eine Adresse gilt für HTTP und HTTPS. Git über HTTP und HTTPS, NetBox und Aufträge nutzen sie. Im Execution Environment gilt das auch für Galaxy. SSH-Git geht nicht darüber. Ein Image-Pull nutzt den Proxy des Container-Daemons.": "One address is used for HTTP and HTTPS. Git over HTTP and HTTPS, NetBox, and jobs use it. Inside an execution environment, Galaxy does too. SSH git does not. An image pull uses the container daemon's proxy.",
+  "Eine leere Adresse schaltet den Proxy aus.": "An empty address turns the proxy off.",
+  "Proxy-Adresse": "Proxy address",
+  "Proxy-Benutzer": "Proxy user",
+  "Proxy-Passwort": "Proxy password",
+  "Ausnahmen": "Exceptions",
+  "Die Umgebung nutzt einen Proxy, der weder HTTP noch HTTPS ist. Speichern schaltet ihn für Git, NetBox und Aufträge aus.": "The environment uses a proxy that is neither HTTP nor HTTPS. Saving turns it off for git, NetBox, and jobs.",
+  "Der Modus und das Zeitlimit gelten für den nächsten Auftrag.": "The mode and the time limit apply to the next job.",
+  "Automatisch": "Automatic",
+  "Container": "Container",
+  "Zeitlimit in Sekunden": "Time limit in seconds",
+  "Automatisch nimmt ein Execution Environment, wenn Docker oder Podman erreichbar ist. Lokal bleibt auf diesem Rechner. Container bricht ab, wenn keine Laufzeitumgebung da ist.": "Automatic uses an execution environment when Docker or Podman is reachable. Local stays on this machine. Container stops when no runtime is available.",
+  "LDAP-Adresse muss ldap:// oder ldaps:// sein.": "The LDAP address must be ldap:// or ldaps://.",
+  "LDAP-Filter braucht {username}.": "The LDAP filter needs {username}.",
+  "LDAP-Modus ist ungültig.": "The LDAP mode is invalid.",
+  "Proxy-Adresse muss http:// oder https:// sein.": "The proxy address must be http:// or https://.",
+  "Zugangsdaten gehören in die eigenen Felder, nicht in die Proxy-Adresse.": "Put the credentials in their own fields, not in the proxy address.",
+  "Proxy-Benutzer fehlt.": "The proxy user is missing.",
+  "Proxy-Ausnahmen sind ungültig.": "The proxy exceptions are invalid.",
+  "Zeitlimit muss zwischen 30 und 86400 Sekunden liegen.": "The time limit must be between 30 and 86400 seconds.",
+  "Runner-Modus ist ungültig.": "The runner mode is invalid.",
+  "Das Platzhalterzeichen ist kein Passwort.": "The placeholder is not a password.",
+  "Gespeicherte Einstellung lässt sich nicht lesen.": "The saved setting cannot be read.",
+  "Der Wert ist zu lang.": "The value is too long.",
+  "Der Wert enthält ungültige Zeichen.": "The value contains invalid characters.",
+  "HTTP-Proxy aus der Umgebung.": "HTTP proxy from the environment.",
   "Erfolgreich": "Successful",
   "Fehlgeschlagen": "Failed",
   "Filter „{line}“ braucht Schlüssel=Wert.": "Filter “{line}” needs key=value.",
@@ -767,7 +815,7 @@ function roleLegend() {
     <li><strong>${h("Betrachter")}</strong> ${h("Betrachter sieht Projekte, Inventare, Vorlagen, Aufträge und Workflows.")}</li>
     <li><strong>${h("Operator")}</strong> ${h("Operator startet Aufträge und pflegt Projekte, Inventare, Vorlagen, Workflows und Webhooks.")}</li>
     <li><strong>${h("Besitzer")}</strong> ${h("Besitzer verwaltet zusätzlich Zugänge, Umgebungen und Mitglieder.")}</li>
-    <li><strong>${h("Administrator")}</strong> ${h("Administrator verwaltet Organisationen, Teams, Benutzer und die Sicherung. Die Teamrolle wird dabei nicht geprüft.")}</li>
+    <li><strong>${h("Administrator")}</strong> ${h("Administrator verwaltet Organisationen, Teams, Benutzer, Einstellungen und die Sicherung. Die Teamrolle wird dabei nicht geprüft.")}</li>
   </ul>`;
 }
 
@@ -903,7 +951,7 @@ function shell(title, body, actions) {
     [lang === "en" ? "Access" : "Zugang", [
       ["#/organizations", t("Organisationen")],
       ["#/team", t("Team")],
-      ...(me.is_admin ? [["#/users", t("Benutzerkonten")], ["#/backup", t("Sicherung")]] : []),
+      ...(me.is_admin ? [["#/settings", t("Einstellungen")], ["#/users", t("Benutzerkonten")], ["#/backup", t("Sicherung")]] : []),
     ]],
   ];
   const nav = groups.map(([label, links]) => `
@@ -4327,6 +4375,169 @@ async function pageUserNew() {
   });
 }
 
+function optionSelected(current, value) {
+  return current === value ? " selected" : "";
+}
+
+function settingsBody(form) {
+  const secret = (name) => {
+    const field = form.elements[name];
+    if (!field || field.dataset.storedMask === "1") return "";
+    return field.value;
+  };
+  const clear = [...form.querySelectorAll("[data-clear]:checked")].map((node) => node.getAttribute("data-clear"));
+  return {
+    ldap: {
+      url: form.ldap_url.value.trim(),
+      mode: form.ldap_mode.value,
+      bind_dn: form.ldap_bind_dn.value.trim(),
+      bind_password: secret("ldap_bind_password"),
+      user_base: form.ldap_user_base.value.trim(),
+      user_filter: form.ldap_user_filter.value.trim(),
+      username_attr: form.ldap_username_attr.value.trim(),
+      group_attr: form.ldap_group_attr.value.trim(),
+      group_base: form.ldap_group_base.value.trim(),
+      starttls: form.ldap_starttls.checked,
+      tls_insecure: form.ldap_tls_insecure.checked,
+    },
+    proxy: {
+      url: form.proxy_url.value.trim(),
+      username: form.proxy_username.value.trim(),
+      password: secret("proxy_password"),
+      no_proxy: form.proxy_no_proxy.value.trim(),
+    },
+    runner: form.runner.value,
+    job_timeout_secs: Number(form.job_timeout_secs.value),
+    clear,
+  };
+}
+
+function bindStoredMasks(form) {
+  form.querySelectorAll("[data-stored-mask]").forEach((field) => {
+    field.addEventListener("focus", () => {
+      if (field.dataset.storedMask === "1") field.select();
+    });
+    field.addEventListener("input", () => {
+      delete field.dataset.storedMask;
+    });
+  });
+}
+
+async function pageSettings(notice) {
+  if (!me.is_admin) {
+    deny("Einstellungen", "admin");
+    return;
+  }
+  const item = await api("GET", "/api/settings");
+  const ldap = item.ldap || {};
+  const proxy = item.proxy || {};
+  const mode = ldap.mode === "ad" ? "ad" : "ldap";
+  const runner = ["auto", "docker", "local"].includes(item.runner) ? item.runner : "auto";
+  const source = item.source === "saved"
+    ? "Diese Werte sind gespeichert und gelten sofort."
+    : "Noch nichts gespeichert. Es gelten die Umgebungsvariablen vom Start.";
+  const unsupported = proxy.unsupported_env
+    ? `<p class="banner warn">${h("Die Umgebung nutzt einen Proxy, der weder HTTP noch HTTPS ist. Speichern schaltet ihn für Git, NetBox und Aufträge aus.")}</p>`
+    : "";
+  const saved = notice ? `<p class="banner good">${h(notice)}</p>` : "";
+  shell(t("Einstellungen"), `<form class="card form" id="settings-form">
+    ${saved}
+    <p class="small muted">${h(source)}</p>
+    <p class="small muted">${h("Bind-Adresse, Datenverzeichnis und das erste Admin-Passwort bleiben am Prozess. Benutzer und die Sicherung haben eigene Seiten.")}</p>
+    <section class="form-section">
+      <h2>${h("Verzeichnis")}</h2>
+      <p class="small muted">${h("LDAP oder Active Directory. Eine leere Adresse schaltet die Anmeldung über das Verzeichnis aus. Das lokale Administratorkonto bleibt.")}</p>
+      <div class="field-row">
+        <label class="field"><span>${h("Modus")}</span>
+          <select class="fit" name="ldap_mode">
+            <option value="ldap"${optionSelected(mode, "ldap")}>LDAP</option>
+            <option value="ad"${optionSelected(mode, "ad")}>${h("Active Directory")}</option>
+          </select>
+        </label>
+      </div>
+      <label class="field"><span>${h("Adresse")}</span><input name="ldap_url" value="${esc(ldap.url || "")}" placeholder="ldap://ldap.example.com" autocomplete="off" spellcheck="false"></label>
+      <label class="field"><span>${h("Bind-DN")}</span><input name="ldap_bind_dn" value="${esc(ldap.bind_dn || "")}" placeholder="cn=svc,dc=example,dc=com" autocomplete="off" spellcheck="false"></label>
+      ${secretInput("ldap_bind_password", "Bind-Passwort", "password", Boolean(ldap.bind_password_set))}
+      <label class="field"><span>${h("Benutzerbasis")}</span><input name="ldap_user_base" value="${esc(ldap.user_base || "")}" placeholder="ou=users,dc=example,dc=com" autocomplete="off" spellcheck="false"></label>
+      <div class="field-grid">
+        <label class="field"><span>${h("Benutzerfilter")}</span><input name="ldap_user_filter" value="${esc(ldap.user_filter || "")}" spellcheck="false"></label>
+        <label class="field"><span>${h("Benutzerattribut")}</span><input name="ldap_username_attr" value="${esc(ldap.username_attr || "")}" spellcheck="false"></label>
+        <label class="field"><span>${h("Gruppenattribut")}</span><input name="ldap_group_attr" value="${esc(ldap.group_attr || "")}" spellcheck="false"></label>
+        <label class="field"><span>${h("Gruppenbasis")}</span><input name="ldap_group_base" value="${esc(ldap.group_base || "")}" autocomplete="off" spellcheck="false"></label>
+      </div>
+      <label class="row"><input name="ldap_starttls" type="checkbox"${ldap.starttls ? " checked" : ""}> ${h("StartTLS")}</label>
+      <label class="row"><input name="ldap_tls_insecure" type="checkbox"${ldap.tls_insecure ? " checked" : ""}> ${h("Zertifikatsprüfung auslassen. Nur in einem Netz, dem du vertraust.")}</label>
+    </section>
+    <section class="form-section">
+      <h2>${h("Proxy")}</h2>
+      <p class="small muted">${h("Eine Adresse gilt für HTTP und HTTPS. Git über HTTP und HTTPS, NetBox und Aufträge nutzen sie. Im Execution Environment gilt das auch für Galaxy. SSH-Git geht nicht darüber. Ein Image-Pull nutzt den Proxy des Container-Daemons.")}</p>
+      <p class="small muted">${h("Eine leere Adresse schaltet den Proxy aus.")}</p>
+      ${unsupported}
+      <label class="field"><span>${h("Proxy-Adresse")}</span><input name="proxy_url" value="${esc(proxy.url || "")}" placeholder="http://proxy.example:3128" autocomplete="off" spellcheck="false"></label>
+      <div class="field-row">
+        <label class="field"><span>${h("Proxy-Benutzer")}</span><input class="fit" name="proxy_username" value="${esc(proxy.username || "")}" autocomplete="off" spellcheck="false"></label>
+        ${secretInput("proxy_password", "Proxy-Passwort", "password", Boolean(proxy.password_set))}
+      </div>
+      <label class="field"><span>${h("Ausnahmen")}</span><input name="proxy_no_proxy" value="${esc(proxy.no_proxy || "")}" placeholder="localhost,127.0.0.1,.internal" autocomplete="off" spellcheck="false"></label>
+    </section>
+    <section class="form-section">
+      <h2>${h("Aufträge")}</h2>
+      <p class="small muted">${h("Der Modus und das Zeitlimit gelten für den nächsten Auftrag.")}</p>
+      <div class="field-row">
+        <label class="field"><span>${h("Runner")}</span>
+          <select class="fit" name="runner">
+            <option value="auto"${optionSelected(runner, "auto")}>${h("Automatisch")}</option>
+            <option value="docker"${optionSelected(runner, "docker")}>${h("Container")}</option>
+            <option value="local"${optionSelected(runner, "local")}>${h("Lokal")}</option>
+          </select>
+        </label>
+        <label class="field"><span>${h("Zeitlimit in Sekunden")}</span><input class="tiny" name="job_timeout_secs" type="number" min="30" max="86400" required value="${esc(String(item.job_timeout_secs || 1800))}"></label>
+      </div>
+      <p class="small muted">${h("Automatisch nimmt ein Execution Environment, wenn Docker oder Podman erreichbar ist. Lokal bleibt auf diesem Rechner. Container bricht ab, wenn keine Laufzeitumgebung da ist.")}</p>
+    </section>
+    <p class="small muted">${h("Speichern ersetzt die Umgebungsvariablen. Ein leeres Passwort bleibt erhalten.")}</p>
+    <div class="choice-row">
+      <button class="btn pill primary" type="submit">${h("Speichern")}</button>
+      <button class="btn pill" id="settings-reset" type="button">${h("Umgebungsvariablen verwenden")}</button>
+    </div>
+  </form>`);
+  const form = document.querySelector("#settings-form");
+  bindStoredMasks(form);
+  form.ldap_mode.addEventListener("change", () => {
+    const ad = form.ldap_mode.value === "ad";
+    const next = ad
+      ? { filter: "(sAMAccountName={username})", attr: "sAMAccountName" }
+      : { filter: "(uid={username})", attr: "uid" };
+    const previous = ad
+      ? { filter: "(uid={username})", attr: "uid" }
+      : { filter: "(sAMAccountName={username})", attr: "sAMAccountName" };
+    if (!form.ldap_user_filter.value.trim() || form.ldap_user_filter.value.trim() === previous.filter) {
+      form.ldap_user_filter.value = next.filter;
+    }
+    if (!form.ldap_username_attr.value.trim() || form.ldap_username_attr.value.trim() === previous.attr) {
+      form.ldap_username_attr.value = next.attr;
+    }
+  });
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      await api("PUT", "/api/settings", settingsBody(form));
+      await pageSettings("Einstellungen gespeichert.");
+    } catch (error) {
+      handle(error);
+    }
+  });
+  document.querySelector("#settings-reset").addEventListener("click", async () => {
+    if (!window.confirm(t("Gespeicherte Einstellungen verwerfen und wieder die Umgebungsvariablen vom Start nutzen?"))) return;
+    try {
+      await api("PUT", "/api/settings", { reset: true });
+      await pageSettings();
+    } catch (error) {
+      handle(error);
+    }
+  });
+}
+
 async function pageBackup() {
   if (!me.is_admin) {
     deny("Sicherung", "admin");
@@ -4447,6 +4658,7 @@ async function route() {
     else if (parts[0] === "users" && parts[1] === "new") await pageUserNew();
     else if (parts[0] === "users" && parts[1]) await pageUser(parts[1]);
     else if (parts[0] === "users") await pageUsers();
+    else if (parts[0] === "settings") await pageSettings();
     else if (parts[0] === "backup") await pageBackup();
     else if (parts[0] === "team") await pageTeam();
     else shell(t("Seite"), `<div class="card">${h("Diese Seite gibt es nicht.")}</div>`);

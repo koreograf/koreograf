@@ -128,11 +128,17 @@ A team stores an LDAP group as a CN or a DN. The comparison ignores case.
 
 Empty filters and attributes use the default for the selected mode. `KOREOGRAF_LDAP_STARTTLS=true` turns on StartTLS. `KOREOGRAF_LDAP_TLS_INSECURE=true` skips certificate checks. The service binds with `KOREOGRAF_LDAP_BIND_DN`, searches for the user, then binds with that user's password. `{username}` in the filter is escaped.
 
+An administrator can change the directory, the HTTP proxy, the runner, and the job timeout under **Settings** (German: **Einstellungen**). `GET` and `PUT /api/settings` are administrator-only. The response never includes the bind password or the proxy password, only whether one is stored. An empty password keeps the stored value. Removing a password uses `clear` with `ldap_bind_password` or `proxy_password`. `PUT` with `{"reset": true}` drops the saved values and returns to the environment variables.
+
+The environment variables apply until the first save. After that, the saved values apply immediately: the next sign-in, the next git sync, the next NetBox fetch, and the next job. A restart is not required. One proxy address is used for both HTTP and HTTPS. It covers git over HTTP and HTTPS, NetBox, and the cleaned job environment, so Galaxy and git inside an execution environment can use it. SSH git does not. An image pull uses the proxy of the container daemon, not this setting. The proxy password is not written to the log. A saved empty proxy address turns the proxy off for those calls, including a proxy that was set on the process. Before the first save, git and NetBox still follow `http_proxy`, `https_proxy`, and `no_proxy` from the process, and a job copies those variables into its environment.
+
+The job timeout is 30 to 86400 seconds. The runner mode is `auto`, `docker`, or `local`.
+
 ## Execution environments
 
 An environment is an image plus a pull policy (`if_not_present`, `always`, `never`). The demo creates `quay.io/ansible/awx-ee:latest` and attaches it to no template, so the first run works without an image pull. The Runtime page lists environments first. `GET` and `PUT /api/environments/{id}` read and change the name, image, pull policy, and description. An owner can edit them. The image may be a tag or a digest reference (`name@sha256:…`).
 
-In the container the runner mounts the project read-only at `/runner/project`, the work directory at `/runner/work`, and the cache at `/cache`. `--env-file` points at a file on the host. The image gets a cleaned environment: `PATH` is local only, `HOME` is the work directory, `LANG=C.UTF-8`, and the `KOREOGRAF_*` variables. The server environment is not inherited.
+In the container the runner mounts the project read-only at `/runner/project`, the work directory at `/runner/work`, and the cache at `/cache`. `--env-file` points at a file on the host. The image gets a cleaned environment: `PATH` is local only, `HOME` is the work directory, `LANG=C.UTF-8`, and the `KOREOGRAF_*` variables. The server environment is not inherited. A configured HTTP proxy is added as `http_proxy` and `https_proxy`. That file is mode `0600` because the proxy password can sit in those values.
 
 ## Workflows
 
@@ -208,7 +214,7 @@ Every signed-in user opens **My account** (German: **Mein Konto**) from their na
 
 Disabling an account ends that user's sessions. The next sign-in, after a correct password, answers `Das Konto ist deaktiviert.` You cannot disable or delete your own account. The last active administrator cannot be demoted, disabled, or deleted.
 
-There is no per-object role. A viewer sees projects, inventories, templates, jobs, and workflows. An operator launches jobs and edits those objects, plus workflows and webhooks. An owner also manages credentials, environments, and team members. The administrator flag skips the team-role check and can manage organizations, teams, users, and backup.
+There is no per-object role. A viewer sees projects, inventories, templates, jobs, and workflows. An operator launches jobs and edits those objects, plus workflows and webhooks. An owner also manages credentials, environments, and team members. The administrator flag skips the team-role check and can manage organizations, teams, users, settings, and backup.
 
 `POST /api/teams/{id}/members` sets a manual role. The same call adds a user to a team they are not in yet.
 
@@ -251,6 +257,7 @@ Session cookie `koreograf_session`, HttpOnly, SameSite=Lax, seven days. Team rou
 | POST | `/hooks/{id}/{token}` |
 | GET | `/healthz`, `/metrics` |
 | GET, POST | `/api/admin/backup` |
+| GET, PUT | `/api/settings` |
 
 `PUT /api/projects/{id}` sets `organization_id` and `team_ids`. An empty list gives the project to every team in the organization. `GET /api/inventories/{id}` returns `hosts`, `host_count`, `source_kind`, and `source`. Groups with `:vars` or `:children` are not hosts. A git sync that fails answers with the last lines from git. Allowed addresses are `http(s)`, `ssh`, `git@`, and `file`. `contents` answers with `playbooks` and `inventories`. `import` takes a static file. `netbox` expects `name`, `api_endpoint`, `token`, and optionally `group_by`, `query_filters`, `validate_certs`, and `virtual_machines`. The fetch happens before the save.
 
@@ -258,7 +265,7 @@ Launches answer 202 and need a JSON body, at least `{}`. `extra_vars` is an obje
 
 ## Security
 
-The prototype is meant for a trusted network. The Docker socket is root on the host. `data/secret.key` decrypts every credential. Copying that file, the SQLite database, or `koreograf-backup.zip` exposes the credentials. `KOREOGRAF_LDAP_TLS_INSECURE` and an open port without TLS do not belong on the internet.
+The prototype is meant for a trusted network. The Docker socket is root on the host. `data/secret.key` decrypts every credential and the saved directory and proxy passwords. Copying that file, the SQLite database, or `koreograf-backup.zip` exposes them. `KOREOGRAF_LDAP_TLS_INSECURE` and an open port without TLS do not belong on the internet.
 
 ## Demo
 

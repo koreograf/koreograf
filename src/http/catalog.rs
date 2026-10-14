@@ -106,6 +106,7 @@ pub async fn overview(
     // The runtime probe awaits. Take it before the database lock so the
     // connection guard, which is not Send, is never held across that point.
     let runtime = runner::detect_runtime().await;
+    let effective = crate::settings::load(&state)?;
     let db = state.db()?;
     let jobs = db::list_jobs(&db, &team, 8)?;
     let deliveries = db::list_deliveries(&db, &team, 8)?;
@@ -113,9 +114,9 @@ pub async fn overview(
     let hook = db::first_hook(&db, &team)?;
     let cache = cacheinfo::team_cache(&state.cfg.data_dir, &team);
     Ok(Json(json!({
-        "runner_mode": state.cfg.runner.as_str(),
+        "runner_mode": effective.runner.as_str(),
         "runtime": runtime,
-        "ldap": state.cfg.ldap.is_some(),
+        "ldap": effective.directory().is_some(),
         "cache_bytes": cache.collections_bytes + cache.roles_bytes + cache.tofu_bytes,
         "jobs": jobs.iter().map(|job| super::job_json(job, None)).collect::<Vec<_>>(),
         "deliveries": deliveries,

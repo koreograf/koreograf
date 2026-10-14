@@ -209,6 +209,10 @@ CREATE TABLE IF NOT EXISTS project_teams (
   team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
   PRIMARY KEY (project_id, team_id)
 );
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_jobs_team ON jobs(team_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_events_job ON job_events(job_id, id);
 CREATE INDEX IF NOT EXISTS idx_members_user ON memberships(user_id);

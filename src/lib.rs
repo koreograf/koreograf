@@ -24,6 +24,7 @@ mod netbox;
 mod runner;
 mod scan;
 mod seed;
+mod settings;
 mod workflow;
 
 use std::collections::HashMap;

@@ -74,7 +74,11 @@ pub fn parse_filters(lines: &[String]) -> Result<Vec<(String, String)>, String> 
     Ok(query)
 }
 
-pub async fn fetch_ini(source: &NetboxSource, token: &str) -> Result<String, String> {
+pub async fn fetch_ini(
+    source: &NetboxSource,
+    token: &str,
+    proxy: &crate::settings::ProxySettings,
+) -> Result<String, String> {
     if !valid_endpoint(&source.api_endpoint) {
         return Err("NetBox-Adresse muss http oder https sein.".into());
     }
@@ -88,10 +92,13 @@ pub async fn fetch_ini(source: &NetboxSource, token: &str) -> Result<String, Str
             ));
         }
     }
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::none())
-        .danger_accept_invalid_certs(!source.validate_certs)
+    let client = proxy
+        .apply_reqwest(
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(30))
+                .redirect(reqwest::redirect::Policy::none())
+                .danger_accept_invalid_certs(!source.validate_certs),
+        )?
         .build()
         .map_err(|err| err.to_string())?;
     let mut hosts = Vec::new();
@@ -523,12 +530,13 @@ mod tests {
             query: vec![("status".into(), "active".into())],
             virtual_machines: true,
         };
-        let ini = fetch_ini(&source, "secret-token").await.unwrap();
+        let proxy = crate::settings::ProxySettings::inherit();
+        let ini = fetch_ini(&source, "secret-token", &proxy).await.unwrap();
         assert!(ini.contains("web-1 ansible_host=10.0.0.8"));
         assert!(ini.contains("web-2"));
         assert!(ini.contains("vm-1 ansible_host=10.1.0.4"));
         assert!(ini.contains("[sites_berlin]"));
-        let denied = fetch_ini(&source, "wrong-token").await.unwrap_err();
+        let denied = fetch_ini(&source, "wrong-token", &proxy).await.unwrap_err();
         assert!(denied.contains("403"), "{denied}");
     }
 

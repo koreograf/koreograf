@@ -363,7 +363,8 @@ pub async fn sync_project(state: &Shared, project: &db::Project) -> AppResult<St
     if project.source_type != "git" {
         return Ok(project.source.clone());
     }
-    let path = runner::materialize_project(project, &state.cfg.data_dir)
+    let proxy = crate::settings::load(state)?.proxy;
+    let path = runner::materialize_project(project, &state.cfg.data_dir, &proxy)
         .await
         .map_err(ApiError::bad)?;
     Ok(path.display().to_string())

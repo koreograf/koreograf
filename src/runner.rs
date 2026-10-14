@@ -498,9 +498,20 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
         fs::create_dir_all(cache.join(sub)).map_err(|e| e.to_string())?;
     }
 
+    let settings = crate::settings::load(state).map_err(|err| err.to_string())?;
+    if settings.proxy.explicit && settings.proxy.is_set() {
+        log(
+            state,
+            job_id,
+            "system",
+            &format!("HTTP-Proxy {}.", settings.proxy.url),
+        );
+    } else if !settings.proxy.explicit && !settings.proxy.job_pairs().is_empty() {
+        log(state, job_id, "system", "HTTP-Proxy aus der Umgebung.");
+    }
     let project = load_project(state, &template).await?;
     if let Some(project) = &project {
-        let source = materialize_project(project, &state.cfg.data_dir).await?;
+        let source = materialize_project(project, &state.cfg.data_dir, &settings.proxy).await?;
         copy_tree(&source, &stage)?;
     }
 
@@ -533,7 +544,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
             &db::json_object(&job.extra_vars),
         )
     };
-    let use_container = should_container(state.cfg.runner, template.environment_id.is_some());
+    let use_container = should_container(settings.runner, template.environment_id.is_some());
     let runtime = if use_container {
         detect_runtime().await
     } else {
@@ -547,7 +558,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
 
     let container_mode = match (use_container, runtime.clone(), environment.clone()) {
         (true, Some(bin), Some(env)) => Some((bin, env)),
-        (true, None, Some(_)) if state.cfg.runner == RunnerMode::Docker => {
+        (true, None, Some(_)) if settings.runner == RunnerMode::Docker => {
             return Err(
                 "Execution Environment ist gesetzt, aber weder Docker noch Podman ist erreichbar."
                     .into(),
@@ -563,7 +574,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
             None
         }
         _ => {
-            if state.cfg.runner == RunnerMode::Local && template.environment_id.is_some() {
+            if settings.runner == RunnerMode::Local && template.environment_id.is_some() {
                 log(
                     state,
                     job_id,
@@ -625,6 +636,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
         &mut env,
     )?;
     export_plain_vars(&extra, &mut env);
+    apply_proxy_env(&mut env, &settings.proxy);
 
     if canceled(state, job_id) {
         return Ok(());
@@ -661,6 +673,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
                 stage: &stage,
                 cache: &cache,
                 env: &env,
+                timeout_secs: settings.job_timeout_secs,
             },
         )
         .await?
@@ -694,7 +707,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
             });
             return Ok(());
         }
-        wait_child(state, job_id, child).await?
+        wait_child(state, job_id, child, settings.job_timeout_secs).await?
     };
 
     let cache_after = dir_size(&cache);
@@ -786,6 +799,16 @@ fn push_paths(
     env.push(("KOREOGRAF_TOFU".into(), tofu));
     env.push(("KOREOGRAF_INVENTORY".into(), inventory));
     env.push(("KOREOGRAF_EXTRA".into(), extra));
+}
+
+fn apply_proxy_env(env: &mut Vec<(String, String)>, proxy: &crate::settings::ProxySettings) {
+    for (key, value) in proxy.job_pairs() {
+        if let Some(slot) = env.iter_mut().find(|(name, _)| name == &key) {
+            slot.1 = value;
+        } else {
+            env.push((key, value));
+        }
+    }
 }
 
 fn export_plain_vars(extra: &Value, env: &mut Vec<(String, String)>) {
@@ -1042,7 +1065,11 @@ pub fn valid_image(image: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || "/:._-@".contains(ch))
 }
 
-pub async fn materialize_project(project: &Project, data_dir: &Path) -> Result<PathBuf, String> {
+pub async fn materialize_project(
+    project: &Project,
+    data_dir: &Path,
+    proxy: &crate::settings::ProxySettings,
+) -> Result<PathBuf, String> {
     match project.source_type.as_str() {
         "path" => {
             let path = PathBuf::from(&project.source);
@@ -1059,7 +1086,7 @@ pub async fn materialize_project(project: &Project, data_dir: &Path) -> Result<P
                 return Err("Git-Adresse ist ungültig.".into());
             }
             let dest = data_dir.join("checkouts").join(&project.id);
-            git_sync(&project.source, &project.revision, &dest).await?;
+            git_sync(&project.source, &project.revision, &dest, proxy).await?;
             Ok(dest)
         }
         other => Err(format!("Unbekannte Projektquelle {other}.")),
@@ -1087,7 +1114,7 @@ pub fn valid_revision(revision: &str) -> bool {
                 .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-')))
 }
 
-fn git_cmd() -> Command {
+fn git_cmd(proxy: &crate::settings::ProxySettings) -> Command {
     let mut cmd = Command::new("git");
     cmd.arg("-c")
         .arg("protocol.file.allow=always")
@@ -1095,6 +1122,7 @@ fn git_cmd() -> Command {
         .env("GCM_INTERACTIVE", "never")
         .stdin(Stdio::null())
         .kill_on_drop(true);
+    proxy.apply_command(&mut cmd);
     cmd
 }
 
@@ -1148,8 +1176,13 @@ fn missing_revision(err: &str) -> bool {
         || lower.contains("konnte den remote-verweis")
 }
 
-async fn git_clone(url: &str, revision: &str, dest: &Path) -> Result<(), String> {
-    let mut cmd = git_cmd();
+async fn git_clone(
+    url: &str,
+    revision: &str,
+    dest: &Path,
+    proxy: &crate::settings::ProxySettings,
+) -> Result<(), String> {
+    let mut cmd = git_cmd(proxy);
     cmd.arg("clone").arg("--depth").arg("1");
     if !revision.is_empty() {
         cmd.arg("--branch").arg(revision);
@@ -1158,15 +1191,19 @@ async fn git_clone(url: &str, revision: &str, dest: &Path) -> Result<(), String>
     git_run(cmd).await
 }
 
-async fn git_checkout(revision: &str, dest: &Path) -> Result<(), String> {
-    let mut fetch = git_cmd();
+async fn git_checkout(
+    revision: &str,
+    dest: &Path,
+    proxy: &crate::settings::ProxySettings,
+) -> Result<(), String> {
+    let mut fetch = git_cmd(proxy);
     fetch
         .arg("-C")
         .arg(dest)
         .args(["fetch", "--depth", "1", "origin"])
         .arg(revision);
     git_run(fetch).await?;
-    let mut checkout = git_cmd();
+    let mut checkout = git_cmd(proxy);
     checkout
         .arg("-C")
         .arg(dest)
@@ -1174,16 +1211,25 @@ async fn git_checkout(revision: &str, dest: &Path) -> Result<(), String> {
     git_run(checkout).await
 }
 
-async fn git_update(revision: &str, dest: &Path) -> Result<(), String> {
+async fn git_update(
+    revision: &str,
+    dest: &Path,
+    proxy: &crate::settings::ProxySettings,
+) -> Result<(), String> {
     if revision.is_empty() {
-        let mut cmd = git_cmd();
+        let mut cmd = git_cmd(proxy);
         cmd.arg("-C").arg(dest).args(["pull", "--ff-only"]);
         return git_run(cmd).await;
     }
-    git_checkout(revision, dest).await
+    git_checkout(revision, dest, proxy).await
 }
 
-async fn git_sync(url: &str, revision: &str, dest: &Path) -> Result<(), String> {
+async fn git_sync(
+    url: &str,
+    revision: &str,
+    dest: &Path,
+    proxy: &crate::settings::ProxySettings,
+) -> Result<(), String> {
     if !valid_revision(revision) {
         return Err("Revision ist ungültig.".into());
     }
@@ -1192,19 +1238,19 @@ async fn git_sync(url: &str, revision: &str, dest: &Path) -> Result<(), String> 
             .map_err(|err| format!("Unvollständiges Checkout lässt sich nicht entfernen: {err}"))?;
     }
     if dest.join(".git").is_dir() {
-        return git_update(revision, dest).await;
+        return git_update(revision, dest, proxy).await;
     }
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
-    match git_clone(url, revision, dest).await {
+    match git_clone(url, revision, dest, proxy).await {
         Ok(()) => Ok(()),
         Err(err) if !revision.is_empty() && missing_revision(&err) => {
             if dest.exists() {
                 fs::remove_dir_all(dest).map_err(|remove| remove.to_string())?;
             }
-            git_clone(url, "", dest).await?;
-            git_checkout(revision, dest).await
+            git_clone(url, "", dest, proxy).await?;
+            git_checkout(revision, dest, proxy).await
         }
         Err(err) => {
             if dest.exists() {
@@ -1259,6 +1305,7 @@ struct ContainerRun<'a> {
     stage: &'a Path,
     cache: &'a Path,
     env: &'a [(String, String)],
+    timeout_secs: u64,
 }
 
 async fn run_container(state: &Shared, job_id: &str, run: ContainerRun<'_>) -> Result<i32, String> {
@@ -1269,6 +1316,7 @@ async fn run_container(state: &Shared, job_id: &str, run: ContainerRun<'_>) -> R
         stage,
         cache,
         env,
+        timeout_secs,
     } = run;
     ensure_image(bin, &environment.image, &environment.pull_policy).await?;
     write_env_file(&work.join("container.env"), env)?;
@@ -1334,7 +1382,7 @@ async fn run_container(state: &Shared, job_id: &str, run: ContainerRun<'_>) -> R
         });
         return Ok(1);
     }
-    wait_child(state, job_id, child).await
+    wait_child(state, job_id, child, timeout_secs).await
 }
 
 fn write_env_file(path: &Path, env: &[(String, String)]) -> Result<(), String> {
@@ -1412,6 +1460,7 @@ async fn wait_child(
     state: &Shared,
     job_id: &str,
     mut child: tokio::process::Child,
+    timeout_secs: u64,
 ) -> Result<i32, String> {
     let stdout = child
         .stdout
@@ -1433,7 +1482,7 @@ async fn wait_child(
         "stderr".to_string(),
         stderr,
     ));
-    let timeout = Duration::from_secs(state.cfg.job_timeout_secs);
+    let timeout = Duration::from_secs(timeout_secs);
     let status = match tokio::time::timeout(timeout, child.wait()).await {
         Ok(Ok(status)) => status,
         Ok(Err(err)) => return Err(format!("Prozess: {err}")),

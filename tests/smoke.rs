@@ -3093,3 +3093,272 @@ async fn template_accepts_one_credential_per_kind_and_many_vaults() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn admin_settings_hide_secrets_and_apply_without_restart() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-settings-smoke-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let script = script.as_str().unwrap_or("");
+    assert!(script.contains("#/settings"));
+    assert!(script.contains("Einstellungen"));
+    assert!(script.contains("Bind-Passwort"));
+    assert!(script.contains("Proxy-Adresse"));
+    assert!(script.contains("Umgebungsvariablen verwenden"));
+    assert!(script.contains("data-stored-mask=\"1\""));
+    assert!(!script.contains("bind-secret-value"));
+    assert!(!script.contains("proxy-secret-value"));
+
+    let (status, denied, _) = call(&app, "GET", "/api/settings", None, None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{denied}");
+    assert_eq!(denied["error"], "Anmeldung erforderlich.");
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "username": "ada",
+            "display_name": "Ada Lovelace",
+            "password": "ada-secret-1",
+            "is_admin": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let (status, ada_me, ada_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "ada", "password": "ada-secret-1"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ada_me}");
+    let ada_cookie = ada_cookie.expect("ada session");
+    let (status, forbidden, _) =
+        call(&app, "GET", "/api/settings", Some(&ada_cookie), None, None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{forbidden}");
+    assert_eq!(forbidden["error"], "Keine Berechtigung für diese Aktion.");
+
+    let (status, current, _) = call(&app, "GET", "/api/settings", Some(&cookie), None, None).await;
+    assert_eq!(status, StatusCode::OK, "{current}");
+    assert_eq!(current["source"], "env");
+    assert_eq!(current["runner"], "local");
+    assert_eq!(current["ldap"]["url"], "");
+    assert_eq!(current["ldap"]["bind_password_set"], false);
+    assert_eq!(current["proxy"]["password_set"], false);
+    assert!(!current.to_string().contains("password\":"));
+
+    let (status, blocked, _) = call(
+        &app,
+        "PUT",
+        "/api/settings",
+        Some(&ada_cookie),
+        None,
+        Some(json!({"reset": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{blocked}");
+
+    let body = json!({
+        "ldap": {
+            "url": "ldap://ldap.example.com",
+            "mode": "ad",
+            "bind_dn": "cn=svc,dc=example,dc=com",
+            "bind_password": "bind-secret-value",
+            "user_base": "ou=users,dc=example,dc=com",
+            "starttls": true,
+            "tls_insecure": false
+        },
+        "proxy": {
+            "url": "http://proxy.example:3128",
+            "username": "proxy-user",
+            "password": "proxy-secret-value",
+            "no_proxy": "localhost,127.0.0.1"
+        },
+        "runner": "docker",
+        "job_timeout_secs": 90
+    });
+    let (status, saved, _) = call(
+        &app,
+        "PUT",
+        "/api/settings",
+        Some(&cookie),
+        None,
+        Some(body),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let saved_text = saved.to_string();
+    assert!(!saved_text.contains("bind-secret-value"), "{saved_text}");
+    assert!(!saved_text.contains("proxy-secret-value"), "{saved_text}");
+    assert_eq!(saved["source"], "saved");
+    assert_eq!(saved["ldap"]["mode"], "ad");
+    assert_eq!(saved["ldap"]["user_filter"], "(sAMAccountName={username})");
+    assert_eq!(saved["ldap"]["bind_password_set"], true);
+    assert_eq!(saved["proxy"]["password_set"], true);
+    assert_eq!(saved["proxy"]["url"], "http://proxy.example:3128");
+    assert_eq!(saved["runner"], "docker");
+    assert_eq!(saved["job_timeout_secs"], 90);
+    assert!(saved["ldap"].get("bind_password").is_none());
+    assert!(saved["proxy"].get("password").is_none());
+
+    let (status, overview, _) = call(
+        &app,
+        "GET",
+        "/api/overview",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{overview}");
+    assert_eq!(overview["ldap"], true);
+    assert_eq!(overview["runner_mode"], "docker");
+
+    let (status, kept, _) = call(
+        &app,
+        "PUT",
+        "/api/settings",
+        Some(&cookie),
+        None,
+        Some(json!({
+            "ldap": {
+                "url": "ldap://ldap.example.com",
+                "mode": "ad",
+                "bind_dn": "cn=svc,dc=example,dc=com",
+                "bind_password": "",
+                "user_base": "ou=users,dc=example,dc=com"
+            },
+            "proxy": {
+                "url": "http://proxy.example:3128",
+                "username": "proxy-user",
+                "password": "",
+                "no_proxy": "localhost,127.0.0.1"
+            },
+            "runner": "docker",
+            "job_timeout_secs": 90
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{kept}");
+    assert_eq!(kept["ldap"]["bind_password_set"], true);
+    assert_eq!(kept["proxy"]["password_set"], true);
+
+    let (status, rejected, _) = call(
+        &app,
+        "PUT",
+        "/api/settings",
+        Some(&cookie),
+        None,
+        Some(json!({
+            "ldap": {
+                "url": "ldap://ldap.example.com",
+                "mode": "ad",
+                "bind_dn": "cn=svc,dc=example,dc=com",
+                "user_base": "ou=users,dc=example,dc=com"
+            },
+            "proxy": {
+                "url": "http://user:secret@proxy.example:3128",
+                "username": "proxy-user"
+            },
+            "runner": "local",
+            "job_timeout_secs": 45
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+    assert_eq!(
+        rejected["error"],
+        "Zugangsdaten gehören in die eigenen Felder, nicht in die Proxy-Adresse."
+    );
+    let (status, still, _) = call(&app, "GET", "/api/settings", Some(&cookie), None, None).await;
+    assert_eq!(status, StatusCode::OK, "{still}");
+    assert_eq!(still["runner"], "docker");
+    assert_eq!(still["proxy"]["password_set"], true);
+    assert!(!still.to_string().contains("proxy-secret-value"));
+
+    let (status, cleared, _) = call(
+        &app,
+        "PUT",
+        "/api/settings",
+        Some(&cookie),
+        None,
+        Some(json!({
+            "ldap": {
+                "url": "",
+                "mode": "ldap",
+                "bind_dn": "cn=svc,dc=example,dc=com",
+                "user_base": "ou=users,dc=example,dc=com"
+            },
+            "proxy": {
+                "url": "http://proxy.example:3128",
+                "username": "proxy-user",
+                "no_proxy": "localhost"
+            },
+            "runner": "auto",
+            "job_timeout_secs": 30,
+            "clear": ["ldap_bind_password", "proxy_password"]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{cleared}");
+    assert_eq!(cleared["ldap"]["url"], "");
+    assert_eq!(cleared["ldap"]["bind_password_set"], false);
+    assert_eq!(cleared["proxy"]["password_set"], false);
+    assert_eq!(cleared["runner"], "auto");
+
+    let (status, overview, _) = call(
+        &app,
+        "GET",
+        "/api/overview",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{overview}");
+    assert_eq!(overview["ldap"], false);
+    assert_eq!(overview["runner_mode"], "auto");
+
+    let (status, reset, _) = call(
+        &app,
+        "PUT",
+        "/api/settings",
+        Some(&cookie),
+        None,
+        Some(json!({"reset": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reset}");
+    assert_eq!(reset["source"], "env");
+    assert_eq!(reset["runner"], "local");
+    assert_eq!(reset["job_timeout_secs"], 60);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -62,7 +62,8 @@ pub async fn login(
             return session_response(&state, &user);
         }
     }
-    if let Some(cfg) = state.cfg.ldap.clone() {
+    let directory = crate::settings::load(&state)?.directory().cloned();
+    if let Some(cfg) = directory {
         match ldap::authenticate(&cfg, &username, &body.password).await {
             Ok(identity) => {
                 let user = provision_ldap(&state, identity)?;

@@ -1,6 +1,7 @@
 mod admin;
 mod catalog;
 mod session;
+mod settings;
 mod sources;
 mod work;
 
@@ -143,6 +144,10 @@ pub fn router(state: Shared) -> Router {
         .route("/hooks/{id}", axum::routing::delete(work::delete_hook))
         .route("/hooks/{id}/test", post(work::test_hook))
         .route("/hooks/{id}/deliveries", get(work::list_deliveries))
+        .route(
+            "/settings",
+            get(settings::get_settings).put(settings::put_settings),
+        )
         .merge(
             Router::new()
                 .route("/admin/backup", get(admin::download).post(admin::restore))
