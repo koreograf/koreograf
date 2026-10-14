@@ -117,6 +117,9 @@ pub fn apply_overrides(params: &mut Map<String, Value>, overrides: &NodeOverride
         );
         params.insert("credential_name".into(), Value::Null);
         params.insert("credential_kind".into(), Value::Null);
+        if id.is_empty() {
+            params.insert("credentials".into(), Value::Array(Vec::new()));
+        }
     }
     if let Some(extra) = &overrides.extra_vars {
         params.insert("extra_vars".into(), extra.clone());
@@ -468,6 +471,10 @@ mod tests {
         assert!(params["credential_id"].is_null());
         assert!(params["credential_name"].is_null());
         assert!(params["credential_kind"].is_null());
+        assert!(params["credentials"]
+            .as_array()
+            .expect("credentials")
+            .is_empty());
     }
 
     #[test]

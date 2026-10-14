@@ -231,24 +231,70 @@ fn refresh_credential(
     team_id: &str,
     params: &mut serde_json::Map<String, Value>,
 ) -> AppResult<()> {
-    match params.get("credential_id").and_then(Value::as_str) {
-        Some(id) if !id.is_empty() => {
-            let credential =
-                db::credential(db, id)?.ok_or_else(|| ApiError::bad("Zugang fehlt."))?;
-            if credential.team_id != team_id {
-                return Err(ApiError::bad("Zugang gehört zu einem anderen Team."));
-            }
-            params.insert("credential_id".into(), json!(credential.id));
-            params.insert("credential_name".into(), json!(credential.name));
-            params.insert("credential_kind".into(), json!(credential.kind));
-        }
-        _ => {
-            params.insert("credential_id".into(), Value::Null);
-            params.insert("credential_name".into(), Value::Null);
-            params.insert("credential_kind".into(), Value::Null);
-        }
+    let chosen = params
+        .get("credential_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string);
+    let Some(id) = chosen else {
+        params.insert("credential_id".into(), Value::Null);
+        params.insert("credential_name".into(), Value::Null);
+        params.insert("credential_kind".into(), Value::Null);
+        params.insert("credentials".into(), json!([]));
+        return Ok(());
+    };
+    let credential = db::credential(db, &id)?.ok_or_else(|| ApiError::bad("Zugang fehlt."))?;
+    if credential.team_id != team_id {
+        return Err(ApiError::bad("Zugang gehört zu einem anderen Team."));
     }
+    let mut list = params
+        .get("credentials")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    replace_credential_kind(&mut list, &credential);
+    let primary = list.iter().find_map(|item| {
+        let kind = item.get("kind").and_then(Value::as_str)?;
+        if kind == "vault" {
+            return None;
+        }
+        Some((
+            item.get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            item.get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            kind.to_string(),
+        ))
+    });
+    let (primary_id, primary_name, primary_kind) = primary.unwrap_or_else(|| {
+        (
+            credential.id.clone(),
+            credential.name.clone(),
+            credential.kind.clone(),
+        )
+    });
+    params.insert("credential_id".into(), json!(primary_id));
+    params.insert("credential_name".into(), json!(primary_name));
+    params.insert("credential_kind".into(), json!(primary_kind));
+    params.insert("credentials".into(), Value::Array(list));
     Ok(())
+}
+
+fn credential_entry(credential: &db::Credential) -> Value {
+    json!({
+        "id": credential.id,
+        "name": credential.name,
+        "kind": credential.kind,
+    })
+}
+
+fn replace_credential_kind(list: &mut Vec<Value>, credential: &db::Credential) {
+    list.retain(|item| item.get("kind").and_then(Value::as_str) != Some(credential.kind.as_str()));
+    list.push(credential_entry(credential));
 }
 
 fn capture_parameters(
@@ -269,6 +315,23 @@ fn capture_parameters(
         .as_deref()
         .and_then(|id| db::credential(db, id).ok().flatten())
         .map(|item| (item.name, item.kind));
+    let linked = db::template_credential_ids(db, &template.id)
+        .ok()
+        .unwrap_or_default();
+    let linked = if linked.is_empty() {
+        template
+            .credential_id
+            .clone()
+            .into_iter()
+            .collect::<Vec<_>>()
+    } else {
+        linked
+    };
+    let credentials = linked
+        .iter()
+        .filter_map(|id| db::credential(db, id).ok().flatten())
+        .map(|item| credential_entry(&item))
+        .collect::<Vec<_>>();
     let environment = template
         .environment_id
         .as_deref()
@@ -286,6 +349,7 @@ fn capture_parameters(
         "credential_id": template.credential_id,
         "credential_name": credential.as_ref().map(|(name, _)| name),
         "credential_kind": credential.as_ref().map(|(_, kind)| kind),
+        "credentials": credentials,
         "environment_id": template.environment_id,
         "environment_name": environment.as_ref().map(|(name, _)| name),
         "environment_image": environment.as_ref().map(|(_, image)| image),

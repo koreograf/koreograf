@@ -80,7 +80,9 @@ const EN = {
   "GitHub-Token": "GitHub token",
   "GitLab-Token": "GitLab token",
   "Gilt im Auftrag. Der Projekt-Sync nutzt diesen Zugang noch nicht.": "Applies to the job. Project sync does not use this credential yet.",
-  "Gilt nur für diesen Knoten. Die Vorlage bleibt unverändert.": "Applies only to this node. The template stays unchanged.",
+  "Diese Vault-Id ist schon gewählt.": "This vault id is already selected.",
+  "Gilt nur für diesen Knoten. Die Vorlage bleibt unverändert. Ein anderer Zugang ersetzt nur dieselbe Art.": "Applies only to this node. The template stays unchanged. Another credential replaces only the same kind.",
+  "Keine Zugänge im Team.": "No credentials in this team.",
   "Ohne Inventar": "No inventory",
   "Google Compute Engine": "Google Compute Engine",
   "Host": "Host",
@@ -506,9 +508,21 @@ const EN = {
   "Zugang anlegen": "New credential",
   "Zugang fehlt.": "Credential is missing.",
   "Zugang gehört zu einem anderen Team.": "The credential belongs to another team.",
+  "Zugang ist doppelt.": "Credential is listed twice.",
   "Zugänge": "Credentials",
   "Zugänge suchen": "Search credentials",
   "Zugangsdaten gehören zu einem anderen Team.": "The credential belongs to another team.",
+  "Zugangsdaten lassen sich nicht lesen.": "Credentials cannot be read.",
+  "Zugangsdaten sind kein JSON.": "Credentials are not JSON.",
+  "Zu viele Zugänge.": "Too many credentials.",
+  "Nur ein Vault-Zugang darf ohne Vault-Id sein.": "Only one vault credential may omit the vault id.",
+  "Pro Art ein Zugang. Vault-Zugänge wählst du über Auswählen. Sie stehen hier als Pillen.": "One credential of each kind. Choose vault credentials with Select. They show up here as pills.",
+  "Auswählen": "Select",
+  "Übernehmen": "Apply",
+  "Vaults suchen": "Search vaults",
+  "Keine Vault-Zugänge im Team.": "No vault credentials in this team.",
+  "Vault-Zugang {name} entfernen": "Remove vault credential {name}",
+  "Pro Art ist nur ein Zugang erlaubt.": "Only one credential of each kind is allowed.",
   "Zugewiesene Teams müssen zur Organisation des Projekts gehören.": "Assigned teams must belong to the project organization.",
   "Zuweisung": "Assignment",
   "Zuweisung speichern": "Save assignment",
@@ -1316,7 +1330,7 @@ async function pageTemplateForm(id) {
   const spec = (existing && existing.spec) || {};
   const item = existing || {
     name: "", description: "", tool: "ansible", project_id: "", inventory_id: "",
-    credential_id: "", environment_id: "", entrypoint: "", extra_vars: {}, spec: {},
+    credential_id: "", credential_ids: [], environment_id: "", entrypoint: "", extra_vars: {}, spec: {},
   };
   const verbosity = Number(spec.verbosity) || 0;
   shell(id ? t("Vorlage bearbeiten") : t("Neue Vorlage"), `
@@ -1340,9 +1354,9 @@ async function pageTemplateForm(id) {
         <div class="field-grid">
           <label class="field"><span>${h("Projekt")}</span><select name="project_id">${selectOptions(projects, item.project_id, true, (row) => row.name)}</select></label>
           <label class="field" id="inventory-field"${item.tool === "ansible" ? "" : " hidden"}><span>${h("Inventar")}</span><select name="inventory_id">${selectOptions(inventories, item.inventory_id, true, (row) => row.name)}</select></label>
-          <label class="field"><span>${h("Zugang")}</span><select name="credential_id">${selectOptions(credentials, item.credential_id, true, (row) => `${row.name} (${credentialKindLabel(row.kind)})`)}</select></label>
           <label class="field"><span>${h("Execution Environment")}</span><select name="environment_id">${selectOptions(environments, item.environment_id, true, (row) => row.name)}</select></label>
         </div>
+        ${templateCredentialFields(credentials, selectedCredentialIds(item))}
         <label class="field" id="playbook-field" hidden><span>${h("Playbook aus dem Projekt")}</span><select name="playbook"><option value="">${h("Anderer Pfad")}</option></select></label>
         <p class="small muted" id="entrypoint-note"></p>
         <label class="field"><span id="entrypoint-label">${h("Einstiegspfad")}</span><input name="entrypoint" value="${esc(item.entrypoint)}" placeholder="site.yml"></label>
@@ -1401,6 +1415,7 @@ async function pageTemplateForm(id) {
     </form>`);
   const form = document.querySelector("#template-form");
   bindChips(form);
+  bindVaultPicker(form, credentials, selectedCredentialIds(item));
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (!flushChips(form)) return;
@@ -1411,7 +1426,10 @@ async function pageTemplateForm(id) {
         tool: form.tool.value,
         project_id: form.project_id.value || null,
         inventory_id: form.inventory_id.value || null,
-        credential_id: form.credential_id.value || null,
+        credential_ids: [
+          ...[...form.querySelectorAll("[data-credential-kind]")].map((select) => select.value).filter(Boolean),
+          ...[...form.querySelectorAll("#vault-pills [data-vault-id]")].map((node) => node.dataset.vaultId),
+        ],
         environment_id: form.environment_id.value || null,
         entrypoint: form.tool.value === "ansible" && form.playbook.value ? form.playbook.value : form.entrypoint.value,
         extra_vars: jsonObject(form.extra_vars.value, "Extra-Variablen"),
@@ -1539,6 +1557,19 @@ function paramRowHtml(label, html) {
   return `<dt>${h(label)}</dt><dd>${html}</dd>`;
 }
 
+function credentialSummary(params) {
+  if (Array.isArray(params.credentials)) {
+    return params.credentials.map((item) => {
+      const name = item && item.name;
+      if (!name) return "";
+      const kind = item.kind ? credentialKindLabel(item.kind) : "";
+      return [name, kind].filter(Boolean).join(" · ");
+    }).filter(Boolean).join(", ");
+  }
+  const kind = params.credential_kind ? credentialKindLabel(params.credential_kind) : "";
+  return [params.credential_name, kind].filter(Boolean).join(" · ");
+}
+
 function jobParameters(job) {
   const params = job.parameters && job.parameters.tool ? job.parameters : null;
   const hosts = Array.isArray(job.failed_hosts) ? job.failed_hosts : [];
@@ -1554,7 +1585,7 @@ function jobParameters(job) {
   const template = templateId
     ? `<a href="#/templates/${esc(templateId)}">${esc(templateName)}</a>`
     : esc(templateName);
-  const credential = [params.credential_name, params.credential_kind].filter(Boolean).join(" · ");
+  const credential = credentialSummary(params);
   const environment = [params.environment_name, params.environment_image].filter(Boolean).join(" · ");
   const kind = spec.job_type === "check" ? t("Check") : spec.job_type === "run" ? t("Ausführen") : "";
   const diff = spec.diff === true ? t("Ja") : spec.diff === false ? t("Nein") : "";
@@ -1921,7 +1952,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
     return `
       <details class="node-params" open>
         <summary>${h("Parameter")}</summary>
-        <p class="small muted">${h("Gilt nur für diesen Knoten. Die Vorlage bleibt unverändert.")}</p>
+        <p class="small muted">${h("Gilt nur für diesen Knoten. Die Vorlage bleibt unverändert. Ein anderer Zugang ersetzt nur dieselbe Art.")}</p>
         ${toolFields}
         <label class="field"><span>${h("Zugang")}</span><select class="fit" id="node-credential">${selectOptions(lists.credentials, credentialId, true, (row) => `${row.name} (${credentialKindLabel(row.kind)})`)}</select></label>
         <label class="field"><span>${h("Extra-Variablen (JSON)")}</span><textarea id="node-extra">${esc(JSON.stringify(extra, null, 2))}</textarea></label>
@@ -3256,6 +3287,145 @@ const CREDENTIAL_KINDS = [
 function credentialKindLabel(kind) {
   const row = CREDENTIAL_KINDS.find((item) => item[0] === kind);
   return row ? t(row[1]) : kind;
+}
+
+function selectedCredentialIds(item) {
+  if (Array.isArray(item.credential_ids)) return item.credential_ids;
+  return item.credential_id ? [item.credential_id] : [];
+}
+
+function templateCredentialFields(credentials, selectedIds) {
+  const selected = new Set(selectedIds || []);
+  const present = new Set(credentials.map((row) => row.kind));
+  const selects = CREDENTIAL_KINDS
+    .map((row) => row[0])
+    .filter((kind) => kind !== "vault" && present.has(kind))
+    .map((kind) => {
+      const rows = credentials.filter((row) => row.kind === kind);
+      const current = rows.find((row) => selected.has(row.id));
+      return `<label class="field"><span>${esc(credentialKindLabel(kind))}</span><select class="fit" data-credential-kind="${esc(kind)}">${selectOptions(rows, current ? current.id : "", true, (row) => row.name)}</select></label>`;
+    })
+    .join("");
+  const grid = selects ? `<div class="field-grid">${selects}</div>` : "";
+  const empty = credentials.length ? "" : `<p class="small muted">${h("Keine Zugänge im Team.")}</p>`;
+  return `${empty}<p class="small muted">${h("Pro Art ein Zugang. Vault-Zugänge wählst du über Auswählen. Sie stehen hier als Pillen.")}</p>${grid}
+    <div class="field">
+      <span>${esc(credentialKindLabel("vault"))}</span>
+      <div class="vault-row">
+        <div class="chips" id="vault-pills"></div>
+        <button class="btn pill" id="vault-add" type="button">${h("Auswählen")}</button>
+      </div>
+    </div>`;
+}
+
+function renderVaultPills(box, credentials, ids) {
+  const byId = new Map(credentials.map((row) => [row.id, row]));
+  box.innerHTML = ids.map((id) => {
+    const row = byId.get(id);
+    if (!row) return "";
+    return `<span class="chip" data-vault-id="${esc(id)}"><span class="chip-text">${esc(row.name)}</span><button class="chip-remove" type="button" aria-label="${h("Vault-Zugang {name} entfernen", { name: row.name })}">×</button></span>`;
+  }).join("");
+  box.querySelectorAll(".chip-remove").forEach((button) => {
+    button.addEventListener("click", () => {
+      const chip = button.closest(".chip");
+      const id = chip ? chip.dataset.vaultId : "";
+      const next = [...box.querySelectorAll("[data-vault-id]")]
+        .map((node) => node.dataset.vaultId)
+        .filter((item) => item !== id);
+      renderVaultPills(box, credentials, next);
+    });
+  });
+}
+
+function closeVaultPicker() {
+  const overlay = document.querySelector("#vault-picker");
+  if (overlay) overlay.remove();
+  if (closeVaultPicker.onKey) {
+    document.removeEventListener("keydown", closeVaultPicker.onKey);
+    closeVaultPicker.onKey = null;
+  }
+}
+
+function openVaultPicker(credentials, selected, onApply) {
+  closeVaultPicker();
+  const chosen = new Set(selected);
+  const vaults = credentials
+    .filter((row) => row.kind === "vault")
+    .slice()
+    .sort((left, right) => left.name.localeCompare(right.name, "de"));
+  const rows = vaults.map((row) => `
+    <label class="vault-choice${chosen.has(row.id) ? " selected" : ""}">
+      <input type="checkbox" value="${esc(row.id)}"${chosen.has(row.id) ? " checked" : ""}>
+      <span>${esc(row.name)}</span>
+    </label>`).join("");
+  const body = vaults.length
+    ? `<input class="search" id="vault-search" placeholder="${h("Vaults suchen")}" autocomplete="off">
+       <div class="vault-choices" id="vault-choices">${rows}</div>
+       <div class="row">
+         <button class="btn pill primary" type="button" id="vault-apply">${h("Übernehmen")}</button>
+         <button class="btn" type="button" id="vault-cancel">${h("Abbrechen")}</button>
+       </div>`
+    : `<p class="muted">${h("Keine Vault-Zugänge im Team.")}</p>`;
+  document.querySelector(".main").insertAdjacentHTML("beforeend", `
+    <div class="overlay" id="vault-picker">
+      <div class="overlay-card vault-picker" role="dialog" aria-modal="true" aria-labelledby="vault-picker-title">
+        <div class="spread">
+          <h2 id="vault-picker-title">${esc(credentialKindLabel("vault"))}</h2>
+          <button class="btn" type="button" id="vault-picker-close">${h("Schließen")}</button>
+        </div>
+        ${body}
+      </div>
+    </div>`);
+  const overlay = document.querySelector("#vault-picker");
+  const dismiss = () => closeVaultPicker();
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) dismiss();
+  });
+  document.querySelector("#vault-picker-close").addEventListener("click", dismiss);
+  const cancel = document.querySelector("#vault-cancel");
+  if (cancel) cancel.addEventListener("click", dismiss);
+  closeVaultPicker.onKey = (event) => {
+    if (event.key === "Escape") dismiss();
+  };
+  document.addEventListener("keydown", closeVaultPicker.onKey);
+  document.querySelectorAll(".vault-choice").forEach((label) => {
+    const input = label.querySelector("input");
+    input.addEventListener("change", () => label.classList.toggle("selected", input.checked));
+  });
+  const search = document.querySelector("#vault-search");
+  if (search) {
+    search.addEventListener("input", () => {
+      const query = search.value.trim().toLowerCase();
+      document.querySelectorAll(".vault-choice").forEach((label) => {
+        const name = label.querySelector("span").textContent.toLowerCase();
+        label.hidden = query !== "" && !name.includes(query);
+      });
+    });
+    if (typeof search.focus === "function") search.focus();
+  }
+  const apply = document.querySelector("#vault-apply");
+  if (!apply) return;
+  apply.addEventListener("click", () => {
+    const checked = [...document.querySelectorAll("#vault-choices input")]
+      .filter((input) => input.checked)
+      .map((input) => input.value);
+    const kept = selected.filter((id) => checked.includes(id));
+    const added = checked.filter((id) => !selected.includes(id));
+    onApply([...kept, ...added]);
+    closeVaultPicker();
+  });
+}
+
+function bindVaultPicker(form, credentials, selectedIds) {
+  const box = form.querySelector("#vault-pills");
+  const open = form.querySelector("#vault-add");
+  if (!box || !open) return;
+  const vaultIds = new Set(credentials.filter((row) => row.kind === "vault").map((row) => row.id));
+  renderVaultPills(box, credentials, (selectedIds || []).filter((id) => vaultIds.has(id)));
+  open.addEventListener("click", () => {
+    const current = [...box.querySelectorAll("[data-vault-id]")].map((node) => node.dataset.vaultId);
+    openVaultPicker(credentials, current, (ids) => renderVaultPills(box, credentials, ids));
+  });
 }
 
 function credText(name, label, type) {

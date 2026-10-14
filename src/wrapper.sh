@@ -167,7 +167,16 @@ EOF
     3) set -- "$@" -vvv ;;
     4) set -- "$@" -vvvv ;;
   esac
-  if [ -n "${KOREOGRAF_VAULT_FILE:-}" ]; then
+  if [ -n "${KOREOGRAF_VAULT_LIST:-}" ]; then
+    while IFS='	' read -r vid vpath; do
+      [ -n "$vpath" ] || continue
+      if [ -n "$vid" ]; then
+        set -- "$@" --vault-id "${vid}@${vpath}"
+      else
+        set -- "$@" --vault-password-file "$vpath"
+      fi
+    done < "$KOREOGRAF_VAULT_LIST"
+  elif [ -n "${KOREOGRAF_VAULT_FILE:-}" ]; then
     if [ -n "${KOREOGRAF_VAULT_ID:-}" ]; then
       set -- "$@" --vault-id "${KOREOGRAF_VAULT_ID}@${KOREOGRAF_VAULT_FILE}"
     else

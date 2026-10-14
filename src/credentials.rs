@@ -3,6 +3,7 @@
 //! Secrets stay in files with mode 0600 or in process environment variables.
 //! They are not placed on the command line.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use serde_json::{Map, Value};
@@ -38,6 +39,46 @@ pub struct PreparedCredential {
 
 pub fn known_kind(kind: &str) -> bool {
     KINDS.contains(&kind)
+}
+
+/// One credential chosen for a template. `vault_id` is empty for every kind except vault.
+#[derive(Clone, Copy)]
+pub struct AssignedCredential<'a> {
+    pub id: &'a str,
+    pub kind: &'a str,
+    pub vault_id: &'a str,
+}
+
+/// One credential of each kind. Vault may repeat when each vault id is unique.
+pub fn check_assignment(items: &[AssignedCredential<'_>]) -> Result<(), String> {
+    if items.len() > 32 {
+        return Err("Zu viele Zugänge.".into());
+    }
+    let mut seen_ids = HashSet::new();
+    let mut seen_kinds = HashSet::new();
+    let mut seen_vault_ids = HashSet::new();
+    let mut default_vaults = 0usize;
+    for item in items {
+        if item.id.is_empty() {
+            return Err("Zugang fehlt.".into());
+        }
+        if !seen_ids.insert(item.id) {
+            return Err("Zugang ist doppelt.".into());
+        }
+        if item.kind == "vault" {
+            if item.vault_id.is_empty() {
+                default_vaults += 1;
+                if default_vaults > 1 {
+                    return Err("Nur ein Vault-Zugang darf ohne Vault-Id sein.".into());
+                }
+            } else if !seen_vault_ids.insert(item.vault_id) {
+                return Err("Diese Vault-Id ist schon gewählt.".into());
+            }
+        } else if !seen_kinds.insert(item.kind) {
+            return Err("Pro Art ist nur ein Zugang erlaubt.".into());
+        }
+    }
+    Ok(())
 }
 
 pub fn check(kind: &str, secret: &Value) -> Result<(), String> {
@@ -656,5 +697,58 @@ mod tests {
             &json!({"access_key": "AKIA", "secret_key": "secret"})
         )
         .is_ok());
+    }
+
+    #[test]
+    fn one_kind_except_many_vault_credentials() {
+        let ssh = AssignedCredential {
+            id: "ssh",
+            kind: "ssh",
+            vault_id: "",
+        };
+        let prod = AssignedCredential {
+            id: "vault-prod",
+            kind: "vault",
+            vault_id: "prod",
+        };
+        let stage = AssignedCredential {
+            id: "vault-stage",
+            kind: "vault",
+            vault_id: "stage",
+        };
+        assert!(check_assignment(&[ssh, prod, stage]).is_ok());
+        let other = AssignedCredential {
+            id: "ssh-2",
+            kind: "ssh",
+            vault_id: "",
+        };
+        assert_eq!(
+            check_assignment(&[ssh, other]).unwrap_err(),
+            "Pro Art ist nur ein Zugang erlaubt."
+        );
+        let again = AssignedCredential {
+            id: "vault-prod-2",
+            kind: "vault",
+            vault_id: "prod",
+        };
+        assert_eq!(
+            check_assignment(&[prod, again]).unwrap_err(),
+            "Diese Vault-Id ist schon gewählt."
+        );
+        let plain = AssignedCredential {
+            id: "vault-plain",
+            kind: "vault",
+            vault_id: "",
+        };
+        let plain_two = AssignedCredential {
+            id: "vault-plain-2",
+            kind: "vault",
+            vault_id: "",
+        };
+        assert_eq!(
+            check_assignment(&[plain, plain_two]).unwrap_err(),
+            "Nur ein Vault-Zugang darf ohne Vault-Id sein."
+        );
+        assert!(check_assignment(&[ssh, plain, prod]).is_ok());
     }
 }

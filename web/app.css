@@ -319,6 +319,22 @@ select.fit { width: max-content; min-width: 8rem; max-width: 100%; field-sizing:
 .chip-error:empty { display: none; }
 .field.check { justify-items: start; }
 .field.check input { width: 1.15rem; height: 1.15rem; }
+.vault-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.vault-row .chips { flex: 1 1 16rem; }
+.overlay-card.vault-picker { width: min(32rem, 100%); }
+.vault-choices { display: grid; gap: 6px; overflow: auto; }
+.vault-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: white;
+  cursor: pointer;
+}
+.vault-choice.selected { border-color: var(--accent); background: var(--accent-soft); }
+.vault-choice input { width: 1.15rem; height: 1.15rem; padding: 0; }
 textarea { min-height: 88px; resize: vertical; }
 /* Author display rules would otherwise beat the user-agent [hidden] style. */
 [hidden] { display: none !important; }

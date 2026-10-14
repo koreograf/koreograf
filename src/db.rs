@@ -115,6 +115,12 @@ CREATE TABLE IF NOT EXISTS templates (
   created_at TEXT NOT NULL,
   UNIQUE (team_id, name)
 );
+CREATE TABLE IF NOT EXISTS template_credentials (
+  template_id TEXT NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+  credential_id TEXT NOT NULL REFERENCES credentials(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL,
+  PRIMARY KEY (template_id, credential_id)
+);
 CREATE TABLE IF NOT EXISTS workflow_jobs (
   id TEXT PRIMARY KEY,
   workflow_id TEXT,
@@ -325,6 +331,18 @@ fn migrate(c: &Connection) -> AppResult<()> {
             [],
         )?;
     }
+    c.execute(
+        "INSERT INTO template_credentials (template_id, credential_id, position)
+         SELECT t.id, t.credential_id, 0
+         FROM templates t
+         WHERE t.credential_id IS NOT NULL
+           AND t.credential_id != ''
+           AND EXISTS (SELECT 1 FROM credentials c WHERE c.id = t.credential_id)
+           AND NOT EXISTS (
+                SELECT 1 FROM template_credentials tc WHERE tc.template_id = t.id
+           )",
+        [],
+    )?;
     Ok(())
 }
 
@@ -1670,6 +1688,49 @@ pub fn delete_template(c: &Connection, id: &str, team_id: &str) -> AppResult<()>
     )?;
     if n == 0 {
         return Err(ApiError::NotFound);
+    }
+    Ok(())
+}
+
+pub fn template_credential_ids(c: &Connection, template_id: &str) -> AppResult<Vec<String>> {
+    let mut stmt = c.prepare(
+        "SELECT credential_id FROM template_credentials
+         WHERE template_id = ?1 ORDER BY position, credential_id",
+    )?;
+    let rows = stmt.query_map([template_id], |row| row.get(0))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+pub fn list_template_credential_links(
+    c: &Connection,
+    team_id: &str,
+) -> AppResult<Vec<(String, String)>> {
+    let mut stmt = c.prepare(
+        "SELECT tc.template_id, tc.credential_id
+         FROM template_credentials tc
+         JOIN templates t ON t.id = tc.template_id
+         WHERE t.team_id = ?1
+         ORDER BY tc.template_id, tc.position, tc.credential_id",
+    )?;
+    let rows = stmt.query_map([team_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+pub fn save_template_credentials(
+    c: &Connection,
+    template_id: &str,
+    ids: &[String],
+) -> AppResult<()> {
+    c.execute(
+        "DELETE FROM template_credentials WHERE template_id = ?1",
+        [template_id],
+    )?;
+    for (position, id) in ids.iter().enumerate() {
+        c.execute(
+            "INSERT INTO template_credentials (template_id, credential_id, position)
+             VALUES (?1, ?2, ?3)",
+            params![template_id, id, position as i64],
+        )?;
     }
     Ok(())
 }

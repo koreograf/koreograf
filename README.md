@@ -136,7 +136,7 @@ In the container the runner mounts the project read-only at `/runner/project`, t
 
 ## Workflows
 
-The editor draws nodes and edges. Add node stays in the side panel after the first node. A run lists each node's status, start, end, and duration under the canvas. Clicking a node opens that job's output on top of the workflow. The run links back to the workflow so it can be edited again. A node can override the template's inventory, credential, extra variables, and the Ansible or OpenTofu options. Untouched fields keep the template value, so one template can patch a test inventory and then the production inventory. A selected node chooses one target for success, one for failure, and one for always. The same links can be drawn by clicking success or failure on the card and then the target node. An edge applies on `success`, `failure`, or `always`. A node starts on `any` as soon as one matching edge is ready, or on `all` when every matching incoming edge is satisfied. A failure counts as handled when a `failure` or `always` edge leaves that node. The API rejects cycles. An empty graph can be saved and cannot be started.
+The editor draws nodes and edges. Add node stays in the side panel after the first node. A run lists each node's status, start, end, and duration under the canvas. Clicking a node opens that job's output on top of the workflow. The run links back to the workflow so it can be edited again. A node can override the template's inventory, credential, extra variables, and the Ansible or OpenTofu options. Another credential replaces only the same kind, so a different SSH login keeps the vault passwords. Clearing the credential removes every credential for that node. Untouched fields keep the template value, so one template can patch a test inventory and then the production inventory. A selected node chooses one target for success, one for failure, and one for always. The same links can be drawn by clicking success or failure on the card and then the target node. An edge applies on `success`, `failure`, or `always`. A node starts on `any` as soon as one matching edge is ready, or on `all` when every matching incoming edge is satisfied. A failure counts as handled when a `failure` or `always` edge leaves that node. The API rejects cycles. An empty graph can be saved and cannot be started.
 
 Cancel sets the job to `canceled`. The workflow treats that like a failure so a failure edge can continue.
 
@@ -170,7 +170,7 @@ The registry lives in `runner::tools()`. Another CLI tool needs an entry there a
 | `opentofu` | `tofu init`, then `plan` or `apply` |
 | `shell` | a script from the project, or `spec.script` written as `inline.sh` |
 
-A template stores one credential. The kinds follow the built-in types in AWX and the two useful Semaphore key-store types (SSH, and login with password). Semaphore's empty "None" type is left out. There is no custom credential-type designer, and no external lookup such as CyberArk, HashiCorp Vault, or a cloud secret manager.
+A template stores one credential of each kind. Ansible Vault is the exception: several vault credentials can be attached, each with its own vault id, and only one of them may omit the id. The kinds follow the built-in types in AWX and the two useful Semaphore key-store types (SSH, and login with password). Semaphore's empty "None" type is left out. There is no custom credential-type designer, and no external lookup such as CyberArk, HashiCorp Vault, or a cloud secret manager.
 
 | Kind | What the job receives |
 | --- | --- |
@@ -196,7 +196,7 @@ A file with `plugin:` is not executed. `plugin: netbox.netbox.nb_inventory` (als
 
 An Ansible template stores the run in `spec`: `job_type` `run` or `check`, `tags`, `skip_tags`, `limit`, `diff`, `verbosity` from 0 to 4, and `forks` from 1 to 50. Check starts `ansible-playbook --check`.
 
-Each job stores the parameters of that launch: template, tool, entry path, project, inventory, credential name and kind (not the secret), execution environment, spec, and the merged extra variables. The job page has an Output tab and a Parameters tab. A failed job can be started again from the job list and from the same row as the Output and Parameters tabs. `POST /api/jobs/{id}/relaunch` uses the stored parameters. `{"only_failed_hosts": true}` is Ansible-only and sets `--limit` to the hosts that failed or were unreachable. A play recap replaces earlier `fatal:` lines. When the recap never arrives, the fatal lines are kept. `GET /api/jobs/{id}/output` downloads the output as text.
+Each job stores the parameters of that launch: template, tool, entry path, project, inventory, each attached credential as name and kind (not the secret), execution environment, spec, and the merged extra variables. The job page has an Output tab and a Parameters tab. A failed job can be started again from the job list and from the same row as the Output and Parameters tabs. `POST /api/jobs/{id}/relaunch` uses the stored parameters. `{"only_failed_hosts": true}` is Ansible-only and sets `--limit` to the hosts that failed or were unreachable. A play recap replaces earlier `fatal:` lines. When the recap never arrives, the fatal lines are kept. `GET /api/jobs/{id}/output` downloads the output as text.
 
 ## Users and permissions
 

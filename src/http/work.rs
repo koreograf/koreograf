@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::time::Duration;
 
@@ -12,8 +13,9 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, Role};
+use crate::credentials::{self, AssignedCredential};
 use crate::crypto;
-use crate::db::{self, Hook, Template, Workflow};
+use crate::db::{self, Credential, Hook, Template, Workflow};
 use crate::error::{ApiError, AppResult};
 use crate::jobs::{self, LaunchRequest};
 use crate::runner;
@@ -37,6 +39,7 @@ pub struct TemplateBody {
     project_id: Option<String>,
     inventory_id: Option<String>,
     credential_id: Option<String>,
+    credential_ids: Option<Vec<String>>,
     environment_id: Option<String>,
     #[serde(default)]
     entrypoint: String,
@@ -92,9 +95,20 @@ pub async fn list_templates(
     gate(&state, &user, &team, Role::Viewer)?;
     let db = state.db()?;
     let items = db::list_templates(&db, &team)?;
+    let links = db::list_template_credential_links(&db, &team)?;
+    let mut by_template: HashMap<String, Vec<String>> = HashMap::new();
+    for (template_id, credential_id) in links {
+        by_template
+            .entry(template_id)
+            .or_default()
+            .push(credential_id);
+    }
     Ok(Json(json!(items
         .iter()
-        .map(template_json)
+        .map(|item| {
+            let ids = by_template.get(&item.id).map(Vec::as_slice).unwrap_or(&[]);
+            template_json(item, ids)
+        })
         .collect::<Vec<_>>())))
 }
 
@@ -106,10 +120,13 @@ pub async fn create_template(
 ) -> AppResult<Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let template = build_template(&state, &team, None, body)?;
-    let db = state.db()?;
-    db::insert_template(&db, &template)?;
-    Ok(created(template_json(&template)))
+    let (template, credential_ids) = build_template(&state, &team, None, body)?;
+    let mut db = state.db()?;
+    let tx = db.transaction()?;
+    db::insert_template(&tx, &template)?;
+    db::save_template_credentials(&tx, &template.id, &credential_ids)?;
+    tx.commit()?;
+    Ok(created(template_json(&template, &credential_ids)))
 }
 
 pub async fn update_template(
@@ -121,10 +138,13 @@ pub async fn update_template(
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let template = build_template(&state, &team, Some(id), body)?;
-    let db = state.db()?;
-    db::update_template(&db, &template)?;
-    Ok(Json(template_json(&template)))
+    let (template, credential_ids) = build_template(&state, &team, Some(id), body)?;
+    let mut db = state.db()?;
+    let tx = db.transaction()?;
+    db::update_template(&tx, &template)?;
+    db::save_template_credentials(&tx, &template.id, &credential_ids)?;
+    tx.commit()?;
+    Ok(Json(template_json(&template, &credential_ids)))
 }
 
 pub async fn delete_template(
@@ -581,7 +601,8 @@ fn build_template(
     team: &str,
     id: Option<String>,
     body: TemplateBody,
-) -> AppResult<Template> {
+) -> AppResult<(Template, Vec<String>)> {
+    let requested_ids = requested_credential_ids(&body);
     if !runner::known_tool(&body.tool) {
         return Err(ApiError::bad("Werkzeug ist ansible, opentofu oder shell."));
     }
@@ -614,66 +635,127 @@ fn build_template(
     }
     let project_id = blank(body.project_id);
     let inventory_id = blank(body.inventory_id);
-    let credential_id = blank(body.credential_id);
     let environment_id = blank(body.environment_id);
-    let db = state.db()?;
-    if let Some(project_id) = &project_id {
-        db::project(&db, project_id)?.ok_or_else(|| ApiError::bad("Projekt fehlt."))?;
-        if !db::project_visible(&db, project_id, team)? {
-            return Err(ApiError::bad(
-                "Das Projekt ist für dieses Team nicht sichtbar.",
-            ));
+    let (created_at, loaded) = {
+        let db = state.db()?;
+        if let Some(project_id) = &project_id {
+            db::project(&db, project_id)?.ok_or_else(|| ApiError::bad("Projekt fehlt."))?;
+            if !db::project_visible(&db, project_id, team)? {
+                return Err(ApiError::bad(
+                    "Das Projekt ist für dieses Team nicht sichtbar.",
+                ));
+            }
         }
-    }
-    if let Some(inventory_id) = &inventory_id {
-        let inventory =
-            db::inventory(&db, inventory_id)?.ok_or_else(|| ApiError::bad("Inventar fehlt."))?;
-        if inventory.team_id != team {
-            return Err(ApiError::bad("Inventar gehört zu einem anderen Team."));
+        if let Some(inventory_id) = &inventory_id {
+            let inventory = db::inventory(&db, inventory_id)?
+                .ok_or_else(|| ApiError::bad("Inventar fehlt."))?;
+            if inventory.team_id != team {
+                return Err(ApiError::bad("Inventar gehört zu einem anderen Team."));
+            }
         }
+        if let Some(environment_id) = &environment_id {
+            let environment = db::environment(&db, environment_id)?
+                .ok_or_else(|| ApiError::bad("Execution Environment fehlt."))?;
+            if environment
+                .team_id
+                .as_ref()
+                .is_some_and(|owner| owner != team)
+            {
+                return Err(ApiError::bad(
+                    "Execution Environment gehört zu einem anderen Team.",
+                ));
+            }
+        }
+        let created_at = if let Some(id) = &id {
+            db::template(&db, id)?
+                .map(|item| item.created_at)
+                .unwrap_or_else(db::now)
+        } else {
+            db::now()
+        };
+        let mut loaded = Vec::with_capacity(requested_ids.len());
+        for credential_id in &requested_ids {
+            let credential = db::credential(&db, credential_id)?
+                .ok_or_else(|| ApiError::bad("Zugang fehlt."))?;
+            loaded.push(credential);
+        }
+        (created_at, loaded)
+    };
+    let credential_ids = assign_credentials(state, team, &loaded)?;
+    let credential_id = credential_ids
+        .iter()
+        .find(|id| {
+            loaded
+                .iter()
+                .find(|row| row.id == **id)
+                .is_some_and(|row| row.kind != "vault")
+        })
+        .or_else(|| credential_ids.first())
+        .cloned();
+    Ok((
+        Template {
+            id: id.unwrap_or_else(|| Uuid::new_v4().to_string()),
+            team_id: team.to_string(),
+            name: require_name(&body.name)?,
+            description: body.description.trim().to_string(),
+            tool: body.tool,
+            project_id,
+            inventory_id,
+            credential_id,
+            environment_id,
+            entrypoint,
+            extra_vars: extra.to_string(),
+            spec: spec.to_string(),
+            created_at,
+        },
+        credential_ids,
+    ))
+}
+
+fn requested_credential_ids(body: &TemplateBody) -> Vec<String> {
+    if let Some(ids) = &body.credential_ids {
+        return ids.iter().map(|id| id.trim().to_string()).collect();
     }
-    if let Some(credential_id) = &credential_id {
-        let credential =
-            db::credential(&db, credential_id)?.ok_or_else(|| ApiError::bad("Zugang fehlt."))?;
+    blank(body.credential_id.clone()).into_iter().collect()
+}
+
+fn assign_credentials(state: &Shared, team: &str, loaded: &[Credential]) -> AppResult<Vec<String>> {
+    let mut assigned = Vec::with_capacity(loaded.len());
+    let mut vault_labels = Vec::with_capacity(loaded.len());
+    for credential in loaded {
         if credential.team_id != team {
             return Err(ApiError::bad("Zugang gehört zu einem anderen Team."));
         }
+        let vault_id = if credential.kind == "vault" {
+            let plain = state
+                .decrypt(&credential.secret_blob)
+                .map_err(|_| ApiError::bad("Zugangsdaten lassen sich nicht lesen."))?;
+            let secret: Value = serde_json::from_str(&plain)
+                .map_err(|_| ApiError::bad("Zugangsdaten sind kein JSON."))?;
+            credentials::check("vault", &secret).map_err(ApiError::bad)?;
+            secret
+                .get("vault_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        } else {
+            String::new()
+        };
+        vault_labels.push(vault_id);
+        assigned.push(credential.id.clone());
     }
-    if let Some(environment_id) = &environment_id {
-        let environment = db::environment(&db, environment_id)?
-            .ok_or_else(|| ApiError::bad("Execution Environment fehlt."))?;
-        if environment
-            .team_id
-            .as_ref()
-            .is_some_and(|owner| owner != team)
-        {
-            return Err(ApiError::bad(
-                "Execution Environment gehört zu einem anderen Team.",
-            ));
-        }
-    }
-    let created_at = if let Some(id) = &id {
-        db::template(&db, id)?
-            .map(|item| item.created_at)
-            .unwrap_or_else(db::now)
-    } else {
-        db::now()
-    };
-    Ok(Template {
-        id: id.unwrap_or_else(|| Uuid::new_v4().to_string()),
-        team_id: team.to_string(),
-        name: require_name(&body.name)?,
-        description: body.description.trim().to_string(),
-        tool: body.tool,
-        project_id,
-        inventory_id,
-        credential_id,
-        environment_id,
-        entrypoint,
-        extra_vars: extra.to_string(),
-        spec: spec.to_string(),
-        created_at,
-    })
+    let view = assigned
+        .iter()
+        .zip(loaded.iter().zip(vault_labels.iter()))
+        .map(|(id, (row, vault_id))| AssignedCredential {
+            id,
+            kind: &row.kind,
+            vault_id,
+        })
+        .collect::<Vec<_>>();
+    credentials::check_assignment(&view).map_err(ApiError::bad)?;
+    Ok(assigned)
 }
 
 fn check_node_overrides(
@@ -821,7 +903,16 @@ fn build_hook(state: &Shared, team: &str, body: HookBody) -> AppResult<Hook> {
     })
 }
 
-fn template_json(template: &Template) -> Value {
+fn template_json(template: &Template, credential_ids: &[String]) -> Value {
+    let credential_ids = if credential_ids.is_empty() {
+        template
+            .credential_id
+            .clone()
+            .into_iter()
+            .collect::<Vec<_>>()
+    } else {
+        credential_ids.to_vec()
+    };
     json!({
         "id": template.id,
         "team_id": template.team_id,
@@ -831,6 +922,7 @@ fn template_json(template: &Template) -> Value {
         "project_id": template.project_id,
         "inventory_id": template.inventory_id,
         "credential_id": template.credential_id,
+        "credential_ids": credential_ids,
         "environment_id": template.environment_id,
         "entrypoint": template.entrypoint,
         "extra_vars": db::json_object(&template.extra_vars),

@@ -615,7 +615,15 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
         &cache,
         &inventory_rel,
     );
-    apply_credential(state, &template, &work, container_mode.is_some(), &mut env)?;
+    let credential_ids = saved_credential_ids(&job, &template);
+    apply_credentials(
+        state,
+        &template,
+        &credential_ids,
+        &work,
+        container_mode.is_some(),
+        &mut env,
+    )?;
     export_plain_vars(&extra, &mut env);
 
     if canceled(state, job_id) {
@@ -805,36 +813,111 @@ fn safe_ident(key: &str) -> bool {
     chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
-fn apply_credential(
+fn saved_credential_ids(job: &db::Job, template: &Template) -> Vec<String> {
+    let params = db::json_object(&job.parameters);
+    if let Some(list) = params.get("credentials").and_then(Value::as_array) {
+        return list
+            .iter()
+            .filter_map(|item| {
+                item.get("id")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_string)
+            })
+            .collect();
+    }
+    template.credential_id.clone().into_iter().collect()
+}
+
+fn apply_credentials(
     state: &Shared,
     template: &Template,
+    ids: &[String],
     work: &Path,
     container: bool,
     env: &mut Vec<(String, String)>,
 ) -> Result<(), String> {
-    let Some(id) = &template.credential_id else {
-        return Ok(());
-    };
-    let credential = {
-        let db = state.db().map_err(|e| e.to_string())?;
-        db::credential(&db, id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "Zugangsdaten fehlen.".to_string())?
-    };
-    if credential.team_id != template.team_id {
-        return Err("Zugangsdaten gehören zu einem anderen Team.".into());
+    let mut used_files = Vec::new();
+    let mut vault_lines = Vec::new();
+    for (index, id) in ids.iter().enumerate() {
+        let credential = {
+            let db = state.db().map_err(|e| e.to_string())?;
+            db::credential(&db, id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "Zugangsdaten fehlen.".to_string())?
+        };
+        if credential.team_id != template.team_id {
+            return Err("Zugangsdaten gehören zu einem anderen Team.".into());
+        }
+        let plain = state
+            .decrypt(&credential.secret_blob)
+            .map_err(|_| "Zugangsdaten lassen sich nicht lesen.".to_string())?;
+        let secret: Value =
+            serde_json::from_str(&plain).map_err(|_| "Zugangsdaten sind kein JSON.".to_string())?;
+        let prepared =
+            crate::credentials::prepare(credential.kind.as_str(), &secret, container, work)?;
+        let mut part = prepared.env;
+        if credential.kind == "vault" {
+            part.retain(|(key, _)| key != "KOREOGRAF_VAULT_FILE" && key != "KOREOGRAF_VAULT_ID");
+        }
+        let mut vault_name = None;
+        for (name, body) in prepared.files {
+            let unique = unique_file_name(&used_files, &name, index);
+            if unique != name {
+                for (_, value) in &mut part {
+                    if let Some(prefix) = value.strip_suffix(&name) {
+                        *value = format!("{prefix}{unique}");
+                    }
+                }
+            }
+            if name == "vault.pass" {
+                vault_name = Some(unique.clone());
+            }
+            used_files.push(unique.clone());
+            write_secret(&work.join(&unique), &body)?;
+        }
+        if credential.kind == "vault" {
+            let name = vault_name.ok_or_else(|| "Vault-Datei fehlt.".to_string())?;
+            let label = secret
+                .get("vault_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            if label.contains(['\t', '\n', '\r', '@']) {
+                return Err("Vault-Id ist ungültig.".into());
+            }
+            let path = guest_path(container, work, &name);
+            vault_lines.push(format!("{label}\t{path}"));
+        }
+        env.extend(part);
     }
-    let plain = state
-        .decrypt(&credential.secret_blob)
-        .map_err(|_| "Zugangsdaten lassen sich nicht lesen.".to_string())?;
-    let secret: Value =
-        serde_json::from_str(&plain).map_err(|_| "Zugangsdaten sind kein JSON.".to_string())?;
-    let prepared = crate::credentials::prepare(credential.kind.as_str(), &secret, container, work)?;
-    for (name, body) in prepared.files {
-        write_secret(&work.join(name), &body)?;
+    if !vault_lines.is_empty() {
+        write_secret(&work.join("vault.list"), &vault_lines.join("\n"))?;
+        env.push((
+            "KOREOGRAF_VAULT_LIST".into(),
+            guest_path(container, work, "vault.list"),
+        ));
     }
-    env.extend(prepared.env);
     Ok(())
+}
+
+fn unique_file_name(used: &[String], name: &str, index: usize) -> String {
+    if !used.iter().any(|item| item == name) {
+        return name.to_string();
+    }
+    let candidate = format!("{index}-{name}");
+    if !used.iter().any(|item| item == &candidate) {
+        return candidate;
+    }
+    format!("{index}-{name}-{}", used.len())
+}
+
+fn guest_path(container: bool, work: &Path, name: &str) -> String {
+    if container {
+        format!("/runner/work/{name}")
+    } else {
+        work.join(name).display().to_string()
+    }
 }
 
 fn write_secret(path: &Path, contents: &str) -> Result<(), String> {
