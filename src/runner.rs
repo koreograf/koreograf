@@ -1044,12 +1044,11 @@ fn load_environment(state: &Shared, template: &Template) -> Result<Option<Enviro
     let environment = db::environment(&db, id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "Execution Environment fehlt.".to_string())?;
-    if environment
-        .team_id
-        .as_ref()
-        .is_some_and(|team| team != &template.team_id)
-    {
-        return Err("Execution Environment gehört zu einem anderen Team.".into());
+    let team = db::team_by_id(&db, &template.team_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Team fehlt.".to_string())?;
+    if !db::environment_visible(&environment, &team) {
+        return Err("Execution Environment ist für dieses Team nicht sichtbar.".into());
     }
     if !valid_image(&environment.image) {
         return Err("Image-Name ist ungültig.".into());

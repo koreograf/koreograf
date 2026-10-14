@@ -90,6 +90,8 @@ pub struct EnvironmentBody {
     pull_policy: String,
     #[serde(default)]
     description: String,
+    #[serde(default)]
+    scope: Option<String>,
 }
 
 fn default_pull() -> String {
@@ -740,10 +742,60 @@ pub async fn list_environments(
     headers: HeaderMap,
     user: AuthUser,
 ) -> AppResult<Json<Value>> {
-    let team = team_header(&headers)?;
-    gate(&state, &user, &team, Role::Viewer)?;
+    let team_id = team_header(&headers)?;
+    gate(&state, &user, &team_id, Role::Viewer)?;
     let db = state.db()?;
+    let team = db::team_by_id(&db, &team_id)?.ok_or(ApiError::NotFound)?;
     Ok(Json(json!(db::list_environments(&db, &team)?)))
+}
+
+fn environment_scope(raw: Option<&str>, fallback: &str) -> AppResult<String> {
+    let raw = raw.unwrap_or("").trim();
+    let scope = if raw.is_empty() { fallback } else { raw };
+    match scope {
+        "team" | "organization" | "global" => Ok(scope.to_string()),
+        _ => Err(ApiError::bad(
+            "Geltungsbereich ist team, organization oder global.",
+        )),
+    }
+}
+
+fn may_manage_environment(user: &AuthUser, scope: &str) -> bool {
+    user.is_admin || matches!(scope, "team" | "organization")
+}
+
+fn apply_environment_scope(item: &mut Environment, scope: &str, team: &db::Team) -> AppResult<()> {
+    match scope {
+        "team" => {
+            item.team_id = Some(team.id.clone());
+            item.organization_id = None;
+        }
+        "organization" => {
+            if team.organization_id.is_empty() {
+                return Err(ApiError::bad("Organisation fehlt."));
+            }
+            item.team_id = None;
+            item.organization_id = Some(team.organization_id.clone());
+        }
+        "global" => {
+            item.team_id = None;
+            item.organization_id = None;
+        }
+        _ => {
+            return Err(ApiError::bad(
+                "Geltungsbereich ist team, organization oder global.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn visible_environment(db: &Connection, id: &str, team: &db::Team) -> AppResult<Environment> {
+    let item = db::environment(db, id)?.ok_or(ApiError::NotFound)?;
+    if !db::environment_visible(&item, team) {
+        return Err(ApiError::NotFound);
+    }
+    Ok(item)
 }
 
 fn environment_fields(body: &EnvironmentBody) -> AppResult<(String, String, String, String)> {
@@ -773,21 +825,32 @@ pub async fn create_environment(
     user: AuthUser,
     Json(body): Json<EnvironmentBody>,
 ) -> AppResult<axum::response::Response> {
-    let team = team_header(&headers)?;
-    gate(&state, &user, &team, Role::Owner)?;
+    let team_id = team_header(&headers)?;
+    gate(&state, &user, &team_id, Role::Owner)?;
     let (name, image, pull_policy, description) = environment_fields(&body)?;
-    let item = Environment {
+    let scope = environment_scope(body.scope.as_deref(), "team")?;
+    if !may_manage_environment(&user, &scope) {
+        return Err(ApiError::Forbidden);
+    }
+    let db = state.db()?;
+    let team = db::team_by_id(&db, &team_id)?.ok_or(ApiError::NotFound)?;
+    let mut item = Environment {
         id: Uuid::new_v4().to_string(),
-        team_id: Some(team),
+        team_id: None,
+        organization_id: None,
         name,
         image,
         pull_policy,
         description,
         created_at: db::now(),
+        scope: String::new(),
+        organization_name: String::new(),
+        team_name: String::new(),
     };
-    let db = state.db()?;
+    apply_environment_scope(&mut item, &scope, &team)?;
     db::insert_environment(&db, &item)?;
-    Ok(created(json!(item)))
+    let stored = db::environment(&db, &item.id)?.ok_or(ApiError::NotFound)?;
+    Ok(created(json!(stored)))
 }
 
 pub async fn get_environment(
@@ -796,13 +859,11 @@ pub async fn get_environment(
     user: AuthUser,
     Path(id): Path<String>,
 ) -> AppResult<Json<Value>> {
-    let team = team_header(&headers)?;
-    gate(&state, &user, &team, Role::Viewer)?;
+    let team_id = team_header(&headers)?;
+    gate(&state, &user, &team_id, Role::Viewer)?;
     let db = state.db()?;
-    let item = db::environment(&db, &id)?.ok_or(ApiError::NotFound)?;
-    if item.team_id.as_ref().is_some_and(|owner| owner != &team) {
-        return Err(ApiError::NotFound);
-    }
+    let team = db::team_by_id(&db, &team_id)?.ok_or(ApiError::NotFound)?;
+    let item = visible_environment(&db, &id, &team)?;
     Ok(Json(json!(item)))
 }
 
@@ -813,20 +874,24 @@ pub async fn update_environment(
     Path(id): Path<String>,
     Json(body): Json<EnvironmentBody>,
 ) -> AppResult<Json<Value>> {
-    let team = team_header(&headers)?;
-    gate(&state, &user, &team, Role::Owner)?;
+    let team_id = team_header(&headers)?;
+    gate(&state, &user, &team_id, Role::Owner)?;
     let (name, image, pull_policy, description) = environment_fields(&body)?;
     let db = state.db()?;
-    let mut item = db::environment(&db, &id)?.ok_or(ApiError::NotFound)?;
-    if item.team_id.as_deref() != Some(team.as_str()) {
-        return Err(ApiError::NotFound);
+    let team = db::team_by_id(&db, &team_id)?.ok_or(ApiError::NotFound)?;
+    let mut item = visible_environment(&db, &id, &team)?;
+    let scope = environment_scope(body.scope.as_deref(), &item.scope)?;
+    if !may_manage_environment(&user, &item.scope) || !may_manage_environment(&user, &scope) {
+        return Err(ApiError::Forbidden);
     }
     item.name = name;
     item.image = image;
     item.pull_policy = pull_policy;
     item.description = description;
+    apply_environment_scope(&mut item, &scope, &team)?;
     db::update_environment(&db, &item)?;
-    Ok(Json(json!(item)))
+    let stored = db::environment(&db, &item.id)?.ok_or(ApiError::NotFound)?;
+    Ok(Json(json!(stored)))
 }
 
 pub async fn delete_environment(
@@ -835,10 +900,15 @@ pub async fn delete_environment(
     user: AuthUser,
     Path(id): Path<String>,
 ) -> AppResult<axum::response::Response> {
-    let team = team_header(&headers)?;
-    gate(&state, &user, &team, Role::Owner)?;
+    let team_id = team_header(&headers)?;
+    gate(&state, &user, &team_id, Role::Owner)?;
     let db = state.db()?;
-    db::delete_environment(&db, &id, &team)?;
+    let team = db::team_by_id(&db, &team_id)?.ok_or(ApiError::NotFound)?;
+    let item = visible_environment(&db, &id, &team)?;
+    if !may_manage_environment(&user, &item.scope) {
+        return Err(ApiError::Forbidden);
+    }
+    db::delete_environment(&db, &id)?;
     Ok(no_content())
 }
 

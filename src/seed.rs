@@ -149,11 +149,15 @@ fn seed_demo(conn: &Connection, cfg: &Config) -> AppResult<()> {
         &Environment {
             id: environment_id,
             team_id: Some(team_id.clone()),
+            organization_id: None,
             name: "AWX-EE".into(),
             image: "quay.io/ansible/awx-ee:latest".into(),
             pull_policy: "if_not_present".into(),
             description: "Gleiches Prinzip wie ein AWX Execution Environment. Der Galaxy-Cache bleibt auf dem Host gemountet und wird nicht pro Lauf geleert.".into(),
             created_at: db::now(),
+            scope: "team".into(),
+            organization_name: String::new(),
+            team_name: String::new(),
         },
     )?;
 

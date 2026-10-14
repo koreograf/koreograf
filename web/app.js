@@ -233,6 +233,15 @@ const EN = {
   "Execution Environment": "Execution environment",
   "Execution Environment fehlt.": "Execution environment is missing.",
   "Execution Environment gehört zu einem anderen Team.": "The execution environment belongs to another team.",
+  "Execution Environment ist für dieses Team nicht sichtbar.": "The execution environment is not visible to this team.",
+  "Geltungsbereich ist team, organization oder global.": "Scope is team, organization, or global.",
+  "Gilt für": "Applies to",
+  "Dieses Team": "This team",
+  "Diese Organisation": "This organization",
+  "Global": "Global",
+  "Organisation · {name}": "Organization · {name}",
+  "Team · {name}": "Team · {name}",
+  "Global gilt für jedes Team. Die Organisation gilt für alle Teams darin. Ein Team bleibt privat.": "Global applies to every team. The organization applies to every team in it. A team stays private.",
   "Execution Environment ist gesetzt, aber weder Docker noch Podman ist erreichbar.": "An execution environment is set, but neither Docker nor Podman is reachable.",
   "Execution Environments": "Execution environments",
   "Extra-Variablen": "Extra variables",
@@ -1405,7 +1414,7 @@ async function pageTemplateForm(id) {
         <div class="field-grid">
           <label class="field"><span>${h("Projekt")}</span><select name="project_id">${selectOptions(projects, item.project_id, true, (row) => row.name)}</select></label>
           <label class="field" id="inventory-field"${item.tool === "ansible" ? "" : " hidden"}><span>${h("Inventar")}</span><select name="inventory_id">${selectOptions(inventories, item.inventory_id, true, (row) => row.name)}</select></label>
-          <label class="field"><span>${h("Execution Environment")}</span><select name="environment_id">${selectOptions(environments, item.environment_id, true, (row) => row.name)}</select></label>
+          <label class="field"><span>${h("Execution Environment")}</span><select name="environment_id">${selectOptions(environments, item.environment_id, true, (row) => `${row.name} (${scopeLabel(row)})`)}</select></label>
         </div>
         ${templateCredentialFields(credentials, selectedCredentialIds(item))}
         <label class="field" id="playbook-field" hidden><span>${h("Playbook aus dem Projekt")}</span><select name="playbook"><option value="">${h("Anderer Pfad")}</option></select></label>
@@ -2797,10 +2806,10 @@ async function pageRuntime() {
     can("owner") ? addLink("#/environments/new", "+ Umgebung") : "");
   const drawEnvironments = () => {
     const needle = document.querySelector("#environment-search").value.trim().toLowerCase();
-    const rows = environments.filter((item) => !needle || `${item.name} ${item.image} ${item.pull_policy}`.toLowerCase().includes(needle)).map((item) =>
-      `<tr><td><a href="#/environments/${esc(item.id)}">${esc(item.name)}</a></td><td class="mono">${esc(item.image)}</td><td>${esc(item.pull_policy)}</td><td>${can("owner") ? `<button class="btn danger" type="button" data-env="${esc(item.id)}">${h("Löschen")}</button>` : ""}</td></tr>`
+    const rows = environments.filter((item) => !needle || `${item.name} ${item.image} ${item.pull_policy} ${item.scope || ""} ${scopeLabel(item)}`.toLowerCase().includes(needle)).map((item) =>
+      `<tr><td><a href="#/environments/${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(scopeLabel(item))}</td><td class="mono">${esc(item.image)}</td><td>${esc(item.pull_policy)}</td><td>${canManageEnvironment(item) ? `<button class="btn danger" type="button" data-env="${esc(item.id)}">${h("Löschen")}</button>` : ""}</td></tr>`
     );
-    document.querySelector("#environment-table").innerHTML = table([t("Name"), t("Image"), t("Pull"), ""], rows);
+    document.querySelector("#environment-table").innerHTML = table([t("Name"), t("Gilt für"), t("Image"), t("Pull"), ""], rows);
     document.querySelectorAll("[data-env]").forEach((button) => {
       button.addEventListener("click", async () => {
         try {
@@ -2816,15 +2825,41 @@ async function pageRuntime() {
   drawEnvironments();
 }
 
+function canManageEnvironment(item) {
+  if (!can("owner")) return false;
+  if (item && item.scope === "global") return !!me.is_admin;
+  return true;
+}
+
+function scopeLabel(item) {
+  if (!item || item.scope === "global") return t("Global");
+  if (item.scope === "organization") return t("Organisation · {name}", { name: item.organization_name || "" });
+  return t("Team · {name}", { name: item.team_name || "" });
+}
+
+function environmentScopeOptions(selected) {
+  const choices = [
+    ["team", "Dieses Team"],
+    ["organization", "Diese Organisation"],
+  ];
+  if (me.is_admin) choices.push(["global", "Global"]);
+  return choices.map(([value, label]) =>
+    `<option value="${value}"${value === selected ? " selected" : ""}>${h(label)}</option>`
+  ).join("");
+}
+
 function environmentForm(item) {
   const policy = item ? item.pull_policy : "if_not_present";
+  const scope = item && item.scope ? item.scope : "team";
   const option = (value) => `<option value="${value}"${policy === value ? " selected" : ""}>${value}</option>`;
   return `<form class="card form" id="env-form">
     <label class="field"><span>${h("Name")}</span><input name="name" required value="${item ? esc(item.name) : ""}"></label>
     <label class="field"><span>${h("Image")}</span><input name="image" required value="${item ? esc(item.image) : ""}" placeholder="quay.io/ansible/awx-ee:latest"></label>
     <div class="field-row">
       <label class="field"><span>${h("Pull")}</span><select class="fit" name="pull_policy">${option("if_not_present")}${option("always")}${option("never")}</select></label>
+      <label class="field"><span>${h("Gilt für")}</span><select class="fit" name="scope">${environmentScopeOptions(scope)}</select></label>
     </div>
+    <p class="small muted">${h("Global gilt für jedes Team. Die Organisation gilt für alle Teams darin. Ein Team bleibt privat.")}</p>
     <label class="field"><span>${h("Beschreibung")}</span><input name="description" value="${item ? esc(item.description) : ""}"></label>
     <button class="btn pill primary" type="submit">${item ? h("Speichern") : h("Anlegen")}</button>
   </form>`;
@@ -2839,6 +2874,7 @@ function bindEnvironmentForm(id) {
       image: form.image.value,
       pull_policy: form.pull_policy.value,
       description: form.description.value,
+      scope: form.scope.value,
     };
     try {
       if (id) await api("PUT", `/api/environments/${encodeURIComponent(id)}`, payload);
@@ -2863,9 +2899,10 @@ async function pageEnvironmentNew() {
 async function pageEnvironment(id) {
   if (!needTeam()) return;
   const item = await api("GET", `/api/environments/${encodeURIComponent(id)}`);
-  if (!can("owner")) {
+  if (!canManageEnvironment(item)) {
     shell(item.name, `<section class="card"><dl class="kv">
       ${paramRow("Name", item.name)}
+      ${paramRow("Gilt für", scopeLabel(item))}
       ${paramRow("Image", item.image)}
       ${paramRow("Pull", item.pull_policy)}
       ${paramRow("Beschreibung", item.description)}

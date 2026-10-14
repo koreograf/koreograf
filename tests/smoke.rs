@@ -2478,6 +2478,9 @@ async fn owner_can_edit_an_execution_environment() {
     assert_eq!(updated["name"], "EE neu");
     assert_eq!(updated["image"], image);
     assert_eq!(updated["pull_policy"], "always");
+    assert_eq!(updated["scope"], "team");
+    assert_eq!(updated["team_id"].as_str(), Some(team.as_str()));
+    assert!(updated["organization_id"].is_null());
     let (status, again, _) = call(
         &app,
         "GET",
@@ -2504,6 +2507,451 @@ async fn owner_can_edit_an_execution_environment() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
     assert_eq!(rejected["error"], "Image-Name ist ungültig.");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn environment_scopes_follow_the_selected_team() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-env-scope-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let script = script.as_str().unwrap_or("");
+    assert!(script.contains("Gilt für"));
+    assert!(script.contains("Dieses Team"));
+    assert!(script.contains("Diese Organisation"));
+    assert!(script.contains("Organisation · {name}"));
+    assert!(script.contains("Team · {name}"));
+    assert!(script.contains(
+        "Global gilt für jedes Team. Die Organisation gilt für alle Teams darin. Ein Team bleibt privat."
+    ));
+    assert!(script.contains("Execution Environment ist für dieses Team nicht sichtbar."));
+    assert!(script.contains("canManageEnvironment"));
+    assert!(script.contains("scopeLabel(row)"));
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+    let org_id = me["teams"][0]["organization_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let org_name = me["teams"][0]["organization_name"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (status, other_org, _) = call(
+        &app,
+        "POST",
+        "/api/organizations",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Andere", "description": ""})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{other_org}");
+    let other_org_id = other_org["id"].as_str().unwrap();
+    let (status, sibling, _) = call(
+        &app,
+        "POST",
+        "/api/teams",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Betrieb",
+            "description": "Gleiches Organisation",
+            "organization_id": org_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{sibling}");
+    let sibling = sibling["id"].as_str().unwrap().to_string();
+    let (status, foreign, _) = call(
+        &app,
+        "POST",
+        "/api/teams",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Nacht",
+            "description": "Andere Organisation",
+            "organization_id": other_org_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{foreign}");
+    let foreign = foreign["id"].as_str().unwrap().to_string();
+
+    let (status, _user, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "username": "ada",
+            "display_name": "Ada",
+            "password": "ada-secret-1",
+            "is_admin": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    for (target, role) in [(&team, "owner"), (&sibling, "owner")] {
+        let (status, joined, _) = call(
+            &app,
+            "POST",
+            &format!("/api/teams/{target}/members"),
+            Some(&cookie),
+            Some(&team),
+            Some(json!({"username": "ada", "role": role})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{joined}");
+    }
+    let (status, ada_me, ada_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "ada", "password": "ada-secret-1"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ada_me}");
+    let ada_cookie = ada_cookie.expect("ada cookie");
+
+    let (status, private_env, _) = call(
+        &app,
+        "POST",
+        "/api/environments",
+        Some(&ada_cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Privat",
+            "image": "quay.io/example/private:1",
+            "pull_policy": "never"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{private_env}");
+    assert_eq!(private_env["scope"], "team");
+    assert_eq!(private_env["team_id"].as_str(), Some(team.as_str()));
+    assert!(private_env["organization_id"].is_null());
+    let private_id = private_env["id"].as_str().unwrap().to_string();
+
+    let (status, org_env, _) = call(
+        &app,
+        "POST",
+        "/api/environments",
+        Some(&ada_cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Orga",
+            "image": "quay.io/example/orga:1",
+            "scope": "organization"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{org_env}");
+    assert_eq!(org_env["scope"], "organization");
+    assert_eq!(org_env["organization_id"], org_id);
+    assert_eq!(org_env["organization_name"], org_name);
+    assert!(org_env["team_id"].is_null());
+    let org_env_id = org_env["id"].as_str().unwrap().to_string();
+
+    let (status, denied_global, _) = call(
+        &app,
+        "POST",
+        "/api/environments",
+        Some(&ada_cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Nicht global",
+            "image": "quay.io/example/nope:1",
+            "scope": "global"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied_global}");
+    assert_eq!(
+        denied_global["error"],
+        "Keine Berechtigung für diese Aktion."
+    );
+    let (status, bad_scope, _) = call(
+        &app,
+        "POST",
+        "/api/environments",
+        Some(&ada_cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Kaputt",
+            "image": "quay.io/example/bad:1",
+            "scope": "world"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{bad_scope}");
+    assert_eq!(
+        bad_scope["error"],
+        "Geltungsbereich ist team, organization oder global."
+    );
+
+    let (status, global_env, _) = call(
+        &app,
+        "POST",
+        "/api/environments",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Geteilt",
+            "image": "quay.io/example/global:1",
+            "scope": "global"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{global_env}");
+    assert_eq!(global_env["scope"], "global");
+    assert!(global_env["team_id"].is_null());
+    assert!(global_env["organization_id"].is_null());
+    let global_id = global_env["id"].as_str().unwrap().to_string();
+
+    let names = |list: &Value| {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["name"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+    };
+    let (status, home, _) = call(
+        &app,
+        "GET",
+        "/api/environments",
+        Some(&ada_cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{home}");
+    let home_names = names(&home);
+    assert!(home_names.contains(&"AWX-EE".to_string()), "{home}");
+    assert!(home_names.contains(&"Privat".to_string()));
+    assert!(home_names.contains(&"Orga".to_string()));
+    assert!(home_names.contains(&"Geteilt".to_string()));
+    let rank = |scope: &str| match scope {
+        "global" => 0,
+        "organization" => 1,
+        "team" => 2,
+        _ => 9,
+    };
+    let scopes = home
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["scope"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(scopes.windows(2).all(|pair| rank(pair[0]) <= rank(pair[1])));
+
+    let (status, same_org, _) = call(
+        &app,
+        "GET",
+        "/api/environments",
+        Some(&ada_cookie),
+        Some(&sibling),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{same_org}");
+    let same_names = names(&same_org);
+    assert!(same_names.contains(&"Geteilt".to_string()), "{same_org}");
+    assert!(same_names.contains(&"Orga".to_string()), "{same_org}");
+    assert!(!same_names.iter().any(|name| name == "Privat"));
+    assert!(!same_names.iter().any(|name| name == "AWX-EE"));
+
+    let (status, other, _) = call(
+        &app,
+        "GET",
+        "/api/environments",
+        Some(&cookie),
+        Some(&foreign),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{other}");
+    let other_names = names(&other);
+    assert!(other_names.contains(&"Geteilt".to_string()), "{other}");
+    assert!(!other_names.iter().any(|name| name == "Orga"));
+    assert!(!other_names.iter().any(|name| name == "Privat"));
+    assert!(!other_names.iter().any(|name| name == "AWX-EE"));
+
+    let (status, seen, _) = call(
+        &app,
+        "GET",
+        &format!("/api/environments/{global_id}"),
+        Some(&ada_cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{seen}");
+    assert_eq!(seen["scope"], "global");
+    let (status, forbidden, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/environments/{global_id}"),
+        Some(&ada_cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Geteilt",
+            "image": "quay.io/example/global:1",
+            "scope": "global"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{forbidden}");
+    assert_eq!(forbidden["error"], "Keine Berechtigung für diese Aktion.");
+    let (status, _, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/environments/{global_id}"),
+        Some(&ada_cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, hidden, _) = call(
+        &app,
+        "GET",
+        &format!("/api/environments/{private_id}"),
+        Some(&cookie),
+        Some(&foreign),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{hidden}");
+
+    let (status, kept, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/environments/{org_env_id}"),
+        Some(&ada_cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Orga",
+            "image": "quay.io/example/orga:2",
+            "description": "bleibt"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{kept}");
+    assert_eq!(kept["scope"], "organization");
+    assert_eq!(kept["image"], "quay.io/example/orga:2");
+    let (status, promote, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/environments/{org_env_id}"),
+        Some(&ada_cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Orga",
+            "image": "quay.io/example/orga:2",
+            "scope": "global"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{promote}");
+    let (status, still_org, _) = call(
+        &app,
+        "GET",
+        &format!("/api/environments/{org_env_id}"),
+        Some(&ada_cookie),
+        Some(&sibling),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{still_org}");
+    assert_eq!(still_org["scope"], "organization");
+    let (status, sibling_edit, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/environments/{org_env_id}"),
+        Some(&ada_cookie),
+        Some(&sibling),
+        Some(json!({
+            "name": "Orga",
+            "image": "quay.io/example/orga:3",
+            "description": "geschwister"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{sibling_edit}");
+    assert_eq!(sibling_edit["scope"], "organization");
+    assert_eq!(sibling_edit["organization_id"], org_id);
+
+    let shell = |name: &str, environment_id: &str| {
+        json!({
+            "name": name,
+            "tool": "shell",
+            "entrypoint": "",
+            "environment_id": environment_id,
+            "spec": {"script": "true"}
+        })
+    };
+    let (status, used, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&foreign),
+        Some(shell("Mit Global", &global_id)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{used}");
+    assert_eq!(used["environment_id"], global_id);
+    let (status, blocked, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&foreign),
+        Some(shell("Mit Orga", &org_env_id)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{blocked}");
+    assert_eq!(
+        blocked["error"],
+        "Execution Environment ist für dieses Team nicht sichtbar."
+    );
+    let (status, allowed, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&ada_cookie),
+        Some(&sibling),
+        Some(shell("Mit Orga erlaubt", &org_env_id)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{allowed}");
+    assert_eq!(allowed["environment_id"], org_env_id);
 
     let _ = std::fs::remove_dir_all(&dir);
 }

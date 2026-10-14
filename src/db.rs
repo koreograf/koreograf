@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS credentials (
 CREATE TABLE IF NOT EXISTS environments (
   id TEXT PRIMARY KEY,
   team_id TEXT REFERENCES teams(id) ON DELETE CASCADE,
+  organization_id TEXT,
   name TEXT NOT NULL,
   image TEXT NOT NULL,
   pull_policy TEXT NOT NULL,
@@ -347,6 +348,12 @@ fn migrate(c: &Connection) -> AppResult<()> {
            )",
         [],
     )?;
+    if !column_exists(c, "environments", "organization_id")? {
+        c.execute(
+            "ALTER TABLE environments ADD COLUMN organization_id TEXT",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -463,11 +470,15 @@ pub struct Credential {
 pub struct Environment {
     pub id: String,
     pub team_id: Option<String>,
+    pub organization_id: Option<String>,
     pub name: String,
     pub image: String,
     pub pull_policy: String,
     pub description: String,
     pub created_at: String,
+    pub scope: String,
+    pub organization_name: String,
+    pub team_name: String,
 }
 
 #[derive(Clone, Debug)]
@@ -1526,11 +1537,13 @@ pub fn delete_credential(c: &Connection, id: &str, team_id: &str) -> AppResult<(
 
 pub fn insert_environment(c: &Connection, item: &Environment) -> AppResult<()> {
     c.execute(
-        "INSERT INTO environments (id, team_id, name, image, pull_policy, description, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO environments (
+            id, team_id, organization_id, name, image, pull_policy, description, created_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             item.id,
             item.team_id,
+            item.organization_id,
             item.name,
             item.image,
             item.pull_policy,
@@ -1541,18 +1554,39 @@ pub fn insert_environment(c: &Connection, item: &Environment) -> AppResult<()> {
     Ok(())
 }
 
-pub fn list_environments(c: &Connection, team_id: &str) -> AppResult<Vec<Environment>> {
-    let mut stmt = c.prepare(
-        "SELECT id, team_id, name, image, pull_policy, description, created_at
-         FROM environments WHERE team_id IS NULL OR team_id = ?1 ORDER BY name",
-    )?;
-    let rows = stmt.query_map([team_id], map_environment)?;
+const ENVIRONMENT_SELECT: &str = "\
+SELECT e.id, e.team_id, e.organization_id, e.name, e.image, e.pull_policy, \
+       e.description, e.created_at, COALESCE(o.name, ''), COALESCE(t.name, '') \
+FROM environments e \
+LEFT JOIN organizations o ON o.id = e.organization_id \
+LEFT JOIN teams t ON t.id = e.team_id";
+
+pub fn list_environments(c: &Connection, team: &Team) -> AppResult<Vec<Environment>> {
+    let mut stmt = c.prepare(&format!(
+        "{ENVIRONMENT_SELECT}
+         WHERE (
+             (e.team_id IS NULL OR e.team_id = '')
+             AND (e.organization_id IS NULL OR e.organization_id = '')
+         ) OR (
+             (e.team_id IS NULL OR e.team_id = '')
+             AND e.organization_id = ?1
+             AND ?1 != ''
+         ) OR e.team_id = ?2
+         ORDER BY
+           CASE
+             WHEN e.team_id IS NOT NULL AND e.team_id != '' THEN 2
+             WHEN e.organization_id IS NOT NULL AND e.organization_id != '' THEN 1
+             ELSE 0
+           END,
+           e.name"
+    ))?;
+    let rows = stmt.query_map(params![team.organization_id, team.id], map_environment)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
 }
 
 pub fn environment(c: &Connection, id: &str) -> AppResult<Option<Environment>> {
     c.query_row(
-        "SELECT id, team_id, name, image, pull_policy, description, created_at FROM environments WHERE id = ?1",
+        &format!("{ENVIRONMENT_SELECT} WHERE e.id = ?1"),
         [id],
         map_environment,
     )
@@ -1560,28 +1594,71 @@ pub fn environment(c: &Connection, id: &str) -> AppResult<Option<Environment>> {
     .map_err(Into::into)
 }
 
+pub fn environment_visible(item: &Environment, team: &Team) -> bool {
+    if let Some(owner) = item.team_id.as_deref().filter(|id| !id.is_empty()) {
+        return owner == team.id;
+    }
+    if let Some(organization_id) = item.organization_id.as_deref().filter(|id| !id.is_empty()) {
+        return !team.organization_id.is_empty() && organization_id == team.organization_id;
+    }
+    true
+}
+
 fn map_environment(row: &rusqlite::Row<'_>) -> rusqlite::Result<Environment> {
+    let team_id = optional_id(row.get(1)?);
+    let organization_id = optional_id(row.get(2)?);
+    let organization_name: String = row.get(8)?;
+    let team_name: String = row.get(9)?;
+    let scope = if team_id.is_some() {
+        "team"
+    } else if organization_id.is_some() {
+        "organization"
+    } else {
+        "global"
+    };
     Ok(Environment {
         id: row.get(0)?,
-        team_id: row.get(1)?,
-        name: row.get(2)?,
-        image: row.get(3)?,
-        pull_policy: row.get(4)?,
-        description: row.get(5)?,
-        created_at: row.get(6)?,
+        team_id,
+        organization_id,
+        name: row.get(3)?,
+        image: row.get(4)?,
+        pull_policy: row.get(5)?,
+        description: row.get(6)?,
+        created_at: row.get(7)?,
+        scope: scope.to_string(),
+        organization_name: if scope == "organization" {
+            organization_name
+        } else {
+            String::new()
+        },
+        team_name: if scope == "team" {
+            team_name
+        } else {
+            String::new()
+        },
+    })
+}
+
+fn optional_id(value: Option<String>) -> Option<String> {
+    value.and_then(|item| {
+        let item = item.trim().to_string();
+        if item.is_empty() {
+            None
+        } else {
+            Some(item)
+        }
     })
 }
 
 pub fn update_environment(c: &Connection, item: &Environment) -> AppResult<()> {
-    let Some(team_id) = item.team_id.as_deref() else {
-        return Err(ApiError::NotFound);
-    };
     let n = c.execute(
-        "UPDATE environments SET name=?3, image=?4, pull_policy=?5, description=?6
-         WHERE id=?1 AND team_id=?2",
+        "UPDATE environments
+         SET team_id=?2, organization_id=?3, name=?4, image=?5, pull_policy=?6, description=?7
+         WHERE id=?1",
         params![
             item.id,
-            team_id,
+            item.team_id,
+            item.organization_id,
             item.name,
             item.image,
             item.pull_policy,
@@ -1594,11 +1671,8 @@ pub fn update_environment(c: &Connection, item: &Environment) -> AppResult<()> {
     Ok(())
 }
 
-pub fn delete_environment(c: &Connection, id: &str, team_id: &str) -> AppResult<()> {
-    let n = c.execute(
-        "DELETE FROM environments WHERE id = ?1 AND team_id = ?2",
-        params![id, team_id],
-    )?;
+pub fn delete_environment(c: &Connection, id: &str) -> AppResult<()> {
+    let n = c.execute("DELETE FROM environments WHERE id = ?1", [id])?;
     if n == 0 {
         return Err(ApiError::NotFound);
     }
@@ -2274,6 +2348,127 @@ mod tests {
         assert_eq!(members[0].role, "operator");
         assert_eq!(members[0].source, "ldap");
         grant_manual_membership(&conn, "team", "user", "viewer").unwrap_err();
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn sample_environment(
+        id: &str,
+        team_id: Option<&str>,
+        organization_id: Option<&str>,
+        name: &str,
+    ) -> Environment {
+        Environment {
+            id: id.to_string(),
+            team_id: team_id.map(str::to_string),
+            organization_id: organization_id.map(str::to_string),
+            name: name.to_string(),
+            image: "quay.io/example/ee:1".into(),
+            pull_policy: "if_not_present".into(),
+            description: String::new(),
+            created_at: now(),
+            scope: String::new(),
+            organization_name: String::new(),
+            team_name: String::new(),
+        }
+    }
+
+    #[test]
+    fn environment_scopes_stay_with_the_team_that_can_see_them() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-env-scope-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = open(&dir.join("koreograf.db")).unwrap();
+        insert_organization(&conn, "org-a", "Alpha", "").unwrap();
+        insert_organization(&conn, "org-b", "Beta", "").unwrap();
+        insert_team(&conn, "team-a", "org-a", "Alpha", "", None).unwrap();
+        insert_team(&conn, "team-b", "org-a", "Betrieb", "", None).unwrap();
+        insert_team(&conn, "team-c", "org-b", "Nacht", "", None).unwrap();
+        insert_environment(&conn, &sample_environment("global", None, None, "Global")).unwrap();
+        insert_environment(
+            &conn,
+            &sample_environment("org", None, Some("org-a"), "Orga"),
+        )
+        .unwrap();
+        insert_environment(
+            &conn,
+            &sample_environment("private", Some("team-a"), None, "Privat"),
+        )
+        .unwrap();
+        insert_environment(
+            &conn,
+            &sample_environment("both", Some("team-a"), Some("org-b"), "Beides"),
+        )
+        .unwrap();
+
+        let team_a = team_by_id(&conn, "team-a").unwrap().unwrap();
+        let team_b = team_by_id(&conn, "team-b").unwrap().unwrap();
+        let team_c = team_by_id(&conn, "team-c").unwrap().unwrap();
+        let names = |team: &Team| {
+            list_environments(&conn, team)
+                .unwrap()
+                .into_iter()
+                .map(|item| item.name)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&team_a), vec!["Global", "Orga", "Beides", "Privat"]);
+        assert_eq!(names(&team_b), vec!["Global", "Orga"]);
+        assert_eq!(names(&team_c), vec!["Global"]);
+
+        let both = environment(&conn, "both").unwrap().unwrap();
+        assert_eq!(both.scope, "team");
+        assert_eq!(both.team_name, "Alpha");
+        assert_eq!(both.organization_name, "");
+        assert!(environment_visible(&both, &team_a));
+        assert!(!environment_visible(&both, &team_b));
+        assert!(!environment_visible(&both, &team_c));
+        let org = environment(&conn, "org").unwrap().unwrap();
+        assert_eq!(org.scope, "organization");
+        assert_eq!(org.organization_name, "Alpha");
+        assert!(environment_visible(&org, &team_b));
+        assert!(!environment_visible(&org, &team_c));
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn migrates_environments_without_an_organization_column() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-env-migrate-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("koreograf.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE environments (
+                    id TEXT PRIMARY KEY,
+                    team_id TEXT,
+                    name TEXT NOT NULL,
+                    image TEXT NOT NULL,
+                    pull_policy TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL
+                );
+                INSERT INTO environments (
+                    id, team_id, name, image, pull_policy, description, created_at
+                ) VALUES (
+                    'ee', 'team-a', 'Alt', 'quay.io/ansible/awx-ee:latest',
+                    'if_not_present', '', '2020-01-01T00:00:00Z'
+                );",
+            )
+            .unwrap();
+        }
+        let conn = open(&path).unwrap();
+        let item = environment(&conn, "ee").unwrap().unwrap();
+        assert_eq!(item.scope, "team");
+        assert_eq!(item.team_id.as_deref(), Some("team-a"));
+        assert!(item.organization_id.is_none());
         drop(conn);
         let _ = std::fs::remove_dir_all(&dir);
     }

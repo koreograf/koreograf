@@ -656,13 +656,10 @@ fn build_template(
         if let Some(environment_id) = &environment_id {
             let environment = db::environment(&db, environment_id)?
                 .ok_or_else(|| ApiError::bad("Execution Environment fehlt."))?;
-            if environment
-                .team_id
-                .as_ref()
-                .is_some_and(|owner| owner != team)
-            {
+            let owner = db::team_by_id(&db, team)?.ok_or(ApiError::NotFound)?;
+            if !db::environment_visible(&environment, &owner) {
                 return Err(ApiError::bad(
-                    "Execution Environment gehört zu einem anderen Team.",
+                    "Execution Environment ist für dieses Team nicht sichtbar.",
                 ));
             }
         }
