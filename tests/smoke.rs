@@ -2526,6 +2526,12 @@ async fn owner_can_store_an_ssh_password_without_a_key() {
     assert!(script.contains("Amazon Web Services"));
     assert!(script.contains("Schlüssel oder Passwort, auch beides."));
     assert!(script.contains("Gilt im Auftrag. Der Projekt-Sync nutzt diesen Zugang noch nicht."));
+    assert!(script.contains("Leer lassen, um den Wert zu behalten."));
+    assert!(script.contains("data-stored-mask=\"1\""));
+    assert!(script.contains("class=\"secret-mask\""));
+    assert!(!script.contains("*** bedeutet, dass ein Wert gespeichert ist."));
+    assert!(script.contains("Die Art lässt sich nicht ändern."));
+    assert!(script.contains("#/credentials/${esc(item.id)}"));
 
     let (status, me, cookie) = call(
         &app,
@@ -2578,6 +2584,90 @@ async fn owner_can_store_an_ssh_password_without_a_key() {
         .unwrap()
         .iter()
         .any(|item| item["id"] == id && item["kind"] == "ssh"));
+    let (status, one, _) = call(
+        &app,
+        "GET",
+        &format!("/api/credentials/{id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{one}");
+    assert_eq!(one["fields"]["username"], "deploy");
+    assert_eq!(one["set"], json!(["password"]));
+    assert!(
+        !one.to_string().contains("ssh-only-pass"),
+        "credential view echoed the secret"
+    );
+    let (status, kept, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/credentials/{id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "SSH Passwort neu",
+            "secret": {"username": "deploy", "password": ""}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{kept}");
+    assert_eq!(kept["name"], "SSH Passwort neu");
+    assert_eq!(kept["set"], json!(["password"]));
+    assert!(!kept.to_string().contains("ssh-only-pass"));
+    let (status, replaced, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/credentials/{id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "SSH Passwort neu",
+            "secret": {
+                "username": "deploy",
+                "password": "ssh-new-pass",
+                "private_key": "KEYMATERIAL"
+            }
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{replaced}");
+    assert_eq!(replaced["set"], json!(["password", "private_key"]));
+    let replaced_text = replaced.to_string();
+    assert!(!replaced_text.contains("ssh-new-pass"));
+    assert!(!replaced_text.contains("ssh-only-pass"));
+    assert!(!replaced_text.contains("KEYMATERIAL"));
+    let (status, cleared, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/credentials/{id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "SSH Passwort neu",
+            "secret": {"username": "deploy"},
+            "clear": ["password", "private_key"]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{cleared}");
+    assert_eq!(
+        cleared["error"],
+        "SSH braucht einen Schlüssel oder ein Passwort."
+    );
+    let (status, still, _) = call(
+        &app,
+        "GET",
+        &format!("/api/credentials/{id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{still}");
+    assert_eq!(still["set"], json!(["password", "private_key"]));
+    assert!(!still.to_string().contains("KEYMATERIAL"));
     let (status, rejected, _) = call(
         &app,
         "POST",

@@ -96,7 +96,9 @@ pub fn router(state: Shared) -> Router {
         )
         .route(
             "/credentials/{id}",
-            axum::routing::delete(catalog::delete_credential),
+            get(catalog::get_credential)
+                .put(catalog::update_credential)
+                .delete(catalog::delete_credential),
         )
         .route(
             "/environments",

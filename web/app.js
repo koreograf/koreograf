@@ -99,6 +99,9 @@ const EN = {
   "OpenStack": "OpenStack",
   "OpenStack braucht auth_url.": "OpenStack needs auth_url.",
   "OpenStack braucht project.": "OpenStack needs project.",
+  "Hinterlegt": "Stored",
+  "Die Art lässt sich nicht ändern.": "The type cannot be changed.",
+  "Leer lassen, um den Wert zu behalten.": "Leave empty to keep the stored value.",
   "Passphrase": "Passphrase",
   "Passphrase braucht einen privaten Schlüssel.": "A passphrase needs a private key.",
   "Passwort fehlt.": "Password is missing.",
@@ -3428,10 +3431,11 @@ function bindVaultPicker(form, credentials, selectedIds) {
   });
 }
 
-function credText(name, label, type) {
+function credText(name, label, type, value) {
   const inputType = type || "text";
   const complete = inputType === "password" ? "new-password" : "off";
-  return `<label class="field"><span>${h(label)}</span><input name="${name}" type="${inputType}" autocomplete="${complete}"></label>`;
+  const held = value ? ` value="${esc(value)}"` : "";
+  return `<label class="field"><span>${h(label)}</span><input name="${name}" type="${inputType}" autocomplete="${complete}"${held}></label>`;
 }
 
 function credArea(name, label) {
@@ -3446,109 +3450,178 @@ function credHint(text) {
   return text ? `<p class="small muted">${h(text)}</p>` : "";
 }
 
-function becomeSelect() {
+function becomeSelect(selected) {
+  const current = selected || "";
   const methods = ["sudo", "su", "pbrun", "pfexec", "doas", "dzdo", "ksu", "runas"];
   const options = [`<option value="">${h("Keine")}</option>`].concat(
-    methods.map((method) => `<option value="${method}">${esc(method)}</option>`)
+    methods.map((method) => `<option value="${method}"${method === current ? " selected" : ""}>${esc(method)}</option>`)
   );
   return `<label class="field"><span>${h("Become-Methode")}</span><select class="fit" name="become_method">${options.join("")}</select></label>`;
 }
 
-function credentialFields(kind) {
+const FIELD_LABELS = {
+  username: "Benutzer",
+  password: "Passwort",
+  private_key: "Privater Schlüssel",
+  passphrase: "Passphrase",
+  become_method: "Become-Methode",
+  become_username: "Become-Benutzer",
+  become_password: "Become-Passwort",
+  vault_id: "Vault-Id",
+  authorize: "Authorize",
+  authorize_password: "Authorize-Passwort",
+  access_key: "Access Key",
+  secret_key: "Secret Key",
+  security_token: "Session-Token",
+  subscription_id: "Subscription",
+  client_id: "Client",
+  secret: "Geheimnis",
+  tenant: "Tenant",
+  service_account: "Dienstkonto",
+  host: "Host",
+  auth_url: "API-Adresse",
+  project: "Projekt",
+  domain: "Domain",
+  url: "API-Adresse",
+  token: "Token",
+  verify_ssl: "Zertifikat prüfen",
+};
+
+function fieldLabel(key) {
+  return FIELD_LABELS[key] || key;
+}
+
+function secretControl(name, label, widget, stored) {
+  const clear = stored
+    ? `<label class="field check"><input type="checkbox" data-clear="${esc(name)}"><span>${h("Entfernen")}</span></label>`
+    : "";
+  return `<label class="field"><span>${h(label)}</span>${widget}</label>${clear}`;
+}
+
+function secretInput(name, label, type, stored) {
+  const inputType = type || "text";
+  const complete = inputType === "password" ? "new-password" : "off";
+  const filled = stored ? ` value="********" data-stored-mask="1"` : "";
+  return secretControl(name, label, `<input name="${name}" type="${inputType}" autocomplete="${complete}"${filled}>`, stored);
+}
+
+function secretArea(name, label, stored) {
+  const filled = stored ? ` data-stored-mask="1"` : "";
+  const body = stored ? "********" : "";
+  return secretControl(
+    name,
+    label,
+    `<textarea name="${name}" class="secret-mask" autocomplete="off" spellcheck="false"${filled}>${body}</textarea>`,
+    stored
+  );
+}
+
+function credentialFields(kind, current) {
   const row = CREDENTIAL_KINDS.find((item) => item[0] === kind);
   const hint = row ? row[2] : "";
+  const fields = (current && current.fields) || {};
+  const stored = new Set((current && current.set) || []);
+  const text = (name, label, type) => credText(name, label, type, fields[name] == null ? "" : String(fields[name]));
+  const has = (name) => stored.has(name);
   if (kind === "ssh") {
     return [
       credHint(hint),
-      credText("username", "Benutzer"),
-      credText("password", "Passwort", "password"),
-      credArea("private_key", "Privater Schlüssel"),
-      credText("passphrase", "Passphrase", "password"),
-      becomeSelect(),
-      credText("become_username", "Become-Benutzer"),
-      credText("become_password", "Become-Passwort", "password"),
+      text("username", "Benutzer"),
+      secretInput("password", "Passwort", "password", has("password")),
+      secretArea("private_key", "Privater Schlüssel", has("private_key")),
+      secretInput("passphrase", "Passphrase", "password", has("passphrase")),
+      becomeSelect(fields.become_method),
+      text("become_username", "Become-Benutzer"),
+      secretInput("become_password", "Become-Passwort", "password", has("become_password")),
     ].join("");
   }
   if (kind === "scm") {
     return [
       credHint(hint),
-      credText("username", "Benutzer"),
-      credText("password", "Passwort", "password"),
-      credArea("private_key", "Privater Schlüssel"),
-      credText("passphrase", "Passphrase", "password"),
+      text("username", "Benutzer"),
+      secretInput("password", "Passwort", "password", has("password")),
+      secretArea("private_key", "Privater Schlüssel", has("private_key")),
+      secretInput("passphrase", "Passphrase", "password", has("passphrase")),
     ].join("");
   }
   if (kind === "vault") {
-    return [credText("password", "Vault-Passwort", "password"), credText("vault_id", "Vault-Id")].join("");
+    return [
+      secretInput("password", "Vault-Passwort", "password", has("password")),
+      text("vault_id", "Vault-Id"),
+    ].join("");
   }
   if (kind === "net") {
     return [
-      credText("username", "Benutzer"),
-      credText("password", "Passwort", "password"),
-      credArea("private_key", "Privater Schlüssel"),
-      credCheck("authorize", "Authorize", false),
-      credText("authorize_password", "Authorize-Passwort", "password"),
+      text("username", "Benutzer"),
+      secretInput("password", "Passwort", "password", has("password")),
+      secretArea("private_key", "Privater Schlüssel", has("private_key")),
+      credCheck("authorize", "Authorize", Boolean(fields.authorize)),
+      secretInput("authorize_password", "Authorize-Passwort", "password", has("authorize_password")),
     ].join("");
   }
   if (kind === "aws") {
     return [
-      credText("access_key", "Access Key"),
-      credText("secret_key", "Secret Key", "password"),
-      credText("security_token", "Session-Token", "password"),
+      text("access_key", "Access Key"),
+      secretInput("secret_key", "Secret Key", "password", has("secret_key")),
+      secretInput("security_token", "Session-Token", "password", has("security_token")),
     ].join("");
   }
   if (kind === "azure") {
     return [
-      credText("subscription_id", "Subscription"),
-      credText("client_id", "Client"),
-      credText("secret", "Geheimnis", "password"),
-      credText("tenant", "Tenant"),
+      text("subscription_id", "Subscription"),
+      text("client_id", "Client"),
+      secretInput("secret", "Geheimnis", "password", has("secret")),
+      text("tenant", "Tenant"),
     ].join("");
   }
-  if (kind === "gce") return credArea("service_account", "Dienstkonto");
+  if (kind === "gce") return secretArea("service_account", "Dienstkonto", has("service_account"));
   if (kind === "vmware") {
     return [
-      credText("host", "Host"),
-      credText("username", "Benutzer"),
-      credText("password", "Passwort", "password"),
+      text("host", "Host"),
+      text("username", "Benutzer"),
+      secretInput("password", "Passwort", "password", has("password")),
     ].join("");
   }
   if (kind === "openstack") {
     return [
       credHint(hint),
-      credText("auth_url", "API-Adresse"),
-      credText("username", "Benutzer"),
-      credText("password", "Passwort", "password"),
-      credText("project", "Projekt"),
-      credText("domain", "Domain"),
+      text("auth_url", "API-Adresse"),
+      text("username", "Benutzer"),
+      secretInput("password", "Passwort", "password", has("password")),
+      text("project", "Projekt"),
+      text("domain", "Domain"),
     ].join("");
   }
   if (kind === "registry") {
     return [
       credHint(hint),
-      credText("host", "Host"),
-      credText("username", "Benutzer"),
-      credText("password", "Passwort", "password"),
+      text("host", "Host"),
+      text("username", "Benutzer"),
+      secretInput("password", "Passwort", "password", has("password")),
     ].join("");
   }
-  if (kind === "github" || kind === "gitlab") return credText("token", "Token", "password");
+  if (kind === "github" || kind === "gitlab") return secretInput("token", "Token", "password", has("token"));
   if (kind === "galaxy") {
-    return [credHint(hint), credText("url", "API-Adresse"), credText("token", "Token", "password")].join("");
+    return [credHint(hint), text("url", "API-Adresse"), secretInput("token", "Token", "password", has("token"))].join("");
   }
   if (kind === "kubernetes") {
     return [
-      credText("host", "API-Adresse"),
-      credText("token", "Token", "password"),
-      credCheck("verify_ssl", "Zertifikat prüfen", true),
+      text("host", "API-Adresse"),
+      secretInput("token", "Token", "password", has("token")),
+      credCheck("verify_ssl", "Zertifikat prüfen", current ? fields.verify_ssl !== false : true),
     ].join("");
   }
   if (kind === "insights") {
-    return [credText("username", "Benutzer"), credText("password", "Passwort", "password")].join("");
+    return [text("username", "Benutzer"), secretInput("password", "Passwort", "password", has("password"))].join("");
   }
   if (kind === "netbox") {
-    return [credText("url", "API-Adresse"), credText("token", "Token", "password")].join("");
+    return [text("url", "API-Adresse"), secretInput("token", "Token", "password", has("token"))].join("");
   }
-  return credArea("env", "KEY=Wert, eine Zeile je Variable");
+  const listed = [...stored].map((name) =>
+    `<label class="field check"><input type="checkbox" data-clear="${esc(name)}"><span>${esc(name)} ${h("Entfernen")}</span></label>`
+  ).join("");
+  const keep = stored.size ? credHint("Leer lassen, um den Wert zu behalten.") : "";
+  return `${keep}${listed}${credArea("env", "KEY=Wert, eine Zeile je Variable")}`;
 }
 
 function inputText(form, name) {
@@ -3619,7 +3692,7 @@ async function pageCredentials() {
   const drawCredentials = () => {
     const needle = document.querySelector("#credential-search").value.trim().toLowerCase();
     const rows = credentials.filter((item) => !needle || `${item.name} ${item.kind} ${credentialKindLabel(item.kind)}`.toLowerCase().includes(needle)).map((item) =>
-      `<tr><td>${esc(item.name)}</td><td>${esc(credentialKindLabel(item.kind))}</td><td>${can("owner") ? `<button class="btn danger" type="button" data-credential="${esc(item.id)}">${h("Löschen")}</button>` : ""}</td></tr>`
+      `<tr><td><a href="#/credentials/${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(credentialKindLabel(item.kind))}</td><td>${can("owner") ? `<button class="btn danger" type="button" data-credential="${esc(item.id)}">${h("Löschen")}</button>` : ""}</td></tr>`
     );
     document.querySelector("#credential-table").innerHTML = table([t("Name"), t("Art"), ""], rows);
     document.querySelectorAll("[data-credential]").forEach((button) => {
@@ -3633,6 +3706,125 @@ async function pageCredentials() {
   };
   document.querySelector("#credential-search").addEventListener("input", drawCredentials);
   drawCredentials();
+}
+
+const SECRET_FIELD_NAMES = {
+  ssh: ["password", "private_key", "passphrase", "become_password"],
+  scm: ["password", "private_key", "passphrase"],
+  vault: ["password"],
+  net: ["password", "private_key", "authorize_password"],
+  aws: ["secret_key", "security_token"],
+  azure: ["secret"],
+  gce: ["service_account"],
+  vmware: ["password"],
+  openstack: ["password"],
+  registry: ["password"],
+  github: ["token"],
+  gitlab: ["token"],
+  galaxy: ["token"],
+  kubernetes: ["token"],
+  insights: ["password"],
+  netbox: ["token"],
+};
+
+function credentialUpdateBody(form, kind) {
+  const clear = [...form.querySelectorAll("[data-clear]:checked")].map((node) => node.getAttribute("data-clear"));
+  if (kind === "env") {
+    const secret = {};
+    form.env.value.split("\n").forEach((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      const eq = trimmed.indexOf("=");
+      if (eq < 1) throw new Error("Env-Zeile braucht KEY=Wert.");
+      secret[trimmed.slice(0, eq)] = trimmed.slice(eq + 1);
+    });
+    return { secret, clear };
+  }
+  const secret = {};
+  const hidden = new Set(SECRET_FIELD_NAMES[kind] || []);
+  const names = {
+    ssh: ["username", "password", "private_key", "passphrase", "become_method", "become_username", "become_password"],
+    vault: ["password", "vault_id"],
+    scm: ["username", "password", "private_key", "passphrase"],
+    net: ["username", "password", "private_key", "authorize_password"],
+    aws: ["access_key", "secret_key", "security_token"],
+    azure: ["subscription_id", "client_id", "secret", "tenant"],
+    gce: ["service_account"],
+    vmware: ["host", "username", "password"],
+    openstack: ["auth_url", "username", "password", "project", "domain"],
+    registry: ["host", "username", "password"],
+    github: ["token"],
+    gitlab: ["token"],
+    galaxy: ["url", "token"],
+    kubernetes: ["host", "token"],
+    insights: ["username", "password"],
+    netbox: ["url", "token"],
+  };
+  (names[kind] || []).forEach((name) => {
+    const field = form.elements[name];
+    if (!field || !("value" in field)) return;
+    const value = field.value.trim();
+    if (hidden.has(name)) {
+      if (field.dataset.storedMask !== "1" && value) secret[name] = value;
+      return;
+    }
+    secret[name] = value;
+  });
+  if (kind === "net" && form.authorize) secret.authorize = Boolean(form.authorize.checked);
+  if (kind === "kubernetes" && form.verify_ssl) secret.verify_ssl = Boolean(form.verify_ssl.checked);
+  return { secret, clear };
+}
+
+function credentialEditForm(item) {
+  return `<form class="card form" id="credential-form" data-kind="${esc(item.kind)}">
+    <label class="field"><span>${h("Name")}</span><input name="name" required value="${esc(item.name)}"></label>
+    <label class="field"><span>${h("Art")}</span><input value="${esc(credentialKindLabel(item.kind))}" disabled></label>
+    <p class="small muted">${h("Die Art lässt sich nicht ändern.")}</p>
+    ${credentialFields(item.kind, item)}
+    <button class="btn pill primary" type="submit">${h("Speichern")}</button>
+  </form>`;
+}
+
+async function pageCredential(id) {
+  if (!needTeam()) return;
+  const item = await api("GET", `/api/credentials/${encodeURIComponent(id)}`);
+  if (!can("owner")) {
+    const visible = Object.entries(item.fields || {}).map(([key, value]) => {
+      const shown = typeof value === "boolean" ? t(value ? "Ja" : "Nein") : String(value);
+      return paramRow(fieldLabel(key), shown);
+    }).join("");
+    const stored = (item.set || []).map((key) => paramRowHtml(fieldLabel(key), `<input type="password" value="********" disabled tabindex="-1">`)).join("");
+    shell(item.name, `<section class="card"><dl class="kv">${paramRow("Name", item.name)}${paramRow("Art", credentialKindLabel(item.kind))}${visible}${stored}</dl></section>`);
+    return;
+  }
+  shell(item.name, credentialEditForm(item), `<button class="btn danger" id="delete-credential" type="button">${h("Löschen")}</button>`);
+  const form = document.querySelector("#credential-form");
+  form.querySelectorAll("[data-stored-mask]").forEach((field) => {
+    field.addEventListener("focus", () => {
+      if (field.dataset.storedMask === "1") field.select();
+    });
+    field.addEventListener("input", () => {
+      delete field.dataset.storedMask;
+    });
+  });
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try {
+      const body = credentialUpdateBody(form, item.kind);
+      await api("PUT", `/api/credentials/${encodeURIComponent(id)}`, {
+        name: form.name.value,
+        secret: body.secret,
+        clear: body.clear,
+      });
+      go("#/credentials");
+    } catch (error) { handle(error); }
+  });
+  document.querySelector("#delete-credential").addEventListener("click", async () => {
+    try {
+      await api("DELETE", `/api/credentials/${encodeURIComponent(id)}`);
+      go("#/credentials");
+    } catch (error) { handle(error); }
+  });
 }
 
 async function pageCredentialNew() {
@@ -4243,6 +4435,7 @@ async function route() {
     else if (parts[0] === "inventories" && parts[1]) await pageInventory(parts[1]);
     else if (parts[0] === "inventories") await pageInventories();
     else if (parts[0] === "credentials" && parts[1] === "new") await pageCredentialNew();
+    else if (parts[0] === "credentials" && parts[1]) await pageCredential(parts[1]);
     else if (parts[0] === "credentials") await pageCredentials();
     else if (parts[0] === "organizations" && parts[1] === "new") await pageOrganizationNew();
     else if (parts[0] === "organizations" && parts[1]) await pageOrganization(parts[1]);

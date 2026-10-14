@@ -1498,6 +1498,17 @@ fn map_credential(row: &rusqlite::Row<'_>) -> rusqlite::Result<Credential> {
     })
 }
 
+pub fn update_credential(c: &Connection, item: &Credential) -> AppResult<()> {
+    let n = c.execute(
+        "UPDATE credentials SET name = ?3, secret_blob = ?4 WHERE id = ?1 AND team_id = ?2",
+        params![item.id, item.team_id, item.name, item.secret_blob],
+    )?;
+    if n == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(())
+}
+
 pub fn delete_credential(c: &Connection, id: &str, team_id: &str) -> AppResult<()> {
     let n = c.execute(
         "DELETE FROM credentials WHERE id = ?1 AND team_id = ?2",

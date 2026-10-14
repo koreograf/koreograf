@@ -74,6 +74,15 @@ pub struct CredentialBody {
 }
 
 #[derive(Deserialize)]
+pub struct CredentialUpdate {
+    name: String,
+    #[serde(default)]
+    secret: Value,
+    #[serde(default)]
+    clear: Vec<String>,
+}
+
+#[derive(Deserialize)]
 pub struct EnvironmentBody {
     name: String,
     image: String,
@@ -658,6 +667,71 @@ pub async fn delete_credential(
     let db = state.db()?;
     db::delete_credential(&db, &id, &team)?;
     Ok(no_content())
+}
+
+fn open_credential(state: &Shared, id: &str, team: &str) -> AppResult<(Credential, Value)> {
+    let item = {
+        let db = state.db()?;
+        db::credential(&db, id)?
+            .filter(|item| item.team_id == team)
+            .ok_or(ApiError::NotFound)?
+    };
+    let plain = state
+        .decrypt(&item.secret_blob)
+        .map_err(|_| ApiError::bad("Zugangsdaten lassen sich nicht lesen."))?;
+    let secret =
+        serde_json::from_str(&plain).map_err(|_| ApiError::bad("Zugangsdaten sind kein JSON."))?;
+    Ok((item, secret))
+}
+
+fn credential_json(item: &Credential, secret: &Value) -> Value {
+    let (fields, set) = crate::credentials::describe(&item.kind, secret);
+    json!({
+        "id": item.id,
+        "name": item.name,
+        "kind": item.kind,
+        "created_at": item.created_at,
+        "fields": fields,
+        "set": set,
+    })
+}
+
+pub async fn get_credential(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Json<Value>> {
+    let team = team_header(&headers)?;
+    gate(&state, &user, &team, Role::Viewer)?;
+    let (item, secret) = open_credential(&state, &id, &team)?;
+    Ok(Json(credential_json(&item, &secret)))
+}
+
+pub async fn update_credential(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Path(id): Path<String>,
+    Json(body): Json<CredentialUpdate>,
+) -> AppResult<Json<Value>> {
+    let team = team_header(&headers)?;
+    gate(&state, &user, &team, Role::Owner)?;
+    let (mut item, previous) = open_credential(&state, &id, &team)?;
+    let secret = crate::credentials::merge_secret(&item.kind, &previous, &body.secret, &body.clear)
+        .map_err(ApiError::bad)?;
+    if let Err(message) = crate::credentials::check(&item.kind, &secret) {
+        return Err(ApiError::bad(message));
+    }
+    let raw = secret.to_string();
+    if raw.len() > 256 * 1024 {
+        return Err(ApiError::bad("Geheimnis ist zu groß."));
+    }
+    item.name = require_name(&body.name)?;
+    item.secret_blob = state.encrypt(&raw)?;
+    let db = state.db()?;
+    db::update_credential(&db, &item)?;
+    Ok(Json(credential_json(&item, &secret)))
 }
 
 pub async fn list_environments(

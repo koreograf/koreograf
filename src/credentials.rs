@@ -81,6 +81,115 @@ pub fn check_assignment(items: &[AssignedCredential<'_>]) -> Result<(), String> 
     Ok(())
 }
 
+/// Values the edit form must not display again. Every `env` key is secret.
+pub fn is_secret_field(kind: &str, key: &str) -> bool {
+    match kind {
+        "ssh" => matches!(
+            key,
+            "password" | "private_key" | "passphrase" | "become_password"
+        ),
+        "scm" => matches!(key, "password" | "private_key" | "passphrase"),
+        "vault" => key == "password",
+        "net" => matches!(key, "password" | "private_key" | "authorize_password"),
+        "aws" => matches!(key, "secret_key" | "security_token"),
+        "azure" => key == "secret",
+        "gce" => key == "service_account",
+        "vmware" | "openstack" | "registry" | "insights" => key == "password",
+        "github" | "gitlab" | "galaxy" | "kubernetes" | "netbox" => key == "token",
+        "env" => true,
+        _ => true,
+    }
+}
+
+/// Public fields and the names of stored secrets. Secret values stay out.
+pub fn describe(kind: &str, secret: &Value) -> (Value, Vec<String>) {
+    let mut fields = Map::new();
+    let mut set = Vec::new();
+    let Some(object) = secret.as_object() else {
+        return (Value::Object(fields), set);
+    };
+    let mut keys: Vec<&String> = object.keys().collect();
+    keys.sort();
+    for key in keys {
+        let value = &object[key];
+        if is_secret_field(kind, key) {
+            let present = match value {
+                Value::String(text) => !text.trim().is_empty(),
+                Value::Bool(flag) => *flag,
+                Value::Null => false,
+                _ => true,
+            };
+            if present {
+                set.push(key.clone());
+            }
+            continue;
+        }
+        if let Some(text) = value.as_str() {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                fields.insert(key.clone(), Value::String(trimmed.to_string()));
+            }
+        } else if let Some(flag) = value.as_bool() {
+            fields.insert(key.clone(), Value::Bool(flag));
+        }
+    }
+    (Value::Object(fields), set)
+}
+
+/// Overlay an edit onto the stored secret.
+///
+/// An empty secret field keeps the stored value, because the form cannot show it.
+/// `clear` removes secret fields. A non-empty secret value wins over `clear`.
+/// Public fields, including an empty string, replace what was stored.
+pub fn merge_secret(
+    kind: &str,
+    previous: &Value,
+    incoming: &Value,
+    clear: &[String],
+) -> Result<Value, String> {
+    if !incoming.is_null() && !incoming.is_object() {
+        return Err("Geheimnis muss ein JSON-Objekt sein.".into());
+    }
+    let mut base = previous.as_object().cloned().unwrap_or_default();
+    for key in clear {
+        if is_secret_field(kind, key) {
+            base.remove(key);
+        }
+    }
+    let Some(object) = incoming.as_object() else {
+        return Ok(Value::Object(base));
+    };
+    for (key, value) in object {
+        if is_secret_field(kind, key) {
+            if let Some(text) = value.as_str() {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    base.insert(key.clone(), Value::String(trimmed.to_string()));
+                }
+            }
+            continue;
+        }
+        match value {
+            Value::String(text) => {
+                let trimmed = text.trim();
+                if trimmed.is_empty() {
+                    base.remove(key);
+                } else {
+                    base.insert(key.clone(), Value::String(trimmed.to_string()));
+                }
+            }
+            Value::Bool(flag) => {
+                base.insert(key.clone(), Value::Bool(*flag));
+            }
+            Value::Null => {
+                base.remove(key);
+            }
+            _ => {}
+        }
+    }
+    Ok(Value::Object(base))
+}
+
 pub fn check(kind: &str, secret: &Value) -> Result<(), String> {
     if !known_kind(kind) {
         return Err("Unbekannte Zugangsart.".into());
@@ -692,6 +801,53 @@ mod tests {
             .any(|(name, body)| name == "auth.json" && body.contains("ansible_password")));
         assert!(check("ssh", &json!({})).is_err());
         assert!(check("ssh", &json!({"password": "only"})).is_ok());
+    }
+
+    #[test]
+    fn edit_keeps_a_blank_secret_and_hides_the_value() {
+        let previous = json!({
+            "username": "deploy",
+            "password": "old-pass",
+            "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----",
+            "become_method": "sudo"
+        });
+        let merged = merge_secret(
+            "ssh",
+            &previous,
+            &json!({"username": "nas", "password": "  ", "become_method": ""}),
+            &["private_key".to_string(), "username".to_string()],
+        )
+        .unwrap();
+        assert_eq!(merged["username"], "nas");
+        assert_eq!(merged["password"], "old-pass");
+        assert!(merged.get("private_key").is_none());
+        assert!(merged.get("become_method").is_none());
+        let replaced = merge_secret(
+            "ssh",
+            &previous,
+            &json!({"password": "new-pass"}),
+            &["password".to_string()],
+        )
+        .unwrap();
+        assert_eq!(replaced["password"], "new-pass");
+        assert_eq!(replaced["private_key"], previous["private_key"]);
+        let (fields, set) = describe("ssh", &replaced);
+        assert_eq!(fields["username"], "deploy");
+        assert!(fields.get("password").is_none());
+        assert_eq!(set, vec!["password".to_string(), "private_key".to_string()]);
+        let rendered = format!("{fields} {}", set.join(","));
+        assert!(!rendered.contains("new-pass"));
+        assert!(!rendered.contains("OPENSSH"));
+        let env = merge_secret(
+            "env",
+            &json!({"A": "1", "B": "2"}),
+            &json!({"A": "3"}),
+            &["B".to_string()],
+        )
+        .unwrap();
+        assert_eq!(env["A"], "3");
+        assert!(env.get("B").is_none());
+        assert!(merge_secret("ssh", &previous, &json!([]), &[]).is_err());
         assert!(check(
             "aws",
             &json!({"access_key": "AKIA", "secret_key": "secret"})

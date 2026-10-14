@@ -317,6 +317,7 @@ select.fit { width: max-content; min-width: 8rem; max-width: 100%; field-sizing:
 .chips input.chip-entry:focus-visible { outline: none; }
 .field span.chip-error { color: var(--bad); font-size: 12px; }
 .chip-error:empty { display: none; }
+textarea.secret-mask { -webkit-text-security: disc; }
 .field.check { justify-items: start; }
 .field.check input { width: 1.15rem; height: 1.15rem; }
 .vault-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
