@@ -11,6 +11,14 @@ Koreograf is a Rust prototype: one binary with an HTTP API, a browser UI, and a 
 - API errors are German sentences in `{ "error": "..." }`. A static sentence that the UI shows should also be an `EN` key. Errors built with `format!` stay German.
 - Comments in `.env.example` and the Helm chart are still German. Leave them unless asked to translate them.
 
+## Git
+
+- This repository has no remote. Do not push unless asked.
+- Before the first change of a task, leave `main` with `git switch -c feat/<topic>` (`fix/`, `chore/`, and `docs/` are the other prefixes). Names are lowercase with hyphens.
+- Commit only on that branch. Do not commit directly to `main`.
+- Merge into `main` only when asked, and only as a fast-forward.
+- Commit messages stay English Conventional Commits, as under Language. Do not use `git add -A`. Do not commit `data/`, secrets, or build output.
+
 ## Build and test
 
 - `rust-toolchain.toml` pins Rust 1.96.0 with rustfmt and Clippy. `Cargo.toml` `rust-version` is 1.89. CI checks 1.89 with `cargo check --locked` and runs the full suite on 1.96.
