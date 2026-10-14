@@ -7,6 +7,46 @@ log() {
   printf '%s\n' "KOREOGRAF $1"
 }
 
+# OpenSSH aborts locally with "No user exists for uid …" when getpwuid()
+# fails, before it dials the remote host. ansible-builder images run as a
+# numeric uid and append that uid from their entrypoint. Koreograf replaces
+# the entrypoint, so the same line is written here. A local run keeps
+# KOREOGRAF_WORK on the host and must not touch /etc/passwd.
+uid_in_passwd() {
+  probe=$1
+  if command -v getent >/dev/null 2>&1; then
+    getent passwd "$probe" >/dev/null 2>&1
+    return $?
+  fi
+  awk -F: -v uid="$probe" '$3 == uid { found = 1 } END { exit found ? 0 : 1 }' /etc/passwd
+}
+
+ensure_container_user() {
+  uid=$(id -u)
+  if uid_in_passwd "$uid"; then
+    return 0
+  fi
+  if [ ! -w /etc/passwd ]; then
+    log "UID ${uid} fehlt in /etc/passwd und die Datei ist nicht schreibbar. SSH bricht dann mit „No user exists for uid“ ab."
+    return 0
+  fi
+  gid=$(id -g)
+  home="${HOME:-/runner/work}"
+  if [ -s /etc/passwd ]; then
+    nl=$(printf '\n')
+    last=$(tail -c 1 /etc/passwd 2>/dev/null || true)
+    if [ "$last" != "$nl" ]; then
+      printf '\n' >> /etc/passwd
+    fi
+  fi
+  printf '%s\n' "${uid}:x:${uid}:${gid}:container user:${home}:/bin/sh" >> /etc/passwd
+  log "UID ${uid} fehlte in /etc/passwd und wurde ergänzt."
+}
+
+if [ "${KOREOGRAF_WORK}" = "/runner/work" ]; then
+  ensure_container_user
+fi
+
 mkdir -p "$KOREOGRAF_COLLECTIONS" "$KOREOGRAF_ROLES" "$KOREOGRAF_TOFU" "$KOREOGRAF_WORK/tmp"
 
 if [ -n "${KOREOGRAF_GIT_PASSWORD_FILE:-}" ]; then

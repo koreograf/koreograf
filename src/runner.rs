@@ -1612,6 +1612,15 @@ mod tests {
     }
 
     #[test]
+    fn container_wrapper_registers_a_missing_uid() {
+        let wrapper = include_str!("wrapper.sh");
+        assert!(wrapper.contains("No user exists for uid"));
+        assert!(wrapper.contains(">> /etc/passwd"));
+        assert!(wrapper.contains("[ \"${KOREOGRAF_WORK}\" = \"/runner/work\" ]"));
+        assert!(wrapper.contains("container user:"));
+    }
+
+    #[test]
     fn docker_command_mounts_the_cache() {
         let spec = ContainerSpec {
             image: "quay.io/ansible/awx-ee:latest".into(),
