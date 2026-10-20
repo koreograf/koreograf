@@ -2,13 +2,14 @@
 # The process stays root: a mounted docker.sock is root-equivalent on the host,
 # and the Debian docker client needs to open that socket.
 
-FROM rust:1.96-bookworm AS build
+FROM rust:1.96.0-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 RUN cargo build --release
 
 FROM debian:bookworm-slim
+# Renovate updates TOFU_VERSION from opentofu/opentofu releases.
 ARG TOFU_VERSION=1.12.1
 # hadolint ignore=DL3008 # Bookworm package names stay unpinned so security updates still apply.
 RUN apt-get update \
