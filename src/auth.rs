@@ -123,7 +123,7 @@ pub fn sync_ldap_teams(
         let Some(group) = team.ldap_group.as_deref() else {
             continue;
         };
-        if ldap::matches_group(&keys, group) {
+        if ldap::group_matches(&keys, group) {
             db::upsert_membership(c, &team.id, user_id, Role::Operator.as_str(), "ldap")?;
         } else {
             db::delete_ldap_membership(c, &team.id, user_id)?;

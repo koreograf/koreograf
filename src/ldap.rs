@@ -93,46 +93,56 @@ fn unescape_dn(value: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Lowercased DN with escapes decoded, so `\2C` and `\,` compare equal.
-fn canonical_dn(dn: &str) -> String {
-    let mut parts = Vec::new();
-    for part in split_dn(dn) {
-        let Some((key, value)) = part.split_once('=') else {
-            continue;
-        };
-        let key = key.trim().to_ascii_lowercase();
-        if key.is_empty() {
-            continue;
-        }
-        let value = unescape_dn(value.trim()).to_ascii_lowercase();
-        parts.push(format!("{key}={value}"));
-    }
-    parts.join(",")
+/// Directory DNs and the CN of each DN, kept apart so a CN cannot match a DN.
+#[derive(Debug, Default)]
+pub struct GroupKeys {
+    dns: HashSet<String>,
+    cns: HashSet<String>,
 }
 
-/// Group names that should open a team: CN of each DN, the raw value, and
-/// the DN with escapes decoded.
-pub fn group_keys(groups: &[String]) -> HashSet<String> {
-    let mut keys = HashSet::new();
+/// Accepts memberOf values and entry DNs. Other strings are ignored.
+pub fn group_keys(groups: &[String]) -> GroupKeys {
+    let mut keys = GroupKeys::default();
     for group in groups {
-        keys.insert(group.to_ascii_lowercase());
-        if let Some(cn) = cn_from_dn(group) {
-            keys.insert(cn.to_ascii_lowercase());
+        if !group.contains('=') {
+            continue;
         }
-        let canonical = canonical_dn(group);
-        if !canonical.is_empty() {
-            keys.insert(canonical);
+        let normalized = normalize_dn(group);
+        if normalized.is_empty() {
+            continue;
+        }
+        keys.dns.insert(normalized);
+        if let Some(cn) = cn_from_dn(group) {
+            keys.cns.insert(cn.to_ascii_lowercase());
         }
     }
     keys
 }
 
-pub fn matches_group(keys: &HashSet<String>, team_group: &str) -> bool {
-    if keys.contains(&team_group.to_ascii_lowercase()) {
-        return true;
+/// A configured value that contains `=` is a DN. Anything else is a CN.
+pub fn group_matches(keys: &GroupKeys, ldap_group: &str) -> bool {
+    let configured = ldap_group.trim();
+    if configured.contains('=') {
+        keys.dns.contains(&normalize_dn(configured))
+    } else {
+        keys.cns.contains(&configured.to_ascii_lowercase())
     }
-    let canonical = canonical_dn(team_group);
-    !canonical.is_empty() && keys.contains(&canonical)
+}
+
+fn normalize_dn(dn: &str) -> String {
+    let mut parts = Vec::new();
+    for part in split_dn(dn) {
+        let Some((key, value)) = part.split_once('=') else {
+            continue;
+        };
+        let key = unescape_dn(key.trim()).to_ascii_lowercase();
+        let value = unescape_dn(value.trim()).to_ascii_lowercase();
+        if key.is_empty() {
+            continue;
+        }
+        parts.push(format!("{key}={value}"));
+    }
+    parts.join(",")
 }
 
 pub async fn authenticate(
@@ -355,18 +365,38 @@ mod tests {
         let dn = r"CN=Plattform\, Ops,OU=Gruppen,DC=example,DC=com";
         assert_eq!(cn_from_dn(dn).as_deref(), Some("Plattform, Ops"));
         let keys = group_keys(&[dn.into()]);
-        assert!(keys.contains("plattform, ops"));
+        assert!(group_matches(&keys, "Plattform, Ops"));
+        assert!(group_matches(&keys, dn));
     }
 
     #[test]
     fn a_group_is_identified_by_its_entry_dn() {
         let dn = "cn=Plattform,ou=groups,dc=example,dc=com";
         let keys = group_keys(&[dn.into()]);
-        assert!(keys.contains("plattform"));
-        assert!(keys.contains(&dn.to_ascii_lowercase()));
+        assert!(group_matches(&keys, "plattform"));
+        assert!(group_matches(&keys, dn));
         let team_dn = "CN=Plattform,OU=Groups,DC=Example,DC=Com";
-        assert!(keys.contains(&team_dn.to_ascii_lowercase()));
-        assert!(!keys.contains("operations"));
+        assert!(group_matches(&keys, team_dn));
+        assert!(!group_matches(&keys, "operations"));
+    }
+
+    #[test]
+    fn a_cn_that_decodes_to_another_dn_does_not_match_that_dn() {
+        let real = "cn=kg-admins,ou=groups,dc=example,dc=com";
+        let spoof = r"cn=cn\3Dkg-admins\2Cou\3Dgroups\2Cdc\3Dexample\2Cdc\3Dcom,ou=groups,dc=example,dc=com";
+        let forged = group_keys(&[spoof.into()]);
+        assert!(!group_matches(&forged, real));
+        assert!(!group_matches(&forged, "kg-admins"));
+        let real_keys = group_keys(&[real.into()]);
+        assert!(group_matches(&real_keys, real));
+        assert!(group_matches(&real_keys, "KG-ADMINS"));
+        assert!(!group_matches(&real_keys, spoof));
+        let hex = r"cn=kg\2Dadmins,ou=groups,dc=example,dc=com";
+        assert!(group_matches(&group_keys(&[hex.into()]), real));
+        assert!(!group_matches(
+            &group_keys(&["kg-admins".into()]),
+            "kg-admins"
+        ));
     }
 
     #[test]
@@ -405,20 +435,18 @@ mod tests {
             Some(decoded.as_str())
         );
         let keys = group_keys(&[server.into()]);
-        assert!(keys.contains("ops, nord"));
-        assert!(!keys.contains("ops2c nord"));
-        assert!(matches_group(&keys, "Ops, Nord"));
-        assert!(matches_group(
+        assert!(group_matches(&keys, "Ops, Nord"));
+        assert!(!group_matches(&keys, "Ops2C Nord"));
+        assert!(group_matches(
             &keys,
             r"cn=Ops\, Nord,ou=groups,dc=example,dc=com"
         ));
-        assert!(matches_group(
+        assert!(group_matches(
             &keys,
             r"CN=Ops\2C Nord,OU=Groups,DC=Example,DC=Com"
         ));
-        assert!(!matches_group(&keys, "Ops2C Nord"));
         let multi = group_keys(&[r"cn=mrdn+ou=x,dc=example,dc=com".into()]);
-        assert!(!multi.contains("mrdn"));
+        assert!(!group_matches(&multi, "mrdn"));
     }
 
     #[test]
