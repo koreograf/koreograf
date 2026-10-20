@@ -2,287 +2,59 @@
 
 [![ci](https://github.com/koreograf/koreograf/actions/workflows/ci.yml/badge.svg)](https://github.com/koreograf/koreograf/actions/workflows/ci.yml)
 
-Alpha [0.1.0-alpha.1](CHANGELOG.md) is at <https://github.com/koreograf/koreograf>.
+Koreograf is a prototype for team-scoped automation. One Rust binary serves the API, the browser UI, and the job runner. Ansible, OpenTofu, and shell run as jobs. Workflows are directed graphs. Webhooks from Alertmanager or Grafana start those graphs.
 
-Koreograf is a prototype for team-scoped automation. One Rust binary serves the API, the browser UI, and the job runner. Ansible, OpenTofu, and shell run as jobs. Collections, roles, and OpenTofu providers stay in a cache. Workflows are directed graphs. Webhooks from Alertmanager or Grafana start those graphs.
+## Status
+
+Alpha [0.1.0-alpha.1](CHANGELOG.md) is at <https://github.com/koreograf/koreograf>.
 
 This is an early prototype, not a replacement for AWX and not a rebuild of Semaphore. There are no surveys, no schedules, no Receptor, and no high-availability setup. The database today is one SQLite file with one writer. PostgreSQL is not connected yet.
 
-The browser UI is German by default. A language menu in the sidebar and on the sign-in page lists each language with a flag and a short code, for example GER and ENG. Visible copy lives in `web/i18n/de.json` and `web/i18n/en.json`. The API returns a message key in `error`, and logs stay English.
+## Quick start
 
-## What the cache changes
-
-AWX installs collections on every run because the execution environment is ephemeral. Koreograf keeps the Galaxy and role cache under `data/cache/<team>/` and mounts it into every run. A second run logs which roles are already cached. If `ansible-galaxy` fails, the job continues with the cache it already has.
-
-OpenTofu uses `TF_PLUGIN_CACHE_DIR` on that same cache. `TF_DATA_DIR` stays in the job directory.
-
-## Database and backup
-
-Home labs and this prototype stay on SQLite (`data/koreograf.db`, WAL, one writer). An empty `KOREOGRAF_DATABASE_URL`, or a value of `sqlite:`, means that file. A `postgres://` URL stops startup with a clear message until a company database exists. The backup from the UI is the hand-off format for that later move: one SQLite file plus the key, not a raw copy of the data directory.
-
-An administrator opens **Backup** in the sidebar. In the German UI the link is **Sicherung**.
-
-- **Download** writes `koreograf-backup.zip`. Inside are `manifest.json` (`format` 1, `engine` sqlite), a consistent database (`koreograf.db`, copied through the SQLite backup API), and `secret.key`. Without the key, credentials cannot be read after a restore.
-- **Left out** are the cache, git checkouts, and job directories. The next run fetches collections and roles again, and git projects are cloned again. A template that does not update on launch needs a project sync after a restore. Projects that use a local path need that same path on the target machine.
-- **Restore** replaces the installation. Finish running jobs first. The request sends the zip body and the header `X-Restore-Confirm: ERSETZEN`. A new sign-in is required afterwards. The previous installation stays as `restore-previous.zip` in the data directory (mode `0600`) and can be restored the same way.
-- The file is secret: it contains users, hooks, and the key for every credential. The upload limit is 256 MiB.
-
-`GET /api/admin/backup` and `POST /api/admin/backup` are limited to the local administrator.
-
-## Logs and Prometheus
-
-Koreograf does not open a syslog socket. Every event is one line on stdout. journald, Docker, and Promtail read that stream. `KOREOGRAF_LOG_FORMAT=json` writes the same fields as JSON. Without the variable the format stays text.
-
-The lines contain no credentials, no tokens, and no extra variables.
-
-| Target | When | Fields |
-| --- | --- | --- |
-| `koreograf::job` | job started and finished | `job_id`, `team_id`, `tool`, `playbook`, `template`, and at the end `status` and `duration_ms` |
-| `koreograf::cache` | when a job starts | collection and role counts, bytes for collections, roles, and OpenTofu |
-| `koreograf::role` | Ansible role finished, and immediately on `failed` or `unreachable` | `playbook`, `role`, `result`, or the counters `ok`, `changed`, `failed`, `unreachable`, `skipped` |
-
-For Ansible, `playbook` is the playbook path. For shell and OpenTofu it is the entry path. Koreograf reads roles from Ansible's default callback output (`TASK [role : task]`, `RUNNING HANDLER`, `ok:`, `changed:`, `fatal:`, `unreachable:`, `skipping:`). `KOREOGRAF Role from cache` means the role was already in the cache. A task name that contains ` : ` outside a role can look like a role.
-
-`GET /metrics` is open, like `/healthz`, and returns Prometheus text. Counters live in memory and start at zero after a restart. Prometheus treats that jump as a restart. Cache numbers are read from disk on each scrape, even when no job is running. The time of a role is the log line. `koreograf_role_results_total` counts results and has no timestamp.
-
-| Metric | Type | Labels |
-| --- | --- | --- |
-| `koreograf_jobs_started_total` | counter | `tool`, `playbook` |
-| `koreograf_jobs_finished_total` | counter | `tool`, `playbook`, `status` (`successful`, `failed`, `canceled`) |
-| `koreograf_role_results_total` | counter | `playbook`, `role`, `result` (`ok`, `changed`, `failed`, `unreachable`, `skipped`) |
-| `koreograf_cache_collections` | gauge | `team_id`, `team` |
-| `koreograf_cache_roles` | gauge | `team_id`, `team` |
-| `koreograf_cache_bytes` | gauge | `team_id`, `team`, `kind` (`collections`, `roles`, `tofu`) |
-
-## Run on a machine
-
-Requirements: Rust 1.89 or newer, plus `ansible-playbook` and `tofu` on `PATH` when those tools should run locally. The shell health check needs only `sh`.
+On a machine, with Rust 1.89 or newer:
 
 ```bash
 cargo run
 ```
 
-The UI is at `http://127.0.0.1:8080`. The language menu at the bottom of the sidebar and on the sign-in page switches the language. Create-lists share the same pill button, for example `+ Projekt`, `+ Zugang`, and `+ Umgebung` (English: `+ Project`, `+ Credential`, `+ Environment`). Without `KOREOGRAF_ADMIN_PASSWORD`, the first start writes the password to `data/initial-admin-password` (mode `0600`) and logs the path. The password is not in the log.
+The UI is at `http://127.0.0.1:8080`. Sign in as `admin`. Without `KOREOGRAF_ADMIN_PASSWORD`, the first start writes the password to `data/initial-admin-password`.
 
-Environment variables: see `.env.example`. Comments in that file are still German.
-
-| Variable | Default |
-| --- | --- |
-| `KOREOGRAF_BIND` | `0.0.0.0:8080` |
-| `KOREOGRAF_DATA` | `./data` |
-| `KOREOGRAF_WEB` | `./web` |
-| `KOREOGRAF_EXAMPLES` | `./examples` |
-| `KOREOGRAF_ADMIN_USER` | `admin` |
-| `KOREOGRAF_ADMIN_PASSWORD` | empty, then generated once |
-| `KOREOGRAF_RUNNER` | `auto` (`local` or `docker`) |
-| `KOREOGRAF_JOB_TIMEOUT_SECS` | `1800` (30–86400) |
-| `KOREOGRAF_SECRET_KEY` | 64 hex characters, otherwise `data/secret.key` |
-| `KOREOGRAF_LOG_FORMAT` | empty, text on stdout. `json` for Promtail |
-| `KOREOGRAF_DATABASE_URL` | empty, SQLite. `postgres://` is rejected |
-
-`auto` looks for `docker` and `podman`. If the runtime is missing, jobs run locally. `local` ignores execution environments and writes that into the job log. `docker` fails a run that has an image set when no runtime is reachable. Templates without an environment always run locally.
-
-## Docker Compose
+Docker Compose:
 
 ```bash
 docker compose up --build
 ```
 
-Compose builds the image on your machine. The published image `ghcr.io/koreograf/koreograf:0.1.0-alpha.1` exists after the git tag `v0.1.0-alpha.1`. The image is `linux/amd64`. It contains Ansible from Debian, the Docker client, and OpenTofu 1.12.1. The process runs as root because a mounted Docker socket is root on the host.
-
-The socket is commented out in `docker-compose.yml`. Execution environments need that line. Without the socket the runner stays local, and the demo health check still runs.
-
-Data lives in the volume `koreograf-data`. Compose reads `.env` for variable substitution.
-
-## Helm
+Helm:
 
 ```bash
 helm upgrade --install koreograf deploy/helm/koreograf
 ```
 
-The chart pulls `ghcr.io/koreograf/koreograf:0.1.0-alpha.1`. That tag is published with the git tag `v0.1.0-alpha.1`. GitHub keeps a new package private until its visibility is public. Until the package exists and is public, build the image yourself and set `image.repository` and `image.tag` to that build.
-
-`replicaCount` is 1. A second pod on the same SQLite file loses writes. The Docker socket is off by default (`runner.dockerSocket.enabled`).
-
-Probes call `/healthz`. Prometheus can scrape `GET /metrics` on the same port. The counters belong to this one replica and live only in memory. If `admin.password` is empty, the first password is in the volume at `/var/lib/koreograf/initial-admin-password`.
-
-## Checks on GitHub
-
-Every push and every pull request starts GitHub Actions. The runs check formatting and Clippy, the Rust tests, the Rust docs, the syntax of `web/app.js`, Shellcheck, Hadolint, the pre-commit hooks, and the Helm chart. `cargo check` also runs on Rust 1.89, the minimum version in `Cargo.toml`. A push to `main` builds the image with Rust 1.96, like the Dockerfile. A tag `v*` publishes `ghcr.io/koreograf/koreograf` for `linux/amd64`. Nothing is deployed.
-
-Commit messages are English and follow Conventional Commits. On pull requests, commitlint checks the messages. `data/` stays out of git: it holds the SQLite file, `secret.key`, and the first admin password.
-
-## Organizations, teams, LDAP, and Active Directory
-
-An organization owns the projects. Each team belongs to exactly one organization. A project is available to every team in that organization until teams are assigned. Once `team_ids` is set, only those teams see the project. Assigned teams must belong to the project's organization.
-
-An operator cannot move a project to an organization other than the one of the team currently selected. An administrator can. A new team without `organization_id` lands in an organization of the same name, or creates that organization. Inventories and credentials stay on the team.
-
-Roles are `viewer`, `operator`, and `owner`. The local administrator bypasses the role check so an LDAP outage cannot lock everyone out. Sign-in checks the local password first, then LDAP.
-
-Memberships from LDAP have source `ldap` and role `operator`. When the group disappears, only that membership is removed. Manual memberships stay. A manual change does not overwrite an LDAP membership. The next directory sync owns that row. Removing the member is still allowed, and the directory can add it back.
-
-A team stores an LDAP group as a CN or a DN. The comparison ignores case.
-
-| Variable | LDAP | Active Directory |
-| --- | --- | --- |
-| `KOREOGRAF_LDAP_URL` | `ldap://ldap.example.com` | `ldap://dc.example.com` |
-| `KOREOGRAF_LDAP_MODE` | `ldap` | `ad` |
-| `KOREOGRAF_LDAP_USER_FILTER` | `(uid={username})` | `(sAMAccountName={username})` |
-| `KOREOGRAF_LDAP_USERNAME_ATTR` | `uid` | `sAMAccountName` |
-| `KOREOGRAF_LDAP_GROUP_ATTR` | `memberOf` | `memberOf` |
-
-Empty filters and attributes use the default for the selected mode. `KOREOGRAF_LDAP_STARTTLS=true` turns on StartTLS. `KOREOGRAF_LDAP_TLS_INSECURE=true` skips certificate checks. The service binds with `KOREOGRAF_LDAP_BIND_DN`, searches for the user, then binds with that user's password. `{username}` in the filter is escaped.
-
-An administrator can change the directory, the HTTP proxy, the runner, and the job timeout under **Settings** (German: **Einstellungen**). `GET` and `PUT /api/settings` are administrator-only. The response never includes the bind password or the proxy password, only whether one is stored. An empty password keeps the stored value. Removing a password uses `clear` with `ldap_bind_password` or `proxy_password`. `PUT` with `{"reset": true}` drops the saved values and returns to the environment variables.
-
-The environment variables apply until the first save. After that, the saved values apply immediately: the next sign-in, the next git sync, the next NetBox fetch, and the next job. A restart is not required. One proxy address is used for both HTTP and HTTPS. It covers git over HTTP and HTTPS, NetBox, and the cleaned job environment, so Galaxy and git inside an execution environment can use it. SSH git does not. An image pull uses the proxy of the container daemon, not this setting. The proxy password is not written to the log. A saved empty proxy address turns the proxy off for those calls, including a proxy that was set on the process. Before the first save, git and NetBox still follow `http_proxy`, `https_proxy`, and `no_proxy` from the process, and a job copies those variables into its environment.
-
-The job timeout is 30 to 86400 seconds. The runner mode is `auto`, `docker`, or `local`.
-
-## Execution environments
-
-An environment is an image plus a pull policy (`if_not_present`, `always`, `never`). It has one of three scopes. **Global** is visible to every team, and only an administrator can create or change it. **Organization** is visible to every team in that organization. An owner of a team in the organization, or an administrator, can manage it. The organization is the organization of the team selected in the UI. **Team** stays private to that one team, and an owner of that team manages it. A template may use any environment the selected team can see. The demo creates `quay.io/ansible/awx-ee:latest` on the demo team and attaches it to no template, so the first run works without an image pull.
-
-The Runtime page lists environments first and shows who each one applies to. `GET` and `PUT /api/environments/{id}` read and change the name, image, pull policy, description, and scope. Omitting `scope` on create stores a team environment. Omitting it on update keeps the current scope. The image may be a tag or a digest reference (`name@sha256:…`). Collections, roles, and the OpenTofu cache stay under `data/cache/<team>/` for that team.
-
-In the container the runner mounts the project read-only at `/runner/project`, the work directory at `/runner/work`, and the cache at `/cache`. `--env-file` points at a file on the host. The image gets a cleaned environment: `PATH` is local only, `HOME` is the work directory, `LANG=C.UTF-8`, and the `KOREOGRAF_*` variables. The server environment is not inherited. A configured HTTP proxy is added as `http_proxy` and `https_proxy`. That file is mode `0600` because the proxy password can sit in those values.
-
-## Workflows
-
-The editor draws nodes and edges. Add node stays in the side panel after the first node. A run lists each node's status, start, end, and duration under the canvas. Clicking a node opens that job's output on top of the workflow. The run links back to the workflow so it can be edited again. A node can override the template's inventory, credential, extra variables, and the Ansible or OpenTofu options. Another credential replaces only the same kind, so a different SSH login keeps the vault passwords. Clearing the credential removes every credential for that node. Untouched fields keep the template value, so one template can patch a test inventory and then the production inventory. A selected node chooses one target for success, one for failure, and one for always. The same links can be drawn by clicking success or failure on the card and then the target node. An edge applies on `success`, `failure`, or `always`. A node starts on `any` as soon as one matching edge is ready, or on `all` when every matching incoming edge is satisfied. A failure counts as handled when a `failure` or `always` edge leaves that node. The API rejects cycles. An empty graph can be saved and cannot be started.
-
-Cancel sets the job to `canceled`. The workflow treats that like a failure so a failure edge can continue.
-
-## Webhooks
-
-`POST /hooks/{id}/{token}` is public. The token is the authentication. Alertmanager reads `alerts[].labels.alertname` and `status`. Grafana reads the older format with `state` and `ruleName`. Otherwise an `alertname` field is enough. `alerting` becomes `firing`, and `ok` becomes `resolved`.
-
-A match on alert name and status (`firing`, `resolved`, `any`) starts the template or the workflow. At most 10 starts per call. A valid token answers 200 even when no alert matches. A wrong token is 401. An unknown id is 404.
-
-Variables are built in this order: template extra variables, then the hook's variables, then the event (`alertname`, `status`, `instance`, `summary`, `event`). A hook `heal_action` does not override a label of the same name.
-
-Alertmanager:
-
-```yaml
-receivers:
-  - name: koreograf
-    webhook_configs:
-      - url: http://koreograf.example.com/hooks/HOOK_ID/TOKEN
-        send_resolved: true
-```
-
-Grafana, contact point Webhook, same URL. In the UI an operator creates the hook and sees the finished URL. `Test` (German: `Test-Alert`) sends an Alertmanager body with the stored alert name.
-
-## Tools
-
-The registry lives in `runner::tools()`. Another CLI tool needs an entry there and a branch in `src/wrapper.sh`. The three built-in tools:
-
-| Id | Run |
-| --- | --- |
-| `ansible` | `ansible-playbook`, Galaxy into the team cache |
-| `opentofu` | `tofu init`, then `plan` or `apply` |
-| `shell` | a script from the project, or `spec.script` written as `inline.sh` |
-
-A template stores one credential of each kind. Ansible Vault is the exception: several vault credentials can be attached, each with its own vault id, and only one of them may omit the id. The kinds follow the built-in types in AWX and the two useful Semaphore key-store types (SSH, and login with password). Semaphore's empty "None" type is left out. There is no custom credential-type designer, and no external lookup such as CyberArk, HashiCorp Vault, or a cloud secret manager.
-
-| Kind | What the job receives |
-| --- | --- |
-| `ssh` | Machine login. A private key, a password, or both. Optional username, key passphrase, and become (`sudo`, `su`, `pbrun`, `pfexec`, `doas`, `dzdo`, `ksu`, `runas`). The password is a file with mode `0600`, not a command argument. |
-| `vault` | Ansible Vault password, and an optional vault id. |
-| `scm` | Git username and password, or an SSH key, for commands inside the job. The project Sync button does not use this credential. |
-| `net` | Network username, password, optional key, and an enable password. |
-| `aws`, `azure`, `gce`, `vmware`, `openstack` | Cloud credentials as environment variables. Google is a service-account file. |
-| `registry` | Host, username, and password visible to the job. Koreograf does not run `docker login`. |
-| `github`, `gitlab`, `galaxy`, `kubernetes`, `insights` | A token, or a username and password, for that service. |
-| `env` | Extra environment variables as `KEY=value` lines. |
-| `netbox` | A token, and an optional API address. The token stays on the credential, not in the inventory source. |
-
-Secrets are stored with AES-GCM. The list API returns the name and the kind, never the secret. Opening one credential returns public fields such as the username and the names of stored secrets, still without the secret values. An owner can change the name and the secret. A stored password, private key, passphrase, or become password is shown with the usual password dots. Replacing those dots stores the new value. Leaving them, or leaving the field empty, keeps the stored value. `clear` removes named secret fields. The kind stays as it was created. Files written for the job, including the container environment file, use mode `0600`.
-
-## Playbooks and inventory sources
-
-`GET /api/projects/{id}/contents` reads an Ansible project and lists playbooks. A file counts when it ends in `.yml` or `.yaml`, the first content line is a list, and `hosts:` appears somewhere. `requirements.yml`, `galaxy.yml`, and role directories such as `tasks`, `handlers`, and `group_vars` stay out. A git project has to be synced first. The template offers the files that were found. Another path can still be typed by hand.
-
-A template updates its git project on every launch. Turn **Update the project on launch** off to run the checkout from the last sync, including when the remote cannot be reached. A revision pinned on the project stays as it is on disk until the next sync. In the German UI the checkbox is **Projekt vor dem Start aktualisieren**. The project still needs one successful sync. The Sync button on the project page is unchanged.
-
-Inventory files are named `hosts` or `inventory`, or they live in `inventory/` and `inventories/`. A relative `inventory=` entry under `[defaults]` in `ansible.cfg` is included. `POST /api/inventories/import` stores the file text. INI and the usual YAML inventory show up in the host list. Ansible receives the same text.
-
-A file with `plugin:` is not executed. `plugin: netbox.netbox.nb_inventory` (also `plugin: netbox`) has a NetBox source. The controller fetches devices and, when asked, virtual machines, groups them like the plugin (`sites_berlin`, `device_roles_web`), and stores INI. The token lives on the credential, not in the source. An inventory can have several sources, for example a file from the project and NetBox. Ansible receives each source as its own file. `POST /api/inventories/{id}/sync` refreshes every external source. Other inventory plugins are listed and cannot be executed here.
-
-An Ansible template stores the run in `spec`: `job_type` `run` or `check`, `tags`, `skip_tags`, `limit`, `diff`, `verbosity` from 0 to 4, and `forks` from 1 to 50. Check starts `ansible-playbook --check`.
-
-Each job stores the parameters of that launch: template, tool, entry path, project, inventory, each attached credential as name and kind (not the secret), execution environment, spec, and the merged extra variables. The job page has an Output tab and a Parameters tab. A failed job can be started again from the job list and from the same row as the Output and Parameters tabs. `POST /api/jobs/{id}/relaunch` uses the stored parameters. `{"only_failed_hosts": true}` is Ansible-only and sets `--limit` to the hosts that failed or were unreachable. A play recap replaces earlier `fatal:` lines. When the recap never arrives, the fatal lines are kept. `GET /api/jobs/{id}/output` downloads the output as text.
-
-## Users and permissions
-
-An administrator sees every account under **Users** (German: **Benutzerkonten**). `GET /api/users` lists them. `GET /api/users/{id}` returns the account and its memberships. The password hash is never returned.
-
-Every signed-in user opens **My account** (German: **Mein Konto**) from their name in the sidebar. `GET /api/me` returns the account, the real team memberships with organization and role, and the email when one is stored. A local user can change the display name, the email, and the password there. An LDAP email is taken from the directory attribute `mail` at sign-in and is not edited here.
-
-`PUT /api/users/{id}` changes the display name, the administrator flag, and whether the account is disabled. The username stays as it is, because LDAP matches on it. A local account can take a new password in the same request. An empty password leaves the current one. An LDAP account keeps its password in the directory.
-
-Disabling an account ends that user's sessions. The next sign-in, after a correct password, answers `Das Konto ist deaktiviert.` You cannot disable or delete your own account. The last active administrator cannot be demoted, disabled, or deleted.
-
-There is no per-object role. A viewer sees projects, inventories, templates, jobs, and workflows. An operator launches jobs and edits those objects, plus workflows and webhooks. An owner also manages credentials, environments, and team members. The administrator flag skips the team-role check and can manage organizations, teams, users, settings, and backup.
-
-`POST /api/teams/{id}/members` sets a manual role. The same call adds a user to a team they are not in yet.
-
-## API
-
-Session cookie `koreograf_session`, HttpOnly, SameSite=Lax, seven days. Team routes need `X-Team-Id`. Job events use the team membership stored on the job, because `EventSource` cannot set custom headers. The stream is `GET /api/jobs/{id}/events?after=`.
-
-| Method | Path |
-| --- | --- |
-| POST | `/api/login`, `/api/logout` |
-| GET, POST | `/api/users` |
-| GET, PUT, DELETE | `/api/users/{id}` |
-| GET, PUT | `/api/me` |
-| GET | `/api/overview`, `/api/teams` |
-| POST | `/api/teams` |
-| PUT | `/api/teams/{id}` |
-| GET, POST | `/api/teams/{id}/members` |
-| DELETE | `/api/teams/{id}/members/{user_id}` |
-| GET, POST | `/api/organizations` |
-| GET, PUT | `/api/organizations/{id}` |
-| GET, POST | `/api/projects`, `/api/inventories`, `/api/credentials`, `/api/environments` |
-| GET | `/api/projects/{id}`, `/api/inventories/{id}`, `/api/credentials/{id}`, `/api/environments/{id}` |
-| PUT | `/api/projects/{id}`, `/api/inventories/{id}`, `/api/credentials/{id}`, `/api/environments/{id}` |
-| DELETE | `/api/projects/{id}`, `/api/inventories/{id}`, `/api/credentials/{id}`, `/api/environments/{id}` |
-| GET | `/api/projects/{id}/contents` |
-| POST | `/api/projects/{id}/sync` |
-| POST | `/api/inventories/import`, `/api/inventories/netbox` |
-| POST | `/api/inventories/{id}/sync` |
-| POST | `/api/inventories/{id}/sources` |
-| PUT, DELETE | `/api/inventories/{id}/sources/{source_id}` |
-| POST | `/api/inventories/{id}/sources/{source_id}/sync` |
-| GET | `/api/cache`, `/api/plugins` |
-| GET, POST | `/api/templates`, `/api/workflows`, `/api/hooks`, `/api/jobs` |
-| PUT, DELETE | `/api/templates/{id}`, `/api/workflows/{id}` |
-| POST | `/api/templates/{id}/launch`, `/api/workflows/{id}/launch` |
-| GET | `/api/jobs/{id}`, `/api/jobs/{id}/output`, `/api/workflows/{id}`, `/api/workflow-jobs/{id}` |
-| POST | `/api/jobs/{id}/cancel`, `/api/jobs/{id}/relaunch`, `/api/hooks/{id}/test` |
-| GET | `/api/hooks/{id}/deliveries` |
-| DELETE | `/api/hooks/{id}` |
-| POST | `/hooks/{id}/{token}` |
-| GET | `/healthz`, `/metrics` |
-| GET, POST | `/api/admin/backup` |
-| GET, PUT | `/api/settings` |
-
-`PUT /api/projects/{id}` sets `organization_id` and `team_ids`. An empty list gives the project to every team in the organization. `GET /api/inventories/{id}` returns `hosts`, `host_count`, `source_kind`, and `source`. Groups with `:vars` or `:children` are not hosts. A git sync that fails answers with the last lines from git. Allowed addresses are `http(s)`, `ssh`, `git@`, and `file`. `contents` answers with `playbooks` and `inventories`. `import` takes a static file. `netbox` expects `name`, `api_endpoint`, `token`, and optionally `group_by`, `query_filters`, `validate_certs`, and `virtual_machines`. The fetch happens before the save.
-
-Launches answer 202 and need a JSON body, at least `{}`. `extra_vars` is an object.
-
-## Security
-
-The prototype is meant for a trusted network. The Docker socket is root on the host. `data/secret.key` decrypts every credential and the saved directory and proxy passwords. Copying that file, the SQLite database, or `koreograf-backup.zip` exposes them. `KOREOGRAF_LDAP_TLS_INSECURE` and an open port without TLS do not belong on the internet.
+Requirements for each tool, the Helm password path, and the image details are in [Installation](docs/installation.md).
 
 ## Demo
 
-1. Sign in as `admin`. The password comes from the environment or from `data/initial-admin-password`.
-2. Select the team `Plattform`.
-3. On the overview, press `Test alert` (German: `Test-Alert`).
-4. The workflow `Self-Heal Ablauf` starts. The health check is shell. On success the Ansible role `incident_report` runs on the controller and writes a report into the job directory. On failure, `escalate.sh` runs.
-5. The role deletes only file names that the hook lists in `incident_report_cleanup_files`, and only under the job work directory. The demo hook sets `heal_action` to `cleanup-tmp` and the file `stale.tmp`.
+Sign in, select the team `Plattform`, and press `Test alert`. The workflow runs the files in [examples/demo](examples/demo). The steps are in [Workflows and webhooks](docs/workflows-webhooks.md#demo).
 
-A second Ansible run shows the role coming from the cache in the log.
+## Documentation
+
+- [Installation](docs/installation.md) — run on a machine, Docker Compose, and Helm.
+- [Configuration](docs/configuration.md) — environment variables, runner mode, and languages.
+- [Backup and restore](docs/backup-restore.md) — the SQLite file and the backup zip.
+- [Observability](docs/observability.md) — stdout logs and Prometheus metrics.
+- [Authentication](docs/authentication.md) — organizations, teams, LDAP, Active Directory, users, and permissions.
+- [Jobs](docs/jobs.md) — tools, execution environments, playbooks, inventory sources, and the cache.
+- [Workflows and webhooks](docs/workflows-webhooks.md) — graphs, Alertmanager and Grafana hooks, and the demo.
+- [API](docs/api.md) — session cookie, team header, and routes.
+- [Security notes](docs/security.md) — trusted network, the key, and the backup zip.
+- [Contributing](CONTRIBUTING.md) — local checks and what GitHub Actions runs.
+
+## Security
+
+Report vulnerabilities as described in [SECURITY.md](SECURITY.md).
+
+## License
+
+Koreograf is released under the [MIT license](LICENSE). Changes are listed in the [changelog](CHANGELOG.md).
