@@ -208,7 +208,9 @@ EOF
     4) set -- "$@" -vvvv ;;
   esac
   if [ -n "${KOREOGRAF_VAULT_LIST:-}" ]; then
-    while IFS='	' read -r vid vpath; do
+    # A pipe keeps an empty vault id. A tab is IFS whitespace, so `read` would
+    # drop that leading field and skip the password file.
+    while IFS='|' read -r vid vpath; do
       [ -n "$vpath" ] || continue
       if [ -n "$vid" ]; then
         set -- "$@" --vault-id "${vid}@${vpath}"
@@ -226,7 +228,7 @@ EOF
   if [ -n "${KOREOGRAF_AUTH_EXTRA:-}" ]; then
     set -- "$@" --extra-vars "@$KOREOGRAF_AUTH_EXTRA"
   fi
-  log "Starte: $*"
+  log "Starting: $*"
   exec "$@"
 }
 
@@ -257,7 +259,7 @@ run_tofu() {
 
 run_shell() {
   cd "$KOREOGRAF_PROJECT" || exit 1
-  log "Shell-Skript: $KOREOGRAF_ENTRYPOINT"
+  log "Shell script: $KOREOGRAF_ENTRYPOINT"
   log "Cache directory: $KOREOGRAF_COLLECTIONS"
   exec sh "$KOREOGRAF_ENTRYPOINT"
 }
@@ -267,7 +269,7 @@ case "$KOREOGRAF_TOOL" in
   opentofu) run_tofu ;;
   shell) run_shell ;;
   *)
-    log "Unbekanntes Werkzeug: $KOREOGRAF_TOOL"
+    log "Unknown tool: $KOREOGRAF_TOOL"
     exit 2
     ;;
 esac

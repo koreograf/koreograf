@@ -84,6 +84,9 @@ impl AppState {
 /// Open the database, load the encryption key, and seed the demo once.
 pub fn boot(mut cfg: Config) -> anyhow::Result<Shared> {
     std::fs::create_dir_all(&cfg.data_dir)?;
+    // A relative data directory would be resolved again from the job work
+    // directory. Local runs then miss wrapper.sh and the other job files.
+    cfg.data_dir = std::path::absolute(&cfg.data_dir)?;
     let conn = db::open(&cfg.data_dir.join("koreograf.db"))?;
     let cipher = crypto::load_cipher(&cfg.data_dir)?;
     seed::seed(&conn, &cfg)?;
@@ -104,9 +107,10 @@ pub async fn serve(cfg: Config) -> anyhow::Result<()> {
     config::database_choice(&url).map_err(anyhow::Error::msg)?;
     let state = boot(cfg)?;
     let bind = state.cfg.bind.clone();
+    let data_dir = state.cfg.data_dir.display().to_string();
     let app = router(state);
     let listener = tokio::net::TcpListener::bind(&bind).await?;
-    tracing::info!(%bind, "Koreograf is ready");
+    tracing::info!(%bind, %data_dir, "Koreograf is ready");
     axum::serve(listener, app).await?;
     Ok(())
 }

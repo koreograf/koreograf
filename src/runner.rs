@@ -917,11 +917,8 @@ fn apply_credentials(
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .trim();
-            if label.contains(['\t', '\n', '\r', '@']) {
-                return Err("Vault id is invalid.".into());
-            }
             let path = guest_path(container, work, &name);
-            vault_lines.push(format!("{label}\t{path}"));
+            vault_lines.push(vault_list_line(label, &path)?);
         }
         env.extend(part);
     }
@@ -944,6 +941,15 @@ fn unique_file_name(used: &[String], name: &str, index: usize) -> String {
         return candidate;
     }
     format!("{index}-{name}-{}", used.len())
+}
+
+/// One vault password on a line. The field separator is `|` because a tab is
+/// IFS whitespace and `read` would discard an empty vault id.
+fn vault_list_line(label: &str, path: &str) -> Result<String, String> {
+    if label.contains(['|', '\t', '\n', '\r', '@']) || path.contains(['|', '\n', '\r']) {
+        return Err("Vault id is invalid.".into());
+    }
+    Ok(format!("{label}|{path}"))
 }
 
 fn guest_path(container: bool, work: &Path, name: &str) -> String {
@@ -1820,5 +1826,74 @@ mod tests {
         let stored = observe_host_line("", "fatal: [web-1]: FAILED! => {}").unwrap();
         assert_eq!(failed_host_names(&stored), vec!["web-1".to_string()]);
         assert!(observe_host_line(&stored, "ok: [web-1]").is_none());
+    }
+
+    #[test]
+    fn an_empty_vault_id_reaches_ansible_playbook() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("koreograf-vault-{nanos}"));
+        let bin = root.join("bin");
+        let project = root.join("project");
+        let work = root.join("work");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&work).unwrap();
+        let fake = bin.join("ansible-playbook");
+        std::fs::write(&fake, "#!/bin/sh\nprintf '%s\\n' \"$*\"\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&fake).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&fake, perms).unwrap();
+        }
+        let default_pass = work.join("default.pass");
+        let prod_pass = work.join("prod.pass");
+        let unnamed = vault_list_line("", &default_pass.display().to_string()).unwrap();
+        let named = vault_list_line("prod", &prod_pass.display().to_string()).unwrap();
+        assert!(unnamed.starts_with('|'), "{unnamed}");
+        assert!(vault_list_line("bad|id", "/tmp/vault.pass").is_err());
+        let list = work.join("vault.list");
+        std::fs::write(&list, format!("{unnamed}\n{named}\n")).unwrap();
+        let path = format!("{}:/usr/bin:/bin", bin.display());
+        let output = std::process::Command::new("sh")
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/wrapper.sh"))
+            .env_clear()
+            .env("PATH", &path)
+            .env("KOREOGRAF_TOOL", "ansible")
+            .env("KOREOGRAF_WORK", &work)
+            .env("KOREOGRAF_PROJECT", &project)
+            .env("KOREOGRAF_COLLECTIONS", root.join("collections"))
+            .env("KOREOGRAF_ROLES", root.join("roles"))
+            .env("KOREOGRAF_TOFU", root.join("tofu"))
+            .env("KOREOGRAF_INVENTORY", work.join("hosts"))
+            .env("KOREOGRAF_ENTRYPOINT", "site.yml")
+            .env("KOREOGRAF_EXTRA", work.join("extra.json"))
+            .env("KOREOGRAF_VAULT_LIST", &list)
+            .output()
+            .expect("wrapper");
+        let text = String::from_utf8_lossy(&output.stdout);
+        let err = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "status {:?} stdout={text} stderr={err}",
+            output.status
+        );
+        assert!(
+            text.contains(&format!("--vault-password-file {}", default_pass.display())),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("--vault-id prod@{}", prod_pass.display())),
+            "{text}"
+        );
+        assert!(text.contains("Starting:"), "{text}");
+        assert!(!text.contains("Starte:"), "{text}");
+        assert!(!text.contains("Shell-Skript"), "{text}");
+        assert!(!text.contains("Unbekanntes Werkzeug"), "{text}");
+        let _ = std::fs::remove_dir_all(root);
     }
 }
