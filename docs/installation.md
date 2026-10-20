@@ -24,7 +24,7 @@ Compose builds the image on your machine. The published image `ghcr.io/koreograf
 
 The socket is commented out in `docker-compose.yml`. Execution environments need that line. Without the socket the runner stays local, and the demo health check still runs.
 
-Data lives in the volume `koreograf-data`. Compose reads `.env` for variable substitution.
+Data lives in the volume `koreograf-data`. Compose reads `.env` for variable substitution. The compose file fixes the bind address, the data directory, the web files, and the examples directory. Log format and the database URL are forwarded. A proxy variable is forwarded only when it is set. A value already exported in the shell is used for that substitution too. The two lists are in [Configuration](configuration.md#docker-compose).
 
 ## Helm
 

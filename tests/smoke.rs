@@ -4296,6 +4296,340 @@ async fn a_relative_data_dir_can_run_a_local_shell_job() {
     let _ = std::fs::remove_dir_all(&data_dir);
 }
 
+#[tokio::test]
+async fn cancel_stops_the_local_process_group() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-cancel-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap();
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(team),
+        Some(json!({
+            "name": "Sleeper",
+            "tool": "shell",
+            "entrypoint": "",
+            "spec": {"script": "sleep 30\necho should-not-run\n"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let template_id = created["id"].as_str().unwrap();
+    let (status, job, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        Some(&cookie),
+        Some(team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+    let job_id = job["id"].as_str().unwrap();
+    let mut pid = String::new();
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let (status, body, _) = call(
+            &app,
+            "GET",
+            &format!("/api/jobs/{job_id}"),
+            Some(&cookie),
+            Some(team),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        if let Some(found) = body["events"].as_array().and_then(|events| {
+            events.iter().find_map(|event| {
+                event["line"]
+                    .as_str()
+                    .and_then(|line| line.strip_prefix("Process group "))
+                    .and_then(|line| line.strip_suffix('.'))
+                    .map(str::to_string)
+            })
+        }) {
+            pid = found;
+            break;
+        }
+    }
+    assert!(!pid.is_empty(), "process group was not logged");
+    let (status, canceled, _) = call(
+        &app,
+        "POST",
+        &format!("/api/jobs/{job_id}/cancel"),
+        Some(&cookie),
+        Some(team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{canceled}");
+    assert_eq!(canceled["status"], "canceled");
+    let proc = std::path::PathBuf::from(format!("/proc/{pid}"));
+    let mut gone = false;
+    for _ in 0..40 {
+        if !proc.exists() {
+            gone = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(gone, "process {pid} is still running");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (status, body, _) = call(
+        &app,
+        "GET",
+        &format!("/api/jobs/{job_id}"),
+        Some(&cookie),
+        Some(team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "canceled");
+    let events = body["events"].to_string();
+    assert!(events.contains("Cancel requested."), "{events}");
+    assert!(!events.contains("should-not-run"), "{events}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn cancel_kills_a_child_that_ignores_term() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-cancel-trap-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap();
+    let script = "( trap '' TERM; sleep 30 & echo $! > \"$KOREOGRAF_WORK/hold.pid\"; wait; echo ran > \"$KOREOGRAF_WORK/marker\" ) &\nwait\n";
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(team),
+        Some(json!({
+            "name": "Trap",
+            "tool": "shell",
+            "entrypoint": "",
+            "spec": {"script": script}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let template_id = created["id"].as_str().unwrap();
+    let (status, job, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        Some(&cookie),
+        Some(team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+    let job_id = job["id"].as_str().unwrap();
+    let hold = dir.join("jobs").join(job_id).join("hold.pid");
+    let marker = dir.join("jobs").join(job_id).join("marker");
+    let mut holder = String::new();
+    for _ in 0..50 {
+        if let Ok(text) = std::fs::read_to_string(&hold) {
+            holder = text.trim().to_string();
+            if !holder.is_empty() {
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        !holder.is_empty(),
+        "the child that ignores TERM did not start"
+    );
+    let (status, canceled, _) = call(
+        &app,
+        "POST",
+        &format!("/api/jobs/{job_id}/cancel"),
+        Some(&cookie),
+        Some(team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{canceled}");
+    assert_eq!(canceled["status"], "canceled");
+    let mut gone = false;
+    for _ in 0..40 {
+        let cmdline = std::fs::read_to_string(format!("/proc/{holder}/cmdline")).ok();
+        if cmdline
+            .as_deref()
+            .is_none_or(|text| text.is_empty() || !text.contains("sleep"))
+        {
+            gone = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(gone, "child {holder} was still running 4s after cancel");
+    assert!(!marker.exists(), "the child kept running after cancel");
+    let (status, body, _) = call(
+        &app,
+        "GET",
+        &format!("/api/jobs/{job_id}"),
+        Some(&cookie),
+        Some(team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "canceled");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn cancel_kills_a_detached_child_that_ignores_term() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-cancel-detached-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap();
+    let script = "( trap '' TERM; sleep 45 & echo $! > \"$KOREOGRAF_WORK/hold.pid\"; wait; echo detached-after > \"$KOREOGRAF_WORK/marker\" ) >/dev/null 2>&1 &\necho detached-start\nwait\n";
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(team),
+        Some(json!({
+            "name": "Detached",
+            "tool": "shell",
+            "entrypoint": "",
+            "spec": {"script": script}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let template_id = created["id"].as_str().unwrap();
+    let (status, job, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        Some(&cookie),
+        Some(team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+    let job_id = job["id"].as_str().unwrap();
+    let hold = dir.join("jobs").join(job_id).join("hold.pid");
+    let marker = dir.join("jobs").join(job_id).join("marker");
+    let mut holder = String::new();
+    for _ in 0..50 {
+        if let Ok(text) = std::fs::read_to_string(&hold) {
+            holder = text.trim().to_string();
+            if !holder.is_empty() {
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        !holder.is_empty(),
+        "the detached child that ignores TERM did not start"
+    );
+    let (status, canceled, _) = call(
+        &app,
+        "POST",
+        &format!("/api/jobs/{job_id}/cancel"),
+        Some(&cookie),
+        Some(team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{canceled}");
+    assert_eq!(canceled["status"], "canceled");
+    let mut gone = false;
+    for _ in 0..50 {
+        let cmdline = std::fs::read_to_string(format!("/proc/{holder}/cmdline")).ok();
+        if cmdline
+            .as_deref()
+            .is_none_or(|text| text.is_empty() || !text.contains("sleep"))
+        {
+            gone = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        gone,
+        "detached child {holder} was still running 5s after cancel"
+    );
+    assert!(
+        !marker.exists(),
+        "the detached child kept running after cancel"
+    );
+    let (status, body, _) = call(
+        &app,
+        "GET",
+        &format!("/api/jobs/{job_id}"),
+        Some(&cookie),
+        Some(team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "canceled");
+    let events = body["events"].to_string();
+    assert!(events.contains("detached-start"), "{events}");
+    assert!(!events.contains("detached-after"), "{events}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn message_catalogs_match_and_cover_the_ui() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
