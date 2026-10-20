@@ -17,6 +17,9 @@ const WRAPPER: &str = include_str!("wrapper.sh");
 const MAX_FILES: u32 = 4_000;
 const MAX_BYTES: u64 = 200 * 1024 * 1024;
 const DEFAULT_INVENTORY: &str = "[all]\nlocalhost ansible_connection=local\n";
+/// Docker or Podman inspect can stall when the daemon does not answer.
+/// The timeout does not abort the blocking thread.
+const STOP_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Debug)]
 pub struct RunningProc {
@@ -434,20 +437,161 @@ pub async fn detect_runtime() -> Option<String> {
     None
 }
 
-pub fn signal_stop(proc: &RunningProc) {
-    if proc.pid > 0 {
-        let _ = std::process::Command::new("kill")
-            .args(["-TERM", &proc.pid.to_string()])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+pub fn signal_stop(state: &Shared, job_id: &str, proc: RunningProc) {
+    let state = state.clone();
+    let job_id = job_id.to_string();
+    tokio::spawn(async move {
+        if !deliver_stop(proc.clone(), false, true).await {
+            log(
+                &state,
+                &job_id,
+                "system",
+                "The stop signal could not be delivered.",
+            );
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        // The leader often exits on SIGTERM. A child that ignores it and
+        // closes the job pipes is no longer remembered, but its process
+        // group can still be alive. A pid is signaled only when that group
+        // still exists.
+        let still_ours = remembered(&state, &job_id).is_some_and(|current| current.pid == proc.pid);
+        if !stop_after_grace(&proc, still_ours).await {
+            log(
+                &state,
+                &job_id,
+                "system",
+                "The stop signal could not be delivered.",
+            );
+        }
+    });
+}
+
+async fn deliver_stop(proc: RunningProc, kill_hard: bool, signal_local: bool) -> bool {
+    blocking_stop(move || deliver_stop_blocking(&proc, kill_hard, signal_local)).await
+}
+
+async fn stop_after_grace(proc: &RunningProc, still_ours: bool) -> bool {
+    let proc = proc.clone();
+    // Check the group and signal it in one blocking call. The pid is not
+    // reused while a member of that group is still alive.
+    blocking_stop(move || {
+        let local_ok = if proc.pid > 1 && (still_ours || process_group_alive(proc.pid)) {
+            signal_process_group(proc.pid, true)
+        } else {
+            proc.pid > 1 || proc.container.is_some()
+        };
+        let container_ok = match (proc.bin.as_deref(), proc.container.as_deref()) {
+            (Some(bin), Some(name)) => runtime_signal(bin, name, "KILL"),
+            _ => true,
+        };
+        local_ok && container_ok
+    })
+    .await
+}
+
+async fn blocking_stop(work: impl FnOnce() -> bool + Send + 'static) -> bool {
+    match tokio::time::timeout(STOP_COMMAND_TIMEOUT, tokio::task::spawn_blocking(work)).await {
+        Ok(Ok(delivered)) => delivered,
+        _ => false,
     }
-    if let (Some(bin), Some(name)) = (proc.bin.as_deref(), proc.container.as_deref()) {
-        let _ = std::process::Command::new(bin)
-            .args(["kill", name])
+}
+
+fn deliver_stop_blocking(proc: &RunningProc, kill_hard: bool, signal_local: bool) -> bool {
+    let signal = if kill_hard { "KILL" } else { "TERM" };
+    // The local group goes first. Inspect can stall, and this thread keeps
+    // running after the wait around it times out.
+    let local_ok = if !signal_local {
+        true
+    } else if proc.pid > 1 {
+        signal_process_group(proc.pid, kill_hard)
+    } else {
+        proc.container.is_some()
+    };
+    let container_ok = match (proc.bin.as_deref(), proc.container.as_deref()) {
+        (Some(bin), Some(name)) => runtime_signal(bin, name, signal),
+        _ => true,
+    };
+    local_ok && container_ok
+}
+
+fn signal_process_group(pid: u32, kill_hard: bool) -> bool {
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
+    };
+    if pid <= 1 {
+        return false;
+    }
+    let signal = if kill_hard {
+        nix::sys::signal::Signal::SIGKILL
+    } else {
+        nix::sys::signal::Signal::SIGTERM
+    };
+    match nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pid), signal) {
+        Ok(()) => true,
+        Err(nix::errno::Errno::ESRCH) => true,
+        Err(_) => false,
+    }
+}
+
+/// `true` when this process may signal `pid`'s group. `EPERM` means the
+/// group exists and belongs to someone else, so it must not be killed.
+fn process_group_alive(pid: u32) -> bool {
+    let Ok(raw) = i32::try_from(pid) else {
+        return false;
+    };
+    if raw <= 1 {
+        return false;
+    }
+    nix::sys::signal::killpg(nix::unistd::Pid::from_raw(raw), None).is_ok()
+}
+
+fn runtime_signal(bin: &str, name: &str, signal: &str) -> bool {
+    match container_state(bin, name) {
+        ContainerPresence::Stopped => true,
+        ContainerPresence::Unknown => false,
+        ContainerPresence::Running => std::process::Command::new(bin)
+            .args(["kill", "--signal", signal, name])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status();
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false),
+    }
+}
+
+enum ContainerPresence {
+    Running,
+    Stopped,
+    Unknown,
+}
+
+fn container_state(bin: &str, name: &str) -> ContainerPresence {
+    let output = match std::process::Command::new(bin)
+        .args(["inspect", "-f", "{{.State.Running}}", name])
+        .output()
+    {
+        Ok(output) => output,
+        Err(_) => return ContainerPresence::Unknown,
+    };
+    classify_inspect(
+        output.status.success(),
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+    )
+}
+
+fn classify_inspect(success: bool, stdout: &str, stderr: &str) -> ContainerPresence {
+    if !success {
+        let err = stderr.to_ascii_lowercase();
+        if err.contains("no such object") || err.contains("no such container") {
+            return ContainerPresence::Stopped;
+        }
+        return ContainerPresence::Unknown;
+    }
+    if stdout.trim() == "true" {
+        ContainerPresence::Running
+    } else {
+        ContainerPresence::Stopped
     }
 }
 
@@ -457,6 +601,19 @@ pub async fn execute(state: Shared, job_id: String) {
         Err(_) => false,
     };
     if !started {
+        // This task never stored a process. A duplicate start must not clear
+        // a run that is already in progress.
+        let finished = state.db().ok().and_then(|db| {
+            db::job(&db, &job_id)
+                .ok()
+                .flatten()
+                .map(|job| matches!(job.status.as_str(), "successful" | "failed" | "canceled"))
+        });
+        if finished == Some(true) {
+            if let Ok(mut canceled) = state.canceled.lock() {
+                canceled.remove(&job_id);
+            }
+        }
         return;
     }
     match prepare_and_run(&state, &job_id).await {
@@ -467,9 +624,7 @@ pub async fn execute(state: Shared, job_id: String) {
         }
     }
     close_observation(&state, &job_id);
-    if let Ok(mut procs) = state.procs.lock() {
-        procs.remove(&job_id);
-    }
+    forget_run(&state, &job_id);
 }
 
 async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
@@ -704,28 +859,27 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        #[cfg(unix)]
+        cmd.process_group(0);
         let child = cmd.spawn().map_err(|e| format!("Start failed: {e}"))?;
         let pid = child.id().unwrap_or(0);
-        remember(
-            state,
-            job_id,
-            RunningProc {
-                pid,
-                container: None,
-                bin: None,
-            },
-        );
+        let proc = RunningProc {
+            pid,
+            container: None,
+            bin: None,
+        };
+        remember(state, job_id, proc.clone());
+        // The job log keeps this pid. The cancel test reads the group from it.
+        log(state, job_id, "system", &format!("Process group {pid}."));
         if canceled(state, job_id) {
-            signal_stop(&RunningProc {
-                pid,
-                container: None,
-                bin: None,
-            });
-            return Ok(());
+            signal_stop(state, job_id, proc);
         }
         wait_child(state, job_id, child, settings.job_timeout_secs).await?
     };
 
+    if canceled(state, job_id) {
+        return Ok(());
+    }
     let cache_after = dir_size(&cache);
     log(
         state,
@@ -1395,24 +1549,18 @@ async fn run_container(state: &Shared, job_id: &str, run: ContainerRun<'_>) -> R
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    #[cfg(unix)]
+    cmd.process_group(0);
     let child = cmd.spawn().map_err(|e| format!("{bin} run failed: {e}"))?;
     let pid = child.id().unwrap_or(0);
-    remember(
-        state,
-        job_id,
-        RunningProc {
-            pid,
-            container: Some(name.clone()),
-            bin: Some(bin.to_string()),
-        },
-    );
+    let proc = RunningProc {
+        pid,
+        container: Some(name),
+        bin: Some(bin.to_string()),
+    };
+    remember(state, job_id, proc.clone());
     if canceled(state, job_id) {
-        signal_stop(&RunningProc {
-            pid,
-            container: Some(name),
-            bin: Some(bin.to_string()),
-        });
-        return Ok(1);
+        signal_stop(state, job_id, proc);
     }
     wait_child(state, job_id, child, timeout_secs).await
 }
@@ -1478,12 +1626,29 @@ fn remember(state: &Shared, job_id: &str, proc: RunningProc) {
     }
 }
 
+fn remembered(state: &Shared, job_id: &str) -> Option<RunningProc> {
+    state
+        .procs
+        .lock()
+        .ok()
+        .and_then(|procs| procs.get(job_id).cloned())
+}
+
+fn forget_run(state: &Shared, job_id: &str) {
+    if let Ok(mut procs) = state.procs.lock() {
+        procs.remove(job_id);
+    }
+    if let Ok(mut canceled) = state.canceled.lock() {
+        canceled.remove(job_id);
+    }
+}
+
 fn canceled(state: &Shared, job_id: &str) -> bool {
     state
-        .db()
+        .canceled
+        .lock()
         .ok()
-        .and_then(|db| db::job(&db, job_id).ok().flatten())
-        .is_some_and(|job| job.status == "canceled")
+        .is_some_and(|ids| ids.contains(job_id))
 }
 
 async fn wait_child(
@@ -1523,6 +1688,16 @@ async fn wait_child(
                 "system",
                 "Time limit reached, stopping the process.",
             );
+            if let Some(proc) = remembered(state, job_id) {
+                if !deliver_stop(proc, true, true).await {
+                    log(
+                        state,
+                        job_id,
+                        "system",
+                        "The stop signal could not be delivered.",
+                    );
+                }
+            }
             let _ = child.start_kill();
             let _ = child.wait().await;
             let _ = out.await;
@@ -1542,6 +1717,7 @@ where
     let mut lines = BufReader::new(reader);
     let mut buf = Vec::new();
     let mut count = 0i64;
+    let mut discarded = false;
     loop {
         buf.clear();
         let read = lines.read_until(b'\n', &mut buf).await;
@@ -1555,6 +1731,18 @@ where
                     buf.pop();
                 }
                 count += 1;
+                if canceled(&state, &job_id) {
+                    if !discarded {
+                        discarded = true;
+                        log(
+                            &state,
+                            &job_id,
+                            "system",
+                            "Further output is discarded because the job was canceled.",
+                        );
+                    }
+                    continue;
+                }
                 if count > 8_000 {
                     if count == 8_001 {
                         log(
@@ -1895,5 +2083,169 @@ mod tests {
         assert!(!text.contains("Shell-Skript"), "{text}");
         assert!(!text.contains("Unbekanntes Werkzeug"), "{text}");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn a_process_group_signal_stops_the_children() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-kill-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg("sleep 60 & echo $! > child.pid; wait")
+            .current_dir(&dir)
+            .process_group(0)
+            .kill_on_drop(true)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = cmd.spawn().unwrap();
+        let pid = child.id().expect("pid");
+        let marker = dir.join("child.pid");
+        let mut grandchild = String::new();
+        for _ in 0..50 {
+            if let Ok(text) = std::fs::read_to_string(&marker) {
+                grandchild = text.trim().to_string();
+                if !grandchild.is_empty() {
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(!grandchild.is_empty(), "child did not start");
+        let before = std::fs::read_to_string(format!("/proc/{grandchild}/status")).ok();
+        assert!(signal_process_group(pid, false), "signal");
+        let finished = tokio::time::timeout(Duration::from_secs(5), child.wait())
+            .await
+            .expect("group did not exit");
+        assert!(finished.is_ok());
+        // child.wait returns when the leader exits. The grandchild can still
+        // be a zombie for a moment, and a zombie's cmdline is empty.
+        let mut after = None;
+        let mut gone = false;
+        for _ in 0..60 {
+            after = std::fs::read_to_string(format!("/proc/{grandchild}/cmdline")).ok();
+            if after
+                .as_deref()
+                .is_none_or(|text| text.is_empty() || !text.contains("sleep"))
+            {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(
+            gone,
+            "grandchild {grandchild} is still sleep; status={before:?} cmdline={after:?}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn stop_after_grace_kills_a_detached_child() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-kill-detached-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg("( trap '' TERM; sleep 60 & echo $! > child.pid; wait ) >/dev/null 2>&1 & wait")
+            .current_dir(&dir)
+            .process_group(0)
+            .kill_on_drop(true)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = cmd.spawn().unwrap();
+        let pid = child.id().expect("pid");
+        struct KillGroup(u32);
+        impl Drop for KillGroup {
+            fn drop(&mut self) {
+                let _ = signal_process_group(self.0, true);
+            }
+        }
+        let _kill = KillGroup(pid);
+        let marker = dir.join("child.pid");
+        let mut grandchild = String::new();
+        for _ in 0..50 {
+            if let Ok(text) = std::fs::read_to_string(&marker) {
+                grandchild = text.trim().to_string();
+                if !grandchild.is_empty() {
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(!grandchild.is_empty(), "detached child did not start");
+        assert!(
+            signal_process_group(pid, false),
+            "the group did not accept SIGTERM"
+        );
+        let finished = tokio::time::timeout(Duration::from_secs(3), child.wait()).await;
+        assert!(finished.is_ok(), "the leader stayed up after SIGTERM");
+        let still = std::fs::read_to_string(format!("/proc/{grandchild}/cmdline")).ok();
+        assert!(
+            still.as_deref().is_some_and(|text| text.contains("sleep")),
+            "SIGTERM stopped the detached child; cmdline={still:?}"
+        );
+        assert!(
+            process_group_alive(pid),
+            "the group was gone before the grace kill"
+        );
+        let proc = RunningProc {
+            pid,
+            container: None,
+            bin: None,
+        };
+        assert!(stop_after_grace(&proc, false).await, "grace kill failed");
+        let mut gone = false;
+        let mut after = None;
+        for _ in 0..40 {
+            after = std::fs::read_to_string(format!("/proc/{grandchild}/cmdline")).ok();
+            if after
+                .as_deref()
+                .is_none_or(|text| text.is_empty() || !text.contains("sleep"))
+            {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(
+            gone,
+            "detached child {grandchild} survived SIGKILL; cmdline={after:?}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn inspect_errors_are_not_a_stopped_container() {
+        assert!(matches!(
+            classify_inspect(true, "true\n", ""),
+            ContainerPresence::Running
+        ));
+        assert!(matches!(
+            classify_inspect(true, "false\n", ""),
+            ContainerPresence::Stopped
+        ));
+        assert!(matches!(
+            classify_inspect(false, "", "Error: No such container: job"),
+            ContainerPresence::Stopped
+        ));
+        assert!(matches!(
+            classify_inspect(false, "", "Error: No such object: job"),
+            ContainerPresence::Stopped
+        ));
+        assert!(matches!(
+            classify_inspect(false, "", "Cannot connect to the Docker daemon"),
+            ContainerPresence::Unknown
+        ));
+        assert!(matches!(
+            container_state("koreograf-missing-runtime", "job"),
+            ContainerPresence::Unknown
+        ));
     }
 }

@@ -27,7 +27,7 @@ mod seed;
 mod settings;
 mod workflow;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
@@ -46,6 +46,8 @@ pub struct AppState {
     /// One backup or restore at a time. Take this before the database lock.
     pub(crate) maintenance: Mutex<()>,
     pub(crate) procs: Mutex<HashMap<String, RunningProc>>,
+    /// Jobs whose later output is discarded. Set when cancel commits.
+    pub(crate) canceled: Mutex<HashSet<String>>,
 }
 
 pub type Shared = Arc<AppState>;
@@ -98,6 +100,7 @@ pub fn boot(mut cfg: Config) -> anyhow::Result<Shared> {
         metrics: metrics::Metrics::new(),
         maintenance: Mutex::new(()),
         procs: Mutex::new(HashMap::new()),
+        canceled: Mutex::new(HashSet::new()),
     }))
 }
 
