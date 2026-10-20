@@ -299,18 +299,63 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/demo");
         let found = scan_project(&root).unwrap();
         assert_eq!(found.playbooks, vec!["site.yml".to_string()]);
-        let playbook = fs::read_to_string(root.join("site.yml")).unwrap();
-        for name in ["alertname", "instance", "heal_action"] {
-            assert!(
-                playbook.contains(&format!("{{{{ {name} | default(omit) }}}}")),
-                "{name} must fall back to the role default"
-            );
-        }
         assert!(found
             .inventories
             .iter()
             .any(|item| item.path == "inventory/hosts.ini" && item.format == "ini"));
         assert!(found.playbooks.iter().all(|path| !path.contains("tasks/")));
+    }
+
+    #[test]
+    #[ignore = "needs ansible-playbook"]
+    fn demo_playbook_keeps_role_defaults_and_accepts_alert_vars() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/demo");
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let work = std::env::temp_dir().join(format!("koreograf-demo-{nanos}"));
+        fs::create_dir_all(&work).unwrap();
+        let missing = run_demo_playbook(&root, &work, &[]);
+        assert!(missing.contains("alertname: manual"), "{missing}");
+        assert!(missing.contains("instance: localhost"), "{missing}");
+        assert!(missing.contains("action: noop"), "{missing}");
+        let injected = run_demo_playbook(
+            &root,
+            &work,
+            &[
+                "alertname=DiskFull",
+                "instance=web-1",
+                "heal_action=cleanup-tmp",
+            ],
+        );
+        assert!(injected.contains("alertname: DiskFull"), "{injected}");
+        assert!(injected.contains("instance: web-1"), "{injected}");
+        assert!(injected.contains("action: cleanup-tmp"), "{injected}");
+        let _ = fs::remove_dir_all(work);
+    }
+
+    fn run_demo_playbook(root: &Path, work: &Path, extra: &[&str]) -> String {
+        let mut cmd = std::process::Command::new("ansible-playbook");
+        cmd.arg("-i")
+            .arg("localhost,")
+            .arg("-c")
+            .arg("local")
+            .arg("site.yml")
+            .arg("-e")
+            .arg(format!("koreograf_work={}", work.display()))
+            .current_dir(root);
+        for item in extra {
+            cmd.arg("-e").arg(*item);
+        }
+        let output = cmd.output().unwrap();
+        assert!(
+            output.status.success(),
+            "stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        fs::read_to_string(work.join("incident-report.txt")).unwrap()
     }
 
     #[test]

@@ -2,13 +2,16 @@
 # Controller-side record of a self-heal decision.
 # Koreograf injects koreograf_work, and alertname, instance and
 # heal_action when a hook or the template provides them. A missing
-# name keeps the role default.
+# name is left unset so the role default applies. omit is only
+# honored for module options, not for these role parameters.
 - name: Respond to an alert
   hosts: all
   gather_facts: false
+  pre_tasks:
+    - name: Map injected alert variables onto the role parameters
+      ansible.builtin.set_fact:
+        "{{ item.key }}": "{{ lookup('ansible.builtin.vars', item.value) }}"
+      loop: "{{ {'incident_report_alertname': 'alertname', 'incident_report_instance': 'instance', 'incident_report_action': 'heal_action'} | dict2items }}"
+      when: item.value in vars
   roles:
     - role: incident_report
-      vars:
-        incident_report_alertname: "{{ alertname | default(omit) }}"
-        incident_report_instance: "{{ instance | default(omit) }}"
-        incident_report_action: "{{ heal_action | default(omit) }}"
