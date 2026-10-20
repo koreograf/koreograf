@@ -47,7 +47,9 @@ jobs:
           toolchain: 1.89.0
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Check the minimum supported Rust version
-        run: cargo check --workspace --all-targets --locked
+        run: |
+          rustc +1.89.0 --version
+          cargo +1.89.0 check --workspace --all-targets --locked
 
   web:
     name: web
@@ -134,4 +136,4 @@ jobs:
         with:
           node-version: 24
       - name: Validate the Renovate config
-        run: npx --yes --package renovate@44 renovate-config-validator
+        run: npx --yes --package renovate@44.172.0 renovate-config-validator
