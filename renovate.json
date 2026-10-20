@@ -10,11 +10,12 @@
   "timezone": "Europe/Berlin",
   "schedule": ["before 6am on monday"],
   "prConcurrentLimit": 5,
-  "separateMajorMinor": true,
-  "semanticCommits": "enabled",
+  "automerge": false,
   "semanticCommitType": "chore",
   "semanticCommitScope": "deps",
   "labels": ["dependencies"],
+  "ignorePaths": ["**/node_modules/**"],
+  "pre-commit": { "enabled": true },
   "vulnerabilityAlerts": {
     "labels": ["dependencies", "security"],
     "schedule": ["at any time"]
@@ -57,6 +58,17 @@
       "packageNameTemplate": "hadolint/hadolint",
       "datasourceTemplate": "github-releases",
       "extractVersionTemplate": "^v(?<version>\\d+\\.\\d+\\.\\d+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "Renovate release that validates this config in CI",
+      "managerFilePatterns": ["/^\\.github/workflows/ci\\.yml$/"],
+      "matchStrings": [
+        "--package renovate@(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "renovate",
+      "packageNameTemplate": "renovate",
+      "datasourceTemplate": "npm"
     }
   ],
   "packageRules": [
@@ -64,6 +76,12 @@
       "description": "The MSRV check stays on Rust 1.89",
       "matchPackageNames": ["rust", "library/rust"],
       "matchCurrentValue": "/^1\\.89(\\.0)?$/",
+      "enabled": false
+    },
+    {
+      "description": "OpenTofu required_version is not the HashiCorp Terraform product",
+      "matchManagers": ["terraform"],
+      "matchDepTypes": ["required_version"],
       "enabled": false
     },
     {
@@ -97,6 +115,11 @@
       "minimumReleaseAge": "3 days"
     },
     {
+      "description": "The Renovate validator pin waits three days",
+      "matchPackageNames": ["renovate"],
+      "minimumReleaseAge": "3 days"
+    },
+    {
       "description": "One pull request for every GitHub Action",
       "matchManagers": ["github-actions"],
       "groupName": "github actions"
@@ -122,42 +145,14 @@
       "description": "Development Rust channel, image, and CI toolchain input move together",
       "matchPackageNames": ["rust", "library/rust"],
       "matchCurrentValue": "!/^1\\.89/",
-      "groupName": "rust toolchain"
+      "groupName": "rust toolchain",
+      "semanticCommitType": "fix"
     },
     {
       "description": "Keep the image on a bookworm patch tag",
       "matchDatasources": ["docker"],
       "matchPackageNames": ["rust", "library/rust"],
       "allowedVersions": "/^\\d+\\.\\d+\\.\\d+-bookworm$/"
-    },
-    {
-      "description": "Automerge patch and digest pins of GitHub Actions",
-      "matchManagers": ["github-actions"],
-      "matchUpdateTypes": ["patch", "pin", "digest"],
-      "automerge": true,
-      "platformAutomerge": true
-    },
-    {
-      "description": "Automerge patch updates of npm dev dependencies",
-      "matchManagers": ["npm"],
-      "matchDepTypes": ["devDependencies"],
-      "matchUpdateTypes": ["patch", "pin", "digest"],
-      "automerge": true,
-      "platformAutomerge": true
-    },
-    {
-      "description": "Automerge patch and digest pins of pre-commit, Galaxy, and demo OpenTofu providers",
-      "matchManagers": ["pre-commit", "ansible-galaxy", "terraform"],
-      "matchUpdateTypes": ["patch", "pin", "digest"],
-      "automerge": true,
-      "platformAutomerge": true
-    },
-    {
-      "description": "Automerge Shellcheck and Hadolint patch releases",
-      "matchPackageNames": ["koalaman/shellcheck", "hadolint/hadolint"],
-      "matchUpdateTypes": ["patch", "pin", "digest"],
-      "automerge": true,
-      "platformAutomerge": true
     },
     {
       "description": "Majors are reviewed by hand and are never titled as a breaking feature",
