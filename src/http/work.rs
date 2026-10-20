@@ -562,7 +562,7 @@ pub async fn test_hook(
             "annotations": {"summary": "Test delivery from the Koreograf UI"}
         }]
     });
-    let dispatch = jobs::accept_hook(&state, &hook, &payload)?;
+    let dispatch = jobs::accept_hook(&state, &hook, &payload, Some(&user.username))?;
     Ok(accepted(json!(dispatch_json(&dispatch))))
 }
 
@@ -578,7 +578,7 @@ pub async fn ingest(
     if !crypto::tokens_equal(&hook.token, &token) {
         return Err(ApiError::Unauthorized);
     }
-    let dispatch = jobs::accept_hook(&state, &hook, &payload)?;
+    let dispatch = jobs::accept_hook(&state, &hook, &payload, None)?;
     Ok(Json(dispatch_json(&dispatch)))
 }
 

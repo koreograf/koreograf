@@ -353,13 +353,28 @@ pub async fn create_project(
     }
     match body.source_type.as_str() {
         "path" => {
-            if !std::path::Path::new(source).is_dir() {
-                return Err(ApiError::bad("the_project_path_is_not_a_directory"));
-            }
+            runner::authorize_project_source(
+                "path",
+                source,
+                &state.cfg.data_dir,
+                &state.cfg.project_roots,
+                user.is_admin,
+            )
+            .map_err(project_path_error)?;
         }
         "git" => {
             if !runner::valid_git(source) {
                 return Err(ApiError::bad("the_git_address_must_be_http_s_ssh"));
+            }
+            if source.starts_with("file://") {
+                runner::authorize_project_source(
+                    "git",
+                    source,
+                    &state.cfg.data_dir,
+                    &state.cfg.project_roots,
+                    user.is_admin,
+                )
+                .map_err(project_path_error)?;
             }
         }
         _ => return Err(ApiError::bad("source_is_path_or_git")),
@@ -379,6 +394,18 @@ pub async fn create_project(
     db::insert_project(&db, &project)?;
     let stored = db::project(&db, &project.id)?.ok_or(ApiError::NotFound)?;
     Ok(created(json!(stored)))
+}
+
+fn project_path_error(err: runner::ProjectPathError) -> ApiError {
+    match err {
+        runner::ProjectPathError::NotDirectory => {
+            ApiError::bad("the_project_path_is_not_a_directory")
+        }
+        runner::ProjectPathError::Denied => ApiError::bad("the_project_path_is_not_allowed"),
+        runner::ProjectPathError::AdminsOnly => {
+            ApiError::bad("path_projects_are_limited_to_administrators")
+        }
+    }
 }
 
 fn check_team_ids(

@@ -19,6 +19,8 @@ See `.env.example`. Comments in that file are still German.
 | `KOREOGRAF_ADMIN_USER` | `admin` |
 | `KOREOGRAF_ADMIN_PASSWORD` | empty, then generated once |
 | `KOREOGRAF_RUNNER` | `auto` (`local` or `docker`) |
+| `KOREOGRAF_LOCAL_RUNNER_FOR` | `admins` (`all` on a trusted network) |
+| `KOREOGRAF_PROJECT_ROOTS` | empty. Comma-separated absolute directories |
 | `KOREOGRAF_JOB_TIMEOUT_SECS` | `1800` (30–86400) |
 | `KOREOGRAF_SECRET_KEY` | 64 hex characters, otherwise `data/secret.key` |
 | `KOREOGRAF_LOG_FORMAT` | empty, text on stdout. `json` for Promtail |
@@ -31,5 +33,9 @@ See `.env.example`. Comments in that file are still German.
 Directory sign-in, including these four variables, is described in [Organizations, teams, LDAP, and Active Directory](authentication.md).
 
 `auto` looks for `docker` and `podman`. If the runtime is missing, jobs run locally. `local` ignores execution environments and writes that into the job log. `docker` fails a run that has an image set when no runtime is reachable. Templates without an environment always run locally.
+
+`KOREOGRAF_LOCAL_RUNNER_FOR` is `admins` or `all`. The default is `admins`. An operator, an anonymous webhook, and a workflow started by either of those cannot start a job on the controller. An administrator can, and a workflow they start keeps that attribution. The Test button on a webhook runs as the signed-in user. `all` is for a trusted network where those jobs must run locally. The value comes from the environment, not from Settings.
+
+`KOREOGRAF_PROJECT_ROOTS` lists absolute directories separated by commas. Empty means only an administrator can add a path project or a `file://` Git URL. An operator can add one when the directory is under a listed root. `/`, `/etc`, `/proc`, `/sys`, `/dev`, `/run`, `/boot`, `/root`, `/var/run`, and the data directory are rejected for everyone. A `file://` URL is accepted for an empty host or `localhost`. Git's file protocol stays off for every other URL.
 
 What the database file holds, and why a `postgres://` URL stops startup, is in [Database and backup](backup-restore.md). Log fields are in [Logs and Prometheus](observability.md). Directory, proxy, runner, and timeout values saved in the UI are in [Organizations, teams, LDAP, and Active Directory](authentication.md#saved-settings).

@@ -11,6 +11,8 @@ services:
       KOREOGRAF_ADMIN_USER: ${KOREOGRAF_ADMIN_USER:-admin}
       KOREOGRAF_ADMIN_PASSWORD: ${KOREOGRAF_ADMIN_PASSWORD:-}
       KOREOGRAF_RUNNER: ${KOREOGRAF_RUNNER:-auto}
+      # admins oder all. Vorgabe admins. all nur im vertrauten Netz.
+      KOREOGRAF_LOCAL_RUNNER_FOR: ${KOREOGRAF_LOCAL_RUNNER_FOR:-admins}
       KOREOGRAF_JOB_TIMEOUT_SECS: ${KOREOGRAF_JOB_TIMEOUT_SECS:-1800}
       KOREOGRAF_SECRET_KEY: ${KOREOGRAF_SECRET_KEY:-}
       # Verzeichnis, Proxy, Runner und Zeitlimit gelten bis zum ersten Speichern

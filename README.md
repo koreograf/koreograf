@@ -53,7 +53,7 @@ Sign in, select the team `Plattform`, and press `Test alert`. The workflow runs 
 
 ## Security
 
-The prototype is meant for a trusted network; see [Security](docs/security.md). Report vulnerabilities as described in [SECURITY.md](SECURITY.md).
+The prototype is meant for a trusted network. Local jobs and arbitrary project paths are limited to administrators unless the environment opts in. See [Security](docs/security.md). Report vulnerabilities as described in [SECURITY.md](SECURITY.md).
 
 ## License
 

@@ -797,6 +797,8 @@ mod tests {
             admin_password: Some("test-admin-pass".into()),
             runner: RunnerMode::Local,
             job_timeout_secs: 60,
+            local_jobs: crate::config::LocalJobs::All,
+            project_roots: Vec::new(),
             ldap: None,
         })
         .unwrap()

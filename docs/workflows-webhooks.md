@@ -24,7 +24,7 @@ receivers:
         send_resolved: true
 ```
 
-Grafana, contact point Webhook, same URL. In the UI an operator creates the hook and sees the finished URL. `Test` (German: `Test-Alert`) sends an Alertmanager body with the stored alert name.
+Grafana, contact point Webhook, same URL. In the UI an operator creates the hook and sees the finished URL. `Test` (German: `Test-Alert`) sends an Alertmanager body with the stored alert name. That button runs as the signed-in user. A public call stays anonymous, so it does not start a local job while local runs are limited to administrators. Event values reach Ansible as unsafe strings.
 
 ## Demo
 

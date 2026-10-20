@@ -66,30 +66,89 @@ fn split_dn(dn: &str) -> Vec<String> {
 }
 
 fn unescape_dn(value: &str) -> String {
-    let mut out = String::new();
-    let mut chars = value.chars();
-    while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            if let Some(next) = chars.next() {
-                out.push(next);
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\\' && index + 1 < bytes.len() {
+            if index + 2 < bytes.len() {
+                if let (Some(high), Some(low)) =
+                    (hex_val(bytes[index + 1]), hex_val(bytes[index + 2]))
+                {
+                    out.push(high * 16 + low);
+                    index += 3;
+                    continue;
+                }
             }
-        } else {
-            out.push(ch);
+            out.push(bytes[index + 1]);
+            index += 2;
+            continue;
         }
+        out.push(bytes[index]);
+        index += 1;
     }
-    out
+    String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Group names that should open a team: CN of each DN, plus the raw value.
-pub fn group_keys(groups: &[String]) -> HashSet<String> {
-    let mut keys = HashSet::new();
+fn hex_val(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// Directory DNs and the CN of each DN, kept apart so a CN cannot match a DN.
+#[derive(Debug, Default)]
+pub struct GroupKeys {
+    dns: HashSet<String>,
+    cns: HashSet<String>,
+}
+
+/// Accepts memberOf values and entry DNs. Other strings are ignored.
+pub fn group_keys(groups: &[String]) -> GroupKeys {
+    let mut keys = GroupKeys::default();
     for group in groups {
-        keys.insert(group.to_ascii_lowercase());
+        if !group.contains('=') {
+            continue;
+        }
+        let normalized = normalize_dn(group);
+        if normalized.is_empty() {
+            continue;
+        }
+        keys.dns.insert(normalized);
         if let Some(cn) = cn_from_dn(group) {
-            keys.insert(cn.to_ascii_lowercase());
+            keys.cns.insert(cn.to_ascii_lowercase());
         }
     }
     keys
+}
+
+/// A configured value that contains `=` is a DN. Anything else is a CN.
+pub fn group_matches(keys: &GroupKeys, ldap_group: &str) -> bool {
+    let configured = ldap_group.trim();
+    if configured.contains('=') {
+        keys.dns.contains(&normalize_dn(configured))
+    } else {
+        keys.cns.contains(&configured.to_ascii_lowercase())
+    }
+}
+
+fn normalize_dn(dn: &str) -> String {
+    let mut parts = Vec::new();
+    for part in split_dn(dn) {
+        let Some((key, value)) = part.split_once('=') else {
+            continue;
+        };
+        let key = unescape_dn(key.trim()).to_ascii_lowercase();
+        let value = unescape_dn(value.trim()).to_ascii_lowercase();
+        if key.is_empty() {
+            continue;
+        }
+        parts.push(format!("{key}={value}"));
+    }
+    parts.join(",")
 }
 
 pub async fn authenticate(
@@ -208,7 +267,10 @@ async fn search_groups(
         format!("(&(objectClass=group)(member={}))", escape_filter(user_dn)),
     ];
     for filter in filters {
-        let Ok(result) = ldap.search(base, Scope::Subtree, &filter, vec!["cn"]).await else {
+        let Ok(result) = ldap
+            .search(base, Scope::Subtree, &filter, vec!["objectClass"])
+            .await
+        else {
             continue;
         };
         let Ok((entries, _)) = result.success() else {
@@ -216,9 +278,7 @@ async fn search_groups(
         };
         for entry in entries {
             let parsed = SearchEntry::construct(entry);
-            if let Some(cn) = first_attr(&parsed, "cn") {
-                found.push(cn);
-            } else {
+            if !parsed.dn.is_empty() {
                 found.push(parsed.dn);
             }
         }
@@ -242,6 +302,30 @@ mod tests {
         let dn = r"CN=Plattform\, Ops,OU=Gruppen,DC=example,DC=com";
         assert_eq!(cn_from_dn(dn).as_deref(), Some("Plattform, Ops"));
         let keys = group_keys(&[dn.into()]);
-        assert!(keys.contains("plattform, ops"));
+        assert!(group_matches(&keys, "Plattform, Ops"));
+        assert!(group_matches(&keys, dn));
+        assert!(group_matches(
+            &keys,
+            "cn=Plattform\\, Ops, ou=Gruppen, dc=example, dc=com"
+        ));
+    }
+
+    #[test]
+    fn a_forged_rdn_does_not_match_the_real_group() {
+        let real = "cn=kg-admins,ou=groups,dc=example,dc=com";
+        let spoof = r"cn=cn\3Dkg-admins\2Cou\3Dgroups\2Cdc\3Dexample\2Cdc\3Dcom,ou=groups,dc=example,dc=com";
+        let forged = group_keys(&[spoof.into()]);
+        assert!(!group_matches(&forged, real));
+        assert!(!group_matches(&forged, "kg-admins"));
+        let real_keys = group_keys(&[real.into()]);
+        assert!(group_matches(&real_keys, real));
+        assert!(group_matches(&real_keys, "KG-ADMINS"));
+        assert!(!group_matches(&real_keys, spoof));
+        let hex = r"cn=kg\2Dadmins,ou=groups,dc=example,dc=com";
+        assert!(group_matches(&group_keys(&[hex.into()]), real));
+        assert!(!group_matches(
+            &group_keys(&["kg-admins".into()]),
+            "kg-admins"
+        ));
     }
 }

@@ -8,7 +8,7 @@ Roles are `viewer`, `operator`, and `owner`. The local administrator bypasses th
 
 Memberships from LDAP have source `ldap` and role `operator`. A viewer or owner role is a manual membership on a team the directory does not fill for that user. `POST /api/teams/{id}/members` rejects a role change on an existing directory membership with `the_membership_comes_from_ldap_or_active_directory`. One user has one membership per team, so the directory row cannot also be a manual row. When the group disappears, only that membership is removed. A manual membership stays, and the next directory sync does not replace it. Removing the member is still allowed, and the directory can add that membership back as `operator`.
 
-A team stores an LDAP group as a CN or a DN. The comparison ignores case.
+A team stores an LDAP group as a CN or a DN. A value that contains `=` is a DN and matches only a directory DN. A CN matches that CN under the search base, including the same name in another OU. Comparison ignores case, ignores spaces around commas, and decodes RFC 4514 hex escapes.
 
 | Variable | LDAP | Active Directory |
 | --- | --- | --- |
@@ -26,7 +26,7 @@ A team stores an LDAP group as a CN or a DN. The comparison ignores case.
 
 Empty filters and attributes use the default for the selected mode. `KOREOGRAF_LDAP_STARTTLS=true` turns on StartTLS. `KOREOGRAF_LDAP_TLS_INSECURE=true` skips certificate checks. The service binds with `KOREOGRAF_LDAP_BIND_DN`, searches under `KOREOGRAF_LDAP_USER_BASE`, then binds with that user's password. `{username}` in the filter is escaped.
 
-Groups come from `KOREOGRAF_LDAP_GROUP_ATTR` on the user entry. When that value is empty and the attribute is not `memberOf`, `memberOf` is read as well. If the entry still has no groups, Koreograf searches for them. The search base is `KOREOGRAF_LDAP_GROUP_BASE`, or `KOREOGRAF_LDAP_USER_BASE` when the group base is empty. The search matches `groupOfNames` whose `member` is the user DN, `posixGroup` whose `memberUid` is the username, and `group` whose `member` is the user DN. When the user entry already lists groups, that search does not run.
+Groups come from `KOREOGRAF_LDAP_GROUP_ATTR` on the user entry. When that value is empty and the attribute is not `memberOf`, `memberOf` is read as well. If the entry still has no groups, Koreograf searches for them. The search base is `KOREOGRAF_LDAP_GROUP_BASE`, or `KOREOGRAF_LDAP_USER_BASE` when the group base is empty. The search matches `groupOfNames` whose `member` is the user DN, `posixGroup` whose `memberUid` is the username, and `group` whose `member` is the user DN. A group found by that search is the entry's DN. Attributes on the group entry are not the group name. When the user entry already lists groups, that search does not run. Sign-in with a directory password does not reuse a local account of the same username.
 
 ## Saved settings
 
@@ -46,6 +46,6 @@ Every signed-in user opens **My account** (German: **Mein Konto**) from their na
 
 Disabling an account ends that user's sessions. The next sign-in, after a correct password, answers `Das Konto ist deaktiviert.` You cannot disable or delete your own account. The last active administrator cannot be demoted, disabled, or deleted.
 
-There is no per-object role. A viewer sees projects, inventories, templates, jobs, and workflows. An operator launches jobs and edits those objects, plus workflows and webhooks. An owner also manages credentials, environments, and team members. The administrator flag skips the team-role check and can manage organizations, teams, users, settings, and backup.
+There is no per-object role. A viewer sees projects, inventories, templates, jobs, and workflows. An operator launches jobs and edits those objects, plus workflows and webhooks. A local job on the controller, and a project path outside `KOREOGRAF_PROJECT_ROOTS`, stay with an administrator. The default refuses the local job. Set `KOREOGRAF_LOCAL_RUNNER_FOR=all` only on a trusted network. An owner also manages credentials, environments, and team members. The administrator flag skips the team-role check and can manage organizations, teams, users, settings, and backup.
 
 `POST /api/teams/{id}/members` sets a manual role. The same call adds a user to a team they are not in yet.

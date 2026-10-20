@@ -7,6 +7,23 @@ pub enum RunnerMode {
     Local,
 }
 
+/// Who may start a job on the controller. The default is administrators.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LocalJobs {
+    Admins,
+    All,
+}
+
+impl LocalJobs {
+    pub fn parse(value: &str) -> Self {
+        if value.trim().eq_ignore_ascii_case("all") {
+            Self::All
+        } else {
+            Self::Admins
+        }
+    }
+}
+
 impl RunnerMode {
     pub fn parse(value: &str) -> Self {
         match value.trim().to_ascii_lowercase().as_str() {
@@ -67,6 +84,10 @@ pub struct Config {
     pub admin_password: Option<String>,
     pub runner: RunnerMode,
     pub job_timeout_secs: u64,
+    /// `KOREOGRAF_LOCAL_RUNNER_FOR`. Not a saved setting.
+    pub local_jobs: LocalJobs,
+    /// `KOREOGRAF_PROJECT_ROOTS`. Empty means path projects are admin-only.
+    pub project_roots: Vec<PathBuf>,
     pub ldap: Option<LdapConfig>,
 }
 
@@ -121,9 +142,20 @@ impl Config {
                 .parse()
                 .unwrap_or(1800)
                 .clamp(30, 86_400),
+            local_jobs: LocalJobs::parse(&env_string("KOREOGRAF_LOCAL_RUNNER_FOR")),
+            project_roots: env_paths("KOREOGRAF_PROJECT_ROOTS"),
             ldap,
         }
     }
+}
+
+fn env_paths(key: &str) -> Vec<PathBuf> {
+    env_string(key)
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(PathBuf::from)
+        .collect()
 }
 
 fn env_string(key: &str) -> String {

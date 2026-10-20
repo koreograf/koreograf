@@ -24,6 +24,9 @@ secretKey: ""
 runner:
   # auto, docker oder local
   mode: auto
+  # admins oder all. Vorgabe admins: nur Administratoren starten einen lokalen Job.
+  # all ist für ein vertrautes Netz, in dem Webhooks lokal laufen sollen.
+  localJobs: admins
   dockerSocket:
     enabled: false
     hostPath: /var/run/docker.sock

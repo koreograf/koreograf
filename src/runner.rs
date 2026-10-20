@@ -1,5 +1,5 @@
 use std::fs::{self, OpenOptions};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -8,7 +8,7 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::Command;
 
 use crate::cacheinfo::dir_size;
-use crate::config::RunnerMode;
+use crate::config::{LocalJobs, RunnerMode};
 use crate::db::{self, Environment, Project, Template};
 use crate::metrics::{self, JobMeta};
 use crate::Shared;
@@ -495,6 +495,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
     let work = state.cfg.data_dir.join("jobs").join(job_id);
     let stage = work.join("project");
     fs::create_dir_all(&stage).map_err(|e| e.to_string())?;
+    let _scrub = SecretScrub { work: work.clone() };
     let cache = state.cfg.data_dir.join("cache").join(&job.team_id);
     for sub in ["collections", "roles", "tofu"] {
         fs::create_dir_all(cache.join(sub)).map_err(|e| e.to_string())?;
@@ -612,13 +613,11 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
     if let Value::Object(map) = &mut extra {
         map.insert("koreograf_work".into(), Value::String(view_work.clone()));
     }
-    fs::write(
-        work.join("extra.json"),
-        serde_json::to_vec_pretty(&extra).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
+    let extra_file = write_extra_file(&work, &template.tool, &extra)?;
 
-    let mut env = base_env(container_mode.is_some(), &work);
+    let mut env = Vec::new();
+    export_plain_vars(&extra, &mut env);
+    env.extend(base_env(container_mode.is_some(), &work));
     env.push(("KOREOGRAF_TOOL".into(), template.tool.clone()));
     env.push(("KOREOGRAF_ENTRYPOINT".into(), entrypoint.clone()));
     if template.tool == "ansible" {
@@ -643,6 +642,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
         &stage,
         &cache,
         &inventory_rel,
+        &extra_file,
     );
     let credential_ids = saved_credential_ids(&job, &template);
     apply_credentials(
@@ -653,7 +653,6 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
         container_mode.is_some(),
         &mut env,
     )?;
-    export_plain_vars(&extra, &mut env);
     apply_proxy_env(&mut env, &settings.proxy);
 
     if canceled(state, job_id) {
@@ -696,9 +695,19 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
         )
         .await?
     } else {
+        if state.cfg.local_jobs == LocalJobs::Admins {
+            let allowed = {
+                let db = state.db().map_err(|e| e.to_string())?;
+                crate::auth::launcher_is_admin(&db, &job.launched_by).map_err(|e| e.to_string())?
+            };
+            if !allowed {
+                return Err("Local runs are limited to administrators.".into());
+            }
+        }
         log(state, job_id, "system", "Local run on the controller.");
         let mut cmd = Command::new("sh");
-        cmd.arg(work.join("wrapper.sh"))
+        cmd.env_clear()
+            .arg(work.join("wrapper.sh"))
             .current_dir(&work)
             .envs(env)
             .stdout(Stdio::piped())
@@ -781,6 +790,7 @@ fn push_paths(
     stage: &Path,
     cache: &Path,
     inventory_rel: &str,
+    extra_file: &str,
 ) {
     let (project, work_s, cols, roles, tofu, inventory, extra) = if container {
         (
@@ -790,7 +800,7 @@ fn push_paths(
             "/cache/roles".into(),
             "/cache/tofu".into(),
             format!("/runner/work/{inventory_rel}"),
-            "/runner/work/extra.json".into(),
+            format!("/runner/work/{extra_file}"),
         )
     } else {
         (
@@ -800,7 +810,7 @@ fn push_paths(
             cache.join("roles").display().to_string(),
             cache.join("tofu").display().to_string(),
             work.join(inventory_rel).display().to_string(),
-            work.join("extra.json").display().to_string(),
+            work.join(extra_file).display().to_string(),
         )
     };
     env.push(("KOREOGRAF_PROJECT".into(), project));
@@ -827,7 +837,7 @@ fn export_plain_vars(extra: &Value, env: &mut Vec<(String, String)>) {
         return;
     };
     for (key, value) in map {
-        if !safe_ident(key) {
+        if !safe_ident(key) || crate::credentials::reserved_env_name(key) {
             continue;
         }
         if let Some(text) = value.as_str() {
@@ -1082,10 +1092,401 @@ pub fn valid_image(image: &str) -> bool {
 }
 
 fn sync_log_line(err: String) -> String {
-    if err == "sync_the_git_project_first" {
-        "Sync the Git project first.".into()
+    match err.as_str() {
+        "sync_the_git_project_first" => "Sync the Git project first.".into(),
+        "the_project_path_is_not_a_directory" => ProjectPathError::NotDirectory.job_text().into(),
+        "the_project_path_is_not_allowed" => ProjectPathError::Denied.job_text().into(),
+        "path_projects_are_limited_to_administrators" => {
+            ProjectPathError::AdminsOnly.job_text().into()
+        }
+        _ => err,
+    }
+}
+
+struct SecretScrub {
+    work: PathBuf,
+}
+
+impl Drop for SecretScrub {
+    fn drop(&mut self) {
+        scrub_work_dir(&self.work);
+    }
+}
+
+const SECRET_FILES: &[&str] = &[
+    "ssh_key",
+    "connection.pass",
+    "key.pass",
+    "become.pass",
+    "auth.json",
+    "git.pass",
+    "git_key",
+    "gce.json",
+    "vault.pass",
+    "vault.list",
+    "container.env",
+    "git-askpass",
+    "askpass",
+];
+
+pub(crate) fn scrub_job_dirs(data_dir: &Path) {
+    let Ok(entries) = fs::read_dir(data_dir.join("jobs")) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            scrub_work_dir(&entry.path());
+        }
+    }
+}
+
+fn scrub_work_dir(work: &Path) {
+    let Ok(entries) = fs::read_dir(work) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if is_secret_file(name) {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
+fn is_secret_file(name: &str) -> bool {
+    SECRET_FILES
+        .iter()
+        .any(|base| name == *base || name.ends_with(&format!("-{base}")))
+}
+
+fn write_extra_file(work: &Path, tool: &str, extra: &Value) -> Result<String, String> {
+    if tool == "ansible" {
+        let name = "extra.yml".to_string();
+        fs::write(work.join(&name), ansible_extra_yaml(extra)).map_err(|err| err.to_string())?;
+        Ok(name)
     } else {
-        err
+        let name = "extra.json".to_string();
+        let bytes = serde_json::to_vec_pretty(extra).map_err(|err| err.to_string())?;
+        fs::write(work.join(&name), bytes).map_err(|err| err.to_string())?;
+        Ok(name)
+    }
+}
+
+fn ansible_extra_yaml(value: &Value) -> String {
+    let mut out = String::from("---\n");
+    match value {
+        Value::Object(map) => write_yaml_object(&mut out, map, 0),
+        other => {
+            write_yaml_scalar(&mut out, other);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+fn write_yaml_object(out: &mut String, map: &serde_json::Map<String, Value>, indent: usize) {
+    for (key, item) in map {
+        write_indent(out, indent);
+        out.push_str(&yaml_key(key));
+        out.push(':');
+        match item {
+            Value::Object(child) if child.is_empty() => out.push_str(" {}\n"),
+            Value::Object(child) => {
+                out.push('\n');
+                write_yaml_object(out, child, indent + 2);
+            }
+            Value::Array(items) if items.is_empty() => out.push_str(" []\n"),
+            Value::Array(items) => {
+                out.push('\n');
+                write_yaml_array(out, items, indent + 2);
+            }
+            _ => {
+                out.push(' ');
+                write_yaml_scalar(out, item);
+                out.push('\n');
+            }
+        }
+    }
+}
+
+fn write_yaml_array(out: &mut String, items: &[Value], indent: usize) {
+    for item in items {
+        write_indent(out, indent);
+        out.push_str("- ");
+        match item {
+            Value::Object(child) if child.is_empty() => out.push_str("{}\n"),
+            Value::Object(child) => {
+                out.push('\n');
+                write_yaml_object(out, child, indent + 2);
+            }
+            Value::Array(nested) if nested.is_empty() => out.push_str("[]\n"),
+            Value::Array(nested) => {
+                out.push('\n');
+                write_yaml_array(out, nested, indent + 2);
+            }
+            _ => {
+                write_yaml_scalar(out, item);
+                out.push('\n');
+            }
+        }
+    }
+}
+
+fn write_yaml_scalar(out: &mut String, value: &Value) {
+    match value {
+        Value::Null => out.push_str("null"),
+        Value::Bool(true) => out.push_str("true"),
+        Value::Bool(false) => out.push_str("false"),
+        Value::Number(number) => out.push_str(&number.to_string()),
+        Value::String(text) => out.push_str(&yaml_unsafe(text)),
+        Value::Array(_) | Value::Object(_) => out.push_str("null"),
+    }
+}
+
+fn yaml_key(key: &str) -> String {
+    if safe_ident(key) {
+        key.to_string()
+    } else {
+        format!("'{}'", key.replace('\'', "''"))
+    }
+}
+
+fn yaml_unsafe(text: &str) -> String {
+    if text
+        .chars()
+        .any(|ch| ch == '\n' || ch == '\r' || ch.is_control())
+    {
+        let mut escaped = String::new();
+        for ch in text.chars() {
+            match ch {
+                '\\' => escaped.push_str("\\\\"),
+                '"' => escaped.push_str("\\\""),
+                '\n' => escaped.push_str("\\n"),
+                '\r' => escaped.push_str("\\r"),
+                other if other.is_control() => {
+                    escaped.push_str(&format!("\\u{:04x}", u32::from(other)));
+                }
+                other => escaped.push(other),
+            }
+        }
+        format!("!unsafe \"{escaped}\"")
+    } else {
+        format!("!unsafe '{}'", text.replace('\'', "''"))
+    }
+}
+
+fn write_indent(out: &mut String, indent: usize) {
+    for _ in 0..indent {
+        out.push(' ');
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectPathError {
+    NotDirectory,
+    Denied,
+    AdminsOnly,
+}
+
+impl ProjectPathError {
+    pub fn api_key(self) -> &'static str {
+        match self {
+            Self::NotDirectory => "the_project_path_is_not_a_directory",
+            Self::Denied => "the_project_path_is_not_allowed",
+            Self::AdminsOnly => "path_projects_are_limited_to_administrators",
+        }
+    }
+
+    pub fn job_text(self) -> &'static str {
+        match self {
+            Self::NotDirectory => "The project path is not a directory.",
+            Self::Denied => "The project path is not allowed.",
+            Self::AdminsOnly => "Path projects are limited to administrators.",
+        }
+    }
+}
+
+enum PathState {
+    Ready(PathBuf),
+    Missing,
+}
+
+pub fn authorize_project_source(
+    source_type: &str,
+    source: &str,
+    data_dir: &Path,
+    roots: &[PathBuf],
+    is_admin: bool,
+) -> Result<(), ProjectPathError> {
+    let path = match source_type {
+        "path" => PathBuf::from(source),
+        "git" => file_url_path(source).ok_or(ProjectPathError::Denied)?,
+        _ => return Err(ProjectPathError::Denied),
+    };
+    match assess_path(&path, data_dir)? {
+        PathState::Missing => {
+            if source_type == "path" {
+                Err(ProjectPathError::NotDirectory)
+            } else if is_admin {
+                Ok(())
+            } else {
+                Err(ProjectPathError::AdminsOnly)
+            }
+        }
+        PathState::Ready(canonical) => {
+            if is_admin || within_roots(&canonical, roots) {
+                Ok(())
+            } else {
+                Err(ProjectPathError::AdminsOnly)
+            }
+        }
+    }
+}
+
+fn stored_directory(path: &Path, data_dir: &Path) -> Result<PathBuf, String> {
+    match assess_path(path, data_dir) {
+        Ok(PathState::Ready(canonical)) => Ok(canonical),
+        Ok(PathState::Missing) => Err("the_project_path_is_not_a_directory".into()),
+        Err(err) => Err(err.api_key().into()),
+    }
+}
+
+fn file_clone_allowed(url: &str, data_dir: &Path) -> Result<bool, String> {
+    let Some(path) = file_url_path(url) else {
+        if url.starts_with("file://") {
+            return Err("the_project_path_is_not_allowed".into());
+        }
+        return Ok(false);
+    };
+    match assess_path(&path, data_dir) {
+        Ok(_) => Ok(true),
+        Err(err) => Err(err.api_key().into()),
+    }
+}
+
+fn file_url_path(url: &str) -> Option<PathBuf> {
+    let rest = url.strip_prefix("file://")?;
+    let path = if let Some(after) = rest.strip_prefix("localhost/") {
+        format!("/{after}")
+    } else if rest == "localhost" {
+        "/".to_string()
+    } else if let Some(stripped) = rest.strip_prefix('/') {
+        format!("/{stripped}")
+    } else {
+        return None;
+    };
+    let decoded = percent_decode(&path);
+    if decoded.contains('\0') {
+        return None;
+    }
+    Some(PathBuf::from(decoded))
+}
+
+fn assess_path(path: &Path, data_dir: &Path) -> Result<PathState, ProjectPathError> {
+    let lexical = lexical_normal(path);
+    if is_sensitive(&lexical) || relates_to_data(&lexical, data_dir) {
+        return Err(ProjectPathError::Denied);
+    }
+    match std::fs::canonicalize(path) {
+        Ok(canonical) => {
+            if is_sensitive(&canonical) || relates_to_data(&canonical, data_dir) {
+                return Err(ProjectPathError::Denied);
+            }
+            if !canonical.is_dir() {
+                return Err(ProjectPathError::NotDirectory);
+            }
+            Ok(PathState::Ready(canonical))
+        }
+        Err(_) => Ok(PathState::Missing),
+    }
+}
+
+fn within_roots(canonical: &Path, roots: &[PathBuf]) -> bool {
+    roots.iter().any(|root| {
+        let Ok(root) = std::fs::canonicalize(root) else {
+            return false;
+        };
+        canonical.starts_with(&root)
+    })
+}
+
+fn relates_to_data(path: &Path, data_dir: &Path) -> bool {
+    let data = data_path(data_dir);
+    path == data || path.starts_with(&data) || data.starts_with(path)
+}
+
+fn data_path(data_dir: &Path) -> PathBuf {
+    std::fs::canonicalize(data_dir).unwrap_or_else(|_| {
+        std::path::absolute(data_dir).unwrap_or_else(|_| data_dir.to_path_buf())
+    })
+}
+
+fn covers_data_dir(host: &Path, data_dir: &Path) -> bool {
+    let host = std::fs::canonicalize(host).unwrap_or_else(|_| host.to_path_buf());
+    let data = data_path(data_dir);
+    host == data || data.starts_with(&host)
+}
+
+fn is_sensitive(path: &Path) -> bool {
+    if path == Path::new("/") {
+        return true;
+    }
+    const DENY: &[&str] = &[
+        "/etc", "/proc", "/sys", "/dev", "/run", "/boot", "/root", "/var/run",
+    ];
+    DENY.iter().any(|item| {
+        let item = Path::new(item);
+        path == item || path.starts_with(item)
+    })
+}
+
+fn lexical_normal(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    out.push("..");
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let (Some(high), Some(low)) =
+                (hex_digit(bytes[index + 1]), hex_digit(bytes[index + 2]))
+            {
+                out.push(high * 16 + low);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
     }
 }
 
@@ -1098,19 +1499,13 @@ pub async fn materialize_project(
     match project.source_type.as_str() {
         "path" => {
             let path = PathBuf::from(&project.source);
-            if !path.is_dir() {
-                let shown = path.display().to_string();
-                return Err(crate::error::message(
-                    "project.path_not_directory",
-                    &[("path", &shown)],
-                ));
-            }
-            Ok(path)
+            stored_directory(&path, data_dir)
         }
         "git" => {
             if !valid_git(&project.source) {
                 return Err("the_git_address_is_invalid".into());
             }
+            let allow_file = file_clone_allowed(&project.source, data_dir)?;
             let dest = data_dir.join("checkouts").join(&project.id);
             if !update {
                 return if dest.join(".git").is_dir() {
@@ -1119,7 +1514,7 @@ pub async fn materialize_project(
                     Err("sync_the_git_project_first".into())
                 };
             }
-            git_sync(&project.source, &project.revision, &dest, proxy).await?;
+            git_sync(&project.source, &project.revision, &dest, proxy, allow_file).await?;
             Ok(dest)
         }
         other => Err(crate::error::message(
@@ -1150,11 +1545,12 @@ pub fn valid_revision(revision: &str) -> bool {
                 .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-')))
 }
 
-fn git_cmd(proxy: &crate::settings::ProxySettings) -> Command {
+fn git_cmd(proxy: &crate::settings::ProxySettings, allow_file: bool) -> Command {
     let mut cmd = Command::new("git");
-    cmd.arg("-c")
-        .arg("protocol.file.allow=always")
-        .env("GIT_TERMINAL_PROMPT", "0")
+    if allow_file {
+        cmd.arg("-c").arg("protocol.file.allow=always");
+    }
+    cmd.env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "never")
         .stdin(Stdio::null())
         .kill_on_drop(true);
@@ -1217,8 +1613,9 @@ async fn git_clone(
     revision: &str,
     dest: &Path,
     proxy: &crate::settings::ProxySettings,
+    allow_file: bool,
 ) -> Result<(), String> {
-    let mut cmd = git_cmd(proxy);
+    let mut cmd = git_cmd(proxy, allow_file);
     cmd.arg("clone").arg("--depth").arg("1");
     if !revision.is_empty() {
         cmd.arg("--branch").arg(revision);
@@ -1231,15 +1628,16 @@ async fn git_checkout(
     revision: &str,
     dest: &Path,
     proxy: &crate::settings::ProxySettings,
+    allow_file: bool,
 ) -> Result<(), String> {
-    let mut fetch = git_cmd(proxy);
+    let mut fetch = git_cmd(proxy, allow_file);
     fetch
         .arg("-C")
         .arg(dest)
         .args(["fetch", "--depth", "1", "origin"])
         .arg(revision);
     git_run(fetch).await?;
-    let mut checkout = git_cmd(proxy);
+    let mut checkout = git_cmd(proxy, allow_file);
     checkout
         .arg("-C")
         .arg(dest)
@@ -1251,13 +1649,14 @@ async fn git_update(
     revision: &str,
     dest: &Path,
     proxy: &crate::settings::ProxySettings,
+    allow_file: bool,
 ) -> Result<(), String> {
     if revision.is_empty() {
-        let mut cmd = git_cmd(proxy);
+        let mut cmd = git_cmd(proxy, allow_file);
         cmd.arg("-C").arg(dest).args(["pull", "--ff-only"]);
         return git_run(cmd).await;
     }
-    git_checkout(revision, dest, proxy).await
+    git_checkout(revision, dest, proxy, allow_file).await
 }
 
 async fn git_sync(
@@ -1265,6 +1664,7 @@ async fn git_sync(
     revision: &str,
     dest: &Path,
     proxy: &crate::settings::ProxySettings,
+    allow_file: bool,
 ) -> Result<(), String> {
     if !valid_revision(revision) {
         return Err("revision_is_invalid".into());
@@ -1274,19 +1674,19 @@ async fn git_sync(
             .map_err(|err| format!("Incomplete checkout cannot be removed: {err}"))?;
     }
     if dest.join(".git").is_dir() {
-        return git_update(revision, dest, proxy).await;
+        return git_update(revision, dest, proxy, allow_file).await;
     }
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
-    match git_clone(url, revision, dest, proxy).await {
+    match git_clone(url, revision, dest, proxy, allow_file).await {
         Ok(()) => Ok(()),
         Err(err) if !revision.is_empty() && missing_revision(&err) => {
             if dest.exists() {
                 fs::remove_dir_all(dest).map_err(|remove| remove.to_string())?;
             }
-            git_clone(url, "", dest, proxy).await?;
-            git_checkout(revision, dest, proxy).await
+            git_clone(url, "", dest, proxy, allow_file).await?;
+            git_checkout(revision, dest, proxy, allow_file).await
         }
         Err(err) => {
             if dest.exists() {
@@ -1380,6 +1780,11 @@ async fn run_container(state: &Shared, job_id: &str, run: ContainerRun<'_>) -> R
         env_file: work.join("container.env").display().to_string(),
         command: vec!["/runner/work/wrapper.sh".into()],
     };
+    for (host, _, _) in &spec.mounts {
+        if covers_data_dir(Path::new(host), &state.cfg.data_dir) {
+            return Err("The job container cannot mount the data directory.".into());
+        }
+    }
     log(
         state,
         job_id,
@@ -1895,5 +2300,144 @@ mod tests {
         assert!(!text.contains("Shell-Skript"), "{text}");
         assert!(!text.contains("Unbekanntes Werkzeug"), "{text}");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runner_env_wins_over_extra_vars() {
+        let extra = serde_json::json!({
+            "KOREOGRAF_ENTRYPOINT": "/tmp/evil.sh",
+            "PATH": "/tmp/evil",
+            "LD_PRELOAD": "/tmp/lib.so",
+            "alertname": "DiskFull"
+        });
+        let mut env = Vec::new();
+        export_plain_vars(&extra, &mut env);
+        assert!(env
+            .iter()
+            .any(|(key, value)| key == "alertname" && value == "DiskFull"));
+        assert!(!env.iter().any(|(key, _)| key == "KOREOGRAF_ENTRYPOINT"));
+        assert!(!env.iter().any(|(key, _)| key == "PATH"));
+        assert!(!env.iter().any(|(key, _)| key == "LD_PRELOAD"));
+        env.extend(base_env(false, Path::new("/work")));
+        env.push(("KOREOGRAF_ENTRYPOINT".into(), "health.sh".into()));
+        let entry = env
+            .iter()
+            .rev()
+            .find(|(key, _)| key == "KOREOGRAF_ENTRYPOINT")
+            .expect("entrypoint");
+        assert_eq!(entry.1, "health.sh");
+    }
+
+    #[test]
+    fn ansible_extra_vars_are_unsafe_yaml() {
+        let extra = serde_json::json!({
+            "alertname": "{{ lookup('pipe', 'id') }}",
+            "count": 2,
+            "ok": true,
+            "missing": null,
+            "labels": {"instance": "web-1"},
+            "hosts": ["a"]
+        });
+        let yaml = ansible_extra_yaml(&extra);
+        assert!(yaml.starts_with("---\n"), "{yaml}");
+        assert!(
+            yaml.contains("alertname: !unsafe '{{ lookup(''pipe'', ''id'') }}'"),
+            "{yaml}"
+        );
+        assert!(yaml.contains("count: 2"), "{yaml}");
+        assert!(yaml.contains("ok: true"), "{yaml}");
+        assert!(yaml.contains("missing: null"), "{yaml}");
+        assert!(yaml.contains("instance: !unsafe 'web-1'"), "{yaml}");
+        assert!(yaml.contains("- !unsafe 'a'"), "{yaml}");
+        assert!(!yaml.contains("lookup('pipe'"), "{yaml}");
+    }
+
+    #[test]
+    fn scrub_removes_secret_files_and_keeps_notes() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let work = std::env::temp_dir().join(format!("koreograf-scrub-{nanos}"));
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::write(work.join("ssh_key"), "secret\n").unwrap();
+        std::fs::write(work.join("0-connection.pass"), "secret\n").unwrap();
+        std::fs::write(work.join("git-askpass"), "secret\n").unwrap();
+        std::fs::write(work.join("notes.txt"), "keep\n").unwrap();
+        std::fs::write(work.join("extra.json"), "{}\n").unwrap();
+        scrub_work_dir(&work);
+        assert!(!work.join("ssh_key").exists());
+        assert!(!work.join("0-connection.pass").exists());
+        assert!(!work.join("git-askpass").exists());
+        assert_eq!(
+            std::fs::read_to_string(work.join("notes.txt")).unwrap(),
+            "keep\n"
+        );
+        assert!(work.join("extra.json").exists());
+        let _ = std::fs::remove_dir_all(work);
+    }
+
+    #[test]
+    fn path_projects_reject_sensitive_directories() {
+        let data = std::env::temp_dir().join(format!(
+            "koreograf-paths-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&data).unwrap();
+        assert_eq!(
+            authorize_project_source("path", "/etc", &data, &[], true),
+            Err(ProjectPathError::Denied)
+        );
+        assert_eq!(
+            authorize_project_source("path", "/etc-custom-not-real", &data, &[], true),
+            Err(ProjectPathError::NotDirectory)
+        );
+        assert_eq!(
+            authorize_project_source("path", &data.display().to_string(), &data, &[], true),
+            Err(ProjectPathError::Denied)
+        );
+        let examples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/demo");
+        authorize_project_source("path", &examples.display().to_string(), &data, &[], true)
+            .expect("admin examples");
+        assert_eq!(
+            authorize_project_source("path", &examples.display().to_string(), &data, &[], false),
+            Err(ProjectPathError::AdminsOnly)
+        );
+        authorize_project_source(
+            "path",
+            &examples.display().to_string(),
+            &data,
+            &[examples.parent().unwrap().to_path_buf()],
+            false,
+        )
+        .expect("operator under root");
+        assert_eq!(
+            authorize_project_source("git", "file:///etc", &data, &[], true),
+            Err(ProjectPathError::Denied)
+        );
+        assert_eq!(
+            authorize_project_source("git", "file://localhost/etc", &data, &[], true),
+            Err(ProjectPathError::Denied)
+        );
+        assert_eq!(
+            authorize_project_source("git", "file://evil.example/tmp", &data, &[], true),
+            Err(ProjectPathError::Denied)
+        );
+        assert!(!file_clone_allowed("https://example.com/demo.git", &data).unwrap());
+        let _ = std::fs::remove_dir_all(data);
+    }
+
+    #[test]
+    fn a_mount_of_the_data_dir_is_rejected() {
+        let data = std::env::temp_dir();
+        assert!(covers_data_dir(&data, &data));
+        assert!(covers_data_dir(Path::new("/"), &data));
+        let child = data.join("koreograf-cache-child");
+        std::fs::create_dir_all(&child).unwrap();
+        assert!(!covers_data_dir(&child, &data));
+        let _ = std::fs::remove_dir(child);
     }
 }

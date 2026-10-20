@@ -4,6 +4,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use crate::config::{LocalJobs, RunnerMode};
 use crate::db::{self, Hook, Job, WorkflowJob};
 use crate::error::{ApiError, AppResult};
 use crate::hooks::{self, AlertEvent};
@@ -24,12 +25,21 @@ pub struct LaunchRequest {
 }
 
 pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
+    let settings = crate::settings::load(state)?;
     let id = Uuid::new_v4().to_string();
     {
         let db = state.db()?;
         let template = db::template(&db, &req.template_id)?.ok_or(ApiError::NotFound)?;
         if template.team_id != req.team_id {
             return Err(ApiError::Forbidden);
+        }
+        if refuses_local_launch(
+            state.cfg.local_jobs,
+            settings.runner,
+            template.environment_id.is_some(),
+        ) && !crate::auth::launcher_is_admin(&db, &req.launched_by)?
+        {
+            return Err(ApiError::bad("local_runs_are_limited_to_administrators"));
         }
         let parameters = match &req.parameters_override {
             Some(raw) => stored_parameters(raw)?,
@@ -74,6 +84,10 @@ pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
         runner::execute(shared, job_id).await;
     });
     Ok(id)
+}
+
+fn refuses_local_launch(local_jobs: LocalJobs, runner: RunnerMode, has_environment: bool) -> bool {
+    local_jobs == LocalJobs::Admins && (!has_environment || runner == RunnerMode::Local)
 }
 
 pub fn relaunch(
@@ -616,7 +630,12 @@ pub struct Dispatch {
     pub workflow_job_id: Option<String>,
 }
 
-pub fn accept_hook(state: &Shared, hook: &Hook, payload: &Value) -> AppResult<Dispatch> {
+pub fn accept_hook(
+    state: &Shared,
+    hook: &Hook,
+    payload: &Value,
+    actor: Option<&str>,
+) -> AppResult<Dispatch> {
     let events = hooks::parse_webhook(payload);
     let matched: Vec<&AlertEvent> = events
         .iter()
@@ -678,6 +697,10 @@ pub fn accept_hook(state: &Shared, hook: &Hook, payload: &Value) -> AppResult<Di
         });
     }
     let hook_vars = db::json_object(&hook.extra_vars);
+    let launched_by = match actor {
+        Some(name) if !name.is_empty() => name.to_string(),
+        _ => format!("hook:{}", hook.name),
+    };
     let mut first_job = None;
     let mut first_workflow = None;
     for event in &matched {
@@ -688,7 +711,7 @@ pub fn accept_hook(state: &Shared, hook: &Hook, payload: &Value) -> AppResult<Di
                 &hook.team_id,
                 workflow_id,
                 extra,
-                &format!("hook:{}", hook.name),
+                &launched_by,
                 "hook",
             )?;
             if first_workflow.is_none() {
@@ -701,7 +724,7 @@ pub fn accept_hook(state: &Shared, hook: &Hook, payload: &Value) -> AppResult<Di
                     team_id: hook.team_id.clone(),
                     template_id: template_id.clone(),
                     extra_vars: extra,
-                    launched_by: format!("hook:{}", hook.name),
+                    launched_by: launched_by.clone(),
                     trigger: "hook".into(),
                     workflow_job_id: None,
                     workflow_node_id: None,
@@ -759,7 +782,7 @@ fn truncate(value: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, RunnerMode};
+    use crate::config::Config;
     use std::path::PathBuf;
 
     fn config(dir: &std::path::Path) -> Config {
@@ -772,6 +795,8 @@ mod tests {
             admin_password: Some("test-admin-pass".into()),
             runner: RunnerMode::Local,
             job_timeout_secs: 60,
+            local_jobs: crate::config::LocalJobs::All,
+            project_roots: Vec::new(),
             ldap: None,
         }
     }

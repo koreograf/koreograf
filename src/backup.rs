@@ -325,7 +325,7 @@ fn write_private(path: &Path, bytes: &[u8]) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{database_choice, Config, RunnerMode};
+    use crate::config::{database_choice, Config, LocalJobs, RunnerMode};
 
     fn config(dir: &Path) -> Config {
         Config {
@@ -337,6 +337,8 @@ mod tests {
             admin_password: Some("test-admin-pass".into()),
             runner: RunnerMode::Local,
             job_timeout_secs: 60,
+            local_jobs: LocalJobs::All,
+            project_roots: Vec::new(),
             ldap: None,
         }
     }

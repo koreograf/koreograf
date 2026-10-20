@@ -113,6 +113,31 @@ fn dummy_hash() -> &'static str {
     DUMMY.get_or_init(|| hash_password("not-a-real-password"))
 }
 
+/// `launched_by` is an administrator username, or `workflow:<id>` whose
+/// own launcher resolves to one. Hooks do not count.
+pub fn launcher_is_admin(c: &rusqlite::Connection, launched_by: &str) -> AppResult<bool> {
+    principal_is_admin(c, launched_by, 0)
+}
+
+fn principal_is_admin(c: &rusqlite::Connection, launched_by: &str, depth: u8) -> AppResult<bool> {
+    if depth > 8 {
+        return Ok(false);
+    }
+    if let Some(id) = launched_by.strip_prefix("workflow:") {
+        let Some(job) = db::workflow_job(c, id)? else {
+            return Ok(false);
+        };
+        return principal_is_admin(c, &job.launched_by, depth + 1);
+    }
+    if launched_by.is_empty() || launched_by.starts_with("hook:") {
+        return Ok(false);
+    }
+    let Some(user) = db::user_by_username(c, launched_by)? else {
+        return Ok(false);
+    };
+    Ok(user.is_admin && !user.disabled)
+}
+
 pub fn sync_ldap_teams(
     c: &rusqlite::Connection,
     user_id: &str,
@@ -123,7 +148,7 @@ pub fn sync_ldap_teams(
         let Some(group) = team.ldap_group.as_deref() else {
             continue;
         };
-        if keys.contains(&group.to_ascii_lowercase()) {
+        if ldap::group_matches(&keys, group) {
             db::upsert_membership(c, &team.id, user_id, Role::Operator.as_str(), "ldap")?;
         } else {
             db::delete_ldap_membership(c, &team.id, user_id)?;
