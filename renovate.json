@@ -1,0 +1,187 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits",
+    "helpers:pinGitHubActionDigests",
+    ":dependencyDashboard",
+    "docker:pinDigests"
+  ],
+  "timezone": "Europe/Berlin",
+  "schedule": ["before 6am on monday"],
+  "prConcurrentLimit": 5,
+  "automerge": false,
+  "automergeStrategy": "squash",
+  "semanticCommitType": "chore",
+  "semanticCommitScope": "deps",
+  "labels": ["dependencies"],
+  "ignorePaths": ["**/node_modules/**"],
+  "pre-commit": { "enabled": true },
+  "vulnerabilityAlerts": {
+    "labels": ["dependencies", "security"],
+    "schedule": ["at any time"]
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "OpenTofu binary baked into the image",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": [
+        "ARG TOFU_VERSION=(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "opentofu",
+      "packageNameTemplate": "opentofu/opentofu",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>\\d+\\.\\d+\\.\\d+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "Shellcheck release used by CI",
+      "managerFilePatterns": ["/^\\.github/workflows/ci\\.yml$/"],
+      "matchStrings": [
+        "koalaman/shellcheck/releases/download/v(?<currentValue>\\d+\\.\\d+\\.\\d+)/",
+        "shellcheck-v(?<currentValue>\\d+\\.\\d+\\.\\d+)\\.linux",
+        "shellcheck-v(?<currentValue>\\d+\\.\\d+\\.\\d+)/shellcheck"
+      ],
+      "depNameTemplate": "shellcheck",
+      "packageNameTemplate": "koalaman/shellcheck",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>\\d+\\.\\d+\\.\\d+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "Hadolint release used by CI",
+      "managerFilePatterns": ["/^\\.github/workflows/ci\\.yml$/"],
+      "matchStrings": [
+        "hadolint/hadolint/releases/download/v(?<currentValue>\\d+\\.\\d+\\.\\d+)/"
+      ],
+      "depNameTemplate": "hadolint",
+      "packageNameTemplate": "hadolint/hadolint",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>\\d+\\.\\d+\\.\\d+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "Renovate release that validates this config in CI",
+      "managerFilePatterns": ["/^\\.github/workflows/ci\\.yml$/"],
+      "matchStrings": [
+        "--package renovate@(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "renovate",
+      "packageNameTemplate": "renovate",
+      "datasourceTemplate": "npm"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "The MSRV check stays on Rust 1.89",
+      "matchPackageNames": ["rust", "library/rust"],
+      "matchCurrentValue": "/^1\\.89(\\.0)?$/",
+      "enabled": false
+    },
+    {
+      "description": "OpenTofu required_version is not the HashiCorp Terraform product",
+      "matchManagers": ["terraform"],
+      "matchDepTypes": ["required_version"],
+      "enabled": false
+    },
+    {
+      "description": "Release-please owns the product image tag",
+      "matchManagers": ["helm-values"],
+      "matchPackageNames": [
+        "ghcr.io/koreograf/koreograf",
+        "koreograf/koreograf"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Cargo dependencies are runtime and ship in a patch release",
+      "matchManagers": ["cargo"],
+      "matchDepTypes": ["dependencies"],
+      "semanticCommitType": "fix"
+    },
+    {
+      "description": "Docker base images are runtime",
+      "matchManagers": ["dockerfile"],
+      "semanticCommitType": "fix"
+    },
+    {
+      "description": "OpenTofu in the image is runtime",
+      "matchPackageNames": ["opentofu/opentofu"],
+      "semanticCommitType": "fix"
+    },
+    {
+      "description": "npm and Cargo wait three days before a new release is suggested",
+      "matchManagers": ["npm", "cargo"],
+      "minimumReleaseAge": "3 days"
+    },
+    {
+      "description": "The Renovate validator pin waits three days",
+      "matchPackageNames": ["renovate"],
+      "minimumReleaseAge": "3 days"
+    },
+    {
+      "description": "One pull request for every GitHub Action",
+      "matchManagers": ["github-actions"],
+      "groupName": "github actions"
+    },
+    {
+      "description": "One pull request for pre-commit hooks",
+      "matchManagers": ["pre-commit"],
+      "groupName": "pre-commit hooks"
+    },
+    {
+      "description": "One pull request for npm dev dependencies",
+      "matchManagers": ["npm"],
+      "matchDepTypes": ["devDependencies"],
+      "groupName": "npm dev dependencies"
+    },
+    {
+      "description": "Cargo patch and minor updates stay together. Majors do not match this rule.",
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "groupName": "cargo non-major"
+    },
+    {
+      "description": "Development Rust channel, image, and CI toolchain input move together",
+      "matchPackageNames": ["rust", "library/rust"],
+      "matchCurrentValue": "!/^1\\.89/",
+      "groupName": "rust toolchain",
+      "semanticCommitType": "fix"
+    },
+    {
+      "description": "Keep the image on a bookworm patch tag",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["rust", "library/rust"],
+      "allowedVersions": "/^\\d+\\.\\d+\\.\\d+-bookworm$/"
+    },
+    {
+      "description": "Automerge patch and pin updates of GitHub Actions. Digest means a moved tag.",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["patch", "pin"],
+      "automerge": true,
+      "platformAutomerge": true
+    },
+    {
+      "description": "Automerge patch and pin updates of npm dev dependencies",
+      "matchManagers": ["npm"],
+      "matchDepTypes": ["devDependencies"],
+      "matchUpdateTypes": ["patch", "pin"],
+      "automerge": true,
+      "platformAutomerge": true
+    },
+    {
+      "description": "Automerge patch and pin updates of pre-commit, Galaxy, and demo OpenTofu providers",
+      "matchManagers": ["pre-commit", "ansible-galaxy", "terraform"],
+      "matchUpdateTypes": ["patch", "pin"],
+      "automerge": true,
+      "platformAutomerge": true
+    },
+    {
+      "description": "Majors are reviewed by hand and are never titled as a breaking feature",
+      "matchUpdateTypes": ["major"],
+      "semanticCommitType": "chore",
+      "automerge": false
+    }
+  ]
+}
