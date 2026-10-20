@@ -448,6 +448,9 @@ fn validate(input: &SettingsWrite, current: &Effective) -> AppResult<Draft> {
         input.clear_ldap_password,
         current_ldap_password,
     )?;
+    if !ldap_url.is_empty() && !ldap_bind_dn.is_empty() && ldap_bind_password.is_empty() {
+        return Err(ApiError::bad("ldap_is_not_fully_configured"));
+    }
     let proxy_url = plain(&input.proxy_url, 300)?;
     if proxy_url.contains('@') {
         return Err(ApiError::bad("put_the_credentials_in_their_own_fields_not"));
@@ -881,8 +884,15 @@ mod tests {
         cleared.clear_ldap_password = true;
         cleared.clear_proxy_password = true;
         cleared.proxy_password.clear();
-        let cleared = save(&state, &cleared).unwrap();
-        assert_eq!(cleared["ldap"]["bind_password_set"], false);
+        let err = save(&state, &cleared).unwrap_err();
+        assert_eq!(err.to_string(), "ldap_is_not_fully_configured");
+        assert_eq!(load(&state).unwrap().ldap.bind_password, "bind-secret");
+        assert_eq!(load(&state).unwrap().proxy.password, "p@ss:word");
+        let mut proxy_only = sample("");
+        proxy_only.clear_proxy_password = true;
+        proxy_only.proxy_password.clear();
+        let cleared = save(&state, &proxy_only).unwrap();
+        assert_eq!(cleared["ldap"]["bind_password_set"], true);
         assert_eq!(cleared["proxy"]["password_set"], false);
         let reset = save(
             &state,

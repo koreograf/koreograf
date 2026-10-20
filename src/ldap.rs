@@ -100,7 +100,9 @@ pub async fn authenticate(
     if password.is_empty() {
         return Err("empty_password".into());
     }
-    if cfg.bind_dn.is_empty() || cfg.user_base.is_empty() {
+    // An empty service password is an unauthenticated bind. Some directories
+    // accept it and then search as anonymous.
+    if cfg.bind_dn.is_empty() || cfg.user_base.is_empty() || cfg.bind_password.is_empty() {
         return Err("ldap_is_not_fully_configured".into());
     }
     let settings = LdapConnSettings::new()
@@ -238,17 +240,34 @@ fn redact_secret(message: &str, secret: &str) -> String {
     }
 }
 
-/// CN, a distinct `name`, and the DN. Matching later ignores case.
-pub fn group_names_from_entry(cn: Option<&str>, name: Option<&str>, dn: &str) -> Vec<String> {
+/// Every CN, every distinct `name`, and the DN. Matching later ignores case.
+fn group_names_from_entry(cns: &[String], names: &[String], dn: &str) -> Vec<String> {
     let mut found = Vec::new();
-    if let Some(cn) = cn {
+    for cn in cns {
         push_group_name(&mut found, cn);
     }
-    if let Some(name) = name {
+    for name in names {
         push_group_name(&mut found, name);
     }
     push_group_name(&mut found, dn);
     found
+}
+
+fn group_search_filters(user_dn: &str, username: &str) -> Vec<String> {
+    let user_dn = escape_filter(user_dn);
+    let username = escape_filter(username);
+    vec![
+        format!("(&(objectClass=groupOfNames)(member={user_dn}))"),
+        format!("(&(objectClass=posixGroup)(memberUid={username}))"),
+        format!("(&(objectClass=group)(member={user_dn}))"),
+        format!("(&(objectClass=groupOfUniqueNames)(uniqueMember={user_dn}))"),
+    ]
+}
+
+fn push_unique(found: &mut Vec<String>, value: String) {
+    if !found.iter().any(|existing| existing == &value) {
+        found.push(value);
+    }
 }
 
 fn push_group_name(found: &mut Vec<String>, value: &str) {
@@ -273,18 +292,7 @@ async fn search_groups(
 ) -> Result<Vec<String>, String> {
     let mut found = Vec::new();
     let mut errors = Vec::new();
-    let filters = [
-        format!(
-            "(&(objectClass=groupOfNames)(member={}))",
-            escape_filter(user_dn)
-        ),
-        format!(
-            "(&(objectClass=posixGroup)(memberUid={}))",
-            escape_filter(username)
-        ),
-        format!("(&(objectClass=group)(member={}))", escape_filter(user_dn)),
-    ];
-    for filter in filters {
+    for filter in group_search_filters(user_dn, username) {
         let searched = ldap
             .search(
                 base,
@@ -297,20 +305,20 @@ async fn search_groups(
             Ok(result) => match result.success() {
                 Ok((entries, _)) => entries,
                 Err(error) => {
-                    errors.push(format!("group search rejected: {error}"));
+                    push_unique(&mut errors, format!("group search rejected: {error}"));
                     continue;
                 }
             },
             Err(error) => {
-                errors.push(format!("group search: {error}"));
+                push_unique(&mut errors, format!("group search: {error}"));
                 continue;
             }
         };
         for entry in entries {
             let parsed = SearchEntry::construct(entry);
             found.extend(group_names_from_entry(
-                first_attr(&parsed, "cn").as_deref(),
-                first_attr(&parsed, "name").as_deref(),
+                &attr_values(&parsed, "cn"),
+                &attr_values(&parsed, "name"),
                 &parsed.dn,
             ));
             if let Some(distinguished) = first_attr(&parsed, "distinguishedName") {
@@ -347,8 +355,8 @@ mod tests {
     #[test]
     fn fallback_names_match_a_cn_and_a_dn() {
         let names = group_names_from_entry(
-            Some("Plattform"),
-            Some("PLATTFORM"),
+            &["Plattform".into()],
+            &["PLATTFORM".into()],
             "cn=Plattform,ou=groups,dc=example,dc=com",
         );
         assert_eq!(
@@ -368,8 +376,8 @@ mod tests {
     #[test]
     fn fallback_names_keep_a_distinct_name() {
         let names = group_names_from_entry(
-            Some("ops"),
-            Some("Operations"),
+            &["ops".into()],
+            &["Operations".into()],
             "cn=ops,ou=groups,dc=example,dc=com",
         );
         assert_eq!(
@@ -387,11 +395,42 @@ mod tests {
 
     #[test]
     fn fallback_names_keep_the_dn_when_attributes_are_missing() {
-        let names = group_names_from_entry(None, Some("  "), "cn=ops,ou=groups,dc=example,dc=com");
+        let names =
+            group_names_from_entry(&[], &["  ".into()], "cn=ops,ou=groups,dc=example,dc=com");
         assert_eq!(
             names,
             vec!["cn=ops,ou=groups,dc=example,dc=com".to_string()]
         );
+    }
+
+    #[test]
+    fn fallback_names_keep_every_cn() {
+        let names = group_names_from_entry(
+            &["ops".into(), "Ops Team".into()],
+            &[],
+            "cn=ops,ou=groups,dc=example,dc=com",
+        );
+        assert_eq!(
+            names,
+            vec![
+                "ops".to_string(),
+                "Ops Team".to_string(),
+                "cn=ops,ou=groups,dc=example,dc=com".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn group_search_includes_unique_members() {
+        let filters = group_search_filters("cn=alice,ou=people,dc=example,dc=com", "alice");
+        assert!(filters.iter().any(|filter| {
+            filter == "(&(objectClass=groupOfUniqueNames)(uniqueMember=cn=alice,ou=people,dc=example,dc=com))"
+        }));
+        let hostile = group_search_filters("cn=a)(uid=*,ou=people", "a)(uid=*");
+        assert!(hostile.iter().all(|filter| !filter.contains("uid=*")));
+        assert!(hostile
+            .iter()
+            .any(|filter| { filter.contains(r"uniqueMember=cn=a\29\28uid=\2a,ou=people") }));
     }
 
     #[test]

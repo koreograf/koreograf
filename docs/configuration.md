@@ -24,7 +24,7 @@ See `.env.example`. Comments in that file are still German.
 | `KOREOGRAF_LOG_FORMAT` | empty, text on stdout. `json` for Promtail |
 | `KOREOGRAF_DATABASE_URL` | empty, SQLite. `postgres://` is rejected |
 | `KOREOGRAF_LDAP_BIND_DN` | empty. Required when `KOREOGRAF_LDAP_URL` is set |
-| `KOREOGRAF_LDAP_BIND_PASSWORD` | empty |
+| `KOREOGRAF_LDAP_BIND_PASSWORD` | empty. Rejected when the bind DN is set |
 | `KOREOGRAF_LDAP_USER_BASE` | empty. Required when `KOREOGRAF_LDAP_URL` is set |
 | `KOREOGRAF_LDAP_GROUP_BASE` | empty |
 
