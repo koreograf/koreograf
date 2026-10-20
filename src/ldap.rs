@@ -159,13 +159,10 @@ pub async fn authenticate(
         .success()
         .map_err(|_| "ldap_rejected_the_password".to_string())?;
 
+    // The user bind only checks the password. Group entries are often
+    // readable by the service account alone, so search as that account.
     if groups.is_empty() {
-        let base = if cfg.group_base.is_empty() {
-            cfg.user_base.as_str()
-        } else {
-            cfg.group_base.as_str()
-        };
-        groups = search_groups(&mut ldap, base, &user_dn, username).await;
+        groups = groups_as_service(&mut ldap, cfg, &user_dn, username).await;
     }
     let _ = ldap.unbind().await;
     Ok(LdapIdentity {
@@ -189,13 +186,93 @@ fn first_attr(entry: &SearchEntry, name: &str) -> Option<String> {
     attr_values(entry, name).into_iter().next()
 }
 
+async fn groups_as_service(
+    ldap: &mut ldap3::Ldap,
+    cfg: &LdapConfig,
+    user_dn: &str,
+    username: &str,
+) -> Vec<String> {
+    if let Err(error) = rebind_service(ldap, cfg).await {
+        let error = redact_secret(&error, &cfg.bind_password);
+        tracing::warn!(
+            user = username,
+            error = %error,
+            "LDAP service re-bind failed, so the group search was skipped"
+        );
+        return Vec::new();
+    }
+    let base = if cfg.group_base.is_empty() {
+        cfg.user_base.as_str()
+    } else {
+        cfg.group_base.as_str()
+    };
+    match search_groups(ldap, base, user_dn, username).await {
+        Ok(found) => {
+            if found.is_empty() && !cfg.group_base.is_empty() {
+                tracing::warn!(user = username, "LDAP group search returned no groups");
+            }
+            found
+        }
+        Err(error) => {
+            let error = redact_secret(&error, &cfg.bind_password);
+            tracing::warn!(user = username, error = %error, "LDAP group search failed");
+            Vec::new()
+        }
+    }
+}
+
+async fn rebind_service(ldap: &mut ldap3::Ldap, cfg: &LdapConfig) -> Result<(), String> {
+    ldap.simple_bind(&cfg.bind_dn, &cfg.bind_password)
+        .await
+        .map_err(|error| format!("service re-bind: {error}"))?
+        .success()
+        .map_err(|error| format!("service re-bind rejected: {error}"))?;
+    Ok(())
+}
+
+fn redact_secret(message: &str, secret: &str) -> String {
+    if secret.is_empty() {
+        message.to_string()
+    } else {
+        message.replace(secret, "[redacted]")
+    }
+}
+
+/// CN, a distinct `name`, and the DN. Matching later ignores case.
+pub fn group_names_from_entry(cn: Option<&str>, name: Option<&str>, dn: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    if let Some(cn) = cn {
+        push_group_name(&mut found, cn);
+    }
+    if let Some(name) = name {
+        push_group_name(&mut found, name);
+    }
+    push_group_name(&mut found, dn);
+    found
+}
+
+fn push_group_name(found: &mut Vec<String>, value: &str) {
+    let value = value.trim();
+    if value.is_empty() {
+        return;
+    }
+    if found
+        .iter()
+        .any(|existing| existing.eq_ignore_ascii_case(value))
+    {
+        return;
+    }
+    found.push(value.to_string());
+}
+
 async fn search_groups(
     ldap: &mut ldap3::Ldap,
     base: &str,
     user_dn: &str,
     username: &str,
-) -> Vec<String> {
+) -> Result<Vec<String>, String> {
     let mut found = Vec::new();
+    let mut errors = Vec::new();
     let filters = [
         format!(
             "(&(objectClass=groupOfNames)(member={}))",
@@ -208,24 +285,46 @@ async fn search_groups(
         format!("(&(objectClass=group)(member={}))", escape_filter(user_dn)),
     ];
     for filter in filters {
-        let Ok(result) = ldap.search(base, Scope::Subtree, &filter, vec!["cn"]).await else {
-            continue;
-        };
-        let Ok((entries, _)) = result.success() else {
-            continue;
+        let searched = ldap
+            .search(
+                base,
+                Scope::Subtree,
+                &filter,
+                vec!["cn", "name", "distinguishedName"],
+            )
+            .await;
+        let entries = match searched {
+            Ok(result) => match result.success() {
+                Ok((entries, _)) => entries,
+                Err(error) => {
+                    errors.push(format!("group search rejected: {error}"));
+                    continue;
+                }
+            },
+            Err(error) => {
+                errors.push(format!("group search: {error}"));
+                continue;
+            }
         };
         for entry in entries {
             let parsed = SearchEntry::construct(entry);
-            if let Some(cn) = first_attr(&parsed, "cn") {
-                found.push(cn);
-            } else {
-                found.push(parsed.dn);
+            found.extend(group_names_from_entry(
+                first_attr(&parsed, "cn").as_deref(),
+                first_attr(&parsed, "name").as_deref(),
+                &parsed.dn,
+            ));
+            if let Some(distinguished) = first_attr(&parsed, "distinguishedName") {
+                push_group_name(&mut found, &distinguished);
             }
         }
     }
-    found.sort();
-    found.dedup();
-    found
+    found.sort_by_key(|left| left.to_ascii_lowercase());
+    found.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    if found.is_empty() && !errors.is_empty() {
+        Err(errors.join("; "))
+    } else {
+        Ok(found)
+    }
 }
 
 #[cfg(test)]
@@ -243,5 +342,64 @@ mod tests {
         assert_eq!(cn_from_dn(dn).as_deref(), Some("Plattform, Ops"));
         let keys = group_keys(&[dn.into()]);
         assert!(keys.contains("plattform, ops"));
+    }
+
+    #[test]
+    fn fallback_names_match_a_cn_and_a_dn() {
+        let names = group_names_from_entry(
+            Some("Plattform"),
+            Some("PLATTFORM"),
+            "cn=Plattform,ou=groups,dc=example,dc=com",
+        );
+        assert_eq!(
+            names,
+            vec![
+                "Plattform".to_string(),
+                "cn=Plattform,ou=groups,dc=example,dc=com".to_string(),
+            ]
+        );
+        let keys = group_keys(&names);
+        assert!(keys.contains("plattform"));
+        assert!(keys.contains("cn=plattform,ou=groups,dc=example,dc=com"));
+        let team_dn = "CN=Plattform,OU=Groups,DC=Example,DC=Com";
+        assert!(keys.contains(&team_dn.to_ascii_lowercase()));
+    }
+
+    #[test]
+    fn fallback_names_keep_a_distinct_name() {
+        let names = group_names_from_entry(
+            Some("ops"),
+            Some("Operations"),
+            "cn=ops,ou=groups,dc=example,dc=com",
+        );
+        assert_eq!(
+            names,
+            vec![
+                "ops".to_string(),
+                "Operations".to_string(),
+                "cn=ops,ou=groups,dc=example,dc=com".to_string(),
+            ]
+        );
+        let keys = group_keys(&names);
+        assert!(keys.contains("operations"));
+        assert!(keys.contains("cn=ops,ou=groups,dc=example,dc=com"));
+    }
+
+    #[test]
+    fn fallback_names_keep_the_dn_when_attributes_are_missing() {
+        let names = group_names_from_entry(None, Some("  "), "cn=ops,ou=groups,dc=example,dc=com");
+        assert_eq!(
+            names,
+            vec!["cn=ops,ou=groups,dc=example,dc=com".to_string()]
+        );
+    }
+
+    #[test]
+    fn redact_secret_hides_the_bind_password() {
+        assert_eq!(
+            redact_secret("service re-bind rejected: secret-value", "secret-value"),
+            "service re-bind rejected: [redacted]"
+        );
+        assert_eq!(redact_secret("no secret here", ""), "no secret here");
     }
 }

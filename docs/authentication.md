@@ -8,7 +8,7 @@ Roles are `viewer`, `operator`, and `owner`. The local administrator bypasses th
 
 Memberships from LDAP have source `ldap` and role `operator`. A viewer or owner role is a manual membership on a team the directory does not fill for that user. `POST /api/teams/{id}/members` rejects a role change on an existing directory membership with `the_membership_comes_from_ldap_or_active_directory`. One user has one membership per team, so the directory row cannot also be a manual row. When the group disappears, only that membership is removed. A manual membership stays, and the next directory sync does not replace it. Removing the member is still allowed, and the directory can add that membership back as `operator`.
 
-A team stores an LDAP group as a CN or a DN. The comparison ignores case.
+A team stores an LDAP group as a CN or a DN. The comparison ignores case. `Plattform` and `cn=Plattform,ou=groups,dc=example,dc=com` are both valid. A DN matches that full value. The CN inside a DN also matches a team that stores only the CN.
 
 | Variable | LDAP | Active Directory |
 | --- | --- | --- |
@@ -24,9 +24,13 @@ A team stores an LDAP group as a CN or a DN. The comparison ignores case.
 
 `KOREOGRAF_LDAP_BIND_DN` and `KOREOGRAF_LDAP_USER_BASE` are required once `KOREOGRAF_LDAP_URL` is set. If either is empty, sign-in stops with `ldap_is_not_fully_configured` before any search. `KOREOGRAF_LDAP_BIND_PASSWORD` has no default. An empty password is sent on the service bind, and a directory that requires a password rejects that bind. The same password can be stored under Settings. It is encrypted, and the API never returns it. `KOREOGRAF_LDAP_GROUP_BASE` has no default.
 
-Empty filters and attributes use the default for the selected mode. `KOREOGRAF_LDAP_STARTTLS=true` turns on StartTLS. `KOREOGRAF_LDAP_TLS_INSECURE=true` skips certificate checks. The service binds with `KOREOGRAF_LDAP_BIND_DN`, searches under `KOREOGRAF_LDAP_USER_BASE`, then binds with that user's password. `{username}` in the filter is escaped.
+Empty filters and attributes use the default for the selected mode. `KOREOGRAF_LDAP_STARTTLS=true` turns on StartTLS. `KOREOGRAF_LDAP_TLS_INSECURE=true` skips certificate checks. The service account binds with `KOREOGRAF_LDAP_BIND_DN` and searches under `KOREOGRAF_LDAP_USER_BASE`. Koreograf then binds with that user's password. `{username}` in the filter is escaped.
 
-Groups come from `KOREOGRAF_LDAP_GROUP_ATTR` on the user entry. When that value is empty and the attribute is not `memberOf`, `memberOf` is read as well. If the entry still has no groups, Koreograf searches for them. The search base is `KOREOGRAF_LDAP_GROUP_BASE`, or `KOREOGRAF_LDAP_USER_BASE` when the group base is empty. The search matches `groupOfNames` whose `member` is the user DN, `posixGroup` whose `memberUid` is the username, and `group` whose `member` is the user DN. When the user entry already lists groups, that search does not run.
+The service account needs read access to the user base and to the group base. Users do not. A minimal OpenLDAP policy lets that bind DN read `ou=people,dc=example,dc=com` and `ou=groups,dc=example,dc=com`, and does not grant that group read to other users.
+
+Groups come from `KOREOGRAF_LDAP_GROUP_ATTR` on the user entry. When that value is empty and the attribute is not `memberOf`, `memberOf` is read as well. A non-empty list is used as it is. Koreograf does not also search the group base in that case. `memberOf` values are DNs, and a team matches either the DN or the CN inside it.
+
+When the user entry has no groups, Koreograf binds again as the service account and searches. The search base is `KOREOGRAF_LDAP_GROUP_BASE`, or `KOREOGRAF_LDAP_USER_BASE` when the group base is empty. The search matches `groupOfNames` whose `member` is the user DN, `posixGroup` whose `memberUid` is the username, and `group` whose `member` is the user DN. Each group is recorded as its CN, its `name` attribute when that differs from the CN, and its DN. A failed search, or an empty result while `KOREOGRAF_LDAP_GROUP_BASE` is set, is a warning in the log. The password is not in that warning. Sign-in still succeeds, and the user has no directory teams until a later sign-in can read the groups.
 
 ## Saved settings
 
