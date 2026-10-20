@@ -1,12 +1,14 @@
 ---
 # Controller-side record of a self-heal decision.
-# Koreograf injects koreograf_work, alertname, instance and heal_action.
+# Koreograf injects koreograf_work, and alertname, instance and
+# heal_action when a hook or the template provides them. A missing
+# name keeps the role default.
 - name: Respond to an alert
   hosts: all
   gather_facts: false
-  vars:
-    incident_report_alertname: "{{ alertname }}"
-    incident_report_instance: "{{ instance }}"
-    incident_report_action: "{{ heal_action }}"
   roles:
     - role: incident_report
+      vars:
+        incident_report_alertname: "{{ alertname | default(omit) }}"
+        incident_report_instance: "{{ instance | default(omit) }}"
+        incident_report_action: "{{ heal_action | default(omit) }}"

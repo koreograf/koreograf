@@ -299,6 +299,13 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/demo");
         let found = scan_project(&root).unwrap();
         assert_eq!(found.playbooks, vec!["site.yml".to_string()]);
+        let playbook = fs::read_to_string(root.join("site.yml")).unwrap();
+        for name in ["alertname", "instance", "heal_action"] {
+            assert!(
+                playbook.contains(&format!("{{{{ {name} | default(omit) }}}}")),
+                "{name} must fall back to the role default"
+            );
+        }
         assert!(found
             .inventories
             .iter()
