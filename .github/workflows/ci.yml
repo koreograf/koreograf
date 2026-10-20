@@ -100,6 +100,30 @@ jobs:
       - name: Lint commit messages
         run: npx commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }}
 
+  title:
+    name: title
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check the pull request title length
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          chars=$(printf '%s' "$TITLE" | wc -m)
+          if [ "$chars" -gt 72 ]; then
+            printf 'Pull request title is %s characters. The limit is 72.\n' "$chars"
+            exit 1
+          fi
+      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          subjectPattern: "^[a-z](?:.*[^.])?$"
+          subjectPatternError: The subject must start with a lowercase letter and must not end with a period.
+
   chart:
     name: chart
     runs-on: ubuntu-latest
