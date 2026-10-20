@@ -376,7 +376,7 @@ pub fn cancel(state: &Shared, job_id: &str) -> AppResult<()> {
             return Ok(());
         }
         db::finish_job(&db, job_id, "canceled")?;
-        db::insert_event(&db, job_id, "system", "Abbruch angefordert.")?;
+        db::insert_event(&db, job_id, "system", "Cancel requested.")?;
     }
     let running = state
         .procs
@@ -384,7 +384,7 @@ pub fn cancel(state: &Shared, job_id: &str) -> AppResult<()> {
         .ok()
         .and_then(|procs| procs.get(job_id).cloned());
     if let Some(proc) = running {
-        runner::signal_stop(&proc);
+        runner::signal_stop(state, job_id, proc);
     } else {
         // The process id may appear a moment later. A second signal is cheap.
         let state = state.clone();
@@ -397,7 +397,7 @@ pub fn cancel(state: &Shared, job_id: &str) -> AppResult<()> {
                 .ok()
                 .and_then(|procs| procs.get(&job_id).cloned())
             {
-                runner::signal_stop(&proc);
+                runner::signal_stop(&state, &job_id, proc);
             }
         });
     }

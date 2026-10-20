@@ -434,21 +434,102 @@ pub async fn detect_runtime() -> Option<String> {
     None
 }
 
-pub fn signal_stop(proc: &RunningProc) {
-    if proc.pid > 0 {
-        let _ = std::process::Command::new("kill")
-            .args(["-TERM", &proc.pid.to_string()])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+pub fn signal_stop(state: &Shared, job_id: &str, proc: RunningProc) {
+    let state = state.clone();
+    let job_id = job_id.to_string();
+    tokio::spawn(async move {
+        if !deliver_stop(&proc, false) {
+            log(
+                &state,
+                &job_id,
+                "system",
+                "The stop signal could not be delivered.",
+            );
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        if still_running(&proc) && !deliver_stop(&proc, true) {
+            log(
+                &state,
+                &job_id,
+                "system",
+                "The stop signal could not be delivered.",
+            );
+        }
+    });
+}
+
+fn deliver_stop(proc: &RunningProc, kill_hard: bool) -> bool {
+    let signal = if kill_hard { "KILL" } else { "TERM" };
+    let container_ok = match (proc.bin.as_deref(), proc.container.as_deref()) {
+        (Some(bin), Some(name)) => runtime_signal(bin, name, signal),
+        _ => true,
+    };
+    let local_ok = if proc.pid > 1 {
+        signal_process_group(proc.pid, kill_hard)
+    } else {
+        proc.container.is_some()
+    };
+    container_ok && local_ok
+}
+
+fn signal_process_group(pid: u32, kill_hard: bool) -> bool {
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
+    };
+    if pid <= 1 {
+        return false;
     }
-    if let (Some(bin), Some(name)) = (proc.bin.as_deref(), proc.container.as_deref()) {
-        let _ = std::process::Command::new(bin)
-            .args(["kill", name])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+    let signal = if kill_hard {
+        nix::sys::signal::Signal::SIGKILL
+    } else {
+        nix::sys::signal::Signal::SIGTERM
+    };
+    match nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pid), signal) {
+        Ok(()) => true,
+        Err(nix::errno::Errno::ESRCH) => true,
+        Err(_) => false,
     }
+}
+
+fn runtime_signal(bin: &str, name: &str, signal: &str) -> bool {
+    if !container_running(bin, name) {
+        return true;
+    }
+    std::process::Command::new(bin)
+        .args(["kill", "--signal", signal, name])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+fn container_running(bin: &str, name: &str) -> bool {
+    let Ok(output) = std::process::Command::new(bin)
+        .args(["inspect", "-f", "{{.State.Running}}", name])
+        .output()
+    else {
+        return false;
+    };
+    output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "true"
+}
+
+fn still_running(proc: &RunningProc) -> bool {
+    let local = proc.pid > 1 && process_alive(proc.pid);
+    let container = match (proc.bin.as_deref(), proc.container.as_deref()) {
+        (Some(bin), Some(name)) => container_running(bin, name),
+        _ => false,
+    };
+    local || container
+}
+
+fn process_alive(pid: u32) -> bool {
+    let Ok(text) = std::fs::read_to_string(format!("/proc/{pid}/status")) else {
+        return false;
+    };
+    !text
+        .lines()
+        .any(|line| line.starts_with("State:") && line.contains('Z'))
 }
 
 pub async fn execute(state: Shared, job_id: String) {
@@ -704,28 +785,26 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        #[cfg(unix)]
+        cmd.process_group(0);
         let child = cmd.spawn().map_err(|e| format!("Start failed: {e}"))?;
         let pid = child.id().unwrap_or(0);
-        remember(
-            state,
-            job_id,
-            RunningProc {
-                pid,
-                container: None,
-                bin: None,
-            },
-        );
+        let proc = RunningProc {
+            pid,
+            container: None,
+            bin: None,
+        };
+        remember(state, job_id, proc.clone());
+        log(state, job_id, "system", &format!("Process group {pid}."));
         if canceled(state, job_id) {
-            signal_stop(&RunningProc {
-                pid,
-                container: None,
-                bin: None,
-            });
-            return Ok(());
+            signal_stop(state, job_id, proc);
         }
         wait_child(state, job_id, child, settings.job_timeout_secs).await?
     };
 
+    if canceled(state, job_id) {
+        return Ok(());
+    }
     let cache_after = dir_size(&cache);
     log(
         state,
@@ -1395,24 +1474,18 @@ async fn run_container(state: &Shared, job_id: &str, run: ContainerRun<'_>) -> R
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    #[cfg(unix)]
+    cmd.process_group(0);
     let child = cmd.spawn().map_err(|e| format!("{bin} run failed: {e}"))?;
     let pid = child.id().unwrap_or(0);
-    remember(
-        state,
-        job_id,
-        RunningProc {
-            pid,
-            container: Some(name.clone()),
-            bin: Some(bin.to_string()),
-        },
-    );
+    let proc = RunningProc {
+        pid,
+        container: Some(name),
+        bin: Some(bin.to_string()),
+    };
+    remember(state, job_id, proc.clone());
     if canceled(state, job_id) {
-        signal_stop(&RunningProc {
-            pid,
-            container: Some(name),
-            bin: Some(bin.to_string()),
-        });
-        return Ok(1);
+        signal_stop(state, job_id, proc);
     }
     wait_child(state, job_id, child, timeout_secs).await
 }
@@ -1478,6 +1551,14 @@ fn remember(state: &Shared, job_id: &str, proc: RunningProc) {
     }
 }
 
+fn remembered(state: &Shared, job_id: &str) -> Option<RunningProc> {
+    state
+        .procs
+        .lock()
+        .ok()
+        .and_then(|procs| procs.get(job_id).cloned())
+}
+
 fn canceled(state: &Shared, job_id: &str) -> bool {
     state
         .db()
@@ -1523,6 +1604,16 @@ async fn wait_child(
                 "system",
                 "Time limit reached, stopping the process.",
             );
+            if let Some(proc) = remembered(state, job_id) {
+                if !deliver_stop(&proc, true) {
+                    log(
+                        state,
+                        job_id,
+                        "system",
+                        "The stop signal could not be delivered.",
+                    );
+                }
+            }
             let _ = child.start_kill();
             let _ = child.wait().await;
             let _ = out.await;
@@ -1542,6 +1633,7 @@ where
     let mut lines = BufReader::new(reader);
     let mut buf = Vec::new();
     let mut count = 0i64;
+    let mut discarded = false;
     loop {
         buf.clear();
         let read = lines.read_until(b'\n', &mut buf).await;
@@ -1555,6 +1647,18 @@ where
                     buf.pop();
                 }
                 count += 1;
+                if canceled(&state, &job_id) {
+                    if !discarded {
+                        discarded = true;
+                        log(
+                            &state,
+                            &job_id,
+                            "system",
+                            "Further output is discarded because the job was canceled.",
+                        );
+                    }
+                    continue;
+                }
                 if count > 8_000 {
                     if count == 8_001 {
                         log(
@@ -1895,5 +1999,49 @@ mod tests {
         assert!(!text.contains("Shell-Skript"), "{text}");
         assert!(!text.contains("Unbekanntes Werkzeug"), "{text}");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn a_process_group_signal_stops_the_children() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-kill-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg("sleep 60 & echo $! > child.pid; wait")
+            .current_dir(&dir)
+            .process_group(0)
+            .kill_on_drop(true)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = cmd.spawn().unwrap();
+        let pid = child.id().expect("pid");
+        let marker = dir.join("child.pid");
+        let mut grandchild = String::new();
+        for _ in 0..50 {
+            if let Ok(text) = std::fs::read_to_string(&marker) {
+                grandchild = text.trim().to_string();
+                if !grandchild.is_empty() {
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(!grandchild.is_empty(), "child did not start");
+        let before = std::fs::read_to_string(format!("/proc/{grandchild}/status")).ok();
+        assert!(signal_process_group(pid, false), "signal");
+        let finished = tokio::time::timeout(Duration::from_secs(5), child.wait())
+            .await
+            .expect("group did not exit");
+        assert!(finished.is_ok());
+        let after = std::fs::read_to_string(format!("/proc/{grandchild}/cmdline")).ok();
+        assert!(
+            after.as_deref().is_none_or(|text| !text.contains("sleep")),
+            "grandchild {grandchild} is still sleep; status={before:?} cmdline={after:?}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
