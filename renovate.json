@@ -11,6 +11,7 @@
   "schedule": ["before 6am on monday"],
   "prConcurrentLimit": 5,
   "automerge": false,
+  "automergeStrategy": "squash",
   "semanticCommitType": "chore",
   "semanticCommitScope": "deps",
   "labels": ["dependencies"],
@@ -153,6 +154,28 @@
       "matchDatasources": ["docker"],
       "matchPackageNames": ["rust", "library/rust"],
       "allowedVersions": "/^\\d+\\.\\d+\\.\\d+-bookworm$/"
+    },
+    {
+      "description": "Automerge patch and pin updates of GitHub Actions. Digest means a moved tag.",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["patch", "pin"],
+      "automerge": true,
+      "platformAutomerge": true
+    },
+    {
+      "description": "Automerge patch and pin updates of npm dev dependencies",
+      "matchManagers": ["npm"],
+      "matchDepTypes": ["devDependencies"],
+      "matchUpdateTypes": ["patch", "pin"],
+      "automerge": true,
+      "platformAutomerge": true
+    },
+    {
+      "description": "Automerge patch and pin updates of pre-commit, Galaxy, and demo OpenTofu providers",
+      "matchManagers": ["pre-commit", "ansible-galaxy", "terraform"],
+      "matchUpdateTypes": ["patch", "pin"],
+      "automerge": true,
+      "platformAutomerge": true
     },
     {
       "description": "Majors are reviewed by hand and are never titled as a breaking feature",
