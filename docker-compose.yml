@@ -18,13 +18,14 @@ services:
       KOREOGRAF_DATABASE_URL: ${KOREOGRAF_DATABASE_URL:-}
       # Verzeichnis, Proxy, Runner und Zeitlimit gelten bis zum ersten Speichern
       # unter Einstellungen. Danach ersetzt die Datenbank diese Variablen.
-      # Leer bleibt leer. Eine gesetzte Shell-Variable ersetzt .env.
-      HTTP_PROXY: ${HTTP_PROXY:-}
-      HTTPS_PROXY: ${HTTPS_PROXY:-}
-      NO_PROXY: ${NO_PROXY:-}
-      http_proxy: ${http_proxy:-}
-      https_proxy: ${https_proxy:-}
-      no_proxy: ${no_proxy:-}
+      # Ein Proxy-Name wird nur gesetzt, wenn .env oder die Shell ihn setzen.
+      # Eine leere Zeichenkette würde den großgeschriebenen Proxy für git abschalten.
+      HTTP_PROXY:
+      HTTPS_PROXY:
+      NO_PROXY:
+      http_proxy:
+      https_proxy:
+      no_proxy:
       KOREOGRAF_LDAP_URL: ${KOREOGRAF_LDAP_URL:-}
       KOREOGRAF_LDAP_MODE: ${KOREOGRAF_LDAP_MODE:-ldap}
       KOREOGRAF_LDAP_BIND_DN: ${KOREOGRAF_LDAP_BIND_DN:-}

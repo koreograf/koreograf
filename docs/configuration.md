@@ -45,6 +45,6 @@ What the database file holds, and why a `postgres://` URL stops startup, is in [
 | `KOREOGRAF_WEB` | `/opt/koreograf/web` |
 | `KOREOGRAF_EXAMPLES` | `/opt/koreograf/examples` |
 
-Compose forwards the other names from `.env` into the container. That includes `KOREOGRAF_LOG_FORMAT`, `KOREOGRAF_DATABASE_URL`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, and the lowercase `http_proxy`, `https_proxy`, and `no_proxy`. An empty value is forwarded as empty. The process treats an empty proxy variable as unset, so a blank line does not enable a proxy.
+Compose forwards the other names from `.env` into the container. That includes `KOREOGRAF_LOG_FORMAT`, `KOREOGRAF_DATABASE_URL`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, and the lowercase `http_proxy`, `https_proxy`, and `no_proxy`. Log format and the database URL are passed through even when they are empty. A proxy name is passed only when `.env` or the shell sets it. An unset proxy is left out of the container. An empty `https_proxy` would turn off `HTTPS_PROXY` for git and for Python, so do not set a proxy name to an empty string.
 
-Compose also reads the shell. A proxy exported in the shell is substituted even when the line in `.env` is commented out. Leave those variables unset in the shell when the container should not use them. The container does not copy a proxy that is configured only on the Docker daemon.
+Compose also reads the shell. A proxy exported in the shell is forwarded even when the line in `.env` is commented out. Leave those variables unset in the shell when the container should not use them. The container does not copy a proxy that is configured only on the Docker daemon.

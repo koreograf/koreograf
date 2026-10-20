@@ -108,6 +108,37 @@ jobs:
       - name: Render the chart
         run: helm template koreograf deploy/helm/koreograf >/tmp/koreograf.yaml
 
+  compose:
+    name: compose
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Omit an unset proxy and keep a set one
+        run: |
+          unset HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy
+          cat > .env << 'EOF'
+          HTTPS_PROXY=http://proxy.example:3128
+          KOREOGRAF_LOG_FORMAT=json
+          EOF
+          docker compose config --format json > /tmp/compose.json
+          python3 - << 'PY'
+          import json
+          data = json.load(open("/tmp/compose.json"))
+          env = data["services"]["koreograf"]["environment"]
+          if isinstance(env, list):
+              mapped = {}
+              for item in env:
+                  if isinstance(item, str) and "=" in item:
+                      key, value = item.split("=", 1)
+                      mapped[key] = value
+              env = mapped
+          assert env["HTTPS_PROXY"] == "http://proxy.example:3128"
+          assert env["KOREOGRAF_LOG_FORMAT"] == "json"
+          assert env["KOREOGRAF_BIND"] == "0.0.0.0:8080"
+          for name in ("HTTP_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"):
+              assert env.get(name) is None, (name, env.get(name))
+          PY
+
   image:
     name: image
     runs-on: ubuntu-latest
