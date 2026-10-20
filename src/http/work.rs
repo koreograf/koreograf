@@ -16,7 +16,7 @@ use crate::auth::{AuthUser, Role};
 use crate::credentials::{self, AssignedCredential};
 use crate::crypto;
 use crate::db::{self, Credential, Hook, Template, Workflow};
-use crate::error::{ApiError, AppResult};
+use crate::error::{ApiError, ApiJson, AppResult};
 use crate::jobs::{self, LaunchRequest};
 use crate::runner;
 use crate::workflow::{self, Graph};
@@ -122,7 +122,7 @@ pub async fn create_template(
     State(state): State<Shared>,
     headers: HeaderMap,
     user: AuthUser,
-    Json(body): Json<TemplateBody>,
+    ApiJson(body): ApiJson<TemplateBody>,
 ) -> AppResult<Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
@@ -140,7 +140,7 @@ pub async fn update_template(
     headers: HeaderMap,
     user: AuthUser,
     Path(id): Path<String>,
-    Json(body): Json<TemplateBody>,
+    ApiJson(body): ApiJson<TemplateBody>,
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
@@ -171,7 +171,7 @@ pub async fn launch_template(
     headers: HeaderMap,
     user: AuthUser,
     Path(id): Path<String>,
-    Json(body): Json<LaunchBody>,
+    ApiJson(body): ApiJson<LaunchBody>,
 ) -> AppResult<Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
@@ -327,7 +327,7 @@ pub async fn relaunch_job(
     State(state): State<Shared>,
     user: AuthUser,
     Path(id): Path<String>,
-    Json(body): Json<RelaunchBody>,
+    ApiJson(body): ApiJson<RelaunchBody>,
 ) -> AppResult<Response> {
     {
         let db = state.db()?;
@@ -415,7 +415,7 @@ pub async fn create_workflow(
     State(state): State<Shared>,
     headers: HeaderMap,
     user: AuthUser,
-    Json(body): Json<WorkflowBody>,
+    ApiJson(body): ApiJson<WorkflowBody>,
 ) -> AppResult<Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
@@ -430,7 +430,7 @@ pub async fn update_workflow(
     headers: HeaderMap,
     user: AuthUser,
     Path(id): Path<String>,
-    Json(body): Json<WorkflowBody>,
+    ApiJson(body): ApiJson<WorkflowBody>,
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
@@ -458,7 +458,7 @@ pub async fn launch_workflow(
     headers: HeaderMap,
     user: AuthUser,
     Path(id): Path<String>,
-    Json(body): Json<LaunchBody>,
+    ApiJson(body): ApiJson<LaunchBody>,
 ) -> AppResult<Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
@@ -505,7 +505,7 @@ pub async fn create_hook(
     State(state): State<Shared>,
     headers: HeaderMap,
     user: AuthUser,
-    Json(body): Json<HookBody>,
+    ApiJson(body): ApiJson<HookBody>,
 ) -> AppResult<Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
@@ -569,7 +569,7 @@ pub async fn test_hook(
 pub async fn ingest(
     State(state): State<Shared>,
     Path((id, token)): Path<(String, String)>,
-    Json(payload): Json<Value>,
+    ApiJson(payload): ApiJson<Value>,
 ) -> AppResult<Json<Value>> {
     let hook = {
         let db = state.db()?;

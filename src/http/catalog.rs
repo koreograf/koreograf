@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::auth::{AuthUser, Role};
 use crate::cacheinfo;
 use crate::db::{self, Credential, Environment, Inventory, Project};
-use crate::error::{ApiError, AppResult};
+use crate::error::{ApiError, ApiJson, AppResult};
 use crate::jobs;
 use crate::runner;
 use crate::Shared;
@@ -150,7 +150,7 @@ pub async fn list_teams(State(state): State<Shared>, user: AuthUser) -> AppResul
 pub async fn create_team(
     State(state): State<Shared>,
     user: AuthUser,
-    Json(body): Json<TeamBody>,
+    ApiJson(body): ApiJson<TeamBody>,
 ) -> AppResult<axum::response::Response> {
     if !user.is_admin {
         return Err(ApiError::Forbidden);
@@ -177,7 +177,7 @@ pub async fn update_team(
     State(state): State<Shared>,
     user: AuthUser,
     Path(id): Path<String>,
-    Json(body): Json<TeamBody>,
+    ApiJson(body): ApiJson<TeamBody>,
 ) -> AppResult<Json<Value>> {
     gate(&state, &user, &id, Role::Owner)?;
     let name = require_name(&body.name)?;
@@ -235,7 +235,7 @@ pub async fn add_member(
     State(state): State<Shared>,
     user: AuthUser,
     Path(id): Path<String>,
-    Json(body): Json<MemberBody>,
+    ApiJson(body): ApiJson<MemberBody>,
 ) -> AppResult<axum::response::Response> {
     gate(&state, &user, &id, Role::Owner)?;
     let role =
@@ -296,7 +296,7 @@ pub async fn update_project(
     headers: HeaderMap,
     user: AuthUser,
     Path(id): Path<String>,
-    Json(body): Json<ProjectAssignBody>,
+    ApiJson(body): ApiJson<ProjectAssignBody>,
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
@@ -325,7 +325,7 @@ pub async fn create_project(
     State(state): State<Shared>,
     headers: HeaderMap,
     user: AuthUser,
-    Json(body): Json<ProjectBody>,
+    ApiJson(body): ApiJson<ProjectBody>,
 ) -> AppResult<axum::response::Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
@@ -467,7 +467,7 @@ pub async fn update_inventory(
     headers: HeaderMap,
     user: AuthUser,
     Path(id): Path<String>,
-    Json(body): Json<InventoryBody>,
+    ApiJson(body): ApiJson<InventoryBody>,
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
@@ -507,7 +507,7 @@ pub async fn create_inventory(
     State(state): State<Shared>,
     headers: HeaderMap,
     user: AuthUser,
-    Json(body): Json<InventoryBody>,
+    ApiJson(body): ApiJson<InventoryBody>,
 ) -> AppResult<axum::response::Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
@@ -619,7 +619,7 @@ pub async fn create_credential(
     State(state): State<Shared>,
     headers: HeaderMap,
     user: AuthUser,
-    Json(body): Json<CredentialBody>,
+    ApiJson(body): ApiJson<CredentialBody>,
 ) -> AppResult<axum::response::Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Owner)?;
@@ -707,7 +707,7 @@ pub async fn update_credential(
     headers: HeaderMap,
     user: AuthUser,
     Path(id): Path<String>,
-    Json(body): Json<CredentialUpdate>,
+    ApiJson(body): ApiJson<CredentialUpdate>,
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Owner)?;
@@ -808,7 +808,7 @@ pub async fn create_environment(
     State(state): State<Shared>,
     headers: HeaderMap,
     user: AuthUser,
-    Json(body): Json<EnvironmentBody>,
+    ApiJson(body): ApiJson<EnvironmentBody>,
 ) -> AppResult<axum::response::Response> {
     let team_id = team_header(&headers)?;
     gate(&state, &user, &team_id, Role::Owner)?;
@@ -857,7 +857,7 @@ pub async fn update_environment(
     headers: HeaderMap,
     user: AuthUser,
     Path(id): Path<String>,
-    Json(body): Json<EnvironmentBody>,
+    ApiJson(body): ApiJson<EnvironmentBody>,
 ) -> AppResult<Json<Value>> {
     let team_id = team_header(&headers)?;
     gate(&state, &user, &team_id, Role::Owner)?;
@@ -935,7 +935,7 @@ pub async fn list_organizations(
 pub async fn create_organization(
     State(state): State<Shared>,
     user: AuthUser,
-    Json(body): Json<OrganizationBody>,
+    ApiJson(body): ApiJson<OrganizationBody>,
 ) -> AppResult<axum::response::Response> {
     if !user.is_admin {
         return Err(ApiError::Forbidden);
@@ -976,7 +976,7 @@ pub async fn update_organization(
     State(state): State<Shared>,
     user: AuthUser,
     Path(id): Path<String>,
-    Json(body): Json<OrganizationBody>,
+    ApiJson(body): ApiJson<OrganizationBody>,
 ) -> AppResult<Json<Value>> {
     if !user.is_admin {
         return Err(ApiError::Forbidden);

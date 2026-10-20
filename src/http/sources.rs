@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::auth::{AuthUser, Role};
 use crate::db::{self, Inventory, Project};
-use crate::error::{ApiError, AppResult};
+use crate::error::{ApiError, ApiJson, AppResult};
 use crate::netbox::{self, NetboxSource};
 use crate::runner;
 use crate::scan;
@@ -100,7 +100,7 @@ pub async fn import_inventory(
     State(state): State<Shared>,
     headers: HeaderMap,
     user: AuthUser,
-    Json(body): Json<ImportBody>,
+    ApiJson(body): ApiJson<ImportBody>,
 ) -> AppResult<axum::response::Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
@@ -154,7 +154,7 @@ pub async fn create_netbox(
     State(state): State<Shared>,
     headers: HeaderMap,
     user: AuthUser,
-    Json(body): Json<NetboxBody>,
+    ApiJson(body): ApiJson<NetboxBody>,
 ) -> AppResult<axum::response::Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
@@ -449,7 +449,7 @@ pub async fn add_source(
     headers: HeaderMap,
     user: AuthUser,
     Path(id): Path<String>,
-    Json(body): Json<SourceInput>,
+    ApiJson(body): ApiJson<SourceInput>,
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
@@ -480,7 +480,7 @@ pub async fn update_source(
     headers: HeaderMap,
     user: AuthUser,
     Path((inventory_id, source_id)): Path<(String, String)>,
-    Json(body): Json<SourcePatch>,
+    ApiJson(body): ApiJson<SourcePatch>,
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;

@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
 
+use axum::extract::{FromRequest, Request};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
 pub type AppResult<T> = Result<T, ApiError>;
@@ -123,5 +125,23 @@ impl IntoResponse for ApiError {
             json!({ "error": key, "vars": vars })
         };
         (status, Json(body)).into_response()
+    }
+}
+
+/// JSON body that rejects a missing or broken payload as a catalog error.
+pub struct ApiJson<T>(pub T);
+
+impl<T, S> FromRequest<S> for ApiJson<T>
+where
+    T: DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        match Json::<T>::from_request(req, state).await {
+            Ok(Json(value)) => Ok(Self(value)),
+            Err(_) => Err(ApiError::bad("json_body_required")),
+        }
     }
 }
