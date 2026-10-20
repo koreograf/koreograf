@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::auth::{self, AuthUser};
 use crate::crypto::{self, hash_password};
 use crate::db::{self, User};
-use crate::error::{ApiError, AppResult};
+use crate::error::{ApiError, ApiJson, AppResult};
 use crate::ldap;
 use crate::Shared;
 
@@ -47,7 +47,7 @@ pub(super) struct UserUpdate {
 
 pub async fn login(
     State(state): State<Shared>,
-    Json(body): Json<LoginBody>,
+    ApiJson(body): ApiJson<LoginBody>,
 ) -> Result<Response, ApiError> {
     let username = normalize(&body.username)?;
     if body.password.is_empty() {
@@ -102,7 +102,7 @@ pub async fn me(State(state): State<Shared>, user: AuthUser) -> Result<Json<Valu
 pub async fn update_me(
     State(state): State<Shared>,
     user: AuthUser,
-    Json(body): Json<MeUpdate>,
+    ApiJson(body): ApiJson<MeUpdate>,
 ) -> AppResult<Json<Value>> {
     let display = trimmed_display(&body.display_name)?;
     let db = state.db()?;
@@ -156,7 +156,7 @@ pub async fn get_user(
 pub async fn create_user(
     State(state): State<Shared>,
     user: AuthUser,
-    Json(body): Json<UserBody>,
+    ApiJson(body): ApiJson<UserBody>,
 ) -> Result<Response, ApiError> {
     require_admin(&user)?;
     let username = body.username.trim().to_ascii_lowercase();
@@ -192,7 +192,7 @@ pub async fn update_user(
     State(state): State<Shared>,
     user: AuthUser,
     Path(id): Path<String>,
-    Json(body): Json<UserUpdate>,
+    ApiJson(body): ApiJson<UserUpdate>,
 ) -> AppResult<Json<Value>> {
     require_admin(&user)?;
     let display = trimmed_display(&body.display_name)?;

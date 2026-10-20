@@ -298,6 +298,7 @@
   "nodes": "Knoten",
   "none": "Keine",
   "not_found": "Nicht gefunden.",
+  "json_body_required": "Die Anfrage braucht einen JSON-Inhalt.",
   "nothing_here": "Nichts vorhanden.",
   "nothing_is_saved_yet_the_environment_variables_from": "Noch nichts gespeichert. Es gelten die Umgebungsvariablen vom Start.",
   "notice": "Hinweis",

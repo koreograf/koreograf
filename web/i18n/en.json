@@ -298,6 +298,7 @@
   "nodes": "Nodes",
   "none": "None",
   "not_found": "Not found.",
+  "json_body_required": "The request needs a JSON body.",
   "nothing_here": "Nothing here.",
   "nothing_is_saved_yet_the_environment_variables_from": "Nothing is saved yet. The environment variables from startup apply.",
   "notice": "Notice",

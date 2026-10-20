@@ -4,7 +4,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::auth::AuthUser;
-use crate::error::{ApiError, AppResult};
+use crate::error::{ApiError, ApiJson, AppResult};
 use crate::settings::{self, SettingsWrite};
 use crate::Shared;
 
@@ -70,7 +70,7 @@ pub async fn get_settings(State(state): State<Shared>, user: AuthUser) -> AppRes
 pub async fn put_settings(
     State(state): State<Shared>,
     user: AuthUser,
-    Json(body): Json<SettingsBody>,
+    ApiJson(body): ApiJson<SettingsBody>,
 ) -> AppResult<Json<Value>> {
     admin(&user)?;
     let clear_ldap_password = body.clear.iter().any(|item| item == "ldap_bind_password");

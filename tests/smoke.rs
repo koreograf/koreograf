@@ -4008,6 +4008,85 @@ fn has_line(job: &Value, stream: &str, line: &str) -> bool {
     })
 }
 
+#[tokio::test]
+async fn a_request_without_json_returns_a_catalog_error() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-json-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, bytes, _) = call_raw(&app, "POST", "/api/login", None, &[], None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let missing: Value = serde_json::from_slice(&bytes).expect("json");
+    assert_eq!(missing["error"], "json_body_required");
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(!text.contains("Expected request"), "{text}");
+
+    let (status, bytes, _) = call_raw(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        &[("content-type", "text/plain")],
+        Some(b"{}".to_vec()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let wrong_type: Value = serde_json::from_slice(&bytes).expect("json");
+    assert_eq!(wrong_type["error"], "json_body_required");
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap();
+    let (status, templates, _) = call(
+        &app,
+        "GET",
+        "/api/templates",
+        Some(&cookie),
+        Some(team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{templates}");
+    let health_id = templates
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["name"] == "Healthcheck")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap();
+    let (status, bytes, _) = call_raw(
+        &app,
+        "POST",
+        &format!("/api/templates/{health_id}/launch"),
+        Some(&cookie),
+        &[("x-team-id", team)],
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let launch: Value = serde_json::from_slice(&bytes).expect("json");
+    assert_eq!(launch["error"], "json_body_required");
+
+    let finished = launch_and_wait(&app, &cookie, team, health_id).await;
+    assert_eq!(finished["status"], "successful", "{}", finished["events"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn message_catalogs_match_and_cover_the_ui() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
