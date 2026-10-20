@@ -1,7 +1,8 @@
 # Opens the release pull request and, when that pull request merges, tags
 # the release. The default GITHUB_TOKEN does not start other workflows, so
 # the image job calls release.yml in this same run. A tag pushed by a person
-# still starts release.yml on its own.
+# still starts release.yml on its own. Write permissions sit on the
+# release-please job. The image job does not inherit repository secrets.
 name: release-please
 
 on:
@@ -9,13 +10,18 @@ on:
     branches:
       - main
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
 
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
@@ -32,4 +38,3 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       tag: ${{ needs.release-please.outputs.tag_name }}
-    secrets: inherit
