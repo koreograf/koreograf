@@ -18,6 +18,7 @@ futures = "0.3"
 hex = "0.4"
 http-body-util = "0.1"
 ldap3 = { version = "0.11.5", default-features = false, features = ["tls-rustls"] }
+nix = { version = "0.29", default-features = false, features = ["signal"] }
 pbkdf2 = "0.12"
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
