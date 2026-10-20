@@ -2,13 +2,13 @@
 
 ## Languages
 
-The browser UI is German by default. A language menu in the sidebar and on the sign-in page lists each language with a flag and a short code, for example GER and ENG. Visible copy lives in `web/i18n/de.json` and `web/i18n/en.json`. The API returns a message key in `error`, and logs stay English.
+The browser UI is German by default. The language menu sits at the bottom of the sidebar and on the sign-in page. Each entry shows a flag and a short code, for example GER and ENG. Visible copy lives in `web/i18n/de.json` and `web/i18n/en.json`. The API returns a message key in `error`, and logs stay English.
 
-Where the menu sits in the sidebar, and the pill labels on create-lists, is described in [Installation](installation.md#run-on-a-machine).
+Create-lists use the same pill button, for example `+ Projekt` (English: `+ Project`). The first start on a machine is also in [Installation](installation.md#run-on-a-machine).
 
 ## Environment variables
 
-Environment variables: see `.env.example`. Comments in that file are still German.
+See `.env.example`. Comments in that file are still German.
 
 | Variable | Default |
 | --- | --- |
@@ -23,7 +23,13 @@ Environment variables: see `.env.example`. Comments in that file are still Germa
 | `KOREOGRAF_SECRET_KEY` | 64 hex characters, otherwise `data/secret.key` |
 | `KOREOGRAF_LOG_FORMAT` | empty, text on stdout. `json` for Promtail |
 | `KOREOGRAF_DATABASE_URL` | empty, SQLite. `postgres://` is rejected |
+| `KOREOGRAF_LDAP_BIND_DN` | empty. Required when `KOREOGRAF_LDAP_URL` is set |
+| `KOREOGRAF_LDAP_BIND_PASSWORD` | empty |
+| `KOREOGRAF_LDAP_USER_BASE` | empty. Required when `KOREOGRAF_LDAP_URL` is set |
+| `KOREOGRAF_LDAP_GROUP_BASE` | empty |
+
+Directory sign-in, including these four variables, is described in [Organizations, teams, LDAP, and Active Directory](authentication.md).
 
 `auto` looks for `docker` and `podman`. If the runtime is missing, jobs run locally. `local` ignores execution environments and writes that into the job log. `docker` fails a run that has an image set when no runtime is reachable. Templates without an environment always run locally.
 
-What the database file holds, and why a `postgres://` URL stops startup, is in [Backup and restore](backup-restore.md). Log fields are in [Observability](observability.md). Directory, proxy, runner, and timeout values saved in the UI are in [Authentication](authentication.md#saved-settings).
+What the database file holds, and why a `postgres://` URL stops startup, is in [Database and backup](backup-restore.md). Log fields are in [Logs and Prometheus](observability.md). Directory, proxy, runner, and timeout values saved in the UI are in [Organizations, teams, LDAP, and Active Directory](authentication.md#saved-settings).
