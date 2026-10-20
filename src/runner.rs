@@ -450,10 +450,10 @@ pub fn signal_stop(state: &Shared, job_id: &str, proc: RunningProc) {
             );
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
-        // The leader often exits on SIGTERM and leaves children that ignore
-        // it. Those children keep the pipes open, so the pid stays remembered
-        // until they die. A reused pid is not signaled: the entry is removed
-        // once the child has been reaped.
+        // The leader often exits on SIGTERM. A child that ignores it and
+        // closes the job pipes is no longer remembered, but its process
+        // group can still be alive. A pid is signaled only when that group
+        // still exists.
         let still_ours = remembered(&state, &job_id).is_some_and(|current| current.pid == proc.pid);
         if !stop_after_grace(&proc, still_ours).await {
             log(
@@ -471,21 +471,20 @@ async fn deliver_stop(proc: RunningProc, kill_hard: bool, signal_local: bool) ->
 }
 
 async fn stop_after_grace(proc: &RunningProc, still_ours: bool) -> bool {
-    if still_ours {
-        return deliver_stop(proc.clone(), true, true).await;
-    }
-    let Some(bin) = proc.bin.clone() else {
-        return true;
-    };
-    let Some(name) = proc.container.clone() else {
-        return true;
-    };
-    // The client can exit before the container. The name belongs to this job,
-    // so a leftover container is stopped without signaling the old pid.
-    blocking_stop(move || match container_state(&bin, &name) {
-        ContainerPresence::Running => runtime_signal(&bin, &name, "KILL"),
-        ContainerPresence::Stopped => true,
-        ContainerPresence::Unknown => false,
+    let proc = proc.clone();
+    // Check the group and signal it in one blocking call. The pid is not
+    // reused while a member of that group is still alive.
+    blocking_stop(move || {
+        let local_ok = if proc.pid > 1 && (still_ours || process_group_alive(proc.pid)) {
+            signal_process_group(proc.pid, true)
+        } else {
+            proc.pid > 1 || proc.container.is_some()
+        };
+        let container_ok = match (proc.bin.as_deref(), proc.container.as_deref()) {
+            (Some(bin), Some(name)) => runtime_signal(bin, name, "KILL"),
+            _ => true,
+        };
+        local_ok && container_ok
     })
     .await
 }
@@ -499,10 +498,8 @@ async fn blocking_stop(work: impl FnOnce() -> bool + Send + 'static) -> bool {
 
 fn deliver_stop_blocking(proc: &RunningProc, kill_hard: bool, signal_local: bool) -> bool {
     let signal = if kill_hard { "KILL" } else { "TERM" };
-    let container_ok = match (proc.bin.as_deref(), proc.container.as_deref()) {
-        (Some(bin), Some(name)) => runtime_signal(bin, name, signal),
-        _ => true,
-    };
+    // The local group goes first. Inspect can stall, and this thread keeps
+    // running after the wait around it times out.
     let local_ok = if !signal_local {
         true
     } else if proc.pid > 1 {
@@ -510,7 +507,11 @@ fn deliver_stop_blocking(proc: &RunningProc, kill_hard: bool, signal_local: bool
     } else {
         proc.container.is_some()
     };
-    container_ok && local_ok
+    let container_ok = match (proc.bin.as_deref(), proc.container.as_deref()) {
+        (Some(bin), Some(name)) => runtime_signal(bin, name, signal),
+        _ => true,
+    };
+    local_ok && container_ok
 }
 
 fn signal_process_group(pid: u32, kill_hard: bool) -> bool {
@@ -530,6 +531,18 @@ fn signal_process_group(pid: u32, kill_hard: bool) -> bool {
         Err(nix::errno::Errno::ESRCH) => true,
         Err(_) => false,
     }
+}
+
+/// `true` when this process may signal `pid`'s group. `EPERM` means the
+/// group exists and belongs to someone else, so it must not be killed.
+fn process_group_alive(pid: u32) -> bool {
+    let Ok(raw) = i32::try_from(pid) else {
+        return false;
+    };
+    if raw <= 1 {
+        return false;
+    }
+    nix::sys::signal::killpg(nix::unistd::Pid::from_raw(raw), None).is_ok()
 }
 
 fn runtime_signal(bin: &str, name: &str, signal: &str) -> bool {
@@ -2126,6 +2139,84 @@ mod tests {
         assert!(
             gone,
             "grandchild {grandchild} is still sleep; status={before:?} cmdline={after:?}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn stop_after_grace_kills_a_detached_child() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-kill-detached-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg("( trap '' TERM; sleep 60 & echo $! > child.pid; wait ) >/dev/null 2>&1 & wait")
+            .current_dir(&dir)
+            .process_group(0)
+            .kill_on_drop(true)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = cmd.spawn().unwrap();
+        let pid = child.id().expect("pid");
+        struct KillGroup(u32);
+        impl Drop for KillGroup {
+            fn drop(&mut self) {
+                let _ = signal_process_group(self.0, true);
+            }
+        }
+        let _kill = KillGroup(pid);
+        let marker = dir.join("child.pid");
+        let mut grandchild = String::new();
+        for _ in 0..50 {
+            if let Ok(text) = std::fs::read_to_string(&marker) {
+                grandchild = text.trim().to_string();
+                if !grandchild.is_empty() {
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(!grandchild.is_empty(), "detached child did not start");
+        assert!(
+            signal_process_group(pid, false),
+            "the group did not accept SIGTERM"
+        );
+        let finished = tokio::time::timeout(Duration::from_secs(3), child.wait()).await;
+        assert!(finished.is_ok(), "the leader stayed up after SIGTERM");
+        let still = std::fs::read_to_string(format!("/proc/{grandchild}/cmdline")).ok();
+        assert!(
+            still.as_deref().is_some_and(|text| text.contains("sleep")),
+            "SIGTERM stopped the detached child; cmdline={still:?}"
+        );
+        assert!(
+            process_group_alive(pid),
+            "the group was gone before the grace kill"
+        );
+        let proc = RunningProc {
+            pid,
+            container: None,
+            bin: None,
+        };
+        assert!(stop_after_grace(&proc, false).await, "grace kill failed");
+        let mut gone = false;
+        let mut after = None;
+        for _ in 0..40 {
+            after = std::fs::read_to_string(format!("/proc/{grandchild}/cmdline")).ok();
+            if after
+                .as_deref()
+                .is_none_or(|text| text.is_empty() || !text.contains("sleep"))
+            {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(
+            gone,
+            "detached child {grandchild} survived SIGKILL; cmdline={after:?}"
         );
         let _ = std::fs::remove_dir_all(dir);
     }
