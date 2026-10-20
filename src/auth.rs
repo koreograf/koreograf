@@ -138,6 +138,21 @@ fn principal_is_admin(c: &rusqlite::Connection, launched_by: &str, depth: u8) ->
     Ok(user.is_admin && !user.disabled)
 }
 
+/// A local run needs the template, and its project when it has one, to have
+/// been saved by an administrator.
+pub fn content_saved_by_admin(
+    c: &rusqlite::Connection,
+    template: &db::Template,
+) -> AppResult<bool> {
+    if !template.admin_saved {
+        return Ok(false);
+    }
+    let Some(project_id) = template.project_id.as_deref().filter(|id| !id.is_empty()) else {
+        return Ok(true);
+    };
+    Ok(db::project(c, project_id)?.is_some_and(|project| project.admin_saved))
+}
+
 pub fn sync_ldap_teams(
     c: &rusqlite::Connection,
     user_id: &str,

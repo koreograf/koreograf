@@ -20,7 +20,7 @@ fn config(dir: &std::path::Path) -> Config {
         runner: RunnerMode::Local,
         job_timeout_secs: 60,
         local_jobs: LocalJobs::All,
-        project_roots: Vec::new(),
+        project_roots: vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples")],
         ldap: None,
     }
 }
@@ -510,8 +510,12 @@ async fn organizations_inventories_and_git_sync() {
         .unwrap()
         .as_nanos();
     let dir = std::env::temp_dir().join(format!("koreograf-org-{nanos}"));
+    let origin = std::env::temp_dir().join(format!("koreograf-origin-{nanos}"));
     std::fs::create_dir_all(&dir).unwrap();
-    let state = koreograf::boot(config(&dir)).unwrap();
+    std::fs::create_dir_all(&origin).unwrap();
+    let mut cfg = config(&dir);
+    cfg.project_roots.push(origin.clone());
+    let state = koreograf::boot(cfg).unwrap();
     let app = koreograf::router(state);
 
     let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
@@ -600,8 +604,6 @@ async fn organizations_inventories_and_git_sync() {
     assert_eq!(status, StatusCode::OK, "{updated}");
     assert_eq!(updated["host_count"], 3);
 
-    let origin = std::env::temp_dir().join(format!("koreograf-origin-{nanos}"));
-    std::fs::create_dir_all(&origin).unwrap();
     git(&origin, &["init", "-b", "main"]);
     git(&origin, &["config", "user.email", "test@example.com"]);
     git(&origin, &["config", "user.name", "Koreograf Test"]);
@@ -683,7 +685,10 @@ async fn organizations_inventories_and_git_sync() {
         let message = failed["error"].as_str().unwrap_or("");
         let lower = message.to_ascii_lowercase();
         assert!(
-            lower.contains("fatal") || lower.contains("repository") || lower.contains("exist"),
+            lower.contains("fatal")
+                || lower.contains("repository")
+                || lower.contains("exist")
+                || message == "the_project_path_is_not_allowed",
             "{failed}"
         );
         assert!(!message.contains("git clone ist fehlgeschlagen"));
@@ -3799,8 +3804,12 @@ async fn a_template_can_run_the_last_sync_offline() {
         .unwrap()
         .as_nanos();
     let dir = std::env::temp_dir().join(format!("koreograf-offline-{nanos}"));
+    let origin = std::env::temp_dir().join(format!("koreograf-offline-origin-{nanos}"));
     std::fs::create_dir_all(&dir).unwrap();
-    let state = koreograf::boot(config(&dir)).unwrap();
+    std::fs::create_dir_all(&origin).unwrap();
+    let mut cfg = config(&dir);
+    cfg.project_roots.push(origin.clone());
+    let state = koreograf::boot(cfg).unwrap();
     let app = koreograf::router(state);
 
     let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
@@ -3822,8 +3831,6 @@ async fn a_template_can_run_the_last_sync_offline() {
     let cookie = cookie.expect("session cookie");
     let team = me["teams"][0]["id"].as_str().unwrap().to_string();
 
-    let origin = std::env::temp_dir().join(format!("koreograf-offline-origin-{nanos}"));
-    std::fs::create_dir_all(&origin).unwrap();
     git(&origin, &["init", "-b", "main"]);
     git(&origin, &["config", "user.email", "test@example.com"]);
     git(&origin, &["config", "user.name", "Koreograf Test"]);
@@ -4068,7 +4075,8 @@ async fn an_operator_cannot_start_a_local_job_or_an_arbitrary_path() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{denied}");
     assert_eq!(denied["error"], "local_runs_are_limited_to_administrators");
 
-    let examples = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/demo");
+    let outside = std::env::temp_dir().join(format!("koreograf-outside-{nanos}"));
+    std::fs::create_dir_all(&outside).unwrap();
     let (status, path_denied, _) = call(
         &app,
         "POST",
@@ -4078,7 +4086,7 @@ async fn an_operator_cannot_start_a_local_job_or_an_arbitrary_path() {
         Some(json!({
             "name": "Operator path",
             "source_type": "path",
-            "source": examples.display().to_string()
+            "source": outside.display().to_string()
         })),
     )
     .await;
@@ -4103,9 +4111,49 @@ async fn an_operator_cannot_start_a_local_job_or_an_arbitrary_path() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{etc_denied}");
     assert_eq!(etc_denied["error"], "the_project_path_is_not_allowed");
 
+    let health = templates
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["name"] == "Healthcheck")
+        .unwrap()
+        .clone();
+    let (status, edited, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/templates/{health_id}"),
+        Some(&operator_cookie),
+        Some(&team),
+        Some(health.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    let (status, blocked, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{health_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{blocked}");
+    assert_eq!(blocked["error"], "local_runs_are_limited_to_administrators");
+    let (status, restored, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/templates/{health_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(health),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{restored}");
+
     let finished = launch_and_wait(&app, &cookie, &team, &health_id).await;
     assert_eq!(finished["status"], "successful", "{}", finished["events"]);
     let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&outside);
 }
 
 async fn launch_and_wait(app: &axum::Router, cookie: &str, team: &str, template_id: &str) -> Value {

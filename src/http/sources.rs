@@ -352,7 +352,12 @@ fn visible_project(state: &Shared, id: &str, team: &str) -> AppResult<Project> {
 
 fn project_dir(state: &Shared, project: &Project) -> AppResult<PathBuf> {
     match project.source_type.as_str() {
-        "path" => Ok(PathBuf::from(&project.source)),
+        "path" => runner::stored_directory(
+            std::path::Path::new(&project.source),
+            &state.cfg.data_dir,
+            &state.cfg.project_roots,
+        )
+        .map_err(ApiError::bad),
         "git" => {
             let dest = state.cfg.data_dir.join("checkouts").join(&project.id);
             if dest.join(".git").is_dir() {

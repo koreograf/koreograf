@@ -37,7 +37,8 @@ pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
             state.cfg.local_jobs,
             settings.runner,
             template.environment_id.is_some(),
-        ) && !crate::auth::launcher_is_admin(&db, &req.launched_by)?
+        ) && (!crate::auth::launcher_is_admin(&db, &req.launched_by)?
+            || !crate::auth::content_saved_by_admin(&db, &template)?)
         {
             return Err(ApiError::bad("local_runs_are_limited_to_administrators"));
         }
@@ -376,9 +377,15 @@ pub async fn sync_project(state: &Shared, project: &db::Project) -> AppResult<St
         return Ok(project.source.clone());
     }
     let proxy = crate::settings::load(state)?.proxy;
-    let path = runner::materialize_project(project, &state.cfg.data_dir, &proxy, true)
-        .await
-        .map_err(ApiError::bad)?;
+    let path = runner::materialize_project(
+        project,
+        &state.cfg.data_dir,
+        &proxy,
+        true,
+        &state.cfg.project_roots,
+    )
+    .await
+    .map_err(ApiError::bad)?;
     Ok(path.display().to_string())
 }
 

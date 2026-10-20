@@ -126,7 +126,8 @@ pub async fn create_template(
 ) -> AppResult<Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let (template, credential_ids) = build_template(&state, &team, None, body)?;
+    let (mut template, credential_ids) = build_template(&state, &team, None, body)?;
+    template.admin_saved = user.is_admin;
     let mut db = state.db()?;
     let tx = db.transaction()?;
     db::insert_template(&tx, &template)?;
@@ -144,7 +145,8 @@ pub async fn update_template(
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let (template, credential_ids) = build_template(&state, &team, Some(id), body)?;
+    let (mut template, credential_ids) = build_template(&state, &team, Some(id), body)?;
+    template.admin_saved = user.is_admin;
     let mut db = state.db()?;
     let tx = db.transaction()?;
     db::update_template(&tx, &template)?;
@@ -707,6 +709,7 @@ fn build_template(
             spec: spec.to_string(),
             created_at,
             update_on_launch: body.update_on_launch,
+            admin_saved: false,
         },
         credential_ids,
     ))

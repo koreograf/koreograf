@@ -317,6 +317,7 @@ pub async fn update_project(
     check_team_ids(&db, organization_id, &body.team_ids)?;
     db::set_project_organization(&db, &id, organization_id)?;
     db::replace_project_teams(&db, &id, &body.team_ids)?;
+    db::set_project_admin_saved(&db, &id, user.is_admin)?;
     let project = db::project(&db, &id)?.ok_or(ApiError::NotFound)?;
     Ok(Json(json!(project)))
 }
@@ -390,6 +391,7 @@ pub async fn create_project(
         revision: revision.to_string(),
         created_at: db::now(),
         team_ids: body.team_ids,
+        admin_saved: user.is_admin,
     };
     db::insert_project(&db, &project)?;
     let stored = db::project(&db, &project.id)?.ok_or(ApiError::NotFound)?;

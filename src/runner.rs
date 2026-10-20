@@ -674,6 +674,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
             &state.cfg.data_dir,
             &settings.proxy,
             template.update_on_launch,
+            &state.cfg.project_roots,
         )
         .await
         .map_err(sync_log_line)?;
@@ -853,7 +854,11 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
         if state.cfg.local_jobs == LocalJobs::Admins {
             let allowed = {
                 let db = state.db().map_err(|e| e.to_string())?;
-                crate::auth::launcher_is_admin(&db, &job.launched_by).map_err(|e| e.to_string())?
+                let launcher = crate::auth::launcher_is_admin(&db, &job.launched_by)
+                    .map_err(|e| e.to_string())?;
+                let content = crate::auth::content_saved_by_admin(&db, &template)
+                    .map_err(|e| e.to_string())?;
+                launcher && content
             };
             if !allowed {
                 return Err("Local runs are limited to administrators.".into());
@@ -1555,15 +1560,25 @@ pub fn authorize_project_source(
     }
 }
 
-fn stored_directory(path: &Path, data_dir: &Path) -> Result<PathBuf, String> {
+pub(crate) fn stored_directory(
+    path: &Path,
+    data_dir: &Path,
+    roots: &[PathBuf],
+) -> Result<PathBuf, String> {
     match assess_path(path, data_dir) {
-        Ok(PathState::Ready(canonical)) => Ok(canonical),
+        Ok(PathState::Ready(canonical)) => {
+            if within_roots(&canonical, roots) {
+                Ok(canonical)
+            } else {
+                Err("the_project_path_is_not_allowed".into())
+            }
+        }
         Ok(PathState::Missing) => Err("the_project_path_is_not_a_directory".into()),
         Err(err) => Err(err.api_key().into()),
     }
 }
 
-fn file_clone_allowed(url: &str, data_dir: &Path) -> Result<bool, String> {
+fn file_clone_allowed(url: &str, data_dir: &Path, roots: &[PathBuf]) -> Result<bool, String> {
     let Some(path) = file_url_path(url) else {
         if url.starts_with("file://") {
             return Err("the_project_path_is_not_allowed".into());
@@ -1571,7 +1586,14 @@ fn file_clone_allowed(url: &str, data_dir: &Path) -> Result<bool, String> {
         return Ok(false);
     };
     match assess_path(&path, data_dir) {
-        Ok(_) => Ok(true),
+        Ok(PathState::Ready(canonical)) => {
+            if within_roots(&canonical, roots) {
+                Ok(true)
+            } else {
+                Err("the_project_path_is_not_allowed".into())
+            }
+        }
+        Ok(PathState::Missing) => Err("the_project_path_is_not_allowed".into()),
         Err(err) => Err(err.api_key().into()),
     }
 }
@@ -1702,17 +1724,17 @@ pub async fn materialize_project(
     data_dir: &Path,
     proxy: &crate::settings::ProxySettings,
     update: bool,
+    roots: &[PathBuf],
 ) -> Result<PathBuf, String> {
     match project.source_type.as_str() {
         "path" => {
             let path = PathBuf::from(&project.source);
-            stored_directory(&path, data_dir)
+            stored_directory(&path, data_dir, roots)
         }
         "git" => {
             if !valid_git(&project.source) {
                 return Err("the_git_address_is_invalid".into());
             }
-            let allow_file = file_clone_allowed(&project.source, data_dir)?;
             let dest = data_dir.join("checkouts").join(&project.id);
             if !update {
                 return if dest.join(".git").is_dir() {
@@ -1721,6 +1743,7 @@ pub async fn materialize_project(
                     Err("sync_the_git_project_first".into())
                 };
             }
+            let allow_file = file_clone_allowed(&project.source, data_dir, roots)?;
             git_sync(&project.source, &project.revision, &dest, proxy, allow_file).await?;
             Ok(dest)
         }
@@ -2321,9 +2344,10 @@ mod tests {
             revision: String::new(),
             created_at: String::new(),
             team_ids: Vec::new(),
+            admin_saved: true,
         };
         let proxy = crate::settings::ProxySettings::inherit();
-        let path = materialize_project(&project, &dir, &proxy, false)
+        let path = materialize_project(&project, &dir, &proxy, false, &[])
             .await
             .unwrap();
         assert_eq!(path, checkout);
@@ -2331,7 +2355,7 @@ mod tests {
             id: "absent".into(),
             ..project
         };
-        let err = materialize_project(&missing, &dir, &proxy, false)
+        let err = materialize_project(&missing, &dir, &proxy, false, &[])
             .await
             .unwrap_err();
         assert_eq!(err, "sync_the_git_project_first");
@@ -2797,8 +2821,64 @@ mod tests {
             authorize_project_source("git", "file://evil.example/tmp", &data, &[], true),
             Err(ProjectPathError::Denied)
         );
-        assert!(!file_clone_allowed("https://example.com/demo.git", &data).unwrap());
+        assert!(!file_clone_allowed("https://example.com/demo.git", &data, &[]).unwrap());
         let _ = std::fs::remove_dir_all(data);
+    }
+
+    #[tokio::test]
+    async fn a_swapped_symlink_is_outside_the_project_root() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!("koreograf-symlink-{nanos}"));
+        let root = base.join("root");
+        let inside = root.join("project");
+        let outside = base.join("outside");
+        let data = base.join("data");
+        std::fs::create_dir_all(&inside).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::create_dir_all(&data).unwrap();
+        let link = root.join("link");
+        std::os::unix::fs::symlink(&inside, &link).unwrap();
+        let roots = [root.clone()];
+        authorize_project_source("path", &link.display().to_string(), &data, &roots, false)
+            .expect("link inside the root");
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let project = db::Project {
+            id: "linked".into(),
+            team_id: "team".into(),
+            organization_id: String::new(),
+            organization_name: String::new(),
+            name: "Linked".into(),
+            source_type: "path".into(),
+            source: link.display().to_string(),
+            revision: String::new(),
+            created_at: String::new(),
+            team_ids: Vec::new(),
+            admin_saved: true,
+        };
+        let proxy = crate::settings::ProxySettings::inherit();
+        let err = materialize_project(&project, &data, &proxy, true, &roots)
+            .await
+            .unwrap_err();
+        assert_eq!(err, "the_project_path_is_not_allowed");
+        let file_url = format!("file://{}", link.display());
+        let file_err = file_clone_allowed(&file_url, &data, &roots).unwrap_err();
+        assert_eq!(file_err, "the_project_path_is_not_allowed");
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(&inside, &link).unwrap();
+        let outside_roots = materialize_project(&project, &data, &proxy, true, &[])
+            .await
+            .unwrap_err();
+        assert_eq!(outside_roots, "the_project_path_is_not_allowed");
+        let path = materialize_project(&project, &data, &proxy, true, &roots)
+            .await
+            .unwrap();
+        assert_eq!(path, inside.canonicalize().unwrap());
+        assert!(file_clone_allowed(&file_url, &data, &roots).unwrap());
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[test]
