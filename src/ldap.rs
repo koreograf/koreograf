@@ -66,21 +66,52 @@ fn split_dn(dn: &str) -> Vec<String> {
 }
 
 fn unescape_dn(value: &str) -> String {
-    let mut out = String::new();
-    let mut chars = value.chars();
-    while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            if let Some(next) = chars.next() {
-                out.push(next);
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\\' && index + 1 < bytes.len() {
+            let next = bytes[index + 1];
+            if index + 2 < bytes.len()
+                && next.is_ascii_hexdigit()
+                && bytes[index + 2].is_ascii_hexdigit()
+            {
+                let hex = &value[index + 1..index + 3];
+                if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                    out.push(byte);
+                    index += 3;
+                    continue;
+                }
             }
-        } else {
-            out.push(ch);
+            out.push(next);
+            index += 2;
+            continue;
         }
+        out.push(bytes[index]);
+        index += 1;
     }
-    out
+    String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Group names that should open a team: CN of each DN, plus the raw value.
+/// Lowercased DN with escapes decoded, so `\2C` and `\,` compare equal.
+fn canonical_dn(dn: &str) -> String {
+    let mut parts = Vec::new();
+    for part in split_dn(dn) {
+        let Some((key, value)) = part.split_once('=') else {
+            continue;
+        };
+        let key = key.trim().to_ascii_lowercase();
+        if key.is_empty() {
+            continue;
+        }
+        let value = unescape_dn(value.trim()).to_ascii_lowercase();
+        parts.push(format!("{key}={value}"));
+    }
+    parts.join(",")
+}
+
+/// Group names that should open a team: CN of each DN, the raw value, and
+/// the DN with escapes decoded.
 pub fn group_keys(groups: &[String]) -> HashSet<String> {
     let mut keys = HashSet::new();
     for group in groups {
@@ -88,8 +119,20 @@ pub fn group_keys(groups: &[String]) -> HashSet<String> {
         if let Some(cn) = cn_from_dn(group) {
             keys.insert(cn.to_ascii_lowercase());
         }
+        let canonical = canonical_dn(group);
+        if !canonical.is_empty() {
+            keys.insert(canonical);
+        }
     }
     keys
+}
+
+pub fn matches_group(keys: &HashSet<String>, team_group: &str) -> bool {
+    if keys.contains(&team_group.to_ascii_lowercase()) {
+        return true;
+    }
+    let canonical = canonical_dn(team_group);
+    !canonical.is_empty() && keys.contains(&canonical)
 }
 
 pub async fn authenticate(
@@ -337,6 +380,45 @@ mod tests {
         assert!(hostile
             .iter()
             .any(|filter| { filter.contains(r"uniqueMember=cn=a\29\28uid=\2a,ou=people") }));
+    }
+
+    #[test]
+    fn hex_escapes_match_the_same_cn_and_dn() {
+        let server = r"cn=Ops\2C Nord,ou=groups,dc=example,dc=com";
+        assert_eq!(cn_from_dn(server).as_deref(), Some("Ops, Nord"));
+        assert_eq!(
+            cn_from_dn(r"cn=a\2Bb,ou=groups,dc=example,dc=com").as_deref(),
+            Some("a+b")
+        );
+        assert_eq!(
+            cn_from_dn(r"cn=\23hash,ou=groups,dc=example,dc=com").as_deref(),
+            Some("#hash")
+        );
+        assert_eq!(
+            cn_from_dn(r"cn=a/b\3Bc,ou=groups,dc=example,dc=com").as_deref(),
+            Some("a/b;c")
+        );
+        let decoded =
+            String::from_utf8(vec![b'M', 0xC3, 0xBC, b'l', b'l', b'e', b'r']).expect("utf-8");
+        assert_eq!(
+            cn_from_dn(r"cn=M\C3\BCller,ou=groups,dc=example,dc=com").as_deref(),
+            Some(decoded.as_str())
+        );
+        let keys = group_keys(&[server.into()]);
+        assert!(keys.contains("ops, nord"));
+        assert!(!keys.contains("ops2c nord"));
+        assert!(matches_group(&keys, "Ops, Nord"));
+        assert!(matches_group(
+            &keys,
+            r"cn=Ops\, Nord,ou=groups,dc=example,dc=com"
+        ));
+        assert!(matches_group(
+            &keys,
+            r"CN=Ops\2C Nord,OU=Groups,DC=Example,DC=Com"
+        ));
+        assert!(!matches_group(&keys, "Ops2C Nord"));
+        let multi = group_keys(&[r"cn=mrdn+ou=x,dc=example,dc=com".into()]);
+        assert!(!multi.contains("mrdn"));
     }
 
     #[test]

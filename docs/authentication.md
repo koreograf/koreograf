@@ -8,7 +8,7 @@ Roles are `viewer`, `operator`, and `owner`. The local administrator bypasses th
 
 Memberships from LDAP have source `ldap` and role `operator`. A viewer or owner role is a manual membership on a team the directory does not fill for that user. `POST /api/teams/{id}/members` rejects a role change on an existing directory membership with `the_membership_comes_from_ldap_or_active_directory`. One user has one membership per team, so the directory row cannot also be a manual row. When the group disappears, only that membership is removed. A manual membership stays, and the next directory sync does not replace it. Removing the member is still allowed, and the directory can add that membership back as `operator`.
 
-A team stores an LDAP group as a CN or a DN. The comparison ignores case and nothing else, so a space after a comma is a different value. `Plattform` and `cn=Plattform,ou=groups,dc=example,dc=com` are both valid. A DN matches that full value. The CN inside a DN also matches a team that stores only the CN.
+A team stores an LDAP group as a CN or a DN. The comparison ignores case, and equivalent character escapes match, so `\2C` and `\,` are the same comma. A space after a comma is a different value. `Plattform` and `cn=Plattform,ou=groups,dc=example,dc=com` are both valid. A DN matches that full value. The CN inside a DN also matches a team that stores only the CN.
 
 | Variable | LDAP | Active Directory |
 | --- | --- | --- |
@@ -26,17 +26,21 @@ A team stores an LDAP group as a CN or a DN. The comparison ignores case and not
 
 Empty filters and attributes use the default for the selected mode. `KOREOGRAF_LDAP_STARTTLS=true` turns on StartTLS. `KOREOGRAF_LDAP_TLS_INSECURE=true` skips certificate checks. The service account binds with `KOREOGRAF_LDAP_BIND_DN` and searches under `KOREOGRAF_LDAP_USER_BASE`. Koreograf then binds with that user's password. `{username}` in the filter is escaped.
 
-The service account needs read access to the user base and to the group base. Users do not. Put the group rule before a general `to *` rule. A base the service account cannot read comes back as `noSuchObject` (LDAP result 32), which looks like a wrong base. Active Directory needs no extra grant when the service account is a normal domain user. A minimal OpenLDAP policy is:
+The service account needs read access to the user base and to the group base. Users do not. Put the group rule before a general `to *` rule. A base the service account cannot read comes back as `noSuchObject` (LDAP result 32), which looks like a wrong base. Active Directory needs no extra grant when the service account is a normal domain user. Add these rules before your existing rules. They are not a complete server policy by themselves. The first rule lets the service account bind when it lives outside `ou=people`:
 
 ```text
-olcAccess: {0}to dn.subtree="ou=groups,dc=example,dc=com"
-  by dn.exact="cn=reader,dc=example,dc=com" read
-  by * none
-olcAccess: {1}to dn.subtree="ou=people,dc=example,dc=com" attrs=userPassword
+olcAccess: {0}to attrs=userPassword
   by anonymous auth
   by self write
   by * none
-olcAccess: {2}to dn.subtree="ou=people,dc=example,dc=com"
+olcAccess: {1}to dn.subtree="ou=groups,dc=example,dc=com"
+  by dn.exact="cn=reader,dc=example,dc=com" read
+  by * none
+olcAccess: {2}to dn.subtree="ou=people,dc=example,dc=com" attrs=userPassword
+  by anonymous auth
+  by self write
+  by * none
+olcAccess: {3}to dn.subtree="ou=people,dc=example,dc=com"
   by dn.exact="cn=reader,dc=example,dc=com" read
   by self read
   by * none
@@ -44,7 +48,7 @@ olcAccess: {2}to dn.subtree="ou=people,dc=example,dc=com"
 
 Groups come from `KOREOGRAF_LDAP_GROUP_ATTR` on the user entry. When that value is empty and the attribute is not `memberOf`, `memberOf` is read as well. A non-empty list is used as it is. Koreograf does not also search the group base in that case. `memberOf` values are DNs, and a team matches either the DN or the CN inside it.
 
-When the user entry has no groups, Koreograf binds again as the service account and searches. The search base is `KOREOGRAF_LDAP_GROUP_BASE`, or `KOREOGRAF_LDAP_USER_BASE` when the group base is empty. The search matches `groupOfNames` whose `member` is the user DN, `posixGroup` whose `memberUid` is the username, `group` whose `member` is the user DN, and `groupOfUniqueNames` whose `uniqueMember` is the user DN. Each group found by that search is the entry's DN. Attributes on the group entry are not the group name. A failed search, or an empty result while `KOREOGRAF_LDAP_GROUP_BASE` is set, is a warning in the log. The password is not in that warning. Sign-in still succeeds, and the user has no directory teams until a later sign-in can read the groups.
+When the user entry has no groups, Koreograf binds again as the service account and searches. The search base is `KOREOGRAF_LDAP_GROUP_BASE`, or `KOREOGRAF_LDAP_USER_BASE` when the group base is empty. The search matches `groupOfNames` whose `member` is the user DN, `posixGroup` whose `memberUid` is the username, `group` whose `member` is the user DN, and `groupOfUniqueNames` whose `uniqueMember` is the user DN. Each group found by that search is the entry's DN. Attributes on the group entry are not the group name. Set a team to the CN of that DN or to the full DN. A second `cn` value, or a `cn` that is not the RDN, does not match a CN team. A `uniqueMember` with a trailing nameAndOptionalUID (`#'0101'B`) is not matched. A failed search, or an empty result while `KOREOGRAF_LDAP_GROUP_BASE` is set, is a warning in the log. The password is not in that warning. Sign-in still succeeds, and the user has no directory teams until a later sign-in can read the groups.
 
 ## Saved settings
 
