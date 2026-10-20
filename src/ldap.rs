@@ -240,19 +240,6 @@ fn redact_secret(message: &str, secret: &str) -> String {
     }
 }
 
-/// Every CN, every distinct `name`, and the DN. Matching later ignores case.
-fn group_names_from_entry(cns: &[String], names: &[String], dn: &str) -> Vec<String> {
-    let mut found = Vec::new();
-    for cn in cns {
-        push_group_name(&mut found, cn);
-    }
-    for name in names {
-        push_group_name(&mut found, name);
-    }
-    push_group_name(&mut found, dn);
-    found
-}
-
 fn group_search_filters(user_dn: &str, username: &str) -> Vec<String> {
     let user_dn = escape_filter(user_dn);
     let username = escape_filter(username);
@@ -270,20 +257,6 @@ fn push_unique(found: &mut Vec<String>, value: String) {
     }
 }
 
-fn push_group_name(found: &mut Vec<String>, value: &str) {
-    let value = value.trim();
-    if value.is_empty() {
-        return;
-    }
-    if found
-        .iter()
-        .any(|existing| existing.eq_ignore_ascii_case(value))
-    {
-        return;
-    }
-    found.push(value.to_string());
-}
-
 async fn search_groups(
     ldap: &mut ldap3::Ldap,
     base: &str,
@@ -294,12 +267,7 @@ async fn search_groups(
     let mut errors = Vec::new();
     for filter in group_search_filters(user_dn, username) {
         let searched = ldap
-            .search(
-                base,
-                Scope::Subtree,
-                &filter,
-                vec!["cn", "name", "distinguishedName"],
-            )
+            .search(base, Scope::Subtree, &filter, vec!["objectClass"])
             .await;
         let entries = match searched {
             Ok(result) => match result.success() {
@@ -316,13 +284,8 @@ async fn search_groups(
         };
         for entry in entries {
             let parsed = SearchEntry::construct(entry);
-            found.extend(group_names_from_entry(
-                &attr_values(&parsed, "cn"),
-                &attr_values(&parsed, "name"),
-                &parsed.dn,
-            ));
-            if let Some(distinguished) = first_attr(&parsed, "distinguishedName") {
-                push_group_name(&mut found, &distinguished);
+            if !parsed.dn.is_empty() {
+                found.push(parsed.dn);
             }
         }
     }
@@ -353,71 +316,14 @@ mod tests {
     }
 
     #[test]
-    fn fallback_names_match_a_cn_and_a_dn() {
-        let names = group_names_from_entry(
-            &["Plattform".into()],
-            &["PLATTFORM".into()],
-            "cn=Plattform,ou=groups,dc=example,dc=com",
-        );
-        assert_eq!(
-            names,
-            vec![
-                "Plattform".to_string(),
-                "cn=Plattform,ou=groups,dc=example,dc=com".to_string(),
-            ]
-        );
-        let keys = group_keys(&names);
+    fn a_group_is_identified_by_its_entry_dn() {
+        let dn = "cn=Plattform,ou=groups,dc=example,dc=com";
+        let keys = group_keys(&[dn.into()]);
         assert!(keys.contains("plattform"));
-        assert!(keys.contains("cn=plattform,ou=groups,dc=example,dc=com"));
+        assert!(keys.contains(&dn.to_ascii_lowercase()));
         let team_dn = "CN=Plattform,OU=Groups,DC=Example,DC=Com";
         assert!(keys.contains(&team_dn.to_ascii_lowercase()));
-    }
-
-    #[test]
-    fn fallback_names_keep_a_distinct_name() {
-        let names = group_names_from_entry(
-            &["ops".into()],
-            &["Operations".into()],
-            "cn=ops,ou=groups,dc=example,dc=com",
-        );
-        assert_eq!(
-            names,
-            vec![
-                "ops".to_string(),
-                "Operations".to_string(),
-                "cn=ops,ou=groups,dc=example,dc=com".to_string(),
-            ]
-        );
-        let keys = group_keys(&names);
-        assert!(keys.contains("operations"));
-        assert!(keys.contains("cn=ops,ou=groups,dc=example,dc=com"));
-    }
-
-    #[test]
-    fn fallback_names_keep_the_dn_when_attributes_are_missing() {
-        let names =
-            group_names_from_entry(&[], &["  ".into()], "cn=ops,ou=groups,dc=example,dc=com");
-        assert_eq!(
-            names,
-            vec!["cn=ops,ou=groups,dc=example,dc=com".to_string()]
-        );
-    }
-
-    #[test]
-    fn fallback_names_keep_every_cn() {
-        let names = group_names_from_entry(
-            &["ops".into(), "Ops Team".into()],
-            &[],
-            "cn=ops,ou=groups,dc=example,dc=com",
-        );
-        assert_eq!(
-            names,
-            vec![
-                "ops".to_string(),
-                "Ops Team".to_string(),
-                "cn=ops,ou=groups,dc=example,dc=com".to_string(),
-            ]
-        );
+        assert!(!keys.contains("operations"));
     }
 
     #[test]
