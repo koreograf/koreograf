@@ -54,6 +54,20 @@ Inventory files are named `hosts` or `inventory`, or they live in `inventory/` a
 
 A file with `plugin:` is not executed. `plugin: netbox.netbox.nb_inventory` (also `plugin: netbox`) has a NetBox source. The controller fetches devices and, when asked, virtual machines, groups them like the plugin (`sites_berlin`, `device_roles_web`), and stores INI. The token lives on the credential, not in the source. An inventory can have several sources, for example a file from the project and NetBox. Ansible receives each source as its own file. `POST /api/inventories/{id}/sync` refreshes every external source. Other inventory plugins are listed and cannot be executed here.
 
+A job uses the inventory from the last sync. Launch does not call NetBox. Sync the inventory before the job when the host list should be current. With no `query_filters`, every device the API returns is imported, including a device that has no `primary_ip`. That host is listed and has no `ansible_host`. Virtual machines are included unless `virtual_machines` is false. A filter such as `status=active` leaves retired devices out:
+
+```yaml
+plugin: netbox.netbox.nb_inventory
+api_endpoint: https://netbox.example.com
+query_filters:
+  - status: active
+group_by:
+  - sites
+  - is_virtual
+```
+
+`netbox_id` is the numeric id from the endpoint that returned the host. A device and a virtual machine can share the same number. `group_by` with `is_virtual` adds the groups `is_virtual_true` and `is_virtual_false`. It does not change `netbox_id`.
+
 An Ansible template stores the run in `spec`: `job_type` `run` or `check`, `tags`, `skip_tags`, `limit`, `diff`, `verbosity` from 0 to 4, and `forks` from 1 to 50. Check starts `ansible-playbook --check`.
 
 Each job stores the parameters of that launch: template, tool, entry path, project, inventory, each attached credential as name and kind (not the secret), execution environment, spec, and the merged extra variables. The job page has an Output tab and a Parameters tab. A failed job can be started again from the job list and from the same row as the Output and Parameters tabs. `POST /api/jobs/{id}/relaunch` uses the stored parameters. `{"only_failed_hosts": true}` is Ansible-only and sets `--limit` to the hosts that failed or were unreachable. A play recap replaces earlier `fatal:` lines. When the recap never arrives, the fatal lines are kept. `GET /api/jobs/{id}/output` downloads the output as text.

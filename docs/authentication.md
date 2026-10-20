@@ -6,7 +6,7 @@ An operator cannot move a project to an organization other than the one of the t
 
 Roles are `viewer`, `operator`, and `owner`. The local administrator bypasses the role check so an LDAP outage cannot lock everyone out. Sign-in checks the local password first, then LDAP.
 
-Memberships from LDAP have source `ldap` and role `operator`. When the group disappears, only that membership is removed. Manual memberships stay. A manual change does not overwrite an LDAP membership. The next directory sync owns that row. Removing the member is still allowed, and the directory can add it back.
+Memberships from LDAP have source `ldap` and role `operator`. A viewer or owner role is a manual membership on a team the directory does not fill for that user. `POST /api/teams/{id}/members` rejects a role change on an existing directory membership with `the_membership_comes_from_ldap_or_active_directory`. One user has one membership per team, so the directory row cannot also be a manual row. When the group disappears, only that membership is removed. A manual membership stays, and the next directory sync does not replace it. Removing the member is still allowed, and the directory can add that membership back as `operator`.
 
 A team stores an LDAP group as a CN or a DN. The comparison ignores case.
 
@@ -14,11 +14,19 @@ A team stores an LDAP group as a CN or a DN. The comparison ignores case.
 | --- | --- | --- |
 | `KOREOGRAF_LDAP_URL` | `ldap://ldap.example.com` | `ldap://dc.example.com` |
 | `KOREOGRAF_LDAP_MODE` | `ldap` | `ad` |
+| `KOREOGRAF_LDAP_BIND_DN` | `cn=reader,dc=example,dc=com` | `cn=reader,cn=Users,dc=example,dc=com` |
+| `KOREOGRAF_LDAP_BIND_PASSWORD` | service account password | service account password |
+| `KOREOGRAF_LDAP_USER_BASE` | `ou=people,dc=example,dc=com` | `cn=Users,dc=example,dc=com` |
 | `KOREOGRAF_LDAP_USER_FILTER` | `(uid={username})` | `(sAMAccountName={username})` |
 | `KOREOGRAF_LDAP_USERNAME_ATTR` | `uid` | `sAMAccountName` |
 | `KOREOGRAF_LDAP_GROUP_ATTR` | `memberOf` | `memberOf` |
+| `KOREOGRAF_LDAP_GROUP_BASE` | `ou=groups,dc=example,dc=com` | empty, or the same base as the users |
 
-Empty filters and attributes use the default for the selected mode. `KOREOGRAF_LDAP_STARTTLS=true` turns on StartTLS. `KOREOGRAF_LDAP_TLS_INSECURE=true` skips certificate checks. The service binds with `KOREOGRAF_LDAP_BIND_DN`, searches for the user, then binds with that user's password. `{username}` in the filter is escaped.
+`KOREOGRAF_LDAP_BIND_DN` and `KOREOGRAF_LDAP_USER_BASE` are required once `KOREOGRAF_LDAP_URL` is set. If either is empty, sign-in stops with `ldap_is_not_fully_configured` before any search. `KOREOGRAF_LDAP_BIND_PASSWORD` has no default. An empty password is sent on the service bind, and a directory that requires a password rejects that bind. The same password can be stored under Settings. It is encrypted, and the API never returns it. `KOREOGRAF_LDAP_GROUP_BASE` has no default.
+
+Empty filters and attributes use the default for the selected mode. `KOREOGRAF_LDAP_STARTTLS=true` turns on StartTLS. `KOREOGRAF_LDAP_TLS_INSECURE=true` skips certificate checks. The service binds with `KOREOGRAF_LDAP_BIND_DN`, searches under `KOREOGRAF_LDAP_USER_BASE`, then binds with that user's password. `{username}` in the filter is escaped.
+
+Groups come from `KOREOGRAF_LDAP_GROUP_ATTR` on the user entry. When that value is empty and the attribute is not `memberOf`, `memberOf` is read as well. If the entry still has no groups, Koreograf searches for them. The search base is `KOREOGRAF_LDAP_GROUP_BASE`, or `KOREOGRAF_LDAP_USER_BASE` when the group base is empty. The search matches `groupOfNames` whose `member` is the user DN, `posixGroup` whose `memberUid` is the username, and `group` whose `member` is the user DN. When the user entry already lists groups, that search does not run.
 
 ## Saved settings
 

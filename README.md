@@ -6,7 +6,7 @@ Koreograf is a prototype for team-scoped automation. One Rust binary serves the 
 
 ## Status
 
-Alpha [0.1.0-alpha.1](CHANGELOG.md) is at <https://github.com/koreograf/koreograf>.
+Alpha [0.1.0-alpha.1](CHANGELOG.md).
 
 This is an early prototype, not a replacement for AWX and not a rebuild of Semaphore. There are no surveys, no schedules, no Receptor, and no high-availability setup. The database today is one SQLite file with one writer. PostgreSQL is not connected yet.
 
@@ -42,18 +42,18 @@ Sign in, select the team `Plattform`, and press `Test alert`. The workflow runs 
 
 - [Installation](docs/installation.md) — run on a machine, Docker Compose, and Helm.
 - [Configuration](docs/configuration.md) — environment variables, runner mode, and languages.
-- [Backup and restore](docs/backup-restore.md) — the SQLite file and the backup zip.
-- [Observability](docs/observability.md) — stdout logs and Prometheus metrics.
-- [Authentication](docs/authentication.md) — organizations, teams, LDAP, Active Directory, users, and permissions.
+- [Database and backup](docs/backup-restore.md) — the SQLite file, the key, and the backup zip.
+- [Logs and Prometheus](docs/observability.md) — stdout fields and the metrics endpoint.
+- [Organizations, teams, LDAP, and Active Directory](docs/authentication.md) — roles, directory sign-in, and users.
 - [Jobs](docs/jobs.md) — tools, execution environments, playbooks, inventory sources, and the cache.
 - [Workflows and webhooks](docs/workflows-webhooks.md) — graphs, Alertmanager and Grafana hooks, and the demo.
 - [API](docs/api.md) — session cookie, team header, and routes.
-- [Security notes](docs/security.md) — trusted network, the key, and the backup zip.
+- [Security](docs/security.md) — the trusted network, the key, and the backup zip.
 - [Contributing](CONTRIBUTING.md) — local checks and what GitHub Actions runs.
 
 ## Security
 
-Report vulnerabilities as described in [SECURITY.md](SECURITY.md).
+The prototype is meant for a trusted network; see [Security](docs/security.md). Report vulnerabilities as described in [SECURITY.md](SECURITY.md).
 
 ## License
 
