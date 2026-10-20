@@ -17,6 +17,9 @@ const WRAPPER: &str = include_str!("wrapper.sh");
 const MAX_FILES: u32 = 4_000;
 const MAX_BYTES: u64 = 200 * 1024 * 1024;
 const DEFAULT_INVENTORY: &str = "[all]\nlocalhost ansible_connection=local\n";
+/// Docker or Podman inspect can stall when the daemon does not answer.
+/// The timeout does not abort the blocking thread.
+const STOP_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Debug)]
 pub struct RunningProc {
@@ -438,7 +441,7 @@ pub fn signal_stop(state: &Shared, job_id: &str, proc: RunningProc) {
     let state = state.clone();
     let job_id = job_id.to_string();
     tokio::spawn(async move {
-        if !deliver_stop(&proc, false) {
+        if !deliver_stop(proc.clone(), false, true).await {
             log(
                 &state,
                 &job_id,
@@ -447,7 +450,12 @@ pub fn signal_stop(state: &Shared, job_id: &str, proc: RunningProc) {
             );
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
-        if still_running(&proc) && !deliver_stop(&proc, true) {
+        // The leader often exits on SIGTERM and leaves children that ignore
+        // it. Those children keep the pipes open, so the pid stays remembered
+        // until they die. A reused pid is not signaled: the entry is removed
+        // once the child has been reaped.
+        let still_ours = remembered(&state, &job_id).is_some_and(|current| current.pid == proc.pid);
+        if !stop_after_grace(&proc, still_ours).await {
             log(
                 &state,
                 &job_id,
@@ -458,13 +466,46 @@ pub fn signal_stop(state: &Shared, job_id: &str, proc: RunningProc) {
     });
 }
 
-fn deliver_stop(proc: &RunningProc, kill_hard: bool) -> bool {
+async fn deliver_stop(proc: RunningProc, kill_hard: bool, signal_local: bool) -> bool {
+    blocking_stop(move || deliver_stop_blocking(&proc, kill_hard, signal_local)).await
+}
+
+async fn stop_after_grace(proc: &RunningProc, still_ours: bool) -> bool {
+    if still_ours {
+        return deliver_stop(proc.clone(), true, true).await;
+    }
+    let Some(bin) = proc.bin.clone() else {
+        return true;
+    };
+    let Some(name) = proc.container.clone() else {
+        return true;
+    };
+    // The client can exit before the container. The name belongs to this job,
+    // so a leftover container is stopped without signaling the old pid.
+    blocking_stop(move || match container_state(&bin, &name) {
+        ContainerPresence::Running => runtime_signal(&bin, &name, "KILL"),
+        ContainerPresence::Stopped => true,
+        ContainerPresence::Unknown => false,
+    })
+    .await
+}
+
+async fn blocking_stop(work: impl FnOnce() -> bool + Send + 'static) -> bool {
+    match tokio::time::timeout(STOP_COMMAND_TIMEOUT, tokio::task::spawn_blocking(work)).await {
+        Ok(Ok(delivered)) => delivered,
+        _ => false,
+    }
+}
+
+fn deliver_stop_blocking(proc: &RunningProc, kill_hard: bool, signal_local: bool) -> bool {
     let signal = if kill_hard { "KILL" } else { "TERM" };
     let container_ok = match (proc.bin.as_deref(), proc.container.as_deref()) {
         (Some(bin), Some(name)) => runtime_signal(bin, name, signal),
         _ => true,
     };
-    let local_ok = if proc.pid > 1 {
+    let local_ok = if !signal_local {
+        true
+    } else if proc.pid > 1 {
         signal_process_group(proc.pid, kill_hard)
     } else {
         proc.container.is_some()
@@ -492,44 +533,53 @@ fn signal_process_group(pid: u32, kill_hard: bool) -> bool {
 }
 
 fn runtime_signal(bin: &str, name: &str, signal: &str) -> bool {
-    if !container_running(bin, name) {
-        return true;
+    match container_state(bin, name) {
+        ContainerPresence::Stopped => true,
+        ContainerPresence::Unknown => false,
+        ContainerPresence::Running => std::process::Command::new(bin)
+            .args(["kill", "--signal", signal, name])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false),
     }
-    std::process::Command::new(bin)
-        .args(["kill", "--signal", signal, name])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
 }
 
-fn container_running(bin: &str, name: &str) -> bool {
-    let Ok(output) = std::process::Command::new(bin)
+enum ContainerPresence {
+    Running,
+    Stopped,
+    Unknown,
+}
+
+fn container_state(bin: &str, name: &str) -> ContainerPresence {
+    let output = match std::process::Command::new(bin)
         .args(["inspect", "-f", "{{.State.Running}}", name])
         .output()
-    else {
-        return false;
+    {
+        Ok(output) => output,
+        Err(_) => return ContainerPresence::Unknown,
     };
-    output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "true"
+    classify_inspect(
+        output.status.success(),
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+    )
 }
 
-fn still_running(proc: &RunningProc) -> bool {
-    let local = proc.pid > 1 && process_alive(proc.pid);
-    let container = match (proc.bin.as_deref(), proc.container.as_deref()) {
-        (Some(bin), Some(name)) => container_running(bin, name),
-        _ => false,
-    };
-    local || container
-}
-
-fn process_alive(pid: u32) -> bool {
-    let Ok(text) = std::fs::read_to_string(format!("/proc/{pid}/status")) else {
-        return false;
-    };
-    !text
-        .lines()
-        .any(|line| line.starts_with("State:") && line.contains('Z'))
+fn classify_inspect(success: bool, stdout: &str, stderr: &str) -> ContainerPresence {
+    if !success {
+        let err = stderr.to_ascii_lowercase();
+        if err.contains("no such object") || err.contains("no such container") {
+            return ContainerPresence::Stopped;
+        }
+        return ContainerPresence::Unknown;
+    }
+    if stdout.trim() == "true" {
+        ContainerPresence::Running
+    } else {
+        ContainerPresence::Stopped
+    }
 }
 
 pub async fn execute(state: Shared, job_id: String) {
@@ -538,6 +588,19 @@ pub async fn execute(state: Shared, job_id: String) {
         Err(_) => false,
     };
     if !started {
+        // This task never stored a process. A duplicate start must not clear
+        // a run that is already in progress.
+        let finished = state.db().ok().and_then(|db| {
+            db::job(&db, &job_id)
+                .ok()
+                .flatten()
+                .map(|job| matches!(job.status.as_str(), "successful" | "failed" | "canceled"))
+        });
+        if finished == Some(true) {
+            if let Ok(mut canceled) = state.canceled.lock() {
+                canceled.remove(&job_id);
+            }
+        }
         return;
     }
     match prepare_and_run(&state, &job_id).await {
@@ -548,9 +611,7 @@ pub async fn execute(state: Shared, job_id: String) {
         }
     }
     close_observation(&state, &job_id);
-    if let Ok(mut procs) = state.procs.lock() {
-        procs.remove(&job_id);
-    }
+    forget_run(&state, &job_id);
 }
 
 async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
@@ -795,6 +856,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
             bin: None,
         };
         remember(state, job_id, proc.clone());
+        // The job log keeps this pid. The cancel test reads the group from it.
         log(state, job_id, "system", &format!("Process group {pid}."));
         if canceled(state, job_id) {
             signal_stop(state, job_id, proc);
@@ -1559,12 +1621,21 @@ fn remembered(state: &Shared, job_id: &str) -> Option<RunningProc> {
         .and_then(|procs| procs.get(job_id).cloned())
 }
 
+fn forget_run(state: &Shared, job_id: &str) {
+    if let Ok(mut procs) = state.procs.lock() {
+        procs.remove(job_id);
+    }
+    if let Ok(mut canceled) = state.canceled.lock() {
+        canceled.remove(job_id);
+    }
+}
+
 fn canceled(state: &Shared, job_id: &str) -> bool {
     state
-        .db()
+        .canceled
+        .lock()
         .ok()
-        .and_then(|db| db::job(&db, job_id).ok().flatten())
-        .is_some_and(|job| job.status == "canceled")
+        .is_some_and(|ids| ids.contains(job_id))
 }
 
 async fn wait_child(
@@ -1605,7 +1676,7 @@ async fn wait_child(
                 "Time limit reached, stopping the process.",
             );
             if let Some(proc) = remembered(state, job_id) {
-                if !deliver_stop(&proc, true) {
+                if !deliver_stop(proc, true, true).await {
                     log(
                         state,
                         job_id,
@@ -2037,11 +2108,53 @@ mod tests {
             .await
             .expect("group did not exit");
         assert!(finished.is_ok());
-        let after = std::fs::read_to_string(format!("/proc/{grandchild}/cmdline")).ok();
+        // child.wait returns when the leader exits. The grandchild can still
+        // be a zombie for a moment, and a zombie's cmdline is empty.
+        let mut after = None;
+        let mut gone = false;
+        for _ in 0..60 {
+            after = std::fs::read_to_string(format!("/proc/{grandchild}/cmdline")).ok();
+            if after
+                .as_deref()
+                .is_none_or(|text| text.is_empty() || !text.contains("sleep"))
+            {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
         assert!(
-            after.as_deref().is_none_or(|text| !text.contains("sleep")),
+            gone,
             "grandchild {grandchild} is still sleep; status={before:?} cmdline={after:?}"
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn inspect_errors_are_not_a_stopped_container() {
+        assert!(matches!(
+            classify_inspect(true, "true\n", ""),
+            ContainerPresence::Running
+        ));
+        assert!(matches!(
+            classify_inspect(true, "false\n", ""),
+            ContainerPresence::Stopped
+        ));
+        assert!(matches!(
+            classify_inspect(false, "", "Error: No such container: job"),
+            ContainerPresence::Stopped
+        ));
+        assert!(matches!(
+            classify_inspect(false, "", "Error: No such object: job"),
+            ContainerPresence::Stopped
+        ));
+        assert!(matches!(
+            classify_inspect(false, "", "Cannot connect to the Docker daemon"),
+            ContainerPresence::Unknown
+        ));
+        assert!(matches!(
+            container_state("koreograf-missing-runtime", "job"),
+            ContainerPresence::Unknown
+        ));
     }
 }

@@ -378,6 +378,10 @@ pub fn cancel(state: &Shared, job_id: &str) -> AppResult<()> {
         db::finish_job(&db, job_id, "canceled")?;
         db::insert_event(&db, job_id, "system", "Cancel requested.")?;
     }
+    // After the database lock. The runner reads this set instead of the job row.
+    if let Ok(mut canceled) = state.canceled.lock() {
+        canceled.insert(job_id.to_string());
+    }
     let running = state
         .procs
         .lock()
