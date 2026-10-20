@@ -29,40 +29,123 @@ pub fn escape_filter(value: &str) -> String {
 }
 
 pub fn cn_from_dn(dn: &str) -> Option<String> {
-    for part in split_dn(dn) {
-        let Some((key, value)) = part.split_once('=') else {
+    let rdns = parse_rdns(dn);
+    let first = rdns.first()?;
+    if first.len() != 1 {
+        return None;
+    }
+    let ava = &first[0];
+    if ava.type_name.eq_ignore_ascii_case("cn") {
+        Some(ava.value.clone())
+    } else {
+        None
+    }
+}
+
+struct Ava {
+    type_name: String,
+    value: String,
+}
+
+/// RDNs in order. Each RDN is the set of its attribute-value pairs.
+fn parse_rdns(dn: &str) -> Vec<Vec<Ava>> {
+    let mut rdns = Vec::new();
+    for raw_rdn in split_unescaped(dn, b',') {
+        let raw_rdn = trim_insignificant(raw_rdn);
+        if raw_rdn.is_empty() {
             continue;
-        };
-        if key.trim().eq_ignore_ascii_case("cn") {
-            return Some(unescape_dn(value.trim()));
         }
+        let mut avas = Vec::new();
+        for raw_ava in split_unescaped(raw_rdn, b'+') {
+            let raw_ava = trim_insignificant(raw_ava);
+            let Some((raw_type, raw_value)) = split_once_unescaped(raw_ava, b'=') else {
+                continue;
+            };
+            let type_name = unescape_dn(trim_insignificant(raw_type));
+            if type_name.is_empty() {
+                continue;
+            }
+            avas.push(Ava {
+                type_name,
+                value: unescape_dn(trim_insignificant(raw_value)),
+            });
+        }
+        if !avas.is_empty() {
+            rdns.push(avas);
+        }
+    }
+    rdns
+}
+
+fn split_unescaped(input: &str, separator: u8) -> Vec<&str> {
+    let bytes = input.as_bytes();
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\\' {
+            index += escape_span(&bytes[index..]);
+            continue;
+        }
+        if bytes[index] == separator {
+            parts.push(&input[start..index]);
+            index += 1;
+            start = index;
+            continue;
+        }
+        index += 1;
+    }
+    parts.push(&input[start..]);
+    parts
+}
+
+fn split_once_unescaped(input: &str, separator: u8) -> Option<(&str, &str)> {
+    let bytes = input.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\\' {
+            index += escape_span(&bytes[index..]);
+            continue;
+        }
+        if bytes[index] == separator {
+            return Some((&input[..index], &input[index + 1..]));
+        }
+        index += 1;
     }
     None
 }
 
-fn split_dn(dn: &str) -> Vec<String> {
-    let mut parts = Vec::new();
-    let mut current = String::new();
-    let mut chars = dn.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            current.push(ch);
-            if let Some(next) = chars.next() {
-                current.push(next);
-            }
-            continue;
-        }
-        if ch == ',' {
-            parts.push(current.trim().to_string());
-            current.clear();
-            continue;
-        }
-        current.push(ch);
+fn escape_span(bytes: &[u8]) -> usize {
+    if bytes.len() >= 3 && bytes[1].is_ascii_hexdigit() && bytes[2].is_ascii_hexdigit() {
+        3
+    } else if bytes.len() >= 2 {
+        2
+    } else {
+        1
     }
-    if !current.trim().is_empty() {
-        parts.push(current.trim().to_string());
+}
+
+/// Spaces next to a separator are not part of the value unless they are escaped.
+fn trim_insignificant(input: &str) -> &str {
+    let bytes = input.as_bytes();
+    let mut start = 0;
+    while start < bytes.len() && bytes[start] == b' ' {
+        start += 1;
     }
-    parts
+    let mut end = bytes.len();
+    while end > start && bytes[end - 1] == b' ' {
+        let mut slashes = 0;
+        let mut index = end - 1;
+        while index > start && bytes[index - 1] == b'\\' {
+            slashes += 1;
+            index -= 1;
+        }
+        if slashes % 2 == 1 {
+            break;
+        }
+        end -= 1;
+    }
+    &input[start..end]
 }
 
 fn unescape_dn(value: &str) -> String {
@@ -70,12 +153,9 @@ fn unescape_dn(value: &str) -> String {
     let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;
     while index < bytes.len() {
-        if bytes[index] == b'\\' && index + 1 < bytes.len() {
-            let next = bytes[index + 1];
-            if index + 2 < bytes.len()
-                && next.is_ascii_hexdigit()
-                && bytes[index + 2].is_ascii_hexdigit()
-            {
+        if bytes[index] == b'\\' {
+            let rest = &bytes[index..];
+            if rest.len() >= 3 && rest[1].is_ascii_hexdigit() && rest[2].is_ascii_hexdigit() {
                 let hex = &value[index + 1..index + 3];
                 if let Ok(byte) = u8::from_str_radix(hex, 16) {
                     out.push(byte);
@@ -83,14 +163,51 @@ fn unescape_dn(value: &str) -> String {
                     continue;
                 }
             }
-            out.push(next);
-            index += 2;
-            continue;
+            if rest.len() >= 2 {
+                out.push(rest[1]);
+                index += 2;
+                continue;
+            }
         }
         out.push(bytes[index]);
         index += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+fn escape_rdn_value(value: &str) -> String {
+    let chars: Vec<char> = value.chars().collect();
+    let mut out = String::with_capacity(value.len());
+    for (index, ch) in chars.iter().copied().enumerate() {
+        let first = index == 0;
+        let last = index + 1 == chars.len();
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            ',' => out.push_str("\\,"),
+            '+' => out.push_str("\\+"),
+            '"' => out.push_str("\\\""),
+            '<' => out.push_str("\\<"),
+            '>' => out.push_str("\\>"),
+            ';' => out.push_str("\\;"),
+            '=' => out.push_str("\\="),
+            ' ' if first || last => out.push_str("\\ "),
+            '#' if first => out.push_str("\\#"),
+            other if other.is_control() => {
+                let mut buf = [0; 4];
+                for byte in other.encode_utf8(&mut buf).bytes() {
+                    out.push('\\');
+                    out.push(hex_digit(byte >> 4));
+                    out.push(hex_digit(byte & 0x0f));
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+fn hex_digit(nibble: u8) -> char {
+    char::from(b"0123456789ABCDEF"[usize::from(nibble)])
 }
 
 /// Directory DNs and the CN of each DN, kept apart so a CN cannot match a DN.
@@ -130,19 +247,20 @@ pub fn group_matches(keys: &GroupKeys, ldap_group: &str) -> bool {
 }
 
 fn normalize_dn(dn: &str) -> String {
-    let mut parts = Vec::new();
-    for part in split_dn(dn) {
-        let Some((key, value)) = part.split_once('=') else {
-            continue;
-        };
-        let key = unescape_dn(key.trim()).to_ascii_lowercase();
-        let value = unescape_dn(value.trim()).to_ascii_lowercase();
-        if key.is_empty() {
-            continue;
-        }
-        parts.push(format!("{key}={value}"));
+    let mut rdns = Vec::new();
+    for rdn in parse_rdns(dn) {
+        let mut avas = rdn
+            .iter()
+            .map(|ava| {
+                let type_name = escape_rdn_value(&ava.type_name.to_ascii_lowercase());
+                let value = escape_rdn_value(&ava.value.to_ascii_lowercase());
+                format!("{type_name}={value}")
+            })
+            .collect::<Vec<_>>();
+        avas.sort();
+        rdns.push(avas.join("+"));
     }
-    parts.join(",")
+    rdns.join(",")
 }
 
 pub async fn authenticate(
@@ -368,6 +486,10 @@ mod tests {
         let keys = group_keys(&[dn.into()]);
         assert!(group_matches(&keys, "Plattform, Ops"));
         assert!(group_matches(&keys, dn));
+        assert!(group_matches(
+            &keys,
+            "cn=Plattform\\, Ops, ou=Gruppen, dc=example, dc=com"
+        ));
     }
 
     #[test]
@@ -448,6 +570,75 @@ mod tests {
         ));
         let multi = group_keys(&[r"cn=mrdn+ou=x,dc=example,dc=com".into()]);
         assert!(!group_matches(&multi, "mrdn"));
+    }
+
+    #[test]
+    fn escaped_comma_and_equals_stay_inside_the_cn_value() {
+        let hex = r"cn=kg-admins\2Cou\3Dgroups,dc=example,dc=com";
+        let slash = r"cn=kg-admins\,ou\=groups,dc=example,dc=com";
+        let split = "cn=kg-admins,ou=groups,dc=example,dc=com";
+        assert_eq!(cn_from_dn(hex).as_deref(), Some("kg-admins,ou=groups"));
+        assert_eq!(cn_from_dn(slash).as_deref(), Some("kg-admins,ou=groups"));
+        assert_eq!(normalize_dn(hex), normalize_dn(slash));
+        assert_ne!(normalize_dn(hex), normalize_dn(split));
+        let keys = group_keys(&[hex.into()]);
+        assert!(group_matches(&keys, slash));
+        assert!(!group_matches(&keys, split));
+        assert!(!group_matches(&keys, "kg-admins"));
+        assert!(!group_matches(&group_keys(&[slash.into()]), split));
+        assert!(!group_matches(&keys, "kg-admins,ou=groups"));
+    }
+
+    #[test]
+    fn the_cn_comes_only_from_the_first_rdn() {
+        let dn = "ou=sub,cn=kg-admins,ou=groups,dc=example,dc=com";
+        assert!(cn_from_dn(dn).is_none());
+        let keys = group_keys(&[dn.into()]);
+        assert!(!group_matches(&keys, "kg-admins"));
+        assert!(group_matches(&keys, dn));
+        assert!(group_matches(
+            &keys,
+            "OU=sub,CN=kg-admins,OU=groups,DC=example,DC=com"
+        ));
+    }
+
+    #[test]
+    fn a_multi_valued_rdn_has_no_cn() {
+        let forward = r"cn=mrdn+ou=x,dc=example,dc=com";
+        let reverse = r"ou=x+cn=mrdn,dc=example,dc=com";
+        assert!(cn_from_dn(forward).is_none());
+        assert!(cn_from_dn(reverse).is_none());
+        assert_eq!(normalize_dn(forward), normalize_dn(reverse));
+        let keys = group_keys(&[forward.into()]);
+        assert!(!group_matches(&keys, "mrdn"));
+        assert!(group_matches(&keys, reverse));
+        assert_ne!(
+            normalize_dn(r"cn=a\+b,dc=example,dc=com"),
+            normalize_dn(r"cn=a+ou=b,dc=example,dc=com")
+        );
+        assert_eq!(
+            cn_from_dn(r"cn=a\+b,dc=example,dc=com").as_deref(),
+            Some("a+b")
+        );
+    }
+
+    #[test]
+    fn memberof_hex_escapes_match_the_group() {
+        let member = r"cn=Ops\2C Nord,ou=groups,dc=example,dc=com";
+        let keys = group_keys(&[member.into()]);
+        assert!(group_matches(&keys, "Ops, Nord"));
+        assert!(group_matches(
+            &keys,
+            r"cn=Ops\, Nord,ou=groups,dc=example,dc=com"
+        ));
+        assert!(group_matches(
+            &keys,
+            r"CN=Ops\2C Nord,OU=Groups,DC=Example,DC=Com"
+        ));
+        assert!(!group_matches(
+            &keys,
+            "cn=Ops,ou=Nord,ou=groups,dc=example,dc=com"
+        ));
     }
 
     #[tokio::test]
