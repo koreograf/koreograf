@@ -1,9 +1,5 @@
 # Changelog
 
-## Unreleased
-
-An LDAP team matches the entry DN or the CN of that DN, including a CN that contains a comma or another special character. Set the team to that CN or to the full DN. A second `cn` on the entry, or a group whose RDN is not `cn`, does not match a CN team.
-
 ## 0.1.0-alpha.1
 
 First public alpha. One Rust binary serves the API, the German UI, and the job runner. English is available from the language menu.

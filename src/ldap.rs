@@ -320,7 +320,8 @@ async fn search_groups(
     let mut errors = Vec::new();
     for filter in group_search_filters(user_dn, username) {
         let searched = ldap
-            .search(base, Scope::Subtree, &filter, vec!["objectClass"])
+            // 1.1 requests no attributes. Matching uses the entry DN.
+            .search(base, Scope::Subtree, &filter, vec!["1.1"])
             .await;
         let entries = match searched {
             Ok(result) => match result.success() {
@@ -447,6 +448,27 @@ mod tests {
         ));
         let multi = group_keys(&[r"cn=mrdn+ou=x,dc=example,dc=com".into()]);
         assert!(!group_matches(&multi, "mrdn"));
+    }
+
+    #[tokio::test]
+    async fn an_empty_bind_password_is_not_fully_configured() {
+        let cfg = LdapConfig {
+            url: "ldap://127.0.0.1:389".into(),
+            mode: "ldap".into(),
+            bind_dn: "cn=reader,dc=example,dc=com".into(),
+            bind_password: String::new(),
+            user_base: "ou=people,dc=example,dc=com".into(),
+            user_filter: "(uid={username})".into(),
+            username_attr: "uid".into(),
+            group_attr: "memberOf".into(),
+            group_base: String::new(),
+            starttls: false,
+            tls_insecure: false,
+        };
+        let error = authenticate(&cfg, "alice", "secret")
+            .await
+            .expect_err("empty bind password");
+        assert_eq!(error, "ldap_is_not_fully_configured");
     }
 
     #[test]
