@@ -4087,6 +4087,73 @@ async fn a_request_without_json_returns_a_catalog_error() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[tokio::test]
+async fn a_relative_data_dir_can_run_a_local_shell_job() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let relative = std::path::PathBuf::from(format!("target/koreograf-rel-{nanos}"));
+    assert!(relative.is_relative());
+    std::fs::create_dir_all(&relative).unwrap();
+    let state = koreograf::boot(config(&relative)).unwrap();
+    let data_dir = state.cfg.data_dir.clone();
+    assert!(data_dir.is_absolute(), "{}", data_dir.display());
+    assert!(
+        data_dir.ends_with(format!("koreograf-rel-{nanos}")),
+        "{}",
+        data_dir.display()
+    );
+    let app = koreograf::router(state);
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap();
+    let (status, templates, _) = call(
+        &app,
+        "GET",
+        "/api/templates",
+        Some(&cookie),
+        Some(team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{templates}");
+    let health_id = templates
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["name"] == "Healthcheck")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap();
+    let job = launch_and_wait(&app, &cookie, team, health_id).await;
+    assert_eq!(job["status"], "successful", "{}", job["events"]);
+    assert!(
+        has_line(&job, "stdout", "healthcheck ok"),
+        "{}",
+        job["events"]
+    );
+    assert!(has_line(
+        &job,
+        "stdout",
+        "KOREOGRAF Shell script: health.sh"
+    ));
+    assert!(has_line(&job, "system", "Local run on the controller."));
+    let events = job["events"].to_string();
+    assert!(!events.contains("Shell-Skript"), "{events}");
+    assert!(!events.contains("cannot open"), "{events}");
+    let _ = std::fs::remove_dir_all(&data_dir);
+}
+
 #[test]
 fn message_catalogs_match_and_cover_the_ui() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
