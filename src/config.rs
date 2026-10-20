@@ -16,9 +16,21 @@ pub enum LocalJobs {
 
 impl LocalJobs {
     pub fn parse(value: &str) -> Self {
-        if value.trim().eq_ignore_ascii_case("all") {
+        let value = value.trim();
+        if value.is_empty() || value.eq_ignore_ascii_case("admins") {
+            Self::Admins
+        } else if value.eq_ignore_ascii_case("all") {
             Self::All
         } else {
+            let shown: String = value
+                .chars()
+                .filter(|ch| !ch.is_control())
+                .take(64)
+                .collect();
+            tracing::warn!(
+                value = %shown,
+                "KOREOGRAF_LOCAL_RUNNER_FOR is not all or admins; local jobs stay limited to administrators"
+            );
             Self::Admins
         }
     }
@@ -176,4 +188,58 @@ fn env_flag(key: &str) -> bool {
         env_string(key).to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "ja"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{self, Write};
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone)]
+    struct Buf(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Buf {
+        fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+            self.0.lock().expect("log lock").extend_from_slice(data);
+            Ok(data.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Buf {
+        type Writer = Self;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    #[test]
+    fn an_unknown_local_runner_value_warns_and_stays_with_admins() {
+        assert_eq!(LocalJobs::parse(""), LocalJobs::Admins);
+        assert_eq!(LocalJobs::parse(" admins "), LocalJobs::Admins);
+        assert_eq!(LocalJobs::parse(" ALL "), LocalJobs::All);
+        let buf = Buf(Arc::new(Mutex::new(Vec::new())));
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(buf.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            assert_eq!(LocalJobs::parse("al"), LocalJobs::Admins);
+            assert_eq!(LocalJobs::parse(""), LocalJobs::Admins);
+        });
+        let text = String::from_utf8(buf.0.lock().expect("log lock").clone()).expect("utf-8");
+        assert!(text.contains("KOREOGRAF_LOCAL_RUNNER_FOR"), "{text}");
+        assert!(text.contains("value=al"), "{text}");
+        assert_eq!(
+            text.matches("KOREOGRAF_LOCAL_RUNNER_FOR").count(),
+            1,
+            "{text}"
+        );
+    }
 }

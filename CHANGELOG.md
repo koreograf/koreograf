@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+Local jobs on the controller now default to administrators. An install that previously let operators, webhooks, or workflow nodes start those jobs sets `KOREOGRAF_LOCAL_RUNNER_FOR=all`. An operator path project also needs its directory in `KOREOGRAF_PROJECT_ROOTS`. See [Configuration](docs/configuration.md).
+
 ## 0.1.0-alpha.1
 
 First public alpha. One Rust binary serves the API, the German UI, and the job runner. English is available from the language menu.

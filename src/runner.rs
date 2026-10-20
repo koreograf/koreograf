@@ -985,7 +985,34 @@ fn write_secret(path: &Path, contents: &str) -> Result<(), String> {
     if !contents.ends_with('\n') {
         file.write_all(b"\n").map_err(|e| e.to_string())?;
     }
+    if let Err(err) = record_secret_file(path) {
+        let _ = fs::remove_file(path);
+        return Err(err);
+    }
     Ok(())
+}
+
+fn record_secret_file(path: &Path) -> Result<(), String> {
+    let Some(name) = path.file_name().and_then(|item| item.to_str()) else {
+        return Err("Secret file name is invalid.".into());
+    };
+    if !safe_manifest_name(name) {
+        return Err("Secret file name is invalid.".into());
+    }
+    let Some(parent) = path.parent() else {
+        return Err("Secret file name is invalid.".into());
+    };
+    let manifest = parent.join(SECRET_MANIFEST);
+    let mut opts = OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = opts.open(&manifest).map_err(|e| e.to_string())?;
+    use std::io::Write;
+    writeln!(file, "{name}").map_err(|e| e.to_string())
 }
 
 async fn load_project(state: &Shared, template: &Template) -> Result<Option<Project>, String> {
@@ -1113,6 +1140,12 @@ impl Drop for SecretScrub {
     }
 }
 
+const SECRET_MANIFEST: &str = "secret.manifest";
+
+/// Names the wrapper still writes itself. A job also records every secret
+/// file it created, so a new credential file is removed without editing this
+/// list. The list stays for askpass scripts and for a job that stopped
+/// before the manifest was written.
 const SECRET_FILES: &[&str] = &[
     "ssh_key",
     "connection.pass",
@@ -1141,6 +1174,15 @@ pub(crate) fn scrub_job_dirs(data_dir: &Path) {
 }
 
 fn scrub_work_dir(work: &Path) {
+    if let Ok(text) = fs::read_to_string(work.join(SECRET_MANIFEST)) {
+        for line in text.lines() {
+            let name = line.trim();
+            if safe_manifest_name(name) {
+                let _ = fs::remove_file(work.join(name));
+            }
+        }
+    }
+    let _ = fs::remove_file(work.join(SECRET_MANIFEST));
     let Ok(entries) = fs::read_dir(work) else {
         return;
     };
@@ -1156,6 +1198,17 @@ fn scrub_work_dir(work: &Path) {
             let _ = fs::remove_file(entry.path());
         }
     }
+}
+
+fn safe_manifest_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && name != SECRET_MANIFEST
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains('\0')
+        && !name.contains("..")
 }
 
 fn is_secret_file(name: &str) -> bool {
@@ -2375,6 +2428,136 @@ mod tests {
         );
         assert!(work.join("extra.json").exists());
         let _ = std::fs::remove_dir_all(work);
+    }
+
+    #[test]
+    fn scrub_removes_files_from_every_credential_kind() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("koreograf-scrub-root-{nanos}"));
+        let work = root.join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let outside = root.join("outside.txt");
+        std::fs::write(&outside, "keep-outside\n").unwrap();
+        std::fs::write(work.join("notes.txt"), "keep\n").unwrap();
+        std::fs::write(work.join("future.secret"), "new-kind\n").unwrap();
+        let mut written = std::collections::BTreeSet::new();
+        for kind in crate::credentials::KINDS {
+            let prepared = crate::credentials::prepare(kind, &sample_secret(kind), false, &work)
+                .unwrap_or_else(|err| panic!("{kind}: {err}"));
+            for (name, body) in prepared.files {
+                write_secret(&work.join(&name), &body)
+                    .unwrap_or_else(|err| panic!("{name}: {err}"));
+                written.insert(name);
+            }
+        }
+        write_secret(&work.join("vault.list"), "prod|/tmp/vault.pass").unwrap();
+        write_env_file(
+            &work.join("container.env"),
+            &[("TOKEN".into(), "value".into())],
+        )
+        .unwrap();
+        written.insert("vault.list".into());
+        written.insert("container.env".into());
+        for required in ["ssh_key", "vault.pass", "git.pass", "gce.json", "auth.json"] {
+            assert!(
+                written.contains(required),
+                "missing {required} in {written:?}"
+            );
+        }
+        use std::io::Write;
+        let mut manifest = std::fs::OpenOptions::new()
+            .append(true)
+            .open(work.join(SECRET_MANIFEST))
+            .unwrap();
+        writeln!(manifest, "future.secret").unwrap();
+        writeln!(manifest, "../outside.txt").unwrap();
+        writeln!(manifest, "/etc/passwd").unwrap();
+        scrub_work_dir(&work);
+        for name in &written {
+            assert!(!work.join(name).exists(), "{name} was left behind");
+        }
+        assert!(!work.join("future.secret").exists());
+        assert!(!work.join(SECRET_MANIFEST).exists());
+        assert_eq!(
+            std::fs::read_to_string(work.join("notes.txt")).unwrap(),
+            "keep\n"
+        );
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "keep-outside\n");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn sample_secret(kind: &str) -> serde_json::Value {
+        match kind {
+            "ssh" => serde_json::json!({
+                "username": "alice",
+                "password": "pw",
+                "private_key": "test-key",
+                "passphrase": "pp",
+                "become_method": "sudo",
+                "become_username": "root",
+                "become_password": "bp"
+            }),
+            "vault" => serde_json::json!({"password": "vault", "vault_id": "prod"}),
+            "scm" => serde_json::json!({
+                "username": "git",
+                "password": "pw",
+                "private_key": "test-key",
+                "passphrase": "pp"
+            }),
+            "net" => serde_json::json!({
+                "username": "net",
+                "password": "pw",
+                "private_key": "test-key",
+                "authorize_password": "auth"
+            }),
+            "aws" => serde_json::json!({
+                "access_key": "AKIA",
+                "secret_key": "secret",
+                "security_token": "tok"
+            }),
+            "azure" => serde_json::json!({
+                "subscription_id": "sub",
+                "client_id": "client",
+                "secret": "secret",
+                "tenant": "tenant"
+            }),
+            "gce" => serde_json::json!({"service_account": "{\"type\":\"service_account\"}"}),
+            "vmware" => serde_json::json!({
+                "host": "vcenter.example",
+                "username": "user",
+                "password": "pw"
+            }),
+            "openstack" => serde_json::json!({
+                "auth_url": "https://cloud.example",
+                "username": "user",
+                "password": "pw",
+                "project": "demo",
+                "domain": "Default"
+            }),
+            "registry" => serde_json::json!({
+                "host": "ghcr.io",
+                "username": "user",
+                "password": "pw"
+            }),
+            "github" | "gitlab" => serde_json::json!({"token": "token-value"}),
+            "galaxy" => serde_json::json!({
+                "token": "token-value",
+                "url": "https://galaxy.example"
+            }),
+            "kubernetes" => {
+                serde_json::json!({"host": "https://k8s.example", "token": "token-value"})
+            }
+            "insights" => serde_json::json!({"username": "user", "password": "pw"}),
+            "env" => serde_json::json!({"CUSTOM_TOKEN": "value"}),
+            "netbox" => serde_json::json!({
+                "token": "token-value",
+                "url": "https://netbox.example"
+            }),
+            other => panic!("add a sample secret for {other}"),
+        }
     }
 
     #[test]
