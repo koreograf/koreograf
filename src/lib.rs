@@ -23,6 +23,7 @@ mod metrics;
 mod netbox;
 mod runner;
 mod scan;
+mod schedule;
 mod seed;
 mod settings;
 mod workflow;
@@ -110,6 +111,7 @@ pub async fn serve(cfg: Config) -> anyhow::Result<()> {
     let url = std::env::var("KOREOGRAF_DATABASE_URL").unwrap_or_default();
     config::database_choice(&url).map_err(anyhow::Error::msg)?;
     let state = boot(cfg)?;
+    schedule::spawn(state.clone());
     let bind = state.cfg.bind.clone();
     let data_dir = state.cfg.data_dir.display().to_string();
     let app = router(state);

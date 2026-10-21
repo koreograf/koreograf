@@ -219,9 +219,34 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS schedules (
+  id TEXT PRIMARY KEY,
+  team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  target_kind TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  timezone TEXT NOT NULL,
+  start_date TEXT NOT NULL,
+  start_time TEXT NOT NULL,
+  frequency TEXT NOT NULL,
+  weekdays TEXT NOT NULL DEFAULT '',
+  end_kind TEXT NOT NULL,
+  end_count INTEGER,
+  end_date TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  next_run_at TEXT,
+  missed_at TEXT,
+  occurrence_count INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (target_kind, target_id, name)
+);
 CREATE INDEX IF NOT EXISTS idx_jobs_team ON jobs(team_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_events_job ON job_events(job_id, id);
 CREATE INDEX IF NOT EXISTS idx_members_user ON memberships(user_id);
+CREATE INDEX IF NOT EXISTS idx_schedules_due ON schedules(enabled, next_run_at);
+CREATE INDEX IF NOT EXISTS idx_schedules_target ON schedules(target_kind, target_id);
 "#;
 
 fn column_exists(c: &Connection, table: &str, column: &str) -> AppResult<bool> {
@@ -389,6 +414,33 @@ fn migrate(c: &Connection) -> AppResult<()> {
             [],
         )?;
     }
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS schedules (
+  id TEXT PRIMARY KEY,
+  team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  target_kind TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  timezone TEXT NOT NULL,
+  start_date TEXT NOT NULL,
+  start_time TEXT NOT NULL,
+  frequency TEXT NOT NULL,
+  weekdays TEXT NOT NULL DEFAULT '',
+  end_kind TEXT NOT NULL,
+  end_count INTEGER,
+  end_date TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  next_run_at TEXT,
+  missed_at TEXT,
+  occurrence_count INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (target_kind, target_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_schedules_due ON schedules(enabled, next_run_at);
+CREATE INDEX IF NOT EXISTS idx_schedules_target ON schedules(target_kind, target_id);",
+    )?;
     Ok(())
 }
 
@@ -1859,6 +1911,7 @@ pub fn delete_template(c: &Connection, id: &str, team_id: &str) -> AppResult<()>
     if n == 0 {
         return Err(ApiError::NotFound);
     }
+    delete_schedules_for(c, "template", id)?;
     Ok(())
 }
 
@@ -2108,6 +2161,7 @@ pub fn delete_workflow(c: &Connection, id: &str, team_id: &str) -> AppResult<()>
     if n == 0 {
         return Err(ApiError::NotFound);
     }
+    delete_schedules_for(c, "workflow", id)?;
     Ok(())
 }
 
@@ -2356,6 +2410,216 @@ pub fn list_deliveries(c: &Connection, team_id: &str, limit: i64) -> AppResult<V
 
 pub fn json_object(text: &str) -> Value {
     serde_json::from_str(text).unwrap_or_else(|_| Value::Object(Default::default()))
+}
+
+#[derive(Clone, Debug)]
+pub struct Schedule {
+    pub id: String,
+    pub team_id: String,
+    pub name: String,
+    pub target_kind: String,
+    pub target_id: String,
+    pub timezone: String,
+    pub start_date: String,
+    pub start_time: String,
+    pub frequency: String,
+    pub weekdays: String,
+    pub end_kind: String,
+    pub end_count: Option<i64>,
+    pub end_date: Option<String>,
+    pub enabled: bool,
+    pub next_run_at: Option<String>,
+    pub missed_at: Option<String>,
+    pub occurrence_count: i64,
+    pub created_by: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+const SCHEDULE_SELECT: &str = "id, team_id, name, target_kind, target_id, timezone, start_date, start_time, frequency, weekdays, end_kind, end_count, end_date, enabled, next_run_at, missed_at, occurrence_count, created_by, created_at, updated_at";
+
+fn map_schedule(row: &rusqlite::Row<'_>) -> rusqlite::Result<Schedule> {
+    Ok(Schedule {
+        id: row.get(0)?,
+        team_id: row.get(1)?,
+        name: row.get(2)?,
+        target_kind: row.get(3)?,
+        target_id: row.get(4)?,
+        timezone: row.get(5)?,
+        start_date: row.get(6)?,
+        start_time: row.get(7)?,
+        frequency: row.get(8)?,
+        weekdays: row.get(9)?,
+        end_kind: row.get(10)?,
+        end_count: row.get(11)?,
+        end_date: row.get(12)?,
+        enabled: flag(row.get(13)?),
+        next_run_at: row.get(14)?,
+        missed_at: row.get(15)?,
+        occurrence_count: row.get(16)?,
+        created_by: row.get(17)?,
+        created_at: row.get(18)?,
+        updated_at: row.get(19)?,
+    })
+}
+
+pub fn insert_schedule(c: &Connection, item: &Schedule) -> AppResult<()> {
+    c.execute(
+        "INSERT INTO schedules (
+            id, team_id, name, target_kind, target_id, timezone, start_date, start_time,
+            frequency, weekdays, end_kind, end_count, end_date, enabled, next_run_at, missed_at,
+            occurrence_count, created_by, created_at, updated_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+        params![
+            item.id,
+            item.team_id,
+            item.name,
+            item.target_kind,
+            item.target_id,
+            item.timezone,
+            item.start_date,
+            item.start_time,
+            item.frequency,
+            item.weekdays,
+            item.end_kind,
+            item.end_count,
+            item.end_date,
+            if item.enabled { 1 } else { 0 },
+            item.next_run_at,
+            item.missed_at,
+            item.occurrence_count,
+            item.created_by,
+            item.created_at,
+            item.updated_at,
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn update_schedule(c: &Connection, item: &Schedule) -> AppResult<()> {
+    let n = c.execute(
+        "UPDATE schedules SET
+            name = ?2, timezone = ?3, start_date = ?4, start_time = ?5, frequency = ?6,
+            weekdays = ?7, end_kind = ?8, end_count = ?9, end_date = ?10, enabled = ?11,
+            next_run_at = ?12, missed_at = ?13, occurrence_count = ?14, updated_at = ?15
+         WHERE id = ?1 AND team_id = ?16",
+        params![
+            item.id,
+            item.name,
+            item.timezone,
+            item.start_date,
+            item.start_time,
+            item.frequency,
+            item.weekdays,
+            item.end_kind,
+            item.end_count,
+            item.end_date,
+            if item.enabled { 1 } else { 0 },
+            item.next_run_at,
+            item.missed_at,
+            item.occurrence_count,
+            item.updated_at,
+            item.team_id,
+        ],
+    )?;
+    if n == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(())
+}
+
+pub fn schedule(c: &Connection, id: &str) -> AppResult<Option<Schedule>> {
+    let sql = format!("SELECT {SCHEDULE_SELECT} FROM schedules WHERE id = ?1");
+    c.query_row(&sql, [id], map_schedule)
+        .optional()
+        .map_err(Into::into)
+}
+
+pub fn list_schedules(c: &Connection, kind: &str, target_id: &str) -> AppResult<Vec<Schedule>> {
+    let sql = format!(
+        "SELECT {SCHEDULE_SELECT} FROM schedules
+         WHERE target_kind = ?1 AND target_id = ?2 ORDER BY name"
+    );
+    let mut stmt = c.prepare(&sql)?;
+    let rows = stmt.query_map(params![kind, target_id], map_schedule)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+pub fn due_schedules(c: &Connection, now: &str) -> AppResult<Vec<Schedule>> {
+    let sql = format!(
+        "SELECT {SCHEDULE_SELECT} FROM schedules
+         WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ?1
+         ORDER BY next_run_at"
+    );
+    let mut stmt = c.prepare(&sql)?;
+    let rows = stmt.query_map([now], map_schedule)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+pub fn delete_schedule(c: &Connection, id: &str, team_id: &str) -> AppResult<()> {
+    let n = c.execute(
+        "DELETE FROM schedules WHERE id = ?1 AND team_id = ?2",
+        params![id, team_id],
+    )?;
+    if n == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(())
+}
+
+fn delete_schedules_for(c: &Connection, kind: &str, target_id: &str) -> AppResult<()> {
+    c.execute(
+        "DELETE FROM schedules WHERE target_kind = ?1 AND target_id = ?2",
+        params![kind, target_id],
+    )?;
+    Ok(())
+}
+
+pub fn advance_schedule(
+    c: &Connection,
+    id: &str,
+    next_run_at: Option<&str>,
+    occurrence_count: i64,
+) -> AppResult<()> {
+    c.execute(
+        "UPDATE schedules SET next_run_at = ?2, occurrence_count = ?3, updated_at = ?4 WHERE id = ?1",
+        params![id, next_run_at, occurrence_count, now()],
+    )?;
+    Ok(())
+}
+
+pub fn note_miss(c: &Connection, id: &str, missed_at: Option<&str>) -> AppResult<()> {
+    c.execute(
+        "UPDATE schedules SET missed_at = ?2, updated_at = ?3 WHERE id = ?1",
+        params![id, missed_at, now()],
+    )?;
+    Ok(())
+}
+
+pub fn set_schedule_enabled(
+    c: &Connection,
+    id: &str,
+    team_id: &str,
+    enabled: bool,
+    next_run_at: Option<&str>,
+    occurrence_count: i64,
+) -> AppResult<()> {
+    let n = c.execute(
+        "UPDATE schedules SET enabled = ?3, next_run_at = ?4, occurrence_count = ?5, updated_at = ?6
+         WHERE id = ?1 AND team_id = ?2",
+        params![
+            id,
+            team_id,
+            if enabled { 1 } else { 0 },
+            next_run_at,
+            occurrence_count,
+            now()
+        ],
+    )?;
+    if n == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
