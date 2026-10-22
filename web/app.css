@@ -338,10 +338,18 @@ textarea.secret-mask { -webkit-text-security: disc; }
   padding: 4px 8px;
   background: white;
 }
-.schedule-list { display: grid; gap: 12px; }
-.schedule-row + .schedule-row { border-top: 1px solid var(--line); padding-top: 12px; }
-.schedule-head { display: flex; gap: 12px; align-items: center; justify-content: space-between; }
-.schedule-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.table-wrap { overflow-x: auto; }
+.schedule-table .table { min-width: 52rem; }
+.schedule-table tbody tr:hover td { background: rgba(28, 25, 23, 0.03); }
+.schedule-table tr.schedule-alert:hover td { background: transparent; }
+.schedule-table tr.schedule-due td:first-child { box-shadow: inset 3px 0 var(--warn); }
+.schedule-table tr.schedule-alert td { padding-top: 0; }
+.table td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.table th.tight, .table td.tight { width: 1%; white-space: nowrap; text-align: center; }
+.table th.actions, .table td.actions { width: 1%; white-space: nowrap; text-align: right; }
+.table td.actions .btn + .btn { margin-left: 6px; }
+.btn.compact { padding: 4px 8px; }
+.pill.warn { background: var(--warn-bg); color: var(--warn); }
 .switch { position: relative; display: inline-flex; width: 42px; height: 24px; flex: 0 0 auto; }
 .switch input {
   position: absolute;
