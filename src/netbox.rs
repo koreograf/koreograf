@@ -251,7 +251,7 @@ fn group_names(key: &str, value: &Value, is_virtual: bool) -> Vec<String> {
     slugs
         .into_iter()
         .filter_map(|slug| {
-            let slug = sanitize(&slug);
+            let slug = sanitize_group(&slug);
             if slug.is_empty() {
                 None
             } else {
@@ -338,9 +338,20 @@ fn render_ini(hosts: &[NbHost]) -> String {
 }
 
 fn sanitize(value: &str) -> String {
+    sanitize_with(value, |ch| {
+        ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-')
+    })
+}
+
+// Ansible warns when a group name contains `-` or `.`. Host names keep both.
+fn sanitize_group(value: &str) -> String {
+    sanitize_with(value, |ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+fn sanitize_with(value: &str, keep: impl Fn(char) -> bool) -> String {
     let mut out = String::new();
     for ch in value.chars() {
-        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+        if keep(ch) {
             out.push(ch);
         } else {
             out.push('_');
@@ -524,6 +535,64 @@ mod tests {
         assert!(ini.contains("[device_roles_web]\nweb_1\n"));
         assert!(ini.contains("[tags_prod]\nweb_1\n"));
         assert!(ini.contains("[tags_edge]\nweb_1\n"));
+    }
+
+    #[test]
+    fn replaces_hyphens_and_dots_in_netbox_group_names() {
+        let device = json!({
+            "name": "web-1.example",
+            "tags": [
+                {"slug": "prod-fake"},
+                {"slug": "a--b"},
+                {"slug": "-edge"},
+                {"slug": "lab.west"}
+            ]
+        });
+        let host = host_from_json(&device, false, &["tags".into()]).unwrap();
+        assert_eq!(
+            host.groups,
+            vec![
+                "tags_prod_fake".to_string(),
+                "tags_a_b".to_string(),
+                "tags_edge".to_string(),
+                "tags_lab_west".to_string(),
+            ]
+        );
+        let ini = render_ini(std::slice::from_ref(&host));
+        let groups: Vec<&str> = ini
+            .lines()
+            .filter_map(|line| {
+                line.strip_prefix('[')
+                    .and_then(|item| item.strip_suffix(']'))
+            })
+            .collect();
+        assert!(
+            groups.iter().all(|name| {
+                !name.is_empty()
+                    && name
+                        .chars()
+                        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+            }),
+            "{groups:?}"
+        );
+    }
+
+    #[test]
+    fn keeps_hyphens_and_dots_in_a_netbox_host_name() {
+        let device = json!({ "name": "web-1.example" });
+        let host = host_from_json(&device, false, &[]).unwrap();
+        assert_eq!(host.name, "web-1.example");
+    }
+
+    #[test]
+    fn drops_a_group_slug_that_has_no_letters_or_digits() {
+        let device = json!({
+            "name": "web-1",
+            "tags": [{"slug": "---"}, {"slug": "..."}, {"slug": "-_-"}]
+        });
+        let host = host_from_json(&device, false, &["tags".into()]).unwrap();
+        assert_eq!(host.name, "web-1");
+        assert!(host.groups.is_empty(), "{:?}", host.groups);
     }
 
     #[tokio::test]
