@@ -421,7 +421,8 @@ pub async fn create_workflow(
 ) -> AppResult<Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let item = build_workflow(&state, &team, None, body)?;
+    let mut item = build_workflow(&state, &team, None, body)?;
+    item.admin_saved = user.is_admin;
     let db = state.db()?;
     db::insert_workflow(&db, &item)?;
     Ok(created(workflow_json(&item)))
@@ -436,7 +437,8 @@ pub async fn update_workflow(
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let item = build_workflow(&state, &team, Some(id), body)?;
+    let mut item = build_workflow(&state, &team, Some(id), body)?;
+    item.admin_saved = user.is_admin;
     let db = state.db()?;
     db::update_workflow(&db, &item)?;
     Ok(Json(workflow_json(&item)))
@@ -849,6 +851,7 @@ fn build_workflow(
         graph: serde_json::to_string(&body.graph)
             .map_err(|err| ApiError::Internal(err.to_string()))?,
         created_at,
+        admin_saved: false,
     })
 }
 

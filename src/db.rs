@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS inventories (
   source_kind TEXT NOT NULL DEFAULT 'ini',
   source_json TEXT NOT NULL DEFAULT '{}',
   credential_id TEXT,
+  admin_saved INTEGER NOT NULL DEFAULT 1,
   UNIQUE (team_id, name)
 );
 CREATE TABLE IF NOT EXISTS inventory_sources (
@@ -169,6 +170,7 @@ CREATE TABLE IF NOT EXISTS workflows (
   description TEXT NOT NULL DEFAULT '',
   graph TEXT NOT NULL,
   created_at TEXT NOT NULL,
+  admin_saved INTEGER NOT NULL DEFAULT 1,
   UNIQUE (team_id, name)
 );
 CREATE TABLE IF NOT EXISTS workflow_nodes (
@@ -375,6 +377,18 @@ fn migrate(c: &Connection) -> AppResult<()> {
             [],
         )?;
     }
+    if !column_exists(c, "inventories", "admin_saved")? {
+        c.execute(
+            "ALTER TABLE inventories ADD COLUMN admin_saved INTEGER NOT NULL DEFAULT 1",
+            [],
+        )?;
+    }
+    if !column_exists(c, "workflows", "admin_saved")? {
+        c.execute(
+            "ALTER TABLE workflows ADD COLUMN admin_saved INTEGER NOT NULL DEFAULT 1",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -465,6 +479,9 @@ pub struct Inventory {
     pub source_kind: String,
     pub source_json: String,
     pub credential_id: Option<String>,
+    /// True when an administrator last saved this inventory.
+    #[serde(skip)]
+    pub admin_saved: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -563,6 +580,8 @@ pub struct Workflow {
     pub description: String,
     pub graph: String,
     pub created_at: String,
+    /// True when an administrator last saved this workflow.
+    pub admin_saved: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1296,8 +1315,9 @@ pub fn delete_project(c: &Connection, id: &str, team_id: &str) -> AppResult<()> 
 pub fn insert_inventory(c: &Connection, item: &Inventory) -> AppResult<()> {
     c.execute(
         "INSERT INTO inventories (
-            id, team_id, name, body, created_at, source_kind, source_json, credential_id
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            id, team_id, name, body, created_at, source_kind, source_json, credential_id,
+            admin_saved
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             item.id,
             item.team_id,
@@ -1306,7 +1326,8 @@ pub fn insert_inventory(c: &Connection, item: &Inventory) -> AppResult<()> {
             item.created_at,
             item.source_kind,
             item.source_json,
-            item.credential_id
+            item.credential_id,
+            item.admin_saved as i64
         ],
     )?;
     Ok(())
@@ -1330,7 +1351,7 @@ pub fn update_inventory(
 }
 
 const INVENTORY_SELECT: &str =
-    "id, team_id, name, body, created_at, source_kind, source_json, credential_id";
+    "id, team_id, name, body, created_at, source_kind, source_json, credential_id, admin_saved";
 
 pub fn list_inventories(c: &Connection, team_id: &str) -> AppResult<Vec<Inventory>> {
     let mut stmt = c.prepare(&format!(
@@ -1348,6 +1369,14 @@ pub fn inventory(c: &Connection, id: &str) -> AppResult<Option<Inventory>> {
     )
     .optional()
     .map_err(Into::into)
+}
+
+pub fn set_inventory_admin_saved(c: &Connection, id: &str, admin_saved: bool) -> AppResult<()> {
+    c.execute(
+        "UPDATE inventories SET admin_saved = ?2 WHERE id = ?1",
+        params![id, admin_saved as i64],
+    )?;
+    Ok(())
 }
 
 pub fn set_inventory_body(c: &Connection, id: &str, team_id: &str, body: &str) -> AppResult<()> {
@@ -1371,6 +1400,7 @@ fn map_inventory(row: &rusqlite::Row<'_>) -> rusqlite::Result<Inventory> {
         source_kind: row.get(5)?,
         source_json: row.get(6)?,
         credential_id: row.get(7)?,
+        admin_saved: flag(row.get(8)?),
     })
 }
 
@@ -2002,15 +2032,17 @@ pub fn events_after(
 
 pub fn insert_workflow(c: &Connection, item: &Workflow) -> AppResult<()> {
     c.execute(
-        "INSERT INTO workflows (id, team_id, name, description, graph, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO workflows (
+            id, team_id, name, description, graph, created_at, admin_saved
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             item.id,
             item.team_id,
             item.name,
             item.description,
             item.graph,
-            item.created_at
+            item.created_at,
+            item.admin_saved as i64
         ],
     )?;
     Ok(())
@@ -2018,8 +2050,17 @@ pub fn insert_workflow(c: &Connection, item: &Workflow) -> AppResult<()> {
 
 pub fn update_workflow(c: &Connection, item: &Workflow) -> AppResult<()> {
     let n = c.execute(
-        "UPDATE workflows SET name = ?3, description = ?4, graph = ?5 WHERE id = ?1 AND team_id = ?2",
-        params![item.id, item.team_id, item.name, item.description, item.graph],
+        "UPDATE workflows
+         SET name = ?3, description = ?4, graph = ?5, admin_saved = ?6
+         WHERE id = ?1 AND team_id = ?2",
+        params![
+            item.id,
+            item.team_id,
+            item.name,
+            item.description,
+            item.graph,
+            item.admin_saved as i64
+        ],
     )?;
     if n == 0 {
         return Err(ApiError::NotFound);
@@ -2029,7 +2070,8 @@ pub fn update_workflow(c: &Connection, item: &Workflow) -> AppResult<()> {
 
 pub fn list_workflows(c: &Connection, team_id: &str) -> AppResult<Vec<Workflow>> {
     let mut stmt = c.prepare(
-        "SELECT id, team_id, name, description, graph, created_at FROM workflows WHERE team_id = ?1 ORDER BY name",
+        "SELECT id, team_id, name, description, graph, created_at, admin_saved
+         FROM workflows WHERE team_id = ?1 ORDER BY name",
     )?;
     let rows = stmt.query_map([team_id], map_workflow)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -2037,7 +2079,8 @@ pub fn list_workflows(c: &Connection, team_id: &str) -> AppResult<Vec<Workflow>>
 
 pub fn workflow(c: &Connection, id: &str) -> AppResult<Option<Workflow>> {
     c.query_row(
-        "SELECT id, team_id, name, description, graph, created_at FROM workflows WHERE id = ?1",
+        "SELECT id, team_id, name, description, graph, created_at, admin_saved
+         FROM workflows WHERE id = ?1",
         [id],
         map_workflow,
     )
@@ -2053,6 +2096,7 @@ fn map_workflow(row: &rusqlite::Row<'_>) -> rusqlite::Result<Workflow> {
         description: row.get(3)?,
         graph: row.get(4)?,
         created_at: row.get(5)?,
+        admin_saved: flag(row.get(6)?),
     })
 }
 
@@ -2069,7 +2113,7 @@ pub fn delete_workflow(c: &Connection, id: &str, team_id: &str) -> AppResult<()>
 
 pub fn first_workflow(c: &Connection, team_id: &str) -> AppResult<Option<Workflow>> {
     c.query_row(
-        "SELECT id, team_id, name, description, graph, created_at FROM workflows
+        "SELECT id, team_id, name, description, graph, created_at, admin_saved FROM workflows
          WHERE team_id = ?1 ORDER BY created_at LIMIT 1",
         [team_id],
         map_workflow,
@@ -2356,6 +2400,41 @@ mod tests {
             )
             .unwrap();
         assert_eq!(saved, 1);
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_old_inventory_and_workflow_stay_released() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-release-migrate-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = open(&dir.join("koreograf.db")).unwrap();
+        conn.execute("PRAGMA foreign_keys = OFF", []).unwrap();
+        conn.execute("ALTER TABLE inventories DROP COLUMN admin_saved", [])
+            .unwrap();
+        conn.execute("ALTER TABLE workflows DROP COLUMN admin_saved", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO inventories (id, team_id, name, body, created_at)
+             VALUES ('i1', 'team', 'Old', '', '2020-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workflows (id, team_id, name, graph, created_at)
+             VALUES ('w1', 'team', 'Old', '{}', '2020-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        ensure_schema(&conn).unwrap();
+        let inventory = inventory(&conn, "i1").unwrap().unwrap();
+        let workflow = workflow(&conn, "w1").unwrap().unwrap();
+        assert!(inventory.admin_saved);
+        assert!(workflow.admin_saved);
         drop(conn);
         let _ = std::fs::remove_dir_all(&dir);
     }

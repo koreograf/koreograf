@@ -128,6 +128,7 @@ fn seed_demo(conn: &Connection, cfg: &Config) -> AppResult<()> {
             source_kind: "ini".into(),
             source_json: "{}".into(),
             credential_id: None,
+            admin_saved: true,
         },
     )?;
     db::insert_inventory_source(
@@ -248,6 +249,7 @@ fn seed_demo(conn: &Connection, cfg: &Config) -> AppResult<()> {
             description: "Health check, then the playbook, or the escalation when it fails.".into(),
             graph: graph.to_string(),
             created_at: db::now(),
+            admin_saved: true,
         },
     )?;
 

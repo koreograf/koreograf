@@ -130,6 +130,7 @@ pub async fn import_inventory(
         source_kind: "project".into(),
         source_json: json!({"project_id": project.id, "path": path}).to_string(),
         credential_id: None,
+        admin_saved: user.is_admin,
     };
     let source_row = db::InventorySource {
         id: Uuid::new_v4().to_string(),
@@ -181,6 +182,7 @@ pub async fn create_netbox(
         })
         .to_string(),
         credential_id: Some(credential_id.clone()),
+        admin_saved: user.is_admin,
     };
     let source_row = db::InventorySource {
         id: Uuid::new_v4().to_string(),
@@ -250,6 +252,7 @@ pub async fn sync_inventory(
         db::set_inventory_source_body(&db, source_id, body)?;
     }
     db::refresh_inventory_summary(&db, &id)?;
+    db::set_inventory_admin_saved(&db, &id, user.is_admin)?;
     let item = db::inventory(&db, &id)?.ok_or(ApiError::NotFound)?;
     Ok(Json(inventory_json(&db, &item)?))
 }
@@ -410,6 +413,7 @@ pub(super) async fn create_with_sources(
     team: String,
     name: String,
     inputs: Vec<SourceInput>,
+    admin_saved: bool,
 ) -> AppResult<axum::response::Response> {
     if inputs.len() > MAX_SOURCES {
         return Err(ApiError::bad("at_most_8_sources"));
@@ -429,6 +433,7 @@ pub(super) async fn create_with_sources(
         source_kind: "ini".into(),
         source_json: "{}".into(),
         credential_id: None,
+        admin_saved,
     };
     let mut db = state.db()?;
     let tx = db.transaction()?;
@@ -475,6 +480,7 @@ pub async fn add_source(
     let tx = db.transaction()?;
     store_source(&tx, &team, &id, position, &resolved, &db::now())?;
     db::refresh_inventory_summary(&tx, &id)?;
+    db::set_inventory_admin_saved(&tx, &id, user.is_admin)?;
     tx.commit()?;
     let item = db::inventory(&db, &id)?.ok_or(ApiError::NotFound)?;
     Ok(Json(inventory_json(&db, &item)?))
@@ -502,6 +508,7 @@ pub async fn update_source(
         db::set_inventory_source_body(&db, &source_id, &body.body)?;
         db::refresh_inventory_summary(&db, &inventory_id)?;
     }
+    db::set_inventory_admin_saved(&db, &inventory_id, user.is_admin)?;
     let item = db::inventory(&db, &inventory_id)?.ok_or(ApiError::NotFound)?;
     Ok(Json(inventory_json(&db, &item)?))
 }
@@ -523,6 +530,7 @@ pub async fn delete_source(
         }
     }
     db::refresh_inventory_summary(&db, &inventory_id)?;
+    db::set_inventory_admin_saved(&db, &inventory_id, user.is_admin)?;
     let item = db::inventory(&db, &inventory_id)?.ok_or(ApiError::NotFound)?;
     Ok(Json(inventory_json(&db, &item)?))
 }
@@ -549,6 +557,7 @@ pub async fn sync_source(
     let db = state.db()?;
     db::set_inventory_source_body(&db, &source_id, &body)?;
     db::refresh_inventory_summary(&db, &inventory_id)?;
+    db::set_inventory_admin_saved(&db, &inventory_id, user.is_admin)?;
     let item = db::inventory(&db, &inventory_id)?.ok_or(ApiError::NotFound)?;
     Ok(Json(inventory_json(&db, &item)?))
 }

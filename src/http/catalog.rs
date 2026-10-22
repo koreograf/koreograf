@@ -528,6 +528,7 @@ pub async fn update_inventory(
             db::set_inventory_body(&db, &id, &team, &body.body)?;
         }
     }
+    db::set_inventory_admin_saved(&db, &id, user.is_admin)?;
     let item = db::inventory(&db, &id)?.ok_or(ApiError::NotFound)?;
     Ok(Json(inventory_json(&db, &item)?))
 }
@@ -542,7 +543,8 @@ pub async fn create_inventory(
     gate(&state, &user, &team, Role::Operator)?;
     let name = require_name(&body.name)?;
     if !body.sources.is_empty() {
-        return super::sources::create_with_sources(state, team, name, body.sources).await;
+        return super::sources::create_with_sources(state, team, name, body.sources, user.is_admin)
+            .await;
     }
     let item = Inventory {
         id: Uuid::new_v4().to_string(),
@@ -553,6 +555,7 @@ pub async fn create_inventory(
         source_kind: "ini".into(),
         source_json: "{}".into(),
         credential_id: None,
+        admin_saved: user.is_admin,
     };
     let source = if body.body.trim().is_empty() {
         None

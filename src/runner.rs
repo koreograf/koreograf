@@ -641,6 +641,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
         };
         (job, template)
     };
+    let original = template.clone();
     let template = with_saved_parameters(template, &job);
     if !known_tool(&template.tool) {
         return Err(format!("Unknown tool {}.", template.tool));
@@ -856,8 +857,26 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
                 let db = state.db().map_err(|e| e.to_string())?;
                 let launcher = crate::auth::launcher_is_admin(&db, &job.launched_by)
                     .map_err(|e| e.to_string())?;
-                let content = crate::auth::content_saved_by_admin(&db, &template)
-                    .map_err(|e| e.to_string())?;
+                let params = db::json_object(&job.parameters);
+                let matches = crate::auth::command_matches_template(&original, &params);
+                let workflow_id = match job.workflow_job_id.as_deref().filter(|id| !id.is_empty()) {
+                    Some(id) => db::workflow_job(&db, id)
+                        .map_err(|e| e.to_string())?
+                        .and_then(|run| run.workflow_id),
+                    None => None,
+                };
+                let requires_workflow = job
+                    .workflow_job_id
+                    .as_deref()
+                    .is_some_and(|id| !id.is_empty())
+                    || !matches;
+                let content = crate::auth::content_saved_by_admin(
+                    &db,
+                    &template,
+                    workflow_id.as_deref(),
+                    requires_workflow,
+                )
+                .map_err(|e| e.to_string())?;
                 launcher && content
             };
             if !allowed {
