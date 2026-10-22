@@ -29,67 +29,238 @@ pub fn escape_filter(value: &str) -> String {
 }
 
 pub fn cn_from_dn(dn: &str) -> Option<String> {
-    for part in split_dn(dn) {
-        let Some((key, value)) = part.split_once('=') else {
+    let rdns = parse_rdns(dn);
+    let first = rdns.first()?;
+    if first.len() != 1 {
+        return None;
+    }
+    let ava = &first[0];
+    if ava.type_name.eq_ignore_ascii_case("cn") {
+        Some(ava.value.clone())
+    } else {
+        None
+    }
+}
+
+struct Ava {
+    type_name: String,
+    value: String,
+}
+
+/// RDNs in order. Each RDN is the set of its attribute-value pairs.
+fn parse_rdns(dn: &str) -> Vec<Vec<Ava>> {
+    let mut rdns = Vec::new();
+    for raw_rdn in split_unescaped(dn, b',') {
+        let raw_rdn = trim_insignificant(raw_rdn);
+        if raw_rdn.is_empty() {
             continue;
-        };
-        if key.trim().eq_ignore_ascii_case("cn") {
-            return Some(unescape_dn(value.trim()));
         }
+        let mut avas = Vec::new();
+        for raw_ava in split_unescaped(raw_rdn, b'+') {
+            let raw_ava = trim_insignificant(raw_ava);
+            let Some((raw_type, raw_value)) = split_once_unescaped(raw_ava, b'=') else {
+                continue;
+            };
+            let type_name = unescape_dn(trim_insignificant(raw_type));
+            if type_name.is_empty() {
+                continue;
+            }
+            avas.push(Ava {
+                type_name,
+                value: unescape_dn(trim_insignificant(raw_value)),
+            });
+        }
+        if !avas.is_empty() {
+            rdns.push(avas);
+        }
+    }
+    rdns
+}
+
+fn split_unescaped(input: &str, separator: u8) -> Vec<&str> {
+    let bytes = input.as_bytes();
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\\' {
+            index += escape_span(&bytes[index..]);
+            continue;
+        }
+        if bytes[index] == separator {
+            parts.push(&input[start..index]);
+            index += 1;
+            start = index;
+            continue;
+        }
+        index += 1;
+    }
+    parts.push(&input[start..]);
+    parts
+}
+
+fn split_once_unescaped(input: &str, separator: u8) -> Option<(&str, &str)> {
+    let bytes = input.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\\' {
+            index += escape_span(&bytes[index..]);
+            continue;
+        }
+        if bytes[index] == separator {
+            return Some((&input[..index], &input[index + 1..]));
+        }
+        index += 1;
     }
     None
 }
 
-fn split_dn(dn: &str) -> Vec<String> {
-    let mut parts = Vec::new();
-    let mut current = String::new();
-    let mut chars = dn.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            current.push(ch);
-            if let Some(next) = chars.next() {
-                current.push(next);
-            }
-            continue;
-        }
-        if ch == ',' {
-            parts.push(current.trim().to_string());
-            current.clear();
-            continue;
-        }
-        current.push(ch);
+fn escape_span(bytes: &[u8]) -> usize {
+    if bytes.len() >= 3 && bytes[1].is_ascii_hexdigit() && bytes[2].is_ascii_hexdigit() {
+        3
+    } else if bytes.len() >= 2 {
+        2
+    } else {
+        1
     }
-    if !current.trim().is_empty() {
-        parts.push(current.trim().to_string());
+}
+
+/// Spaces next to a separator are not part of the value unless they are escaped.
+fn trim_insignificant(input: &str) -> &str {
+    let bytes = input.as_bytes();
+    let mut start = 0;
+    while start < bytes.len() && bytes[start] == b' ' {
+        start += 1;
     }
-    parts
+    let mut end = bytes.len();
+    while end > start && bytes[end - 1] == b' ' {
+        let mut slashes = 0;
+        let mut index = end - 1;
+        while index > start && bytes[index - 1] == b'\\' {
+            slashes += 1;
+            index -= 1;
+        }
+        if slashes % 2 == 1 {
+            break;
+        }
+        end -= 1;
+    }
+    &input[start..end]
 }
 
 fn unescape_dn(value: &str) -> String {
-    let mut out = String::new();
-    let mut chars = value.chars();
-    while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            if let Some(next) = chars.next() {
-                out.push(next);
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\\' {
+            let rest = &bytes[index..];
+            if rest.len() >= 3 && rest[1].is_ascii_hexdigit() && rest[2].is_ascii_hexdigit() {
+                let hex = &value[index + 1..index + 3];
+                if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                    out.push(byte);
+                    index += 3;
+                    continue;
+                }
             }
-        } else {
-            out.push(ch);
+            if rest.len() >= 2 {
+                out.push(rest[1]);
+                index += 2;
+                continue;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn escape_rdn_value(value: &str) -> String {
+    let chars: Vec<char> = value.chars().collect();
+    let mut out = String::with_capacity(value.len());
+    for (index, ch) in chars.iter().copied().enumerate() {
+        let first = index == 0;
+        let last = index + 1 == chars.len();
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            ',' => out.push_str("\\,"),
+            '+' => out.push_str("\\+"),
+            '"' => out.push_str("\\\""),
+            '<' => out.push_str("\\<"),
+            '>' => out.push_str("\\>"),
+            ';' => out.push_str("\\;"),
+            '=' => out.push_str("\\="),
+            ' ' if first || last => out.push_str("\\ "),
+            '#' if first => out.push_str("\\#"),
+            other if other.is_control() => {
+                let mut buf = [0; 4];
+                for byte in other.encode_utf8(&mut buf).bytes() {
+                    out.push('\\');
+                    out.push(hex_digit(byte >> 4));
+                    out.push(hex_digit(byte & 0x0f));
+                }
+            }
+            other => out.push(other),
         }
     }
     out
 }
 
-/// Group names that should open a team: CN of each DN, plus the raw value.
-pub fn group_keys(groups: &[String]) -> HashSet<String> {
-    let mut keys = HashSet::new();
+fn hex_digit(nibble: u8) -> char {
+    char::from(b"0123456789ABCDEF"[usize::from(nibble)])
+}
+
+/// Directory DNs and the CN of each DN, kept apart so a CN cannot match a DN.
+#[derive(Debug, Default)]
+pub struct GroupKeys {
+    dns: HashSet<String>,
+    cns: HashSet<String>,
+}
+
+/// Accepts memberOf values and entry DNs. Other strings are ignored.
+pub fn group_keys(groups: &[String]) -> GroupKeys {
+    let mut keys = GroupKeys::default();
     for group in groups {
-        keys.insert(group.to_ascii_lowercase());
+        if !group.contains('=') {
+            continue;
+        }
+        let normalized = normalize_dn(group);
+        if normalized.is_empty() {
+            continue;
+        }
+        keys.dns.insert(normalized);
         if let Some(cn) = cn_from_dn(group) {
-            keys.insert(cn.to_ascii_lowercase());
+            keys.cns.insert(cn.to_ascii_lowercase());
         }
     }
     keys
+}
+
+/// A configured value that contains `=` is a DN. Anything else is a CN.
+pub fn group_matches(keys: &GroupKeys, ldap_group: &str) -> bool {
+    let configured = ldap_group.trim();
+    if configured.contains('=') {
+        keys.dns.contains(&normalize_dn(configured))
+    } else {
+        keys.cns.contains(&configured.to_ascii_lowercase())
+    }
+}
+
+fn normalize_dn(dn: &str) -> String {
+    let mut rdns = Vec::new();
+    for rdn in parse_rdns(dn) {
+        let mut avas = rdn
+            .iter()
+            .map(|ava| {
+                let type_name = escape_rdn_value(&ava.type_name.to_ascii_lowercase());
+                let value = escape_rdn_value(&ava.value.to_ascii_lowercase());
+                format!("{type_name}={value}")
+            })
+            .collect::<Vec<_>>();
+        avas.sort();
+        rdns.push(avas.join("+"));
+    }
+    rdns.join(",")
 }
 
 pub async fn authenticate(
@@ -100,7 +271,9 @@ pub async fn authenticate(
     if password.is_empty() {
         return Err("empty_password".into());
     }
-    if cfg.bind_dn.is_empty() || cfg.user_base.is_empty() {
+    // An empty service password is an unauthenticated bind. Some directories
+    // accept it and then search as anonymous.
+    if cfg.bind_dn.is_empty() || cfg.user_base.is_empty() || cfg.bind_password.is_empty() {
         return Err("ldap_is_not_fully_configured".into());
     }
     let settings = LdapConnSettings::new()
@@ -159,13 +332,10 @@ pub async fn authenticate(
         .success()
         .map_err(|_| "ldap_rejected_the_password".to_string())?;
 
+    // The user bind only checks the password. Group entries are often
+    // readable by the service account alone, so search as that account.
     if groups.is_empty() {
-        let base = if cfg.group_base.is_empty() {
-            cfg.user_base.as_str()
-        } else {
-            cfg.group_base.as_str()
-        };
-        groups = search_groups(&mut ldap, base, &user_dn, username).await;
+        groups = groups_as_service(&mut ldap, cfg, &user_dn, username).await;
     }
     let _ = ldap.unbind().await;
     Ok(LdapIdentity {
@@ -189,43 +359,115 @@ fn first_attr(entry: &SearchEntry, name: &str) -> Option<String> {
     attr_values(entry, name).into_iter().next()
 }
 
+async fn groups_as_service(
+    ldap: &mut ldap3::Ldap,
+    cfg: &LdapConfig,
+    user_dn: &str,
+    username: &str,
+) -> Vec<String> {
+    if let Err(error) = rebind_service(ldap, cfg).await {
+        let error = redact_secret(&error, &cfg.bind_password);
+        tracing::warn!(
+            user = username,
+            error = %error,
+            "LDAP service re-bind failed, so the group search was skipped"
+        );
+        return Vec::new();
+    }
+    let base = if cfg.group_base.is_empty() {
+        cfg.user_base.as_str()
+    } else {
+        cfg.group_base.as_str()
+    };
+    match search_groups(ldap, base, user_dn, username).await {
+        Ok(found) => {
+            if found.is_empty() && !cfg.group_base.is_empty() {
+                tracing::warn!(user = username, "LDAP group search returned no groups");
+            }
+            found
+        }
+        Err(error) => {
+            let error = redact_secret(&error, &cfg.bind_password);
+            tracing::warn!(user = username, error = %error, "LDAP group search failed");
+            Vec::new()
+        }
+    }
+}
+
+async fn rebind_service(ldap: &mut ldap3::Ldap, cfg: &LdapConfig) -> Result<(), String> {
+    ldap.simple_bind(&cfg.bind_dn, &cfg.bind_password)
+        .await
+        .map_err(|error| format!("service re-bind: {error}"))?
+        .success()
+        .map_err(|error| format!("service re-bind rejected: {error}"))?;
+    Ok(())
+}
+
+fn redact_secret(message: &str, secret: &str) -> String {
+    if secret.is_empty() {
+        message.to_string()
+    } else {
+        message.replace(secret, "[redacted]")
+    }
+}
+
+fn group_search_filters(user_dn: &str, username: &str) -> Vec<String> {
+    let user_dn = escape_filter(user_dn);
+    let username = escape_filter(username);
+    vec![
+        format!("(&(objectClass=groupOfNames)(member={user_dn}))"),
+        format!("(&(objectClass=posixGroup)(memberUid={username}))"),
+        format!("(&(objectClass=group)(member={user_dn}))"),
+        format!("(&(objectClass=groupOfUniqueNames)(uniqueMember={user_dn}))"),
+    ]
+}
+
+fn push_unique(found: &mut Vec<String>, value: String) {
+    if !found.iter().any(|existing| existing == &value) {
+        found.push(value);
+    }
+}
+
 async fn search_groups(
     ldap: &mut ldap3::Ldap,
     base: &str,
     user_dn: &str,
     username: &str,
-) -> Vec<String> {
+) -> Result<Vec<String>, String> {
     let mut found = Vec::new();
-    let filters = [
-        format!(
-            "(&(objectClass=groupOfNames)(member={}))",
-            escape_filter(user_dn)
-        ),
-        format!(
-            "(&(objectClass=posixGroup)(memberUid={}))",
-            escape_filter(username)
-        ),
-        format!("(&(objectClass=group)(member={}))", escape_filter(user_dn)),
-    ];
-    for filter in filters {
-        let Ok(result) = ldap.search(base, Scope::Subtree, &filter, vec!["cn"]).await else {
-            continue;
-        };
-        let Ok((entries, _)) = result.success() else {
-            continue;
+    let mut errors = Vec::new();
+    for filter in group_search_filters(user_dn, username) {
+        let searched = ldap
+            // 1.1 requests no attributes. Matching uses the entry DN.
+            .search(base, Scope::Subtree, &filter, vec!["1.1"])
+            .await;
+        let entries = match searched {
+            Ok(result) => match result.success() {
+                Ok((entries, _)) => entries,
+                Err(error) => {
+                    push_unique(&mut errors, format!("group search rejected: {error}"));
+                    continue;
+                }
+            },
+            Err(error) => {
+                push_unique(&mut errors, format!("group search: {error}"));
+                continue;
+            }
         };
         for entry in entries {
             let parsed = SearchEntry::construct(entry);
-            if let Some(cn) = first_attr(&parsed, "cn") {
-                found.push(cn);
-            } else {
+            if !parsed.dn.is_empty() {
                 found.push(parsed.dn);
             }
         }
     }
-    found.sort();
-    found.dedup();
-    found
+    found.sort_by_key(|left| left.to_ascii_lowercase());
+    found.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    if found.is_empty() && !errors.is_empty() {
+        Err(errors.join("; "))
+    } else {
+        Ok(found)
+    }
 }
 
 #[cfg(test)]
@@ -242,6 +484,190 @@ mod tests {
         let dn = r"CN=Plattform\, Ops,OU=Gruppen,DC=example,DC=com";
         assert_eq!(cn_from_dn(dn).as_deref(), Some("Plattform, Ops"));
         let keys = group_keys(&[dn.into()]);
-        assert!(keys.contains("plattform, ops"));
+        assert!(group_matches(&keys, "Plattform, Ops"));
+        assert!(group_matches(&keys, dn));
+        assert!(group_matches(
+            &keys,
+            "cn=Plattform\\, Ops, ou=Gruppen, dc=example, dc=com"
+        ));
+    }
+
+    #[test]
+    fn a_group_is_identified_by_its_entry_dn() {
+        let dn = "cn=Plattform,ou=groups,dc=example,dc=com";
+        let keys = group_keys(&[dn.into()]);
+        assert!(group_matches(&keys, "plattform"));
+        assert!(group_matches(&keys, dn));
+        let team_dn = "CN=Plattform,OU=Groups,DC=Example,DC=Com";
+        assert!(group_matches(&keys, team_dn));
+        assert!(!group_matches(&keys, "operations"));
+    }
+
+    #[test]
+    fn a_cn_that_decodes_to_another_dn_does_not_match_that_dn() {
+        let real = "cn=kg-admins,ou=groups,dc=example,dc=com";
+        let spoof = r"cn=cn\3Dkg-admins\2Cou\3Dgroups\2Cdc\3Dexample\2Cdc\3Dcom,ou=groups,dc=example,dc=com";
+        let forged = group_keys(&[spoof.into()]);
+        assert!(!group_matches(&forged, real));
+        assert!(!group_matches(&forged, "kg-admins"));
+        let real_keys = group_keys(&[real.into()]);
+        assert!(group_matches(&real_keys, real));
+        assert!(group_matches(&real_keys, "KG-ADMINS"));
+        assert!(!group_matches(&real_keys, spoof));
+        let hex = r"cn=kg\2Dadmins,ou=groups,dc=example,dc=com";
+        assert!(group_matches(&group_keys(&[hex.into()]), real));
+        assert!(!group_matches(
+            &group_keys(&["kg-admins".into()]),
+            "kg-admins"
+        ));
+    }
+
+    #[test]
+    fn group_search_includes_unique_members() {
+        let filters = group_search_filters("cn=alice,ou=people,dc=example,dc=com", "alice");
+        assert!(filters.iter().any(|filter| {
+            filter == "(&(objectClass=groupOfUniqueNames)(uniqueMember=cn=alice,ou=people,dc=example,dc=com))"
+        }));
+        let hostile = group_search_filters("cn=a)(uid=*,ou=people", "a)(uid=*");
+        assert!(hostile.iter().all(|filter| !filter.contains("uid=*")));
+        assert!(hostile
+            .iter()
+            .any(|filter| { filter.contains(r"uniqueMember=cn=a\29\28uid=\2a,ou=people") }));
+    }
+
+    #[test]
+    fn hex_escapes_match_the_same_cn_and_dn() {
+        let server = r"cn=Ops\2C Nord,ou=groups,dc=example,dc=com";
+        assert_eq!(cn_from_dn(server).as_deref(), Some("Ops, Nord"));
+        assert_eq!(
+            cn_from_dn(r"cn=a\2Bb,ou=groups,dc=example,dc=com").as_deref(),
+            Some("a+b")
+        );
+        assert_eq!(
+            cn_from_dn(r"cn=\23hash,ou=groups,dc=example,dc=com").as_deref(),
+            Some("#hash")
+        );
+        assert_eq!(
+            cn_from_dn(r"cn=a/b\3Bc,ou=groups,dc=example,dc=com").as_deref(),
+            Some("a/b;c")
+        );
+        let decoded =
+            String::from_utf8(vec![b'M', 0xC3, 0xBC, b'l', b'l', b'e', b'r']).expect("utf-8");
+        assert_eq!(
+            cn_from_dn(r"cn=M\C3\BCller,ou=groups,dc=example,dc=com").as_deref(),
+            Some(decoded.as_str())
+        );
+        let keys = group_keys(&[server.into()]);
+        assert!(group_matches(&keys, "Ops, Nord"));
+        assert!(!group_matches(&keys, "Ops2C Nord"));
+        assert!(group_matches(
+            &keys,
+            r"cn=Ops\, Nord,ou=groups,dc=example,dc=com"
+        ));
+        assert!(group_matches(
+            &keys,
+            r"CN=Ops\2C Nord,OU=Groups,DC=Example,DC=Com"
+        ));
+        let multi = group_keys(&[r"cn=mrdn+ou=x,dc=example,dc=com".into()]);
+        assert!(!group_matches(&multi, "mrdn"));
+    }
+
+    #[test]
+    fn escaped_comma_and_equals_stay_inside_the_cn_value() {
+        let hex = r"cn=kg-admins\2Cou\3Dgroups,dc=example,dc=com";
+        let slash = r"cn=kg-admins\,ou\=groups,dc=example,dc=com";
+        let split = "cn=kg-admins,ou=groups,dc=example,dc=com";
+        assert_eq!(cn_from_dn(hex).as_deref(), Some("kg-admins,ou=groups"));
+        assert_eq!(cn_from_dn(slash).as_deref(), Some("kg-admins,ou=groups"));
+        assert_eq!(normalize_dn(hex), normalize_dn(slash));
+        assert_ne!(normalize_dn(hex), normalize_dn(split));
+        let keys = group_keys(&[hex.into()]);
+        assert!(group_matches(&keys, slash));
+        assert!(!group_matches(&keys, split));
+        assert!(!group_matches(&keys, "kg-admins"));
+        assert!(!group_matches(&group_keys(&[slash.into()]), split));
+        assert!(!group_matches(&keys, "kg-admins,ou=groups"));
+    }
+
+    #[test]
+    fn the_cn_comes_only_from_the_first_rdn() {
+        let dn = "ou=sub,cn=kg-admins,ou=groups,dc=example,dc=com";
+        assert!(cn_from_dn(dn).is_none());
+        let keys = group_keys(&[dn.into()]);
+        assert!(!group_matches(&keys, "kg-admins"));
+        assert!(group_matches(&keys, dn));
+        assert!(group_matches(
+            &keys,
+            "OU=sub,CN=kg-admins,OU=groups,DC=example,DC=com"
+        ));
+    }
+
+    #[test]
+    fn a_multi_valued_rdn_has_no_cn() {
+        let forward = r"cn=mrdn+ou=x,dc=example,dc=com";
+        let reverse = r"ou=x+cn=mrdn,dc=example,dc=com";
+        assert!(cn_from_dn(forward).is_none());
+        assert!(cn_from_dn(reverse).is_none());
+        assert_eq!(normalize_dn(forward), normalize_dn(reverse));
+        let keys = group_keys(&[forward.into()]);
+        assert!(!group_matches(&keys, "mrdn"));
+        assert!(group_matches(&keys, reverse));
+        assert_ne!(
+            normalize_dn(r"cn=a\+b,dc=example,dc=com"),
+            normalize_dn(r"cn=a+ou=b,dc=example,dc=com")
+        );
+        assert_eq!(
+            cn_from_dn(r"cn=a\+b,dc=example,dc=com").as_deref(),
+            Some("a+b")
+        );
+    }
+
+    #[test]
+    fn memberof_hex_escapes_match_the_group() {
+        let member = r"cn=Ops\2C Nord,ou=groups,dc=example,dc=com";
+        let keys = group_keys(&[member.into()]);
+        assert!(group_matches(&keys, "Ops, Nord"));
+        assert!(group_matches(
+            &keys,
+            r"cn=Ops\, Nord,ou=groups,dc=example,dc=com"
+        ));
+        assert!(group_matches(
+            &keys,
+            r"CN=Ops\2C Nord,OU=Groups,DC=Example,DC=Com"
+        ));
+        assert!(!group_matches(
+            &keys,
+            "cn=Ops,ou=Nord,ou=groups,dc=example,dc=com"
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_empty_bind_password_is_not_fully_configured() {
+        let cfg = LdapConfig {
+            url: "ldap://127.0.0.1:389".into(),
+            mode: "ldap".into(),
+            bind_dn: "cn=reader,dc=example,dc=com".into(),
+            bind_password: String::new(),
+            user_base: "ou=people,dc=example,dc=com".into(),
+            user_filter: "(uid={username})".into(),
+            username_attr: "uid".into(),
+            group_attr: "memberOf".into(),
+            group_base: String::new(),
+            starttls: false,
+            tls_insecure: false,
+        };
+        let error = authenticate(&cfg, "alice", "secret")
+            .await
+            .expect_err("empty bind password");
+        assert_eq!(error, "ldap_is_not_fully_configured");
+    }
+
+    #[test]
+    fn redact_secret_hides_the_bind_password() {
+        assert_eq!(
+            redact_secret("service re-bind rejected: secret-value", "secret-value"),
+            "service re-bind rejected: [redacted]"
+        );
+        assert_eq!(redact_secret("no secret here", ""), "no secret here");
     }
 }
