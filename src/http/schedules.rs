@@ -62,6 +62,26 @@ fn never() -> String {
     "never".to_string()
 }
 
+pub async fn list_for_team(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    user: AuthUser,
+) -> AppResult<Json<Value>> {
+    let team = team_header(&headers)?;
+    gate(&state, &user, &team, Role::Viewer)?;
+    let db = state.db()?;
+    let items = db::list_team_schedules(&db, &team)?;
+    let rows = items
+        .iter()
+        .map(|(item, target_name)| {
+            let mut value = schedule_json(item);
+            value["target_name"] = json!(target_name);
+            value
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(json!(rows)))
+}
+
 pub async fn list_for_template(
     State(state): State<Shared>,
     headers: HeaderMap,

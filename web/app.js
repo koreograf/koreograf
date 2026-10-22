@@ -346,6 +346,7 @@ function shell(title, body, actions) {
       ["#/templates", t("templates")],
       ["#/jobs", t("jobs")],
       ["#/workflows", t("workflows")],
+      ["#/schedules", t("schedules")],
       ["#/hooks", t("webhooks")],
     ]],
     [t("resources"), [
@@ -1064,23 +1065,27 @@ function mountSchedules(card) {
   if (!card) return;
   const kind = card.dataset.kind;
   const target = card.dataset.target;
-  const path = `/api/${kind}s/${encodeURIComponent(target)}/schedules`;
+  const all = kind === "all";
+  const path = all ? "/api/schedules" : `/api/${kind}s/${encodeURIComponent(target)}/schedules`;
   const draw = async () => {
     const items = await api("GET", path);
-    const add = can("operator") ? `<button class="btn" type="button" id="schedule-add">${h("schedule_add")}</button>` : "";
-    const emptyKey = kind === "workflow" ? "schedule_empty_workflow" : "schedule_empty_template";
+    const add = !all && can("operator") ? `<button class="btn" type="button" id="schedule-add">${h("schedule_add")}</button>` : "";
+    const empty = all
+      ? h("schedule_empty_all")
+      : h(kind === "workflow" ? "schedule_empty_workflow" : "schedule_empty_template");
     const rows = items.length
-      ? items.map((item) => scheduleRow(item)).join("")
-      : `<p class="muted">${h(emptyKey)}</p>`;
+      ? items.map((item) => scheduleRow(item, all)).join("")
+      : `<p class="muted">${empty}</p>`;
+    const heading = all ? "" : `<div class="row"><h2>${h("schedules")}</h2>${add}</div>`;
     card.innerHTML = `
-      <div class="row"><h2>${h("schedules")}</h2>${add}</div>
+      ${heading}
       <div class="schedule-list">${rows}</div>`;
     const addButton = card.querySelector("#schedule-add");
     if (addButton) addButton.addEventListener("click", () => openScheduleForm(kind, target, null, draw));
     card.querySelectorAll("[data-schedule-edit]").forEach((button) => {
       button.addEventListener("click", () => {
         const item = items.find((row) => row.id === button.dataset.scheduleEdit);
-        if (item) openScheduleForm(kind, target, item, draw);
+        if (item) openScheduleForm(item.target_kind || kind, item.target_id || target, item, draw);
       });
     });
     card.querySelectorAll("[data-schedule-delete]").forEach((button) => {
@@ -1094,17 +1099,21 @@ function mountSchedules(card) {
         }
       });
     });
-    card.querySelectorAll("[data-schedule-enabled]").forEach((button) => {
-      button.addEventListener("click", async () => {
-        const item = items.find((row) => row.id === button.dataset.scheduleEnabled);
+    card.querySelectorAll("[data-schedule-enabled]").forEach((control) => {
+      const apply = async () => {
+        const item = items.find((row) => row.id === control.dataset.scheduleEnabled);
         if (!item) return;
+        const enabled = control.type === "checkbox" ? control.checked : !item.enabled;
         try {
-          await api("POST", `/api/schedules/${encodeURIComponent(item.id)}/enabled`, { enabled: !item.enabled });
+          await api("POST", `/api/schedules/${encodeURIComponent(item.id)}/enabled`, { enabled });
           await draw();
         } catch (error) {
           handle(error);
+          if (control.isConnected && control.type === "checkbox") control.checked = item.enabled;
         }
-      });
+      };
+      if (control.type === "checkbox") control.addEventListener("change", apply);
+      else control.addEventListener("click", apply);
     });
     card.querySelectorAll("[data-schedule-accept], [data-schedule-decline]").forEach((button) => {
       button.addEventListener("click", async () => {
@@ -1121,21 +1130,42 @@ function mountSchedules(card) {
   draw().catch(handle);
 }
 
-function scheduleRow(item) {
+function scheduleSwitch(item) {
+  const checked = item.enabled ? " checked" : "";
+  const disabled = can("operator") ? "" : " disabled";
+  return `<label class="switch"><input type="checkbox" data-schedule-enabled="${esc(item.id)}" aria-label="${h(item.enabled ? "pause_schedule" : "resume_schedule")}"${checked}${disabled}><span></span></label>`;
+}
+
+function scheduleTarget(item) {
+  if (!item.target_id) return "";
+  const workflow = item.target_kind === "workflow";
+  const href = workflow ? `#/workflows/${encodeURIComponent(item.target_id)}` : `#/templates/${encodeURIComponent(item.target_id)}`;
+  const label = workflow ? t("workflow") : t("template");
+  return `<a class="small" href="${href}">${esc(label)}: ${esc(item.target_name || "")}</a>`;
+}
+
+function scheduleRow(item, index) {
   const next = item.next_run_at
     ? `<p class="small muted">${h("next_run")}: ${esc(formatWhen(item.next_run_at, item.timezone))}</p>`
     : `<p class="small muted">${h("schedule_no_upcoming")}</p>`;
-  const controls = can("operator") ? `
-    <button class="btn" type="button" data-schedule-enabled="${esc(item.id)}">${h(item.enabled ? "pause_schedule" : "resume_schedule")}</button>
+  const edit = can("operator") ? `
     <button class="btn" type="button" data-schedule-edit="${esc(item.id)}">${h("schedule_edit")}</button>
     <button class="btn danger" type="button" data-schedule-delete="${esc(item.id)}">${h("delete")}</button>` : "";
+  const toggle = index
+    ? scheduleSwitch(item)
+    : (can("operator") ? `<button class="btn" type="button" data-schedule-enabled="${esc(item.id)}">${h(item.enabled ? "pause_schedule" : "resume_schedule")}</button>` : "");
+  const status = index ? "" : `<span class="pill">${esc(item.enabled ? t("schedule_active") : t("schedule_paused"))}</span>`;
+  const target = index ? scheduleTarget(item) : "";
   const miss = item.missed_at ? `
     <div class="schedule-miss">
       <span>${h("schedule.missed", { when: formatWhen(item.missed_at, item.timezone) })}</span>
       ${can("operator") ? `<button class="btn primary" type="button" data-schedule-accept="${esc(item.id)}">${h("run_missed_now")}</button><button class="btn" type="button" data-schedule-decline="${esc(item.id)}">${h("skip_missed")}</button>` : ""}
     </div>` : "";
   return `<article class="schedule-row">
-    <div class="row"><strong>${esc(item.name)}</strong><span class="pill">${esc(item.enabled ? t("schedule_active") : t("schedule_paused"))}</span>${controls}</div>
+    <div class="schedule-head">
+      <div class="schedule-main"><strong>${esc(item.name)}</strong>${target}</div>
+      <div class="row">${status}${toggle}${edit}</div>
+    </div>
     <p>${esc(scheduleSentence(item))}</p>
     ${next}
     ${miss}
@@ -1273,6 +1303,12 @@ function openScheduleForm(kind, target, existing, redraw) {
     }
   });
   form.name.focus();
+}
+
+async function pageSchedules() {
+  if (!needTeam()) return;
+  shell(t("schedules"), `<section class="card" id="schedule-card" data-kind="all"></section>`);
+  mountSchedules(document.querySelector("#schedule-card"));
 }
 
 async function pageJobs() {
@@ -4401,6 +4437,7 @@ async function route() {
     else if (parts[0] === "workflows" && parts[1] === "new") await pageWorkflowNew();
     else if (parts[0] === "workflows" && parts[1]) await pageWorkflow(parts[1]);
     else if (parts[0] === "workflows") await pageWorkflows();
+    else if (parts[0] === "schedules") await pageSchedules();
     else if (parts[0] === "runs" && parts[1]) await pageRun(parts[1]);
     else if (parts[0] === "hooks" && parts[1] === "new") await pageHookNew();
     else if (parts[0] === "hooks") await pageHooks();

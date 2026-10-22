@@ -4718,9 +4718,15 @@ async fn a_schedule_runs_the_last_miss_once_and_lists_on_its_target() {
     let script = script.as_str().unwrap_or("");
     assert!(script.contains("schedule-card"));
     assert!(script.contains("id=\"schedule-form\""));
+    assert!(script.contains("#/schedules"));
+    assert!(script.contains("class=\"switch\""));
     let (status, style, _) = call(&app, "GET", "/app.css", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(style.as_str().unwrap_or("").contains("schedule-miss"));
+    assert!(style
+        .as_str()
+        .unwrap_or("")
+        .contains(".switch input:checked"));
 
     let (status, me, cookie) = call(
         &app,
@@ -4982,6 +4988,30 @@ async fn a_schedule_runs_the_last_miss_once_and_lists_on_its_target() {
     assert_eq!(status, StatusCode::OK, "{flows}");
     assert_eq!(flows.as_array().unwrap().len(), 1);
 
+    let (status, all, _) = call(
+        &app,
+        "GET",
+        "/api/schedules",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{all}");
+    let rows = all.as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    let morning = rows
+        .iter()
+        .find(|row| row["name"] == "Morning later")
+        .unwrap();
+    assert_eq!(morning["target_kind"], "template");
+    assert_eq!(morning["target_id"], template_id);
+    assert_eq!(morning["target_name"], "Scheduled");
+    let weekdays = rows.iter().find(|row| row["name"] == "Weekdays").unwrap();
+    assert_eq!(weekdays["target_kind"], "workflow");
+    assert_eq!(weekdays["target_id"], workflow_id);
+    assert_eq!(weekdays["target_name"], "Scheduled flow");
+
     let (status, gone, _) = call(
         &app,
         "DELETE",
@@ -5002,6 +5032,18 @@ async fn a_schedule_runs_the_last_miss_once_and_lists_on_its_target() {
         .expect("count")
     };
     assert_eq!(left, 0i64);
+    let (status, remaining, _) = call(
+        &app,
+        "GET",
+        "/api/schedules",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{remaining}");
+    assert_eq!(remaining.as_array().unwrap().len(), 1);
+    assert_eq!(remaining[0]["name"], "Weekdays");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

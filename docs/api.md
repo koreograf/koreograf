@@ -31,6 +31,7 @@ Session cookie `koreograf_session`, HttpOnly, SameSite=Lax, seven days. Team rou
 | PUT, DELETE | `/api/templates/{id}`, `/api/workflows/{id}` |
 | POST | `/api/templates/{id}/launch`, `/api/workflows/{id}/launch` |
 | GET, POST | `/api/templates/{id}/schedules`, `/api/workflows/{id}/schedules` |
+| GET | `/api/schedules` |
 | POST | `/api/schedules/preview` |
 | PUT, DELETE | `/api/schedules/{id}` |
 | POST | `/api/schedules/{id}/enabled`, `/api/schedules/{id}/missed` |
@@ -47,4 +48,4 @@ Session cookie `koreograf_session`, HttpOnly, SameSite=Lax, seven days. Team rou
 
 Launches answer 202 and need a JSON body, at least `{}`. `extra_vars` is an object.
 
-A schedule belongs to one template or one workflow. Creating one needs `name`, an IANA `timezone`, `start_date` (`YYYY-MM-DD`), `start_time` (`HH:MM`), and `frequency` (`once`, `hourly`, `daily`, `weekly`, `monthly`). Weekly also needs `weekdays` (`MO` through `SU`). `end_kind` is `never`, `after` with `end_count` from 1 to 999, or `on_date`. The clock time stays in that zone across daylight saving. `POST /api/schedules/preview` returns up to five upcoming UTC instants and does not save anything. A viewer can list. An operator can create, change, delete, and pause. `POST /api/schedules/{id}/enabled` takes `{ "enabled": true }`. `POST /api/schedules/{id}/missed` takes `{ "accept": true }` to start the last missed time once, or `{ "accept": false }` to clear it. Times that passed while the process was stopped are not replayed.
+`GET /api/schedules` lists every schedule of the selected team and includes `target_name`. A schedule belongs to one template or one workflow. Creating one needs `name`, an IANA `timezone`, `start_date` (`YYYY-MM-DD`), `start_time` (`HH:MM`), and `frequency` (`once`, `hourly`, `daily`, `weekly`, `monthly`). Weekly also needs `weekdays` (`MO` through `SU`). `end_kind` is `never`, `after` with `end_count` from 1 to 999, or `on_date`. The clock time stays in that zone across daylight saving. `POST /api/schedules/preview` returns up to five upcoming UTC instants and does not save anything. A viewer can list. An operator can create, change, delete, and pause. `POST /api/schedules/{id}/enabled` takes `{ "enabled": true }`. `POST /api/schedules/{id}/missed` takes `{ "accept": true }` to start the last missed time once, or `{ "accept": false }` to clear it. Times that passed while the process was stopped are not replayed.

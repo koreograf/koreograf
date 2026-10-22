@@ -2545,6 +2545,33 @@ pub fn list_schedules(c: &Connection, kind: &str, target_id: &str) -> AppResult<
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
 }
 
+pub fn list_team_schedules(c: &Connection, team_id: &str) -> AppResult<Vec<(Schedule, String)>> {
+    let sql = format!(
+        "SELECT {SCHEDULE_SELECT},
+            COALESCE(
+                CASE target_kind
+                    WHEN 'template' THEN (
+                        SELECT name FROM templates WHERE id = schedules.target_id
+                    )
+                    WHEN 'workflow' THEN (
+                        SELECT name FROM workflows WHERE id = schedules.target_id
+                    )
+                    ELSE ''
+                END,
+                ''
+            )
+         FROM schedules
+         WHERE team_id = ?1
+         ORDER BY name"
+    );
+    let mut stmt = c.prepare(&sql)?;
+    let rows = stmt.query_map(params![team_id], |row| {
+        let target_name: String = row.get(20)?;
+        Ok((map_schedule(row)?, target_name))
+    })?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
 pub fn due_schedules(c: &Connection, now: &str) -> AppResult<Vec<Schedule>> {
     let sql = format!(
         "SELECT {SCHEDULE_SELECT} FROM schedules

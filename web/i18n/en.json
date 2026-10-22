@@ -688,6 +688,7 @@
   "schedule_edit": "Edit",
   "schedule_empty_template": "This template has no schedule yet.",
   "schedule_empty_workflow": "This workflow has no schedule yet.",
+  "schedule_empty_all": "This team has no schedule yet.",
   "schedule_end_date_is_invalid": "The end date is invalid.",
   "schedule_end_is_invalid": "The end is invalid.",
   "schedule_has_no_missed_run": "There is no missed run to answer.",

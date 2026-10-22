@@ -688,6 +688,7 @@
   "schedule_edit": "Bearbeiten",
   "schedule_empty_template": "Diese Vorlage hat noch keinen Zeitplan.",
   "schedule_empty_workflow": "Dieser Workflow hat noch keinen Zeitplan.",
+  "schedule_empty_all": "In diesem Team gibt es noch keinen Zeitplan.",
   "schedule_end_date_is_invalid": "Das Enddatum ist ungültig.",
   "schedule_end_is_invalid": "Das Ende ist ungültig.",
   "schedule_has_no_missed_run": "Es gibt keinen ausgefallenen Lauf.",

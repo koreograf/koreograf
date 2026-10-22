@@ -131,6 +131,7 @@ pub fn router(state: Shared) -> Router {
             "/workflows/{id}/schedules",
             get(schedules::list_for_workflow).post(schedules::create_for_workflow),
         )
+        .route("/schedules", get(schedules::list_for_team))
         .route("/schedules/preview", post(schedules::preview))
         .route(
             "/schedules/{id}",

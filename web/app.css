@@ -340,6 +340,43 @@ textarea.secret-mask { -webkit-text-security: disc; }
 }
 .schedule-list { display: grid; gap: 12px; }
 .schedule-row + .schedule-row { border-top: 1px solid var(--line); padding-top: 12px; }
+.schedule-head { display: flex; gap: 12px; align-items: center; justify-content: space-between; }
+.schedule-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.switch { position: relative; display: inline-flex; width: 42px; height: 24px; flex: 0 0 auto; }
+.switch input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.switch span {
+  width: 42px;
+  height: 24px;
+  background: #d6d3d1;
+  border-radius: 999px;
+  display: block;
+  position: relative;
+}
+.switch span::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 1px 2px rgba(28, 25, 23, 0.25);
+  transition: transform 0.15s ease;
+}
+.switch input:checked + span { background: var(--accent); }
+.switch input:checked + span::after { transform: translateX(18px); }
+.switch input:disabled { cursor: default; }
+.switch input:disabled + span { opacity: 0.55; }
+.switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
 .schedule-miss {
   display: flex;
   flex-wrap: wrap;
