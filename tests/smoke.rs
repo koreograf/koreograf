@@ -4586,7 +4586,9 @@ async fn cancel_kills_a_detached_child_that_ignores_term() {
     assert_eq!(status, StatusCode::OK, "{me}");
     let cookie = cookie.expect("session cookie");
     let team = me["teams"][0]["id"].as_str().unwrap();
-    let script = "( trap '' TERM; sleep 45 & echo $! > \"$KOREOGRAF_WORK/hold.pid\"; wait; echo detached-after > \"$KOREOGRAF_WORK/marker\" ) >/dev/null 2>&1 &\necho detached-start\nwait\n";
+    // /bin/true is external, so a shell that buffers stdout flushes the
+    // start line before it waits. Output after cancel is discarded.
+    let script = "( trap '' TERM; sleep 45 & echo $! > \"$KOREOGRAF_WORK/hold.pid\"; wait; echo detached-after > \"$KOREOGRAF_WORK/marker\" ) >/dev/null 2>&1 &\necho detached-start\n/bin/true\nwait\n";
     let (status, created, _) = call(
         &app,
         "POST",
@@ -4617,12 +4619,33 @@ async fn cancel_kills_a_detached_child_that_ignores_term() {
     let hold = dir.join("jobs").join(job_id).join("hold.pid");
     let marker = dir.join("jobs").join(job_id).join("marker");
     let mut holder = String::new();
+    let mut started = false;
     for _ in 0..50 {
-        if let Ok(text) = std::fs::read_to_string(&hold) {
-            holder = text.trim().to_string();
-            if !holder.is_empty() {
-                break;
+        if holder.is_empty() {
+            if let Ok(text) = std::fs::read_to_string(&hold) {
+                let text = text.trim().to_string();
+                if !text.is_empty() {
+                    holder = text;
+                }
             }
+        }
+        if !started {
+            let (status, body, _) = call(
+                &app,
+                "GET",
+                &format!("/api/jobs/{job_id}"),
+                Some(&cookie),
+                Some(team),
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            if body["events"].to_string().contains("detached-start") {
+                started = true;
+            }
+        }
+        if !holder.is_empty() && started {
+            break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -4630,6 +4653,7 @@ async fn cancel_kills_a_detached_child_that_ignores_term() {
         !holder.is_empty(),
         "the detached child that ignores TERM did not start"
     );
+    assert!(started, "the job did not log detached-start before cancel");
     let (status, canceled, _) = call(
         &app,
         "POST",
