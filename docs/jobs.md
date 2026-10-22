@@ -54,7 +54,7 @@ Inventory files are named `hosts` or `inventory`, or they live in `inventory/` a
 
 A file with `plugin:` is not executed. `plugin: netbox.netbox.nb_inventory` (also `plugin: netbox`) has a NetBox source. The controller fetches devices and, when asked, virtual machines, groups them like the plugin (`sites_berlin`, `device_roles_web`), and stores INI. The token lives on the credential, not in the source. An inventory can have several sources, for example a file from the project and NetBox. Ansible receives each source as its own file. `POST /api/inventories/{id}/sync` refreshes every external source. Other inventory plugins are listed and cannot be executed here.
 
-A job uses the inventory from the last sync. Launch does not call NetBox. Sync the inventory before the job when the host list should be current. With no `query_filters`, every device the API returns is imported, including a device that has no `primary_ip`. That host is listed and has no `ansible_host`. Virtual machines are included unless `virtual_machines` is false. A filter such as `status=active` leaves retired devices out:
+A job uses the inventory from the last sync. Launch does not call NetBox. Sync the inventory before the job when the host list should be current. With no `query_filters`, every device the API returns is imported. `ansible_host` is the host part of `primary_ip4`, then `primary_ip`, then `primary_ip6`. A null field or an address without a host is skipped, and a prefix length is removed. A device with none of those addresses is still listed and has no `ansible_host`. Virtual machines are included unless `virtual_machines` is false. A filter such as `status=active` leaves retired devices out:
 
 ```yaml
 plugin: netbox.netbox.nb_inventory
