@@ -2825,6 +2825,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(data);
     }
 
+    #[test]
+    fn the_seeded_demo_stays_inside_the_examples_root() {
+        let examples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples");
+        let demo = examples.join("demo");
+        let data = std::env::temp_dir().join("koreograf-demo-root");
+        let roots = crate::config::effective_project_roots(Vec::new(), &examples);
+        let canonical = stored_directory(&demo, &data, &roots).expect("demo");
+        assert_eq!(canonical, demo.canonicalize().unwrap());
+    }
+
     #[tokio::test]
     async fn a_swapped_symlink_is_outside_the_project_root() {
         let nanos = std::time::SystemTime::now()

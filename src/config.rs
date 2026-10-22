@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunnerMode {
@@ -98,7 +98,7 @@ pub struct Config {
     pub job_timeout_secs: u64,
     /// `KOREOGRAF_LOCAL_RUNNER_FOR`. Not a saved setting.
     pub local_jobs: LocalJobs,
-    /// `KOREOGRAF_PROJECT_ROOTS`. Empty means path projects are admin-only.
+    /// Allowed path-project directories. `from_env` always includes `examples_dir`.
     pub project_roots: Vec<PathBuf>,
     pub ldap: Option<LdapConfig>,
 }
@@ -138,11 +138,14 @@ impl Config {
         };
 
         let password = env_string("KOREOGRAF_ADMIN_PASSWORD");
+        let examples_dir = PathBuf::from(env_or("KOREOGRAF_EXAMPLES", "./examples"));
+        let project_roots =
+            effective_project_roots(env_paths("KOREOGRAF_PROJECT_ROOTS"), &examples_dir);
         Self {
             bind: env_or("KOREOGRAF_BIND", "0.0.0.0:8080"),
             data_dir: PathBuf::from(env_or("KOREOGRAF_DATA", "./data")),
             web_dir: PathBuf::from(env_or("KOREOGRAF_WEB", "./web")),
-            examples_dir: PathBuf::from(env_or("KOREOGRAF_EXAMPLES", "./examples")),
+            examples_dir,
             admin_user: env_or("KOREOGRAF_ADMIN_USER", "admin").to_ascii_lowercase(),
             admin_password: if password.is_empty() {
                 None
@@ -155,10 +158,22 @@ impl Config {
                 .unwrap_or(1800)
                 .clamp(30, 86_400),
             local_jobs: LocalJobs::parse(&env_string("KOREOGRAF_LOCAL_RUNNER_FOR")),
-            project_roots: env_paths("KOREOGRAF_PROJECT_ROOTS"),
+            project_roots,
             ldap,
         }
     }
+}
+
+pub(crate) fn effective_project_roots(
+    configured: Vec<PathBuf>,
+    examples_dir: &Path,
+) -> Vec<PathBuf> {
+    let mut roots = configured;
+    if roots.iter().any(|root| root == examples_dir) {
+        return roots;
+    }
+    roots.push(examples_dir.to_path_buf());
+    roots
 }
 
 fn env_paths(key: &str) -> Vec<PathBuf> {
@@ -240,6 +255,24 @@ mod tests {
             text.matches("KOREOGRAF_LOCAL_RUNNER_FOR").count(),
             1,
             "{text}"
+        );
+    }
+
+    #[test]
+    fn the_examples_directory_is_always_a_project_root() {
+        let examples = PathBuf::from("examples");
+        let extra = PathBuf::from("/srv/projects");
+        assert_eq!(
+            effective_project_roots(Vec::new(), &examples),
+            vec![examples.clone()]
+        );
+        assert_eq!(
+            effective_project_roots(vec![extra.clone()], &examples),
+            vec![extra, examples.clone()]
+        );
+        assert_eq!(
+            effective_project_roots(vec![examples.clone()], &examples),
+            vec![examples]
         );
     }
 }

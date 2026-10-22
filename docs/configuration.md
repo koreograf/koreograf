@@ -20,7 +20,7 @@ See `.env.example`. Comments in that file are still German.
 | `KOREOGRAF_ADMIN_PASSWORD` | empty, then generated once |
 | `KOREOGRAF_RUNNER` | `auto` (`local` or `docker`) |
 | `KOREOGRAF_LOCAL_RUNNER_FOR` | `admins` (`all` on a trusted network) |
-| `KOREOGRAF_PROJECT_ROOTS` | empty. Comma-separated absolute directories |
+| `KOREOGRAF_PROJECT_ROOTS` | empty, plus the examples directory. Comma-separated absolute directories |
 | `KOREOGRAF_JOB_TIMEOUT_SECS` | `1800` (30–86400) |
 | `KOREOGRAF_SECRET_KEY` | 64 hex characters, otherwise `data/secret.key` |
 | `KOREOGRAF_LOG_FORMAT` | empty, text on stdout. `json` for Promtail |
@@ -36,7 +36,7 @@ Directory sign-in, including these four variables, is described in [Organization
 
 `KOREOGRAF_LOCAL_RUNNER_FOR` is `admins` or `all`. The default is `admins`. An operator, an anonymous webhook, and a workflow started by either of those cannot start a job on the controller. An administrator can, and a workflow they start keeps that attribution. The Test button on a webhook runs as the signed-in user. `all` is for a trusted network where those jobs must run locally. The value comes from the environment, not from Settings. An install that already ran those jobs locally sets `KOREOGRAF_LOCAL_RUNNER_FOR=all`. An operator path project also needs that directory listed in `KOREOGRAF_PROJECT_ROOTS`. An unknown value is treated as `admins` and written to the log.
 
-`KOREOGRAF_PROJECT_ROOTS` lists absolute directories separated by commas. Empty means only an administrator can add a path project or a `file://` Git URL. An operator can add one when the directory is under a listed root. At run time the canonical directory must still be under one of the listed roots, including a path that was accepted when it was saved. The sample project under `KOREOGRAF_EXAMPLES` runs only when that directory is listed. `/`, `/etc`, `/proc`, `/sys`, `/dev`, `/run`, `/boot`, `/root`, `/var/run`, and the data directory are rejected for everyone. A `file://` URL is accepted for an empty host or `localhost`. Git's file protocol stays off for every other URL.
+`KOREOGRAF_PROJECT_ROOTS` lists absolute directories separated by commas. The directory in `KOREOGRAF_EXAMPLES` is always an allowed root, so the seeded Demo project runs on a default install. An operator can add a path project or a `file://` Git URL when the directory is under one of these roots. An administrator can save a path outside them. At run time the canonical directory must still be under an allowed root, including a path that was accepted when it was saved, so that saved path does not run until its directory is listed. `/`, `/etc`, `/proc`, `/sys`, `/dev`, `/run`, `/boot`, `/root`, `/var/run`, and the data directory are rejected for everyone. A `file://` URL is accepted for an empty host or `localhost`. Git's file protocol stays off for every other URL.
 
 What the database file holds, and why a `postgres://` URL stops startup, is in [Database and backup](backup-restore.md). Log fields are in [Logs and Prometheus](observability.md). Directory, proxy, runner, and timeout values saved in the UI are in [Organizations, teams, LDAP, and Active Directory](authentication.md#saved-settings).
 
