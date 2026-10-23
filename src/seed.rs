@@ -112,6 +112,7 @@ fn seed_demo(conn: &Connection, cfg: &Config) -> AppResult<()> {
             revision: String::new(),
             created_at: db::now(),
             team_ids: Vec::new(),
+            admin_saved: true,
         },
     )?;
 
@@ -127,6 +128,7 @@ fn seed_demo(conn: &Connection, cfg: &Config) -> AppResult<()> {
             source_kind: "ini".into(),
             source_json: "{}".into(),
             credential_id: None,
+            admin_saved: true,
         },
     )?;
     db::insert_inventory_source(
@@ -247,6 +249,7 @@ fn seed_demo(conn: &Connection, cfg: &Config) -> AppResult<()> {
             description: "Health check, then the playbook, or the escalation when it fails.".into(),
             graph: graph.to_string(),
             created_at: db::now(),
+            admin_saved: true,
         },
     )?;
 
@@ -304,6 +307,7 @@ fn insert_template(conn: &Connection, item: DemoTemplate<'_>) -> AppResult<Strin
             spec: item.spec.to_string(),
             created_at: db::now(),
             update_on_launch: true,
+            admin_saved: true,
         },
     )?;
     Ok(id)

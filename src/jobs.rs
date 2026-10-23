@@ -4,6 +4,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use crate::config::{LocalJobs, RunnerMode};
 use crate::db::{self, Hook, Job, WorkflowJob};
 use crate::error::{ApiError, AppResult};
 use crate::hooks::{self, AlertEvent};
@@ -24,6 +25,7 @@ pub struct LaunchRequest {
 }
 
 pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
+    let settings = crate::settings::load(state)?;
     let id = Uuid::new_v4().to_string();
     {
         let db = state.db()?;
@@ -36,6 +38,30 @@ pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
             None => capture_parameters(&db, &template, &req.extra_vars),
         };
         let parsed = db::json_object(&parameters);
+        if refuses_local_launch(
+            state.cfg.local_jobs,
+            settings.runner,
+            parameter_has_environment(&template, &parsed),
+        ) {
+            let workflow_id = workflow_definition_id(&db, req.workflow_job_id.as_deref())?;
+            let matches = crate::auth::command_matches_template(&template, &parsed);
+            let requires_workflow = req
+                .workflow_job_id
+                .as_deref()
+                .is_some_and(|item| !item.is_empty())
+                || !matches;
+            let effective = template_with_saved_targets(&template, &parsed);
+            let allowed = crate::auth::launcher_is_admin(&db, &req.launched_by)?
+                && crate::auth::content_saved_by_admin(
+                    &db,
+                    &effective,
+                    workflow_id.as_deref(),
+                    requires_workflow,
+                )?;
+            if !allowed {
+                return Err(ApiError::bad("local_runs_are_limited_to_administrators"));
+            }
+        }
         let name = parsed
             .get("template_name")
             .and_then(Value::as_str)
@@ -76,13 +102,17 @@ pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
     Ok(id)
 }
 
+fn refuses_local_launch(local_jobs: LocalJobs, runner: RunnerMode, has_environment: bool) -> bool {
+    local_jobs == LocalJobs::Admins && (!has_environment || runner == RunnerMode::Local)
+}
+
 pub fn relaunch(
     state: &Shared,
     source_id: &str,
     launched_by: &str,
     only_failed_hosts: bool,
 ) -> AppResult<String> {
-    let (team_id, template_id, extra, parameters) = {
+    let (team_id, template_id, extra, parameters, workflow_job_id) = {
         let db = state.db()?;
         let job = db::job(&db, source_id)?.ok_or(ApiError::NotFound)?;
         if job.status != "failed" {
@@ -115,11 +145,21 @@ pub fn relaunch(
             parameters =
                 runner::parameters_with_limit(&parameters, &limit).map_err(ApiError::bad)?;
         }
+        let differs =
+            !crate::auth::command_matches_template(&template, &db::json_object(&parameters));
+        // A stored command that is not the current template stays tied to the
+        // workflow that saved it, so the local-run check can see that release.
+        let workflow_job_id = if differs {
+            job.workflow_job_id.clone()
+        } else {
+            None
+        };
         (
             job.team_id,
             template_id,
             db::json_object(&job.extra_vars),
             parameters,
+            workflow_job_id,
         )
     };
     launch(
@@ -130,11 +170,49 @@ pub fn relaunch(
             extra_vars: extra,
             launched_by: launched_by.to_string(),
             trigger: "relaunch".into(),
-            workflow_job_id: None,
+            workflow_job_id,
             workflow_node_id: None,
             parameters_override: Some(parameters),
         },
     )
+}
+
+fn parameter_has_environment(template: &db::Template, params: &Value) -> bool {
+    if params.get("tool").and_then(Value::as_str).is_some() {
+        return params
+            .get("environment_id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| !id.is_empty());
+    }
+    template.environment_id.is_some()
+}
+
+fn template_with_saved_targets(template: &db::Template, params: &Value) -> db::Template {
+    if params.get("tool").and_then(Value::as_str).is_none() {
+        return template.clone();
+    }
+    let mut effective = template.clone();
+    effective.project_id = params
+        .get("project_id")
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string);
+    effective.inventory_id = params
+        .get("inventory_id")
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string);
+    effective
+}
+
+fn workflow_definition_id(
+    db: &rusqlite::Connection,
+    workflow_job_id: Option<&str>,
+) -> AppResult<Option<String>> {
+    let Some(id) = workflow_job_id.filter(|id| !id.is_empty()) else {
+        return Ok(None);
+    };
+    Ok(db::workflow_job(db, id)?.and_then(|run| run.workflow_id))
 }
 
 fn stored_parameters(raw: &str) -> AppResult<String> {
@@ -362,9 +440,15 @@ pub async fn sync_project(state: &Shared, project: &db::Project) -> AppResult<St
         return Ok(project.source.clone());
     }
     let proxy = crate::settings::load(state)?.proxy;
-    let path = runner::materialize_project(project, &state.cfg.data_dir, &proxy, true)
-        .await
-        .map_err(ApiError::bad)?;
+    let path = runner::materialize_project(
+        project,
+        &state.cfg.data_dir,
+        &proxy,
+        true,
+        &state.cfg.project_roots,
+    )
+    .await
+    .map_err(ApiError::bad)?;
     Ok(path.display().to_string())
 }
 
@@ -620,7 +704,12 @@ pub struct Dispatch {
     pub workflow_job_id: Option<String>,
 }
 
-pub fn accept_hook(state: &Shared, hook: &Hook, payload: &Value) -> AppResult<Dispatch> {
+pub fn accept_hook(
+    state: &Shared,
+    hook: &Hook,
+    payload: &Value,
+    actor: Option<&str>,
+) -> AppResult<Dispatch> {
     let events = hooks::parse_webhook(payload);
     let matched: Vec<&AlertEvent> = events
         .iter()
@@ -682,6 +771,10 @@ pub fn accept_hook(state: &Shared, hook: &Hook, payload: &Value) -> AppResult<Di
         });
     }
     let hook_vars = db::json_object(&hook.extra_vars);
+    let launched_by = match actor {
+        Some(name) if !name.is_empty() => name.to_string(),
+        _ => format!("hook:{}", hook.name),
+    };
     let mut first_job = None;
     let mut first_workflow = None;
     for event in &matched {
@@ -692,7 +785,7 @@ pub fn accept_hook(state: &Shared, hook: &Hook, payload: &Value) -> AppResult<Di
                 &hook.team_id,
                 workflow_id,
                 extra,
-                &format!("hook:{}", hook.name),
+                &launched_by,
                 "hook",
             )?;
             if first_workflow.is_none() {
@@ -705,7 +798,7 @@ pub fn accept_hook(state: &Shared, hook: &Hook, payload: &Value) -> AppResult<Di
                     team_id: hook.team_id.clone(),
                     template_id: template_id.clone(),
                     extra_vars: extra,
-                    launched_by: format!("hook:{}", hook.name),
+                    launched_by: launched_by.clone(),
                     trigger: "hook".into(),
                     workflow_job_id: None,
                     workflow_node_id: None,
@@ -763,7 +856,7 @@ fn truncate(value: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, RunnerMode};
+    use crate::config::Config;
     use std::path::PathBuf;
 
     fn config(dir: &std::path::Path) -> Config {
@@ -776,6 +869,8 @@ mod tests {
             admin_password: Some("test-admin-pass".into()),
             runner: RunnerMode::Local,
             job_timeout_secs: 60,
+            local_jobs: crate::config::LocalJobs::All,
+            project_roots: Vec::new(),
             ldap: None,
         }
     }
@@ -860,6 +955,532 @@ mod tests {
                 .contains("only_a_failed_job_can_be_relaunched"),
             "{running}"
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn admins(dir: &std::path::Path, runner: RunnerMode) -> Config {
+        let mut cfg = config(dir);
+        cfg.local_jobs = crate::config::LocalJobs::Admins;
+        cfg.runner = runner;
+        cfg
+    }
+
+    fn team_of(state: &Shared) -> String {
+        let db = state.db().expect("db");
+        db.query_row("SELECT team_id FROM templates LIMIT 1", [], |row| {
+            row.get(0)
+        })
+        .expect("team")
+    }
+
+    fn insert_shell(
+        db: &rusqlite::Connection,
+        team_id: &str,
+        inventory_id: Option<&str>,
+        script: &str,
+    ) -> String {
+        let id = Uuid::new_v4().to_string();
+        db::insert_template(
+            db,
+            &db::Template {
+                id: id.clone(),
+                team_id: team_id.to_string(),
+                name: format!("Inline {id}"),
+                description: String::new(),
+                tool: "shell".into(),
+                project_id: None,
+                inventory_id: inventory_id.map(str::to_string),
+                credential_id: None,
+                environment_id: None,
+                entrypoint: String::new(),
+                extra_vars: "{}".into(),
+                spec: json!({"script": script}).to_string(),
+                created_at: db::now(),
+                update_on_launch: false,
+                admin_saved: true,
+            },
+        )
+        .expect("template");
+        id
+    }
+
+    fn insert_inventory(db: &rusqlite::Connection, team_id: &str, admin_saved: bool) -> String {
+        let id = Uuid::new_v4().to_string();
+        db::insert_inventory(
+            db,
+            &db::Inventory {
+                id: id.clone(),
+                team_id: team_id.to_string(),
+                name: format!("Hosts {id}"),
+                body: "[all]\nlocalhost ansible_connection=local\n".into(),
+                created_at: db::now(),
+                source_kind: "ini".into(),
+                source_json: "{}".into(),
+                credential_id: None,
+                admin_saved,
+            },
+        )
+        .expect("inventory");
+        id
+    }
+
+    fn insert_override_workflow(
+        db: &rusqlite::Connection,
+        team_id: &str,
+        template_id: &str,
+        overrides: Value,
+        admin_saved: bool,
+    ) -> String {
+        let id = Uuid::new_v4().to_string();
+        let graph = json!({
+            "nodes": [{
+                "id": "run",
+                "template_id": template_id,
+                "name": "Run",
+                "overrides": overrides
+            }],
+            "edges": []
+        });
+        db::insert_workflow(
+            db,
+            &db::Workflow {
+                id: id.clone(),
+                team_id: team_id.to_string(),
+                name: format!("Flow {id}"),
+                description: String::new(),
+                graph: graph.to_string(),
+                created_at: db::now(),
+                admin_saved,
+            },
+        )
+        .expect("workflow");
+        id
+    }
+
+    async fn wait_workflow(state: &Shared, id: &str) -> String {
+        for _ in 0..50 {
+            if let Ok(db) = state.db() {
+                if let Ok(Some(run)) = db::workflow_job(&db, id) {
+                    if matches!(run.status.as_str(), "successful" | "failed" | "canceled") {
+                        return run.status;
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        "timeout".into()
+    }
+
+    fn jobs_for(state: &Shared, template_id: &str) -> i64 {
+        let db = state.db().expect("db");
+        db.query_row(
+            "SELECT COUNT(*) FROM jobs WHERE template_id = ?1",
+            [template_id],
+            |row| row.get(0),
+        )
+        .expect("count")
+    }
+
+    #[tokio::test]
+    async fn an_operator_inventory_blocks_a_local_run() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-inv-release-{nanos}"));
+        let state = crate::boot(admins(&dir, RunnerMode::Local)).expect("boot");
+        let team_id = team_of(&state);
+        let inventory_id = {
+            let db = state.db().expect("db");
+            insert_inventory(&db, &team_id, false)
+        };
+        let template_id = {
+            let db = state.db().expect("db");
+            insert_shell(&db, &team_id, Some(&inventory_id), "true")
+        };
+        let denied = launch(
+            &state,
+            LaunchRequest {
+                team_id: team_id.clone(),
+                template_id: template_id.clone(),
+                extra_vars: json!({}),
+                launched_by: "admin".into(),
+                trigger: "manual".into(),
+                workflow_job_id: None,
+                workflow_node_id: None,
+                parameters_override: None,
+            },
+        )
+        .expect_err("operator inventory");
+        assert!(
+            denied
+                .to_string()
+                .contains("local_runs_are_limited_to_administrators"),
+            "{denied}"
+        );
+        {
+            let db = state.db().expect("db");
+            db.execute(
+                "UPDATE inventories SET admin_saved = 1 WHERE id = ?1",
+                [&inventory_id],
+            )
+            .expect("release");
+        }
+        launch(
+            &state,
+            LaunchRequest {
+                team_id,
+                template_id,
+                extra_vars: json!({}),
+                launched_by: "admin".into(),
+                trigger: "manual".into(),
+                workflow_job_id: None,
+                workflow_node_id: None,
+                parameters_override: None,
+            },
+        )
+        .expect("admin inventory");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn an_operator_workflow_cannot_replace_a_local_shell_script() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-wf-shell-{nanos}"));
+        let marker = dir.join("operator-script-ran");
+        let state = crate::boot(admins(&dir, RunnerMode::Local)).expect("boot");
+        let team_id = team_of(&state);
+        let template_id = {
+            let db = state.db().expect("db");
+            insert_shell(&db, &team_id, None, "true")
+        };
+        let workflow_id = {
+            let db = state.db().expect("db");
+            let script = format!("touch '{}'", marker.display());
+            insert_override_workflow(
+                &db,
+                &team_id,
+                &template_id,
+                json!({"spec": {"script": script}}),
+                false,
+            )
+        };
+        let run_id = launch_workflow(&state, &team_id, &workflow_id, json!({}), "admin", "manual")
+            .expect("start");
+        let status = wait_workflow(&state, &run_id).await;
+        assert_eq!(status, "failed", "{status}");
+        assert_eq!(jobs_for(&state, &template_id), 0);
+        assert!(!marker.exists(), "operator script ran");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn an_admin_workflow_cannot_point_a_local_run_at_an_operator_inventory() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-wf-inv-{nanos}"));
+        let state = crate::boot(admins(&dir, RunnerMode::Local)).expect("boot");
+        let team_id = team_of(&state);
+        let (template_id, workflow_id) = {
+            let db = state.db().expect("db");
+            let template_id = insert_shell(&db, &team_id, None, "true");
+            let inventory_id = insert_inventory(&db, &team_id, false);
+            let workflow_id = insert_override_workflow(
+                &db,
+                &team_id,
+                &template_id,
+                json!({"inventory_id": inventory_id}),
+                true,
+            );
+            (template_id, workflow_id)
+        };
+        let run_id = launch_workflow(&state, &team_id, &workflow_id, json!({}), "admin", "manual")
+            .expect("start");
+        let status = wait_workflow(&state, &run_id).await;
+        assert_eq!(status, "failed", "{status}");
+        assert_eq!(jobs_for(&state, &template_id), 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn relaunch_rejects_stored_parameters_the_template_does_not_have() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-relaunch-gate-{nanos}"));
+        let marker = dir.join("stored-script-ran");
+        let state = crate::boot(admins(&dir, RunnerMode::Auto)).expect("boot");
+        let team_id = team_of(&state);
+        let (template_id, environment_id) = {
+            let db = state.db().expect("db");
+            let template_id = insert_shell(&db, &team_id, None, "true");
+            let environment_id: String = db
+                .query_row("SELECT id FROM environments LIMIT 1", [], |row| row.get(0))
+                .expect("environment");
+            db.execute(
+                "UPDATE templates SET environment_id = ?2 WHERE id = ?1",
+                rusqlite::params![template_id, environment_id],
+            )
+            .expect("environment");
+            (template_id, environment_id)
+        };
+        let script = format!("touch '{}'", marker.display());
+        let stored = json!({
+            "tool": "shell",
+            "entrypoint": "",
+            "spec": {"script": script},
+            "environment_id": null,
+            "extra_vars": {}
+        })
+        .to_string();
+        {
+            let db = state.db().expect("db");
+            db::insert_job(
+                &db,
+                &db::Job {
+                    id: "stored-shell".into(),
+                    team_id: team_id.clone(),
+                    template_id: Some(template_id.clone()),
+                    workflow_job_id: None,
+                    workflow_node_id: None,
+                    name: "Inline".into(),
+                    tool: "shell".into(),
+                    status: "failed".into(),
+                    extra_vars: "{}".into(),
+                    launched_by: "operator".into(),
+                    trigger: "manual".into(),
+                    started_at: None,
+                    finished_at: Some(db::now()),
+                    created_at: db::now(),
+                    parameters: stored,
+                    failed_hosts: "[]".into(),
+                },
+            )
+            .expect("job");
+        }
+        let operator = relaunch(&state, "stored-shell", "operator", false).expect_err("operator");
+        assert!(
+            operator
+                .to_string()
+                .contains("local_runs_are_limited_to_administrators"),
+            "{operator}"
+        );
+        let admin = relaunch(&state, "stored-shell", "admin", false).expect_err("admin");
+        assert!(
+            admin
+                .to_string()
+                .contains("local_runs_are_limited_to_administrators"),
+            "{admin}"
+        );
+        assert!(!marker.exists(), "stored script ran");
+        let matching = json!({
+            "tool": "shell",
+            "entrypoint": "",
+            "spec": {"script": "true"},
+            "environment_id": environment_id,
+            "extra_vars": {}
+        })
+        .to_string();
+        {
+            let db = state.db().expect("db");
+            db.execute(
+                "UPDATE jobs SET parameters = ?1 WHERE id = 'stored-shell'",
+                [&matching],
+            )
+            .expect("match");
+        }
+        relaunch(&state, "stored-shell", "admin", false).expect("matching snapshot");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn an_admin_workflow_may_replace_a_local_shell_script() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-wf-admin-shell-{nanos}"));
+        let state = crate::boot(admins(&dir, RunnerMode::Local)).expect("boot");
+        let team_id = team_of(&state);
+        let (template_id, workflow_id) = {
+            let db = state.db().expect("db");
+            let template_id = insert_shell(&db, &team_id, None, "true");
+            let workflow_id = insert_override_workflow(
+                &db,
+                &team_id,
+                &template_id,
+                json!({"spec": {"script": ":"}}),
+                true,
+            );
+            (template_id, workflow_id)
+        };
+        let run_id = launch_workflow(&state, &team_id, &workflow_id, json!({}), "admin", "manual")
+            .expect("start");
+        let status = wait_workflow(&state, &run_id).await;
+        assert_eq!(status, "successful", "{status}");
+        assert_eq!(jobs_for(&state, &template_id), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn relaunch_of_a_workflow_snapshot_needs_that_workflow_release() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-wf-relaunch-{nanos}"));
+        let state = crate::boot(admins(&dir, RunnerMode::Local)).expect("boot");
+        let team_id = team_of(&state);
+        let workflow_id = {
+            let db = state.db().expect("db");
+            let template_id = insert_shell(&db, &team_id, None, "true");
+            let workflow_id =
+                insert_override_workflow(&db, &team_id, &template_id, json!({}), false);
+            db::insert_workflow_job(
+                &db,
+                &db::WorkflowJob {
+                    id: "wf-run".into(),
+                    workflow_id: Some(workflow_id.clone()),
+                    team_id: team_id.clone(),
+                    name: "Flow".into(),
+                    status: "failed".into(),
+                    extra_vars: "{}".into(),
+                    launched_by: "admin".into(),
+                    trigger: "manual".into(),
+                    created_at: db::now(),
+                    finished_at: Some(db::now()),
+                },
+            )
+            .expect("workflow job");
+            db::insert_job(
+                &db,
+                &db::Job {
+                    id: "node-job".into(),
+                    team_id: team_id.clone(),
+                    template_id: Some(template_id),
+                    workflow_job_id: Some("wf-run".into()),
+                    workflow_node_id: Some("run".into()),
+                    name: "Inline".into(),
+                    tool: "shell".into(),
+                    status: "failed".into(),
+                    extra_vars: "{}".into(),
+                    launched_by: "workflow:wf-run".into(),
+                    trigger: "workflow".into(),
+                    started_at: None,
+                    finished_at: Some(db::now()),
+                    created_at: db::now(),
+                    parameters: json!({
+                        "tool": "shell",
+                        "entrypoint": "",
+                        "spec": {"script": ":"},
+                        "extra_vars": {}
+                    })
+                    .to_string(),
+                    failed_hosts: "[]".into(),
+                },
+            )
+            .expect("job");
+            workflow_id
+        };
+        let denied = relaunch(&state, "node-job", "admin", false).expect_err("unreleased");
+        assert!(
+            denied
+                .to_string()
+                .contains("local_runs_are_limited_to_administrators"),
+            "{denied}"
+        );
+        {
+            let db = state.db().expect("db");
+            db.execute(
+                "UPDATE workflows SET admin_saved = 1 WHERE id = ?1",
+                [&workflow_id],
+            )
+            .expect("release");
+        }
+        relaunch(&state, "node-job", "admin", false).expect("released workflow");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_stored_shell_snapshot_does_not_run_on_the_controller() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-stored-run-{nanos}"));
+        let marker = dir.join("runner-script-ran");
+        let state = crate::boot(admins(&dir, RunnerMode::Auto)).expect("boot");
+        let team_id = team_of(&state);
+        let template_id = {
+            let db = state.db().expect("db");
+            let template_id = insert_shell(&db, &team_id, None, "true");
+            let environment_id: String = db
+                .query_row("SELECT id FROM environments LIMIT 1", [], |row| row.get(0))
+                .expect("environment");
+            db.execute(
+                "UPDATE templates SET environment_id = ?2 WHERE id = ?1",
+                rusqlite::params![template_id, environment_id],
+            )
+            .expect("environment");
+            template_id
+        };
+        let script = format!("touch '{}'", marker.display());
+        {
+            let db = state.db().expect("db");
+            db::insert_job(
+                &db,
+                &db::Job {
+                    id: "bypass".into(),
+                    team_id,
+                    template_id: Some(template_id),
+                    workflow_job_id: None,
+                    workflow_node_id: None,
+                    name: "Inline".into(),
+                    tool: "shell".into(),
+                    status: "pending".into(),
+                    extra_vars: "{}".into(),
+                    launched_by: "admin".into(),
+                    trigger: "manual".into(),
+                    started_at: None,
+                    finished_at: None,
+                    created_at: db::now(),
+                    parameters: json!({
+                        "tool": "shell",
+                        "entrypoint": "",
+                        "spec": {"script": script},
+                        "environment_id": null,
+                        "extra_vars": {}
+                    })
+                    .to_string(),
+                    failed_hosts: "[]".into(),
+                },
+            )
+            .expect("job");
+        }
+        runner::execute(state.clone(), "bypass".into()).await;
+        let (status, log) = {
+            let db = state.db().expect("db");
+            let job = db::job(&db, "bypass").expect("read").expect("job");
+            let events = db::events_after(&db, "bypass", 0, 50).expect("events");
+            let log = events
+                .iter()
+                .map(|event| event.line.clone())
+                .collect::<Vec<_>>()
+                .join("\n");
+            (job.status, log)
+        };
+        assert_eq!(status, "failed", "{log}");
+        assert!(
+            log.contains("Local runs are limited to administrators."),
+            "{log}"
+        );
+        assert!(!marker.exists(), "stored script ran");
         let _ = std::fs::remove_dir_all(dir);
     }
 }

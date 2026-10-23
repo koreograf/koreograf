@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use koreograf::{Config, RunnerMode};
+use koreograf::{Config, LocalJobs, RunnerMode};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
@@ -19,6 +19,8 @@ fn config(dir: &std::path::Path) -> Config {
         admin_password: Some("test-admin-pass".into()),
         runner: RunnerMode::Local,
         job_timeout_secs: 60,
+        local_jobs: LocalJobs::All,
+        project_roots: vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples")],
         ldap: None,
     }
 }
@@ -508,8 +510,12 @@ async fn organizations_inventories_and_git_sync() {
         .unwrap()
         .as_nanos();
     let dir = std::env::temp_dir().join(format!("koreograf-org-{nanos}"));
+    let origin = std::env::temp_dir().join(format!("koreograf-origin-{nanos}"));
     std::fs::create_dir_all(&dir).unwrap();
-    let state = koreograf::boot(config(&dir)).unwrap();
+    std::fs::create_dir_all(&origin).unwrap();
+    let mut cfg = config(&dir);
+    cfg.project_roots.push(origin.clone());
+    let state = koreograf::boot(cfg).unwrap();
     let app = koreograf::router(state);
 
     let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
@@ -598,8 +604,6 @@ async fn organizations_inventories_and_git_sync() {
     assert_eq!(status, StatusCode::OK, "{updated}");
     assert_eq!(updated["host_count"], 3);
 
-    let origin = dir.join("origin");
-    std::fs::create_dir_all(&origin).unwrap();
     git(&origin, &["init", "-b", "main"]);
     git(&origin, &["config", "user.email", "test@example.com"]);
     git(&origin, &["config", "user.name", "Koreograf Test"]);
@@ -681,7 +685,10 @@ async fn organizations_inventories_and_git_sync() {
         let message = failed["error"].as_str().unwrap_or("");
         let lower = message.to_ascii_lowercase();
         assert!(
-            lower.contains("fatal") || lower.contains("repository") || lower.contains("exist"),
+            lower.contains("fatal")
+                || lower.contains("repository")
+                || lower.contains("exist")
+                || message == "the_project_path_is_not_allowed",
             "{failed}"
         );
         assert!(!message.contains("git clone ist fehlgeschlagen"));
@@ -885,6 +892,7 @@ async fn organizations_inventories_and_git_sync() {
         "{there}"
     );
 
+    let _ = std::fs::remove_dir_all(&origin);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -3796,8 +3804,12 @@ async fn a_template_can_run_the_last_sync_offline() {
         .unwrap()
         .as_nanos();
     let dir = std::env::temp_dir().join(format!("koreograf-offline-{nanos}"));
+    let origin = std::env::temp_dir().join(format!("koreograf-offline-origin-{nanos}"));
     std::fs::create_dir_all(&dir).unwrap();
-    let state = koreograf::boot(config(&dir)).unwrap();
+    std::fs::create_dir_all(&origin).unwrap();
+    let mut cfg = config(&dir);
+    cfg.project_roots.push(origin.clone());
+    let state = koreograf::boot(cfg).unwrap();
     let app = koreograf::router(state);
 
     let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
@@ -3819,8 +3831,6 @@ async fn a_template_can_run_the_last_sync_offline() {
     let cookie = cookie.expect("session cookie");
     let team = me["teams"][0]["id"].as_str().unwrap().to_string();
 
-    let origin = dir.join("origin");
-    std::fs::create_dir_all(&origin).unwrap();
     git(&origin, &["init", "-b", "main"]);
     git(&origin, &["config", "user.email", "test@example.com"]);
     git(&origin, &["config", "user.name", "Koreograf Test"]);
@@ -3929,7 +3939,11 @@ async fn a_template_can_run_the_last_sync_offline() {
     ));
     assert!(has_line(&updated, "stdout", "newer"));
 
-    let missing = format!("file://{}/missing-{}", dir.display(), nanos);
+    let missing = format!(
+        "file://{}/koreograf-missing-{}",
+        std::env::temp_dir().display(),
+        nanos
+    );
     let (status, absent, _) = call(
         &app,
         "POST",
@@ -3963,7 +3977,183 @@ async fn a_template_can_run_the_last_sync_offline() {
     assert!(has_line(&failed, "system", "Sync the Git project first."));
     assert!(!has_line(&failed, "stdout", "should-not-run"));
 
+    let _ = std::fs::remove_dir_all(&origin);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn an_operator_cannot_start_a_local_job_or_an_arbitrary_path() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-local-admin-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut cfg = config(&dir);
+    cfg.local_jobs = LocalJobs::Admins;
+    let state = koreograf::boot(cfg).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+    let (status, templates, _) = call(
+        &app,
+        "GET",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{templates}");
+    let health_id = templates
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["name"] == "Healthcheck")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "username": "operator",
+            "display_name": "operator",
+            "password": "operator-pass",
+            "is_admin": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{team}/members"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"username": "operator", "role": "operator"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, operator_me, operator_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "operator", "password": "operator-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{operator_me}");
+    let operator_cookie = operator_cookie.expect("operator cookie");
+
+    let (status, denied, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{health_id}/launch"),
+        Some(&operator_cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{denied}");
+    assert_eq!(denied["error"], "local_runs_are_limited_to_administrators");
+
+    let outside = std::env::temp_dir().join(format!("koreograf-outside-{nanos}"));
+    std::fs::create_dir_all(&outside).unwrap();
+    let (status, path_denied, _) = call(
+        &app,
+        "POST",
+        "/api/projects",
+        Some(&operator_cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Operator path",
+            "source_type": "path",
+            "source": outside.display().to_string()
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{path_denied}");
+    assert_eq!(
+        path_denied["error"],
+        "path_projects_are_limited_to_administrators"
+    );
+    let (status, etc_denied, _) = call(
+        &app,
+        "POST",
+        "/api/projects",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Etc",
+            "source_type": "path",
+            "source": "/etc"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{etc_denied}");
+    assert_eq!(etc_denied["error"], "the_project_path_is_not_allowed");
+
+    let health = templates
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["name"] == "Healthcheck")
+        .unwrap()
+        .clone();
+    let (status, edited, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/templates/{health_id}"),
+        Some(&operator_cookie),
+        Some(&team),
+        Some(health.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    let (status, blocked, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{health_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{blocked}");
+    assert_eq!(blocked["error"], "local_runs_are_limited_to_administrators");
+    let (status, restored, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/templates/{health_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(health),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{restored}");
+
+    let finished = launch_and_wait(&app, &cookie, &team, &health_id).await;
+    assert_eq!(finished["status"], "successful", "{}", finished["events"]);
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&outside);
 }
 
 async fn launch_and_wait(app: &axum::Router, cookie: &str, team: &str, template_id: &str) -> Value {

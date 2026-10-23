@@ -35,7 +35,7 @@ use rusqlite::Connection;
 use crate::error::ApiError;
 use crate::runner::RunningProc;
 
-pub use config::{Config, LdapConfig, RunnerMode};
+pub use config::{Config, LdapConfig, LocalJobs, RunnerMode};
 
 /// Shared process state. Cheap to clone because it is an `Arc`.
 pub struct AppState {
@@ -89,6 +89,7 @@ pub fn boot(mut cfg: Config) -> anyhow::Result<Shared> {
     // A relative data directory would be resolved again from the job work
     // directory. Local runs then miss wrapper.sh and the other job files.
     cfg.data_dir = std::path::absolute(&cfg.data_dir)?;
+    runner::scrub_job_dirs(&cfg.data_dir);
     let conn = db::open(&cfg.data_dir.join("koreograf.db"))?;
     let cipher = crypto::load_cipher(&cfg.data_dir)?;
     seed::seed(&conn, &cfg)?;

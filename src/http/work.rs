@@ -126,7 +126,8 @@ pub async fn create_template(
 ) -> AppResult<Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let (template, credential_ids) = build_template(&state, &team, None, body)?;
+    let (mut template, credential_ids) = build_template(&state, &team, None, body)?;
+    template.admin_saved = user.is_admin;
     let mut db = state.db()?;
     let tx = db.transaction()?;
     db::insert_template(&tx, &template)?;
@@ -144,7 +145,8 @@ pub async fn update_template(
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let (template, credential_ids) = build_template(&state, &team, Some(id), body)?;
+    let (mut template, credential_ids) = build_template(&state, &team, Some(id), body)?;
+    template.admin_saved = user.is_admin;
     let mut db = state.db()?;
     let tx = db.transaction()?;
     db::update_template(&tx, &template)?;
@@ -419,7 +421,8 @@ pub async fn create_workflow(
 ) -> AppResult<Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let item = build_workflow(&state, &team, None, body)?;
+    let mut item = build_workflow(&state, &team, None, body)?;
+    item.admin_saved = user.is_admin;
     let db = state.db()?;
     db::insert_workflow(&db, &item)?;
     Ok(created(workflow_json(&item)))
@@ -434,7 +437,8 @@ pub async fn update_workflow(
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let item = build_workflow(&state, &team, Some(id), body)?;
+    let mut item = build_workflow(&state, &team, Some(id), body)?;
+    item.admin_saved = user.is_admin;
     let db = state.db()?;
     db::update_workflow(&db, &item)?;
     Ok(Json(workflow_json(&item)))
@@ -562,7 +566,7 @@ pub async fn test_hook(
             "annotations": {"summary": "Test delivery from the Koreograf UI"}
         }]
     });
-    let dispatch = jobs::accept_hook(&state, &hook, &payload)?;
+    let dispatch = jobs::accept_hook(&state, &hook, &payload, Some(&user.username))?;
     Ok(accepted(json!(dispatch_json(&dispatch))))
 }
 
@@ -578,7 +582,7 @@ pub async fn ingest(
     if !crypto::tokens_equal(&hook.token, &token) {
         return Err(ApiError::Unauthorized);
     }
-    let dispatch = jobs::accept_hook(&state, &hook, &payload)?;
+    let dispatch = jobs::accept_hook(&state, &hook, &payload, None)?;
     Ok(Json(dispatch_json(&dispatch)))
 }
 
@@ -707,6 +711,7 @@ fn build_template(
             spec: spec.to_string(),
             created_at,
             update_on_launch: body.update_on_launch,
+            admin_saved: false,
         },
         credential_ids,
     ))
@@ -846,6 +851,7 @@ fn build_workflow(
         graph: serde_json::to_string(&body.graph)
             .map_err(|err| ApiError::Internal(err.to_string()))?,
         created_at,
+        admin_saved: false,
     })
 }
 

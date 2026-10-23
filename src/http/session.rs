@@ -245,6 +245,13 @@ pub async fn delete_user(
 fn provision_ldap(state: &Shared, identity: ldap::LdapIdentity) -> AppResult<User> {
     let db = state.db()?;
     let user = if let Some(user) = db::user_by_username(&db, &identity.username)? {
+        if user.auth_source != "ldap" {
+            tracing::warn!(
+                username = %identity.username,
+                "LDAP sign-in matches a local account"
+            );
+            return Err(ApiError::Unauthorized);
+        }
         user
     } else {
         let id = Uuid::new_v4().to_string();
@@ -466,5 +473,53 @@ mod tests {
             Some("ada@example.com")
         );
         assert_eq!(profile_email("local", None, Some("")).unwrap(), None);
+    }
+
+    #[test]
+    fn ldap_sign_in_does_not_take_over_a_local_account() {
+        use crate::config::{Config, LocalJobs, RunnerMode};
+        use crate::db;
+        use crate::error::ApiError;
+        use std::path::PathBuf;
+
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-ldap-local-{nanos}"));
+        let state = crate::boot(Config {
+            bind: "127.0.0.1:0".into(),
+            data_dir: dir.clone(),
+            web_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web"),
+            examples_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples"),
+            admin_user: "admin".into(),
+            admin_password: Some("test-admin-pass".into()),
+            runner: RunnerMode::Local,
+            job_timeout_secs: 60,
+            local_jobs: LocalJobs::All,
+            project_roots: Vec::new(),
+            ldap: None,
+        })
+        .expect("boot");
+        let err = super::provision_ldap(
+            &state,
+            crate::ldap::LdapIdentity {
+                username: "admin".into(),
+                display_name: "Taken".into(),
+                email: Some("taken@example.com".into()),
+                groups: vec!["cn=kg-admins,ou=groups,dc=example,dc=com".into()],
+            },
+        )
+        .expect_err("local account");
+        assert!(matches!(err, ApiError::Unauthorized));
+        let db = state.db().expect("db");
+        let user = db::user_by_username(&db, "admin")
+            .expect("read")
+            .expect("admin");
+        assert_eq!(user.auth_source, "local");
+        assert!(user.is_admin);
+        assert_eq!(user.display_name, "Administrator");
+        assert!(user.email.is_none());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

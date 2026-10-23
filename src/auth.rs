@@ -113,6 +113,112 @@ fn dummy_hash() -> &'static str {
     DUMMY.get_or_init(|| hash_password("not-a-real-password"))
 }
 
+/// `launched_by` is an administrator username, or `workflow:<id>` whose
+/// own launcher resolves to one. Hooks do not count.
+pub fn launcher_is_admin(c: &rusqlite::Connection, launched_by: &str) -> AppResult<bool> {
+    principal_is_admin(c, launched_by, 0)
+}
+
+fn principal_is_admin(c: &rusqlite::Connection, launched_by: &str, depth: u8) -> AppResult<bool> {
+    if depth > 8 {
+        return Ok(false);
+    }
+    if let Some(id) = launched_by.strip_prefix("workflow:") {
+        let Some(job) = db::workflow_job(c, id)? else {
+            return Ok(false);
+        };
+        return principal_is_admin(c, &job.launched_by, depth + 1);
+    }
+    if launched_by.is_empty() || launched_by.starts_with("hook:") {
+        return Ok(false);
+    }
+    let Some(user) = db::user_by_username(c, launched_by)? else {
+        return Ok(false);
+    };
+    Ok(user.is_admin && !user.disabled)
+}
+
+/// A local run needs every object that supplies the command to have been saved
+/// by an administrator. `template` carries the project and inventory that will
+/// actually run. When `requires_workflow` is set, `workflow_id` must name a
+/// workflow an administrator saved. That covers a node override and a stored
+/// snapshot that is not the current template.
+pub fn content_saved_by_admin(
+    c: &rusqlite::Connection,
+    template: &db::Template,
+    workflow_id: Option<&str>,
+    requires_workflow: bool,
+) -> AppResult<bool> {
+    if !template.admin_saved {
+        return Ok(false);
+    }
+    if let Some(project_id) = template.project_id.as_deref().filter(|id| !id.is_empty()) {
+        if !db::project(c, project_id)?.is_some_and(|project| project.admin_saved) {
+            return Ok(false);
+        }
+    }
+    if let Some(inventory_id) = template.inventory_id.as_deref().filter(|id| !id.is_empty()) {
+        if !db::inventory(c, inventory_id)?.is_some_and(|item| item.admin_saved) {
+            return Ok(false);
+        }
+    }
+    if !requires_workflow {
+        return Ok(true);
+    }
+    let Some(workflow_id) = workflow_id.filter(|id| !id.is_empty()) else {
+        return Ok(false);
+    };
+    Ok(db::workflow(c, workflow_id)?.is_some_and(|item| item.admin_saved))
+}
+
+/// True when `params` would run the same command as `template`. A missing
+/// `tool` means the runner keeps the template. `spec.limit` is ignored because
+/// relaunch of failed hosts adds it.
+pub(crate) fn command_matches_template(
+    template: &db::Template,
+    params: &serde_json::Value,
+) -> bool {
+    let Some(tool) = params.get("tool").and_then(serde_json::Value::as_str) else {
+        return true;
+    };
+    if tool != template.tool {
+        return false;
+    }
+    if let Some(entrypoint) = params.get("entrypoint").and_then(serde_json::Value::as_str) {
+        if entrypoint != template.entrypoint {
+            return false;
+        }
+    }
+    if saved_target(params, "project_id") != template.project_id {
+        return false;
+    }
+    if saved_target(params, "inventory_id") != template.inventory_id {
+        return false;
+    }
+    specs_match(&template.spec, params)
+}
+
+fn saved_target(params: &serde_json::Value, key: &str) -> Option<String> {
+    params
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
+}
+
+fn specs_match(template_spec: &str, params: &serde_json::Value) -> bool {
+    let Some(saved) = params.get("spec").filter(|value| value.is_object()) else {
+        return true;
+    };
+    spec_map(saved) == spec_map(&db::json_object(template_spec))
+}
+
+fn spec_map(value: &serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+    let mut map = value.as_object().cloned().unwrap_or_default();
+    map.remove("limit");
+    map
+}
+
 pub fn sync_ldap_teams(
     c: &rusqlite::Connection,
     user_id: &str,
@@ -150,4 +256,52 @@ pub fn read_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::command_matches_template;
+    use crate::db::Template;
+    use serde_json::json;
+
+    fn template(spec: &str) -> Template {
+        Template {
+            id: "t".into(),
+            team_id: "team".into(),
+            name: "Heal".into(),
+            description: String::new(),
+            tool: "ansible".into(),
+            project_id: Some("project".into()),
+            inventory_id: Some("inventory".into()),
+            credential_id: None,
+            environment_id: None,
+            entrypoint: "site.yml".into(),
+            extra_vars: "{}".into(),
+            spec: spec.into(),
+            created_at: String::new(),
+            update_on_launch: true,
+            admin_saved: true,
+        }
+    }
+
+    #[test]
+    fn a_failed_host_limit_does_not_change_the_command() {
+        let template = template(r#"{"tags":"heal"}"#);
+        let limited = json!({
+            "tool": "ansible",
+            "entrypoint": "site.yml",
+            "project_id": "project",
+            "inventory_id": "inventory",
+            "spec": {"tags": "heal", "limit": "web-1,db-1"}
+        });
+        assert!(command_matches_template(&template, &limited));
+        let replaced = json!({
+            "tool": "shell",
+            "entrypoint": "",
+            "project_id": "project",
+            "inventory_id": "inventory",
+            "spec": {"script": "true"}
+        });
+        assert!(!command_matches_template(&template, &replaced));
+    }
 }
