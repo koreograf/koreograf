@@ -147,7 +147,16 @@ pub async fn update(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let name = require_name(&body.name)?;
-    let rule = rule_from_body(&body)?;
+    let rule = rule_from_fields(&body)?;
+    {
+        let db = state.db()?;
+        let existing = load(&db, &id, &team)?;
+        let stored = rule.start_date.format("%Y-%m-%d").to_string();
+        if existing.start_date != stored {
+            schedule::ensure_start_is_recent(rule.start_date, rule.timezone)
+                .map_err(ApiError::bad)?;
+        }
+    }
     let (count, next) = schedule::first_from_blocking(rule.clone(), Utc::now())
         .await
         .map_err(ApiError::bad)?;
@@ -356,7 +365,13 @@ fn target_team(db: &rusqlite::Connection, kind: &str, id: &str, team: &str) -> A
 }
 
 fn rule_from_body(body: &ScheduleBody) -> AppResult<Rule> {
-    let rule = schedule::parse(&Input {
+    let rule = rule_from_fields(body)?;
+    schedule::ensure_start_is_recent(rule.start_date, rule.timezone).map_err(ApiError::bad)?;
+    Ok(rule)
+}
+
+fn rule_from_fields(body: &ScheduleBody) -> AppResult<Rule> {
+    schedule::parse(&Input {
         timezone: &body.timezone,
         start_date: &body.start_date,
         start_time: &body.start_time,
@@ -366,9 +381,7 @@ fn rule_from_body(body: &ScheduleBody) -> AppResult<Rule> {
         end_count: body.end_count,
         end_date: body.end_date.as_deref(),
     })
-    .map_err(ApiError::bad)?;
-    schedule::ensure_start_is_recent(rule.start_date, rule.timezone).map_err(ApiError::bad)?;
-    Ok(rule)
+    .map_err(ApiError::bad)
 }
 
 fn rule_from_preview(body: &PreviewBody) -> AppResult<Rule> {
