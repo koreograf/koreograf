@@ -6,6 +6,8 @@ The editor draws nodes and edges. Add node stays in the side panel after the fir
 
 Cancel sets the job to `canceled` and stops the controller process. The workflow treats that like a failure so a failure edge can continue. That edge can start during the two seconds between `SIGTERM` and `SIGKILL`. A task already started on a remote host is not stopped; see [Jobs](jobs.md).
 
+A workflow can also start from a schedule on the same page. The form, the missed-run question, and the check interval are in [Schedules](jobs.md#schedules).
+
 ## Webhooks
 
 `POST /hooks/{id}/{token}` is public. The token is the authentication. Alertmanager reads `alerts[].labels.alertname` and `status`. Grafana reads the older format with `state` and `ruleName`. Otherwise an `alertname` field is enough. `alerting` becomes `firing`, and `ok` becomes `resolved`.
@@ -24,7 +26,7 @@ receivers:
         send_resolved: true
 ```
 
-Grafana, contact point Webhook, same URL. In the UI an operator creates the hook and sees the finished URL. `Test` (German: `Test-Alert`) sends an Alertmanager body with the stored alert name.
+Grafana, contact point Webhook, same URL. In the UI an operator creates the hook and sees the finished URL. `Test` (German: `Test-Alert`) sends an Alertmanager body with the stored alert name. That button runs as the signed-in user. A public call stays anonymous, so it does not start a local job while local runs are limited to administrators. Event values reach Ansible as unsafe strings.
 
 ## Demo
 

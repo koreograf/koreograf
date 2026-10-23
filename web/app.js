@@ -346,6 +346,7 @@ function shell(title, body, actions) {
       ["#/templates", t("templates")],
       ["#/jobs", t("jobs")],
       ["#/workflows", t("workflows")],
+      ["#/schedules", t("schedules")],
       ["#/hooks", t("webhooks")],
     ]],
     [t("resources"), [
@@ -877,7 +878,8 @@ async function pageTemplateForm(id) {
         <button class="btn pill primary" type="submit">${id ? h("save") : h("create")}</button>
         ${id && can("operator") ? `<button class="btn danger" id="delete-template" type="button">${h("delete")}</button>` : ""}
       </div>
-    </form>`);
+    </form>
+    ${id ? `<section class="card" id="schedule-card" data-kind="template" data-target="${esc(id)}"></section>` : ""}`);
   const form = document.querySelector("#template-form");
   bindChips(form);
   bindVaultPicker(form, credentials, selectedCredentialIds(item));
@@ -977,6 +979,429 @@ async function pageTemplateForm(id) {
       }
     });
   }
+  if (id) mountSchedules(document.querySelector("#schedule-card"));
+}
+
+const SCHEDULE_ZONES = [
+  "Europe/Berlin", "Europe/Vienna", "Europe/Zurich", "Europe/Paris", "Europe/Amsterdam",
+  "Europe/London", "UTC", "America/New_York", "America/Chicago", "America/Los_Angeles",
+  "Asia/Tokyo", "Asia/Singapore", "Australia/Sydney",
+];
+const SCHEDULE_DAYS = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"];
+
+function browserZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Berlin";
+  } catch (error) {
+    return "Europe/Berlin";
+  }
+}
+
+function zoneChoices(selected) {
+  const zones = [...SCHEDULE_ZONES];
+  const browser = browserZone();
+  if (!zones.includes(browser)) zones.unshift(browser);
+  if (selected && !zones.includes(selected)) zones.unshift(selected);
+  return zones;
+}
+
+function localParts(zone) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: zone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    weekday: "short",
+  }).formatToParts(new Date());
+  const get = (type) => parts.find((part) => part.type === type)?.value || "";
+  const weekday = { Mon: "MO", Tue: "TU", Wed: "WE", Thu: "TH", Fri: "FR", Sat: "SA", Sun: "SU" }[get("weekday")] || "MO";
+  let hour = get("hour");
+  if (hour === "24") hour = "00";
+  return {
+    date: `${get("year")}-${get("month")}-${get("day")}`,
+    time: `${hour.padStart(2, "0")}:${get("minute").padStart(2, "0")}`,
+    weekday,
+  };
+}
+
+function formatLocalDate(isoDate) {
+  const [year, month, day] = String(isoDate || "").split("-");
+  if (!year || !month || !day) return isoDate || "";
+  return lang === "de" ? `${day}.${month}.${year}` : `${year}-${month}-${day}`;
+}
+
+function dayList(days) {
+  return (days || []).map((day) => t(`schedule.day.${String(day).toLowerCase()}`)).join(", ");
+}
+
+function scheduleSentence(item) {
+  const date = formatLocalDate(item.start_date);
+  const time = item.start_time;
+  const zone = item.timezone;
+  const day = Number(String(item.start_date || "").slice(8, 10)) || "";
+  let text = t("schedule.daily", { time, zone });
+  if (item.frequency === "once") text = t("schedule.once", { date, time, zone });
+  if (item.frequency === "hourly") text = t("schedule.hourly", { date, time, zone });
+  if (item.frequency === "weekly") text = t("schedule.weekly", { days: dayList(item.weekdays), time, zone });
+  if (item.frequency === "monthly") text = t("schedule.monthly", { day, time, zone });
+  if (item.end_kind === "after" && item.end_count) text = `${text} ${t("schedule.ends_after", { count: item.end_count })}`;
+  if (item.end_kind === "on_date" && item.end_date) text = `${text} ${t("schedule.ends_on", { date: formatLocalDate(item.end_date) })}`;
+  return text;
+}
+
+function formatWhen(iso, zone) {
+  if (!iso) return "";
+  return new Intl.DateTimeFormat(lang === "de" ? "de-DE" : "en-GB", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: zone || "UTC",
+  }).format(new Date(iso));
+}
+
+function mountSchedules(card) {
+  if (!card) return;
+  const kind = card.dataset.kind;
+  const target = card.dataset.target;
+  const all = kind === "all";
+  const path = all ? "/api/schedules" : `/api/${kind}s/${encodeURIComponent(target)}/schedules`;
+  let items = [];
+  let query = "";
+  const empty = all
+    ? h("schedule_empty_all")
+    : h(kind === "workflow" ? "schedule_empty_workflow" : "schedule_empty_template");
+  const render = () => {
+    const needle = query.trim().toLowerCase();
+    const shown = items
+      .filter((item) => !needle || scheduleHaystack(item).includes(needle))
+      .sort(compareSchedules);
+    const host = card.querySelector(".schedule-table");
+    const message = items.length ? h("nothing_here") : empty;
+    host.innerHTML = scheduleTable(shown, all, message);
+    bindScheduleActions(card, items, kind, target, draw);
+  };
+  const draw = async () => {
+    items = await api("GET", path);
+    render();
+  };
+  const search = all
+    ? `<input class="search" id="schedule-search" placeholder="${h("search_schedules")}" autocomplete="off">`
+    : "";
+  const add = !all && can("operator") ? `<button class="btn" type="button" id="schedule-add">${h("schedule_add")}</button>` : "";
+  const heading = all ? `<div class="spread">${search}</div>` : `<div class="row"><h2>${h("schedules")}</h2>${add}</div>`;
+  card.innerHTML = `${heading}<div class="table-wrap schedule-table"></div>`;
+  const searchBox = card.querySelector("#schedule-search");
+  if (searchBox) {
+    searchBox.addEventListener("input", () => {
+      query = searchBox.value;
+      render();
+    });
+  }
+  const addButton = card.querySelector("#schedule-add");
+  if (addButton) addButton.addEventListener("click", () => openScheduleForm(kind, target, null, draw));
+  draw().catch(handle);
+}
+
+function bindScheduleActions(card, items, kind, target, draw) {
+  card.querySelectorAll("[data-schedule-edit]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const item = items.find((row) => row.id === button.dataset.scheduleEdit);
+      if (item) openScheduleForm(item.target_kind || kind, item.target_id || target, item, draw);
+    });
+  });
+  card.querySelectorAll("[data-schedule-delete]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (!confirm(t("delete_this_schedule"))) return;
+      try {
+        await api("DELETE", `/api/schedules/${encodeURIComponent(button.dataset.scheduleDelete)}`);
+        await draw();
+      } catch (error) {
+        handle(error);
+      }
+    });
+  });
+  card.querySelectorAll("[data-schedule-enabled]").forEach((control) => {
+    const apply = async () => {
+      const item = items.find((row) => row.id === control.dataset.scheduleEnabled);
+      if (!item) return;
+      const enabled = control.type === "checkbox" ? control.checked : !item.enabled;
+      try {
+        await api("POST", `/api/schedules/${encodeURIComponent(item.id)}/enabled`, { enabled });
+        await draw();
+      } catch (error) {
+        handle(error);
+        if (control.isConnected && control.type === "checkbox") control.checked = item.enabled;
+      }
+    };
+    if (control.type === "checkbox") control.addEventListener("change", apply);
+    else control.addEventListener("click", apply);
+  });
+  card.querySelectorAll("[data-schedule-accept], [data-schedule-decline]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const id = button.dataset.scheduleAccept || button.dataset.scheduleDecline;
+      try {
+        await api("POST", `/api/schedules/${encodeURIComponent(id)}/missed`, { accept: Boolean(button.dataset.scheduleAccept) });
+        await draw();
+      } catch (error) {
+        handle(error);
+      }
+    });
+  });
+}
+
+function scheduleHaystack(item) {
+  return [
+    item.name,
+    item.target_name,
+    item.timezone,
+    item.start_time,
+    item.created_by,
+    scheduleRepeat(item),
+    scheduleEnd(item),
+    scheduleSentence(item),
+  ].join(" ").toLowerCase();
+}
+
+function compareSchedules(a, b) {
+  const rank = (item) => {
+    if (item.missed_at) return 0;
+    if (item.enabled && item.next_run_at) return 1;
+    if (item.enabled) return 2;
+    return 3;
+  };
+  const byRank = rank(a) - rank(b);
+  if (byRank) return byRank;
+  const left = a.next_run_at || "9999";
+  const right = b.next_run_at || "9999";
+  if (left !== right) return left < right ? -1 : 1;
+  return String(a.name).localeCompare(String(b.name));
+}
+
+function scheduleRepeat(item) {
+  if (item.frequency === "weekly") {
+    const days = (item.weekdays || []).map((day) => t(`schedule.short.${String(day).toLowerCase()}`));
+    return days.length ? days.join(", ") : t("weekly");
+  }
+  if (item.frequency === "monthly") {
+    const day = Number(String(item.start_date || "").slice(8, 10)) || "";
+    return day ? t("schedule.day_of_month", { day }) : t("monthly");
+  }
+  return t(item.frequency || "daily");
+}
+
+function scheduleEnd(item) {
+  if (item.end_kind === "after" && item.end_count) return t("schedule.after_count", { count: item.end_count });
+  if (item.end_kind === "on_date" && item.end_date) return formatLocalDate(item.end_date);
+  return t("never");
+}
+
+function scheduleNext(item) {
+  const when = item.next_run_at
+    ? esc(formatWhen(item.next_run_at, item.timezone))
+    : `<span class="muted">${h("schedule_no_upcoming")}</span>`;
+  const missed = item.missed_at ? `<div><span class="pill warn">${h("schedule_missed_state")}</span></div>` : "";
+  return `${missed}${when}`;
+}
+
+function scheduleTable(items, showTarget, emptyMessage) {
+  const columns = [
+    ["name", ""],
+    ...(showTarget ? [["schedule_target", ""]] : []),
+    ["repeat", ""],
+    ["start_time", ""],
+    ["next_run", ""],
+    ["ends", ""],
+    ["schedule_active", "tight"],
+    ["actions", "actions"],
+  ];
+  const body = items.length
+    ? items.map((item) => scheduleTableRows(item, showTarget, columns.length)).join("")
+    : `<tr><td class="muted" colspan="${columns.length}">${emptyMessage}</td></tr>`;
+  const head = columns.map(([key, kind]) => `<th class="${kind}">${esc(t(key))}</th>`).join("");
+  return `<table class="table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function scheduleTableRows(item, showTarget, span) {
+  const target = showTarget ? `<td>${scheduleTarget(item)}</td>` : "";
+  const edit = can("operator") ? `
+    <button class="btn compact" type="button" data-schedule-edit="${esc(item.id)}">${h("schedule_edit")}</button>
+    <button class="btn compact danger" type="button" data-schedule-delete="${esc(item.id)}">${h("delete")}</button>` : "";
+  const by = item.created_by ? `<div class="small muted">${h("schedule.by", { name: item.created_by })}</div>` : "";
+  const alert = item.missed_at ? `
+    <tr class="schedule-alert">
+      <td colspan="${span}">
+        <div class="schedule-miss">
+          <span>${h("schedule.missed", { when: formatWhen(item.missed_at, item.timezone) })}</span>
+          ${can("operator") ? `<button class="btn compact primary" type="button" data-schedule-accept="${esc(item.id)}">${h("run_missed_now")}</button><button class="btn compact" type="button" data-schedule-decline="${esc(item.id)}">${h("skip_missed")}</button>` : ""}
+        </div>
+      </td>
+    </tr>` : "";
+  return `<tr class="${item.missed_at ? "schedule-due" : ""}">
+    <td><strong>${esc(item.name)}</strong>${by}</td>
+    ${target}
+    <td>${esc(scheduleRepeat(item))}</td>
+    <td class="num">${esc(item.start_time || "")}<div class="small muted">${esc(item.timezone || "")}</div></td>
+    <td class="num">${scheduleNext(item)}</td>
+    <td>${esc(scheduleEnd(item))}</td>
+    <td class="tight">${scheduleSwitch(item)}</td>
+    <td class="actions">${edit}</td>
+  </tr>${alert}`;
+}
+
+function scheduleSwitch(item) {
+  const checked = item.enabled ? " checked" : "";
+  const disabled = can("operator") ? "" : " disabled";
+  return `<label class="switch"><input type="checkbox" data-schedule-enabled="${esc(item.id)}" aria-label="${h(item.enabled ? "pause_schedule" : "resume_schedule")}"${checked}${disabled}><span></span></label>`;
+}
+
+function scheduleTarget(item) {
+  if (!item.target_id) return "";
+  const workflow = item.target_kind === "workflow";
+  const href = workflow ? `#/workflows/${encodeURIComponent(item.target_id)}` : `#/templates/${encodeURIComponent(item.target_id)}`;
+  const label = workflow ? t("workflow") : t("template");
+  const name = item.target_name || label;
+  return `<a href="${href}">${esc(name)}</a><div class="small muted">${esc(label)}</div>`;
+}
+
+function openScheduleForm(kind, target, existing, redraw) {
+  document.querySelector("#schedule-form")?.remove();
+  const zone = existing?.timezone || browserZone();
+  const local = localParts(zone);
+  const item = existing || {
+    name: "",
+    timezone: zoneChoices(zone).includes(zone) ? zone : "Europe/Berlin",
+    start_date: local.date,
+    start_time: "08:00",
+    frequency: "daily",
+    weekdays: [local.weekday],
+    end_kind: "never",
+    end_count: 5,
+    end_date: local.date,
+  };
+  const zones = zoneChoices(item.timezone).map((name) => `<option value="${esc(name)}"${name === item.timezone ? " selected" : ""}>${esc(name)}</option>`).join("");
+  const days = SCHEDULE_DAYS.map((day) => `
+    <label><input type="checkbox" name="weekday" value="${day}"${(item.weekdays || []).includes(day) ? " checked" : ""}> ${h(`schedule.day.${day.toLowerCase()}`)}</label>`).join("");
+  const host = document.createElement("div");
+  host.innerHTML = `
+    <div class="overlay" id="schedule-form">
+      <div class="overlay-card schedule-form" role="dialog" aria-modal="true" aria-labelledby="schedule-title">
+        <div class="row">
+          <h2 id="schedule-title">${existing ? h("edit_schedule") : h("new_schedule")}</h2>
+          <button class="btn" type="button" id="schedule-close">${h("close")}</button>
+        </div>
+        <form id="schedule-fields" class="form">
+          <label class="field"><span>${h("name")}</span><input name="name" required value="${esc(item.name)}"></label>
+          <div class="field-row">
+            <label class="field"><span>${h("start_date")}</span><input name="start_date" type="date" required value="${esc(item.start_date)}"></label>
+            <label class="field"><span>${h("start_time")}</span><input name="start_time" type="time" required value="${esc(item.start_time)}"></label>
+            <label class="field"><span>${h("time_zone")}</span><select class="fit" name="timezone">${zones}</select></label>
+          </div>
+          <label class="field"><span>${h("repeat")}</span>
+            <select class="fit" name="frequency">
+              ${["once", "hourly", "daily", "weekly", "monthly"].map((value) => `<option value="${value}"${item.frequency === value ? " selected" : ""}>${h(value)}</option>`).join("")}
+            </select>
+          </label>
+          <div class="field" id="schedule-weekdays">
+            <span>${h("weekdays")}</span>
+            <div class="weekday-row">${days}</div>
+          </div>
+          <div class="field-row" id="schedule-end">
+            <label class="field"><span>${h("ends")}</span>
+              <select class="fit" name="end_kind">
+                <option value="never"${item.end_kind === "never" ? " selected" : ""}>${h("never")}</option>
+                <option value="after"${item.end_kind === "after" ? " selected" : ""}>${h("after_n_occurrences")}</option>
+                <option value="on_date"${item.end_kind === "on_date" ? " selected" : ""}>${h("on_a_date")}</option>
+              </select>
+            </label>
+            <label class="field" id="schedule-count"><span>${h("times")}</span><input class="tiny" name="end_count" type="number" min="1" max="999" value="${esc(item.end_count || 5)}"></label>
+            <label class="field" id="schedule-until"><span>${h("end_date")}</span><input name="end_date" type="date" value="${esc(item.end_date || local.date)}"></label>
+          </div>
+          <p id="schedule-sentence"></p>
+          <div>
+            <p class="small muted">${h("schedule_preview")}</p>
+            <ul id="schedule-next"></ul>
+          </div>
+          <div class="row">
+            <button class="btn pill primary" type="submit">${h("save")}</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+  document.body.appendChild(host.firstElementChild);
+  const overlay = document.querySelector("#schedule-form");
+  const form = document.querySelector("#schedule-fields");
+  const close = () => overlay.remove();
+  overlay.querySelector("#schedule-close").addEventListener("click", close);
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) close();
+  });
+  overlay.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") close();
+  });
+  const showParts = () => {
+    const weekly = form.frequency.value === "weekly";
+    const once = form.frequency.value === "once";
+    document.querySelector("#schedule-weekdays").hidden = !weekly;
+    document.querySelector("#schedule-end").hidden = once;
+    document.querySelector("#schedule-count").hidden = form.end_kind.value !== "after";
+    document.querySelector("#schedule-until").hidden = form.end_kind.value !== "on_date";
+  };
+  const payload = () => ({
+    timezone: form.timezone.value,
+    start_date: form.start_date.value,
+    start_time: form.start_time.value,
+    frequency: form.frequency.value,
+    weekdays: [...form.querySelectorAll("input[name=weekday]:checked")].map((box) => box.value),
+    end_kind: form.frequency.value === "once" ? "never" : form.end_kind.value,
+    end_count: form.end_kind.value === "after" ? Number(form.end_count.value) : null,
+    end_date: form.end_kind.value === "on_date" ? form.end_date.value : null,
+  });
+  let previewTimer = 0;
+  const preview = () => {
+    window.clearTimeout(previewTimer);
+    previewTimer = window.setTimeout(async () => {
+      const body = payload();
+      document.querySelector("#schedule-sentence").textContent = scheduleSentence({ ...body, name: form.name.value });
+      try {
+        const result = await api("POST", "/api/schedules/preview", body);
+        const lines = (result.occurrences || []).map((at) => `<li>${esc(formatWhen(at, body.timezone))}</li>`).join("");
+        document.querySelector("#schedule-next").innerHTML = lines || `<li>${h("schedule_no_upcoming")}</li>`;
+      } catch (error) {
+        document.querySelector("#schedule-next").innerHTML = `<li>${esc(t(error.message || "error.internal", error.vars))}</li>`;
+      }
+    }, 200);
+  };
+  form.addEventListener("input", () => {
+    showParts();
+    preview();
+  });
+  form.addEventListener("change", () => {
+    showParts();
+    preview();
+  });
+  showParts();
+  preview();
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const body = { ...payload(), name: form.name.value };
+    try {
+      if (existing) await api("PUT", `/api/schedules/${encodeURIComponent(existing.id)}`, body);
+      else await api("POST", `/api/${kind}s/${encodeURIComponent(target)}/schedules`, body);
+      close();
+      await redraw();
+    } catch (error) {
+      handle(error);
+    }
+  });
+  form.name.focus();
+}
+
+async function pageSchedules() {
+  if (!needTeam()) return;
+  shell(t("schedules"), `<section class="card" id="schedule-card" data-kind="all"></section>`);
+  mountSchedules(document.querySelector("#schedule-card"));
 }
 
 async function pageJobs() {
@@ -1349,7 +1774,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
       </div>
       <aside class="card inspector" id="inspector"></aside>
     </div>
-    ${readonly ? `<section class="card run-log" id="run-log" aria-live="polite"></section>` : ""}
+    ${readonly ? `<section class="card run-log" id="run-log" aria-live="polite"></section>` : `<section class="card" id="schedule-card" data-kind="workflow" data-target="${esc(workflow.id)}"></section>`}
     </div>`, readonly ? back : `
       ${can("operator") ? `<button class="btn" id="wf-save" type="button">${h("save")}</button><button class="btn primary" id="wf-launch" type="button">${h("launch")}</button>` : ""}
       ${can("operator") ? `<button class="btn danger" id="wf-delete" type="button">${h("delete")}</button>` : ""}`);
@@ -1817,6 +2242,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
 
   renderNodes();
   renderInspector();
+  mountSchedules(document.querySelector("#schedule-card"));
 
   const save = document.querySelector("#wf-save");
   if (save) {
@@ -4104,6 +4530,7 @@ async function route() {
     else if (parts[0] === "workflows" && parts[1] === "new") await pageWorkflowNew();
     else if (parts[0] === "workflows" && parts[1]) await pageWorkflow(parts[1]);
     else if (parts[0] === "workflows") await pageWorkflows();
+    else if (parts[0] === "schedules") await pageSchedules();
     else if (parts[0] === "runs" && parts[1]) await pageRun(parts[1]);
     else if (parts[0] === "hooks" && parts[1] === "new") await pageHookNew();
     else if (parts[0] === "hooks") await pageHooks();

@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use koreograf::{Config, RunnerMode};
+use koreograf::{Config, LocalJobs, RunnerMode};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
@@ -19,6 +19,8 @@ fn config(dir: &std::path::Path) -> Config {
         admin_password: Some("test-admin-pass".into()),
         runner: RunnerMode::Local,
         job_timeout_secs: 60,
+        local_jobs: LocalJobs::All,
+        project_roots: vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples")],
         ldap: None,
     }
 }
@@ -508,8 +510,12 @@ async fn organizations_inventories_and_git_sync() {
         .unwrap()
         .as_nanos();
     let dir = std::env::temp_dir().join(format!("koreograf-org-{nanos}"));
+    let origin = std::env::temp_dir().join(format!("koreograf-origin-{nanos}"));
     std::fs::create_dir_all(&dir).unwrap();
-    let state = koreograf::boot(config(&dir)).unwrap();
+    std::fs::create_dir_all(&origin).unwrap();
+    let mut cfg = config(&dir);
+    cfg.project_roots.push(origin.clone());
+    let state = koreograf::boot(cfg).unwrap();
     let app = koreograf::router(state);
 
     let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
@@ -598,8 +604,6 @@ async fn organizations_inventories_and_git_sync() {
     assert_eq!(status, StatusCode::OK, "{updated}");
     assert_eq!(updated["host_count"], 3);
 
-    let origin = dir.join("origin");
-    std::fs::create_dir_all(&origin).unwrap();
     git(&origin, &["init", "-b", "main"]);
     git(&origin, &["config", "user.email", "test@example.com"]);
     git(&origin, &["config", "user.name", "Koreograf Test"]);
@@ -681,7 +685,10 @@ async fn organizations_inventories_and_git_sync() {
         let message = failed["error"].as_str().unwrap_or("");
         let lower = message.to_ascii_lowercase();
         assert!(
-            lower.contains("fatal") || lower.contains("repository") || lower.contains("exist"),
+            lower.contains("fatal")
+                || lower.contains("repository")
+                || lower.contains("exist")
+                || message == "the_project_path_is_not_allowed",
             "{failed}"
         );
         assert!(!message.contains("git clone ist fehlgeschlagen"));
@@ -885,6 +892,7 @@ async fn organizations_inventories_and_git_sync() {
         "{there}"
     );
 
+    let _ = std::fs::remove_dir_all(&origin);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -3796,8 +3804,12 @@ async fn a_template_can_run_the_last_sync_offline() {
         .unwrap()
         .as_nanos();
     let dir = std::env::temp_dir().join(format!("koreograf-offline-{nanos}"));
+    let origin = std::env::temp_dir().join(format!("koreograf-offline-origin-{nanos}"));
     std::fs::create_dir_all(&dir).unwrap();
-    let state = koreograf::boot(config(&dir)).unwrap();
+    std::fs::create_dir_all(&origin).unwrap();
+    let mut cfg = config(&dir);
+    cfg.project_roots.push(origin.clone());
+    let state = koreograf::boot(cfg).unwrap();
     let app = koreograf::router(state);
 
     let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
@@ -3819,8 +3831,6 @@ async fn a_template_can_run_the_last_sync_offline() {
     let cookie = cookie.expect("session cookie");
     let team = me["teams"][0]["id"].as_str().unwrap().to_string();
 
-    let origin = dir.join("origin");
-    std::fs::create_dir_all(&origin).unwrap();
     git(&origin, &["init", "-b", "main"]);
     git(&origin, &["config", "user.email", "test@example.com"]);
     git(&origin, &["config", "user.name", "Koreograf Test"]);
@@ -3929,7 +3939,11 @@ async fn a_template_can_run_the_last_sync_offline() {
     ));
     assert!(has_line(&updated, "stdout", "newer"));
 
-    let missing = format!("file://{}/missing-{}", dir.display(), nanos);
+    let missing = format!(
+        "file://{}/koreograf-missing-{}",
+        std::env::temp_dir().display(),
+        nanos
+    );
     let (status, absent, _) = call(
         &app,
         "POST",
@@ -3963,7 +3977,183 @@ async fn a_template_can_run_the_last_sync_offline() {
     assert!(has_line(&failed, "system", "Sync the Git project first."));
     assert!(!has_line(&failed, "stdout", "should-not-run"));
 
+    let _ = std::fs::remove_dir_all(&origin);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn an_operator_cannot_start_a_local_job_or_an_arbitrary_path() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-local-admin-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut cfg = config(&dir);
+    cfg.local_jobs = LocalJobs::Admins;
+    let state = koreograf::boot(cfg).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+    let (status, templates, _) = call(
+        &app,
+        "GET",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{templates}");
+    let health_id = templates
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["name"] == "Healthcheck")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "username": "operator",
+            "display_name": "operator",
+            "password": "operator-pass",
+            "is_admin": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{team}/members"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"username": "operator", "role": "operator"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, operator_me, operator_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "operator", "password": "operator-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{operator_me}");
+    let operator_cookie = operator_cookie.expect("operator cookie");
+
+    let (status, denied, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{health_id}/launch"),
+        Some(&operator_cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{denied}");
+    assert_eq!(denied["error"], "local_runs_are_limited_to_administrators");
+
+    let outside = std::env::temp_dir().join(format!("koreograf-outside-{nanos}"));
+    std::fs::create_dir_all(&outside).unwrap();
+    let (status, path_denied, _) = call(
+        &app,
+        "POST",
+        "/api/projects",
+        Some(&operator_cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Operator path",
+            "source_type": "path",
+            "source": outside.display().to_string()
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{path_denied}");
+    assert_eq!(
+        path_denied["error"],
+        "path_projects_are_limited_to_administrators"
+    );
+    let (status, etc_denied, _) = call(
+        &app,
+        "POST",
+        "/api/projects",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Etc",
+            "source_type": "path",
+            "source": "/etc"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{etc_denied}");
+    assert_eq!(etc_denied["error"], "the_project_path_is_not_allowed");
+
+    let health = templates
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["name"] == "Healthcheck")
+        .unwrap()
+        .clone();
+    let (status, edited, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/templates/{health_id}"),
+        Some(&operator_cookie),
+        Some(&team),
+        Some(health.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    let (status, blocked, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{health_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{blocked}");
+    assert_eq!(blocked["error"], "local_runs_are_limited_to_administrators");
+    let (status, restored, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/templates/{health_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(health),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{restored}");
+
+    let finished = launch_and_wait(&app, &cookie, &team, &health_id).await;
+    assert_eq!(finished["status"], "successful", "{}", finished["events"]);
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&outside);
 }
 
 async fn launch_and_wait(app: &axum::Router, cookie: &str, team: &str, template_id: &str) -> Value {
@@ -4396,7 +4586,9 @@ async fn cancel_kills_a_detached_child_that_ignores_term() {
     assert_eq!(status, StatusCode::OK, "{me}");
     let cookie = cookie.expect("session cookie");
     let team = me["teams"][0]["id"].as_str().unwrap();
-    let script = "( trap '' TERM; sleep 45 & echo $! > \"$KOREOGRAF_WORK/hold.pid\"; wait; echo detached-after > \"$KOREOGRAF_WORK/marker\" ) >/dev/null 2>&1 &\necho detached-start\nwait\n";
+    // /bin/true is external, so a shell that buffers stdout flushes the
+    // start line before it waits. Output after cancel is discarded.
+    let script = "( trap '' TERM; sleep 45 & echo $! > \"$KOREOGRAF_WORK/hold.pid\"; wait; echo detached-after > \"$KOREOGRAF_WORK/marker\" ) >/dev/null 2>&1 &\necho detached-start\n/bin/true\nwait\n";
     let (status, created, _) = call(
         &app,
         "POST",
@@ -4427,12 +4619,33 @@ async fn cancel_kills_a_detached_child_that_ignores_term() {
     let hold = dir.join("jobs").join(job_id).join("hold.pid");
     let marker = dir.join("jobs").join(job_id).join("marker");
     let mut holder = String::new();
+    let mut started = false;
     for _ in 0..50 {
-        if let Ok(text) = std::fs::read_to_string(&hold) {
-            holder = text.trim().to_string();
-            if !holder.is_empty() {
-                break;
+        if holder.is_empty() {
+            if let Ok(text) = std::fs::read_to_string(&hold) {
+                let text = text.trim().to_string();
+                if !text.is_empty() {
+                    holder = text;
+                }
             }
+        }
+        if !started {
+            let (status, body, _) = call(
+                &app,
+                "GET",
+                &format!("/api/jobs/{job_id}"),
+                Some(&cookie),
+                Some(team),
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            if body["events"].to_string().contains("detached-start") {
+                started = true;
+            }
+        }
+        if !holder.is_empty() && started {
+            break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -4440,6 +4653,7 @@ async fn cancel_kills_a_detached_child_that_ignores_term() {
         !holder.is_empty(),
         "the detached child that ignores TERM did not start"
     );
+    assert!(started, "the job did not log detached-start before cancel");
     let (status, canceled, _) = call(
         &app,
         "POST",
@@ -4486,6 +4700,474 @@ async fn cancel_kills_a_detached_child_that_ignores_term() {
     assert!(events.contains("detached-start"), "{events}");
     assert!(!events.contains("detached-after"), "{events}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn a_schedule_runs_the_last_miss_once_and_lists_on_its_target() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-schedule-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state.clone());
+
+    let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let script = script.as_str().unwrap_or("");
+    assert!(script.contains("schedule-card"));
+    assert!(script.contains("id=\"schedule-form\""));
+    assert!(script.contains("#/schedules"));
+    assert!(script.contains("class=\"switch\""));
+    let (status, style, _) = call(&app, "GET", "/app.css", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(style.as_str().unwrap_or("").contains("schedule-miss"));
+    assert!(style
+        .as_str()
+        .unwrap_or("")
+        .contains(".switch input:checked"));
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Scheduled",
+            "tool": "shell",
+            "update_on_launch": false,
+            "spec": {"script": "echo scheduled"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().unwrap().to_string();
+
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/schedules"),
+        Some(&cookie),
+        Some(&team),
+        Some(daily_schedule("Morning")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["next_run_at"], "2027-06-01T04:00:00Z");
+    assert_eq!(created["frequency"], "daily");
+    assert_eq!(created["enabled"], true);
+    assert!(created["missed_at"].is_null());
+    let schedule_id = created["id"].as_str().unwrap().to_string();
+
+    let (status, list, _) = call(
+        &app,
+        "GET",
+        &format!("/api/templates/{template_id}/schedules"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    assert_eq!(list.as_array().unwrap().len(), 1);
+
+    let (status, preview, _) = call(
+        &app,
+        "POST",
+        "/api/schedules/preview",
+        Some(&cookie),
+        Some(&team),
+        Some(daily_schedule("ignored")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let occurrences = preview["occurrences"].as_array().unwrap();
+    assert_eq!(occurrences.len(), 5);
+    assert_eq!(occurrences[0], "2027-06-01T04:00:00Z");
+    assert_eq!(occurrences[1], "2027-06-02T04:00:00Z");
+
+    let (status, zone, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/schedules"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Unknown zone",
+            "timezone": "Mars/Olympus",
+            "start_date": "2027-06-01",
+            "start_time": "06:00",
+            "frequency": "daily",
+            "end_kind": "never"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{zone}");
+    assert_eq!(zone["error"], "schedule_needs_a_known_time_zone");
+
+    let (status, past, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/schedules"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Already over",
+            "timezone": "Europe/Berlin",
+            "start_date": "2020-01-01",
+            "start_time": "06:00",
+            "frequency": "once",
+            "end_kind": "never"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{past}");
+    assert_eq!(past["error"], "schedule_date_is_too_far_in_the_past");
+
+    let yesterday = chrono::Utc::now()
+        .date_naive()
+        .pred_opt()
+        .expect("yesterday")
+        .format("%Y-%m-%d")
+        .to_string();
+    let (status, recent_past, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/schedules"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Yesterday once",
+            "timezone": "UTC",
+            "start_date": yesterday,
+            "start_time": "00:00",
+            "frequency": "once",
+            "end_kind": "never"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{recent_past}");
+    assert_eq!(recent_past["error"], "schedule_has_no_occurrence");
+
+    let (status, duplicate, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/schedules"),
+        Some(&cookie),
+        Some(&team),
+        Some(daily_schedule("Morning")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{duplicate}");
+    assert_eq!(duplicate["error"], "that_name_is_already_used_in_this_team");
+
+    mark_missed(&state, &schedule_id);
+    let (status, paused, _) = call(
+        &app,
+        "POST",
+        &format!("/api/schedules/{schedule_id}/enabled"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"enabled": false})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{paused}");
+    assert_eq!(paused["enabled"], false);
+    assert_eq!(paused["missed_at"], "2026-10-21T04:00:00Z");
+    let (status, resumed, _) = call(
+        &app,
+        "POST",
+        &format!("/api/schedules/{schedule_id}/enabled"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"enabled": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{resumed}");
+    assert_eq!(resumed["enabled"], true);
+    assert_eq!(resumed["missed_at"], "2026-10-21T04:00:00Z");
+    assert_eq!(resumed["next_run_at"], "2027-06-01T04:00:00Z");
+
+    let (status, updated, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/schedules/{schedule_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(daily_schedule("Morning later")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["name"], "Morning later");
+    assert!(updated["missed_at"].is_null());
+
+    mark_missed(&state, &schedule_id);
+    let (status, accepted, _) = call(
+        &app,
+        "POST",
+        &format!("/api/schedules/{schedule_id}/missed"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"accept": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{accepted}");
+    assert!(accepted["missed_at"].is_null());
+    let (status, jobs, _) = call(&app, "GET", "/api/jobs", Some(&cookie), Some(&team), None).await;
+    assert_eq!(status, StatusCode::OK, "{jobs}");
+    let started = scheduled_jobs(&jobs, &template_id);
+    assert_eq!(started.len(), 1);
+    assert_eq!(started[0]["trigger"], "schedule");
+    assert_eq!(started[0]["launched_by"], "admin");
+    let job_id = started[0]["id"].as_str().unwrap().to_string();
+    let finished = wait_for_job(&app, &cookie, &team, &job_id).await;
+    assert_eq!(finished["status"], "successful", "{}", finished["events"]);
+    assert!(has_line(&finished, "stdout", "scheduled"));
+
+    let (status, again, _) = call(
+        &app,
+        "POST",
+        &format!("/api/schedules/{schedule_id}/missed"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"accept": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{again}");
+    assert_eq!(again["error"], "schedule_has_no_missed_run");
+
+    mark_missed(&state, &schedule_id);
+    let missed_path = format!("/api/schedules/{schedule_id}/missed");
+    let left = call(
+        &app,
+        "POST",
+        &missed_path,
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"accept": true})),
+    );
+    let right = call(
+        &app,
+        "POST",
+        &missed_path,
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"accept": true})),
+    );
+    let ((left_status, left_body, _), (right_status, right_body, _)) = tokio::join!(left, right);
+    let statuses = [left_status, right_status];
+    assert!(
+        statuses.contains(&StatusCode::OK),
+        "one accept should run: {left_body} {right_body}"
+    );
+    assert!(
+        statuses.contains(&StatusCode::BAD_REQUEST),
+        "the other accept should be refused: {left_body} {right_body}"
+    );
+    let errors = [left_body["error"].as_str(), right_body["error"].as_str()];
+    assert!(errors.contains(&Some("schedule_has_no_missed_run")));
+    let (status, jobs, _) = call(&app, "GET", "/api/jobs", Some(&cookie), Some(&team), None).await;
+    assert_eq!(status, StatusCode::OK, "{jobs}");
+    let ids: Vec<String> = scheduled_jobs(&jobs, &template_id)
+        .iter()
+        .map(|job| job["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(ids.len(), 2);
+    for id in ids {
+        let finished = wait_for_job(&app, &cookie, &team, &id).await;
+        assert_eq!(finished["status"], "successful", "{}", finished["events"]);
+    }
+
+    mark_missed(&state, &schedule_id);
+    let (status, declined, _) = call(
+        &app,
+        "POST",
+        &format!("/api/schedules/{schedule_id}/missed"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"accept": false})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{declined}");
+    assert!(declined["missed_at"].is_null());
+    let (status, jobs, _) = call(&app, "GET", "/api/jobs", Some(&cookie), Some(&team), None).await;
+    assert_eq!(status, StatusCode::OK, "{jobs}");
+    assert_eq!(scheduled_jobs(&jobs, &template_id).len(), 2);
+
+    let (status, workflow, _) = call(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Scheduled flow", "graph": {}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{workflow}");
+    let workflow_id = workflow["id"].as_str().unwrap().to_string();
+    let (status, weekly, _) = call(
+        &app,
+        "POST",
+        &format!("/api/workflows/{workflow_id}/schedules"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Weekdays",
+            "timezone": "Europe/Berlin",
+            "start_date": "2027-06-01",
+            "start_time": "06:00",
+            "frequency": "weekly",
+            "weekdays": ["FR", "MO"],
+            "end_kind": "after",
+            "end_count": 3
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{weekly}");
+    assert_eq!(weekly["weekdays"], json!(["MO", "FR"]));
+    assert_eq!(weekly["end_kind"], "after");
+    assert_eq!(weekly["end_count"], 3);
+    assert_eq!(weekly["next_run_at"], "2027-06-04T04:00:00Z");
+    let (status, flows, _) = call(
+        &app,
+        "GET",
+        &format!("/api/workflows/{workflow_id}/schedules"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{flows}");
+    assert_eq!(flows.as_array().unwrap().len(), 1);
+
+    let (status, all, _) = call(
+        &app,
+        "GET",
+        "/api/schedules",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{all}");
+    let rows = all.as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    let morning = rows
+        .iter()
+        .find(|row| row["name"] == "Morning later")
+        .unwrap();
+    assert_eq!(morning["target_kind"], "template");
+    assert_eq!(morning["target_id"], template_id);
+    assert_eq!(morning["target_name"], "Scheduled");
+    let weekdays = rows.iter().find(|row| row["name"] == "Weekdays").unwrap();
+    assert_eq!(weekdays["target_kind"], "workflow");
+    assert_eq!(weekdays["target_id"], workflow_id);
+    assert_eq!(weekdays["target_name"], "Scheduled flow");
+
+    let (status, gone, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/templates/{template_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{gone}");
+    let left: i64 = {
+        let db = state.db().expect("database");
+        db.query_row(
+            "SELECT COUNT(*) FROM schedules WHERE target_id = ?1",
+            [template_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count")
+    };
+    assert_eq!(left, 0i64);
+    let (status, remaining, _) = call(
+        &app,
+        "GET",
+        "/api/schedules",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{remaining}");
+    assert_eq!(remaining.as_array().unwrap().len(), 1);
+    assert_eq!(remaining[0]["name"], "Weekdays");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn daily_schedule(name: &str) -> Value {
+    json!({
+        "name": name,
+        "timezone": "Europe/Berlin",
+        "start_date": "2027-06-01",
+        "start_time": "06:00",
+        "frequency": "daily",
+        "end_kind": "never"
+    })
+}
+
+fn mark_missed(state: &koreograf::Shared, id: &str) {
+    let db = state.db().expect("database");
+    let changed = db
+        .execute(
+            "UPDATE schedules SET missed_at = ?1 WHERE id = ?2",
+            ("2026-10-21T04:00:00Z", id),
+        )
+        .expect("mark missed");
+    assert_eq!(changed, 1);
+}
+
+fn scheduled_jobs<'a>(jobs: &'a Value, template_id: &str) -> Vec<&'a Value> {
+    jobs.as_array()
+        .unwrap()
+        .iter()
+        .filter(|job| {
+            job["template_id"].as_str() == Some(template_id) && job["trigger"] == "schedule"
+        })
+        .collect()
+}
+
+async fn wait_for_job(app: &axum::Router, cookie: &str, team: &str, job_id: &str) -> Value {
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let (status, body, _) = call(
+            app,
+            "GET",
+            &format!("/api/jobs/{job_id}"),
+            Some(cookie),
+            Some(team),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        if matches!(
+            body["status"].as_str(),
+            Some("successful" | "failed" | "canceled")
+        ) {
+            return body;
+        }
+    }
+    panic!("job {job_id} did not finish");
 }
 
 #[test]

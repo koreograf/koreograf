@@ -317,6 +317,7 @@ pub async fn update_project(
     check_team_ids(&db, organization_id, &body.team_ids)?;
     db::set_project_organization(&db, &id, organization_id)?;
     db::replace_project_teams(&db, &id, &body.team_ids)?;
+    db::set_project_admin_saved(&db, &id, user.is_admin)?;
     let project = db::project(&db, &id)?.ok_or(ApiError::NotFound)?;
     Ok(Json(json!(project)))
 }
@@ -353,13 +354,28 @@ pub async fn create_project(
     }
     match body.source_type.as_str() {
         "path" => {
-            if !std::path::Path::new(source).is_dir() {
-                return Err(ApiError::bad("the_project_path_is_not_a_directory"));
-            }
+            runner::authorize_project_source(
+                "path",
+                source,
+                &state.cfg.data_dir,
+                &state.cfg.project_roots,
+                user.is_admin,
+            )
+            .map_err(project_path_error)?;
         }
         "git" => {
             if !runner::valid_git(source) {
                 return Err(ApiError::bad("the_git_address_must_be_http_s_ssh"));
+            }
+            if source.starts_with("file://") {
+                runner::authorize_project_source(
+                    "git",
+                    source,
+                    &state.cfg.data_dir,
+                    &state.cfg.project_roots,
+                    user.is_admin,
+                )
+                .map_err(project_path_error)?;
             }
         }
         _ => return Err(ApiError::bad("source_is_path_or_git")),
@@ -375,10 +391,23 @@ pub async fn create_project(
         revision: revision.to_string(),
         created_at: db::now(),
         team_ids: body.team_ids,
+        admin_saved: user.is_admin,
     };
     db::insert_project(&db, &project)?;
     let stored = db::project(&db, &project.id)?.ok_or(ApiError::NotFound)?;
     Ok(created(json!(stored)))
+}
+
+fn project_path_error(err: runner::ProjectPathError) -> ApiError {
+    match err {
+        runner::ProjectPathError::NotDirectory => {
+            ApiError::bad("the_project_path_is_not_a_directory")
+        }
+        runner::ProjectPathError::Denied => ApiError::bad("the_project_path_is_not_allowed"),
+        runner::ProjectPathError::AdminsOnly => {
+            ApiError::bad("path_projects_are_limited_to_administrators")
+        }
+    }
 }
 
 fn check_team_ids(
@@ -499,6 +528,7 @@ pub async fn update_inventory(
             db::set_inventory_body(&db, &id, &team, &body.body)?;
         }
     }
+    db::set_inventory_admin_saved(&db, &id, user.is_admin)?;
     let item = db::inventory(&db, &id)?.ok_or(ApiError::NotFound)?;
     Ok(Json(inventory_json(&db, &item)?))
 }
@@ -513,7 +543,8 @@ pub async fn create_inventory(
     gate(&state, &user, &team, Role::Operator)?;
     let name = require_name(&body.name)?;
     if !body.sources.is_empty() {
-        return super::sources::create_with_sources(state, team, name, body.sources).await;
+        return super::sources::create_with_sources(state, team, name, body.sources, user.is_admin)
+            .await;
     }
     let item = Inventory {
         id: Uuid::new_v4().to_string(),
@@ -524,6 +555,7 @@ pub async fn create_inventory(
         source_kind: "ini".into(),
         source_json: "{}".into(),
         credential_id: None,
+        admin_saved: user.is_admin,
     };
     let source = if body.body.trim().is_empty() {
         None

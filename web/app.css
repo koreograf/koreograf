@@ -323,6 +323,78 @@ textarea.secret-mask { -webkit-text-security: disc; }
 .vault-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .vault-row .chips { flex: 1 1 16rem; }
 .overlay-card.vault-picker { width: min(32rem, 100%); }
+.overlay-card.schedule-form {
+  width: min(40rem, 100%);
+  max-height: min(90vh, 860px);
+  overflow: auto;
+}
+.weekday-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.weekday-row label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: white;
+}
+.table-wrap { overflow-x: auto; }
+.schedule-table .table { min-width: 52rem; }
+.schedule-table tbody tr:hover td { background: rgba(28, 25, 23, 0.03); }
+.schedule-table tr.schedule-alert:hover td { background: transparent; }
+.schedule-table tr.schedule-due td:first-child { box-shadow: inset 3px 0 var(--warn); }
+.schedule-table tr.schedule-alert td { padding-top: 0; }
+.table td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.table th.tight, .table td.tight { width: 1%; white-space: nowrap; text-align: center; }
+.table th.actions, .table td.actions { width: 1%; white-space: nowrap; text-align: right; }
+.table td.actions .btn + .btn { margin-left: 6px; }
+.btn.compact { padding: 4px 8px; }
+.pill.warn { background: var(--warn-bg); color: var(--warn); }
+.switch { position: relative; display: inline-flex; width: 42px; height: 24px; flex: 0 0 auto; }
+.switch input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.switch span {
+  width: 42px;
+  height: 24px;
+  background: #d6d3d1;
+  border-radius: 999px;
+  display: block;
+  position: relative;
+}
+.switch span::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 1px 2px rgba(28, 25, 23, 0.25);
+  transition: transform 0.15s ease;
+}
+.switch input:checked + span { background: var(--accent); }
+.switch input:checked + span::after { transform: translateX(18px); }
+.switch input:disabled { cursor: default; }
+.switch input:disabled + span { opacity: 0.55; }
+.switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.schedule-miss {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  background: var(--warn-bg);
+  color: var(--warn);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
 .vault-choices { display: grid; gap: 6px; overflow: auto; }
 .vault-choice {
   display: flex;
