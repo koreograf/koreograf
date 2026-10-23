@@ -107,7 +107,7 @@ pub async fn create_for_template(
     Path(id): Path<String>,
     ApiJson(body): ApiJson<ScheduleBody>,
 ) -> AppResult<Response> {
-    create(&state, &headers, &user, "template", &id, body)
+    create(&state, &headers, &user, "template", &id, body).await
 }
 
 pub async fn create_for_workflow(
@@ -117,7 +117,7 @@ pub async fn create_for_workflow(
     Path(id): Path<String>,
     ApiJson(body): ApiJson<ScheduleBody>,
 ) -> AppResult<Response> {
-    create(&state, &headers, &user, "workflow", &id, body)
+    create(&state, &headers, &user, "workflow", &id, body).await
 }
 
 pub async fn preview(
@@ -129,7 +129,9 @@ pub async fn preview(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let rule = rule_from_preview(&body)?;
-    let times = schedule::preview(&rule, Utc::now(), 5).map_err(ApiError::bad)?;
+    let times = schedule::preview_blocking(rule, Utc::now(), 5)
+        .await
+        .map_err(ApiError::bad)?;
     Ok(Json(json!({
         "occurrences": times.into_iter().map(schedule::format_utc).collect::<Vec<_>>()
     })))
@@ -146,7 +148,9 @@ pub async fn update(
     gate(&state, &user, &team, Role::Operator)?;
     let name = require_name(&body.name)?;
     let rule = rule_from_body(&body)?;
-    let (count, next) = schedule::first_from(&rule, Utc::now()).map_err(ApiError::bad)?;
+    let (count, next) = schedule::first_from_blocking(rule.clone(), Utc::now())
+        .await
+        .map_err(ApiError::bad)?;
     let db = state.db()?;
     let existing = load(&db, &id, &team)?;
     let mut item = stored(&existing, &name, &rule, count, &next);
@@ -180,15 +184,19 @@ pub async fn set_enabled(
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let db = state.db()?;
-    let mut item = load(&db, &id, &team)?;
+    let mut item = {
+        let db = state.db()?;
+        load(&db, &id, &team)?
+    };
     let now = Utc::now();
     if body.enabled {
         if let Some(next) = item.next_run_at.as_deref().and_then(schedule::parse_utc) {
             if next <= now {
                 let rule = schedule::rule_from(&item).map_err(ApiError::bad)?;
                 let count = u32::try_from(item.occurrence_count).unwrap_or(0);
-                let decided = schedule::step(&rule, count, now, true).map_err(ApiError::bad)?;
+                let decided = schedule::step_blocking(rule, count, now, true)
+                    .await
+                    .map_err(ApiError::bad)?;
                 item.occurrence_count = i64::from(decided.occurrence_count);
                 item.next_run_at = decided.next_run.map(schedule::format_utc);
             }
@@ -196,6 +204,7 @@ pub async fn set_enabled(
     }
     item.enabled = body.enabled;
     item.updated_at = db::now();
+    let db = state.db()?;
     db::set_schedule_enabled(
         &db,
         &item.id,
@@ -219,7 +228,7 @@ pub async fn answer_missed(
     let item = {
         let db = state.db()?;
         let item = load(&db, &id, &team)?;
-        if item.missed_at.is_none() {
+        if !db::claim_missed(&db, &id, &team)? {
             return Err(ApiError::bad("schedule_has_no_missed_run"));
         }
         item
@@ -228,9 +237,7 @@ pub async fn answer_missed(
         schedule::start(&state, &item, &user.username)?;
     }
     let db = state.db()?;
-    db::note_miss(&db, &id, None)?;
-    let mut item = load(&db, &id, &team)?;
-    item.missed_at = None;
+    let item = load(&db, &id, &team)?;
     Ok(Json(schedule_json(&item)))
 }
 
@@ -252,7 +259,7 @@ fn list(
         .collect::<Vec<_>>())))
 }
 
-fn create(
+async fn create(
     state: &Shared,
     headers: &HeaderMap,
     user: &AuthUser,
@@ -264,7 +271,9 @@ fn create(
     gate(state, user, &team, Role::Operator)?;
     let name = require_name(&body.name)?;
     let rule = rule_from_body(&body)?;
-    let (count, next) = schedule::first_from(&rule, Utc::now()).map_err(ApiError::bad)?;
+    let (count, next) = schedule::first_from_blocking(rule.clone(), Utc::now())
+        .await
+        .map_err(ApiError::bad)?;
     let db = state.db()?;
     target_team(&db, kind, id, &team)?;
     let now = db::now();
@@ -347,7 +356,7 @@ fn target_team(db: &rusqlite::Connection, kind: &str, id: &str, team: &str) -> A
 }
 
 fn rule_from_body(body: &ScheduleBody) -> AppResult<Rule> {
-    schedule::parse(&Input {
+    let rule = schedule::parse(&Input {
         timezone: &body.timezone,
         start_date: &body.start_date,
         start_time: &body.start_time,
@@ -357,11 +366,13 @@ fn rule_from_body(body: &ScheduleBody) -> AppResult<Rule> {
         end_count: body.end_count,
         end_date: body.end_date.as_deref(),
     })
-    .map_err(ApiError::bad)
+    .map_err(ApiError::bad)?;
+    schedule::ensure_start_is_recent(rule.start_date, rule.timezone).map_err(ApiError::bad)?;
+    Ok(rule)
 }
 
 fn rule_from_preview(body: &PreviewBody) -> AppResult<Rule> {
-    schedule::parse(&Input {
+    let rule = schedule::parse(&Input {
         timezone: &body.timezone,
         start_date: &body.start_date,
         start_time: &body.start_time,
@@ -371,7 +382,9 @@ fn rule_from_preview(body: &PreviewBody) -> AppResult<Rule> {
         end_count: body.end_count,
         end_date: body.end_date.as_deref(),
     })
-    .map_err(ApiError::bad)
+    .map_err(ApiError::bad)?;
+    schedule::ensure_start_is_recent(rule.start_date, rule.timezone).map_err(ApiError::bad)?;
+    Ok(rule)
 }
 
 fn schedule_json(item: &Schedule) -> Value {

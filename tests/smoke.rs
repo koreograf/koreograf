@@ -4837,7 +4837,32 @@ async fn a_schedule_runs_the_last_miss_once_and_lists_on_its_target() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{past}");
-    assert_eq!(past["error"], "schedule_has_no_occurrence");
+    assert_eq!(past["error"], "schedule_date_is_too_far_in_the_past");
+
+    let yesterday = chrono::Utc::now()
+        .date_naive()
+        .pred_opt()
+        .expect("yesterday")
+        .format("%Y-%m-%d")
+        .to_string();
+    let (status, recent_past, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/schedules"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Yesterday once",
+            "timezone": "UTC",
+            "start_date": yesterday,
+            "start_time": "00:00",
+            "frequency": "once",
+            "end_kind": "never"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{recent_past}");
+    assert_eq!(recent_past["error"], "schedule_has_no_occurrence");
 
     let (status, duplicate, _) = call(
         &app,
@@ -4927,6 +4952,48 @@ async fn a_schedule_runs_the_last_miss_once_and_lists_on_its_target() {
     assert_eq!(again["error"], "schedule_has_no_missed_run");
 
     mark_missed(&state, &schedule_id);
+    let missed_path = format!("/api/schedules/{schedule_id}/missed");
+    let left = call(
+        &app,
+        "POST",
+        &missed_path,
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"accept": true})),
+    );
+    let right = call(
+        &app,
+        "POST",
+        &missed_path,
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"accept": true})),
+    );
+    let ((left_status, left_body, _), (right_status, right_body, _)) = tokio::join!(left, right);
+    let statuses = [left_status, right_status];
+    assert!(
+        statuses.contains(&StatusCode::OK),
+        "one accept should run: {left_body} {right_body}"
+    );
+    assert!(
+        statuses.contains(&StatusCode::BAD_REQUEST),
+        "the other accept should be refused: {left_body} {right_body}"
+    );
+    let errors = [left_body["error"].as_str(), right_body["error"].as_str()];
+    assert!(errors.contains(&Some("schedule_has_no_missed_run")));
+    let (status, jobs, _) = call(&app, "GET", "/api/jobs", Some(&cookie), Some(&team), None).await;
+    assert_eq!(status, StatusCode::OK, "{jobs}");
+    let ids: Vec<String> = scheduled_jobs(&jobs, &template_id)
+        .iter()
+        .map(|job| job["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(ids.len(), 2);
+    for id in ids {
+        let finished = wait_for_job(&app, &cookie, &team, &id).await;
+        assert_eq!(finished["status"], "successful", "{}", finished["events"]);
+    }
+
+    mark_missed(&state, &schedule_id);
     let (status, declined, _) = call(
         &app,
         "POST",
@@ -4940,7 +5007,7 @@ async fn a_schedule_runs_the_last_miss_once_and_lists_on_its_target() {
     assert!(declined["missed_at"].is_null());
     let (status, jobs, _) = call(&app, "GET", "/api/jobs", Some(&cookie), Some(&team), None).await;
     assert_eq!(status, StatusCode::OK, "{jobs}");
-    assert_eq!(scheduled_jobs(&jobs, &template_id).len(), 1);
+    assert_eq!(scheduled_jobs(&jobs, &template_id).len(), 2);
 
     let (status, workflow, _) = call(
         &app,

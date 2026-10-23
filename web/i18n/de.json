@@ -685,6 +685,7 @@
   "schedule_add": "+ Zeitplan",
   "schedule_count_is_invalid": "Die Anzahl ist ungültig.",
   "schedule_date_is_invalid": "Das Datum ist ungültig.",
+  "schedule_date_is_too_far_in_the_past": "Das Startdatum liegt mehr als ein Jahr zurück.",
   "schedule_edit": "Bearbeiten",
   "schedule_empty_template": "Diese Vorlage hat noch keinen Zeitplan.",
   "schedule_empty_workflow": "Dieser Workflow hat noch keinen Zeitplan.",

@@ -4,10 +4,13 @@
 //! moment that clock time exists. A time that falls in a daylight-saving gap
 //! is skipped. A repeated local time, when the clocks go back, is used once,
 //! at the earlier offset. Hourly schedules step by one hour of absolute time.
+//! Daily and weekly schedules step by the calendar, not by walking each day.
 
 use std::time::Duration as StdDuration;
 
-use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, TimeZone, Utc, Weekday};
+use chrono::{
+    DateTime, Datelike, Duration, Months, NaiveDate, NaiveTime, Offset, TimeZone, Utc, Weekday,
+};
 use chrono_tz::Tz;
 use serde_json::json;
 
@@ -139,6 +142,22 @@ pub(crate) fn parse(input: &Input<'_>) -> Result<Rule, &'static str> {
     Ok(rule)
 }
 
+/// A start more than one calendar year before today in `timezone` is rejected.
+/// Stored schedules keep their original start and are not checked again.
+pub(crate) fn ensure_start_is_recent(
+    start_date: NaiveDate,
+    timezone: Tz,
+) -> Result<(), &'static str> {
+    let today = Utc::now().with_timezone(&timezone).date_naive();
+    let Some(limit) = today.checked_sub_months(Months::new(12)) else {
+        return Ok(());
+    };
+    if start_date < limit {
+        return Err("schedule_date_is_too_far_in_the_past");
+    }
+    Ok(())
+}
+
 pub(crate) fn weekday_codes(days: &[Weekday]) -> String {
     days.iter()
         .map(|day| match day {
@@ -169,33 +188,48 @@ pub(crate) fn first_from(
     rule: &Rule,
     not_before: DateTime<Utc>,
 ) -> Result<(u32, DateTime<Utc>), &'static str> {
-    if rule.frequency == Frequency::Hourly {
-        let start = resolve(rule, rule.start_date, rule.start_time)
-            .ok_or("schedule_time_does_not_exist")?;
-        if start >= not_before {
-            return Ok((0, start));
+    match rule.frequency {
+        Frequency::Hourly => first_hourly(rule, not_before),
+        Frequency::Daily => {
+            let guess = daily_guess(rule, not_before)?;
+            first_near(rule, not_before, guess)
         }
-        let hours = (not_before - start).num_hours();
-        let mut index = u32::try_from(hours).map_err(|_| "schedule_has_no_occurrence")?;
-        for _ in 0..3 {
-            let Some(at) = nth(rule, index)? else {
-                return Err("schedule_has_no_occurrence");
-            };
-            if at >= not_before {
-                return Ok((index, at));
-            }
-            index = index.checked_add(1).ok_or("schedule_has_no_occurrence")?;
+        Frequency::Weekly => {
+            let guess = weekly_guess(rule, not_before)?;
+            first_near(rule, not_before, guess)
         }
-        return Err("schedule_has_no_occurrence");
+        Frequency::Once | Frequency::Monthly => first_by_scan(rule, not_before),
     }
-    for index in 0..SCAN_LIMIT {
-        match nth(rule, index)? {
-            Some(at) if at >= not_before => return Ok((index, at)),
-            Some(_) => {}
-            None => return Err("schedule_has_no_occurrence"),
-        }
-    }
-    Err("schedule_has_no_occurrence")
+}
+
+pub(crate) async fn first_from_blocking(
+    rule: Rule,
+    not_before: DateTime<Utc>,
+) -> Result<(u32, DateTime<Utc>), &'static str> {
+    tokio::task::spawn_blocking(move || first_from(&rule, not_before))
+        .await
+        .map_err(|_| "schedule_has_no_occurrence")?
+}
+
+pub(crate) async fn preview_blocking(
+    rule: Rule,
+    not_before: DateTime<Utc>,
+    limit: usize,
+) -> Result<Vec<DateTime<Utc>>, &'static str> {
+    tokio::task::spawn_blocking(move || preview(&rule, not_before, limit))
+        .await
+        .map_err(|_| "schedule_has_no_occurrence")?
+}
+
+pub(crate) async fn step_blocking(
+    rule: Rule,
+    occurrence_count: u32,
+    now: DateTime<Utc>,
+    startup: bool,
+) -> Result<Step, &'static str> {
+    tokio::task::spawn_blocking(move || step(&rule, occurrence_count, now, startup))
+        .await
+        .map_err(|_| "schedule_has_no_occurrence")?
 }
 
 pub(crate) fn preview(
@@ -225,6 +259,12 @@ pub(crate) fn step(
     startup: bool,
 ) -> Result<Step, &'static str> {
     if startup {
+        if matches!(
+            rule.frequency,
+            Frequency::Hourly | Frequency::Daily | Frequency::Weekly
+        ) {
+            return startup_jump(rule, occurrence_count, now);
+        }
         let mut index = occurrence_count;
         let mut last = None;
         let mut walked = 0u32;
@@ -291,33 +331,361 @@ fn nth(rule: &Rule, index: u32) -> Result<Option<DateTime<Utc>>, &'static str> {
             let at = start + Duration::hours(i64::from(index));
             Ok(kept(rule, index, at))
         }
-        Frequency::Daily => scan_days(rule, index, false),
-        Frequency::Weekly => scan_days(rule, index, true),
+        Frequency::Daily => nth_daily(rule, index),
+        Frequency::Weekly => nth_weekly(rule, index),
         Frequency::Monthly => scan_months(rule, index),
     }
 }
 
-fn scan_days(rule: &Rule, index: u32, weekly: bool) -> Result<Option<DateTime<Utc>>, &'static str> {
-    let mut seen = 0u32;
-    let mut date = rule.start_date;
-    for _ in 0..SCAN_LIMIT {
-        let matches = !weekly || rule.weekdays.contains(&date.weekday());
-        if matches {
-            if let Some(at) = resolve(rule, date, rule.start_time) {
-                if !within_end(rule, seen, at) {
-                    return Ok(None);
-                }
-                if seen == index {
-                    return Ok(Some(at));
-                }
-                seen += 1;
-            }
+fn first_hourly(
+    rule: &Rule,
+    not_before: DateTime<Utc>,
+) -> Result<(u32, DateTime<Utc>), &'static str> {
+    let start =
+        resolve(rule, rule.start_date, rule.start_time).ok_or("schedule_time_does_not_exist")?;
+    if start >= not_before {
+        return Ok((0, start));
+    }
+    let hours = (not_before - start).num_hours();
+    let index = u32::try_from(hours).map_err(|_| "schedule_has_no_occurrence")?;
+    first_near(rule, not_before, index.saturating_sub(1))
+}
+
+fn first_by_scan(
+    rule: &Rule,
+    not_before: DateTime<Utc>,
+) -> Result<(u32, DateTime<Utc>), &'static str> {
+    for index in 0..SCAN_LIMIT {
+        match nth(rule, index)? {
+            Some(at) if at >= not_before => return Ok((index, at)),
+            Some(_) => {}
+            None => return Err("schedule_has_no_occurrence"),
         }
-        date = date
-            .checked_add_signed(Duration::days(1))
-            .ok_or("schedule_has_no_occurrence")?;
     }
     Err("schedule_has_no_occurrence")
+}
+
+fn first_near(
+    rule: &Rule,
+    not_before: DateTime<Utc>,
+    guess: u32,
+) -> Result<(u32, DateTime<Utc>), &'static str> {
+    let mut index = guess;
+    for _ in 0..8 {
+        match nth(rule, index)? {
+            Some(at) if at >= not_before => return Ok((index, at)),
+            Some(_) => index = index.checked_add(1).ok_or("schedule_has_no_occurrence")?,
+            None => return Err("schedule_has_no_occurrence"),
+        }
+    }
+    Err("schedule_has_no_occurrence")
+}
+
+fn daily_guess(rule: &Rule, not_before: DateTime<Utc>) -> Result<u32, &'static str> {
+    let local = not_before.with_timezone(&rule.timezone).date_naive();
+    if local <= rule.start_date {
+        return Ok(0);
+    }
+    let calendar = local
+        .signed_duration_since(rule.start_date)
+        .num_days()
+        .max(0);
+    let gaps = i64::try_from(gap_dates(rule, rule.start_date, local).len()).unwrap_or(0);
+    let guess = u32::try_from(calendar.saturating_sub(gaps)).unwrap_or(u32::MAX);
+    Ok(guess.saturating_sub(1))
+}
+
+fn weekly_guess(rule: &Rule, not_before: DateTime<Utc>) -> Result<u32, &'static str> {
+    let local = not_before.with_timezone(&rule.timezone).date_naive();
+    if local <= rule.start_date {
+        return Ok(0);
+    }
+    let before = count_selected(rule.start_date, local, &rule.weekdays);
+    let gaps = i64::try_from(
+        gap_dates(rule, rule.start_date, local)
+            .into_iter()
+            .filter(|day| rule.weekdays.contains(&day.weekday()))
+            .count(),
+    )
+    .unwrap_or(0);
+    let guess = u32::try_from(before.saturating_sub(gaps)).unwrap_or(u32::MAX);
+    Ok(guess.saturating_sub(1))
+}
+
+fn startup_jump(
+    rule: &Rule,
+    occurrence_count: u32,
+    now: DateTime<Utc>,
+) -> Result<Step, &'static str> {
+    let just_after = now + Duration::nanoseconds(1);
+    if let Ok((index, _)) = first_from(rule, just_after) {
+        let index = index.max(occurrence_count);
+        let last = if index > occurrence_count {
+            nth(rule, index - 1)?
+        } else {
+            None
+        };
+        let action = match last {
+            Some(at) if at <= now => Action::Miss(at),
+            _ => Action::Idle,
+        };
+        return Ok(Step {
+            action,
+            occurrence_count: index,
+            next_run: nth(rule, index)?,
+        });
+    }
+    let Some(at) = nth(rule, occurrence_count)? else {
+        return Ok(Step {
+            action: Action::Idle,
+            occurrence_count,
+            next_run: None,
+        });
+    };
+    if at > now {
+        return Ok(Step {
+            action: Action::Idle,
+            occurrence_count,
+            next_run: Some(at),
+        });
+    }
+    let last_index = last_existing(rule, occurrence_count)?;
+    let last_at = nth(rule, last_index)?.ok_or("schedule_has_no_occurrence")?;
+    let next_index = last_index
+        .checked_add(1)
+        .ok_or("schedule_has_no_occurrence")?;
+    Ok(Step {
+        action: Action::Miss(last_at),
+        occurrence_count: next_index,
+        next_run: nth(rule, next_index)?,
+    })
+}
+
+fn last_existing(rule: &Rule, from: u32) -> Result<u32, &'static str> {
+    if nth(rule, from)?.is_none() {
+        return Err("schedule_has_no_occurrence");
+    }
+    let mut lo = from;
+    let mut hi = from;
+    loop {
+        if hi >= SCAN_LIMIT {
+            break;
+        }
+        let next = hi.saturating_mul(2).saturating_add(1).min(SCAN_LIMIT);
+        if nth(rule, next)?.is_some() {
+            lo = next;
+            if next == SCAN_LIMIT {
+                break;
+            }
+            hi = next;
+        } else {
+            hi = next;
+            break;
+        }
+    }
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2 + 1;
+        if nth(rule, mid)?.is_some() {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    Ok(lo)
+}
+
+fn nth_daily(rule: &Rule, index: u32) -> Result<Option<DateTime<Utc>>, &'static str> {
+    let mut offset = i64::from(index);
+    for _ in 0..6 {
+        let Some(date) = rule.start_date.checked_add_signed(Duration::days(offset)) else {
+            return Err("schedule_has_no_occurrence");
+        };
+        let gaps = i64::try_from(gaps_through(rule, date)).unwrap_or(i64::MAX);
+        let next = i64::from(index).saturating_add(gaps);
+        if next == offset {
+            let Some(at) = resolve(rule, date, rule.start_time) else {
+                return Err("schedule_has_no_occurrence");
+            };
+            return Ok(kept(rule, index, at));
+        }
+        offset = next;
+    }
+    Err("schedule_has_no_occurrence")
+}
+
+fn nth_weekly(rule: &Rule, index: u32) -> Result<Option<DateTime<Utc>>, &'static str> {
+    let mut raw = index;
+    for _ in 0..6 {
+        let Some(date) = weekly_date(rule.start_date, &rule.weekdays, raw) else {
+            return Err("schedule_has_no_occurrence");
+        };
+        let gaps = selected_gaps_through(rule, date);
+        let Some(next) = index.checked_add(gaps) else {
+            return Err("schedule_has_no_occurrence");
+        };
+        if next == raw {
+            let Some(at) = resolve(rule, date, rule.start_time) else {
+                return Err("schedule_has_no_occurrence");
+            };
+            return Ok(kept(rule, index, at));
+        }
+        raw = next;
+    }
+    Err("schedule_has_no_occurrence")
+}
+
+fn weekly_date(start: NaiveDate, days: &[Weekday], index: u32) -> Option<NaiveDate> {
+    if days.is_empty() {
+        return None;
+    }
+    let start_wd = start.weekday().num_days_from_monday();
+    let nums: Vec<u32> = days.iter().map(Weekday::num_days_from_monday).collect();
+    let first_week: Vec<u32> = nums
+        .iter()
+        .copied()
+        .filter(|day| *day >= start_wd)
+        .collect();
+    let first_len = u32::try_from(first_week.len()).unwrap_or(0);
+    if index < first_len {
+        let delta = i64::from(first_week[index as usize] - start_wd);
+        return start.checked_add_signed(Duration::days(delta));
+    }
+    let rest = index - first_len;
+    let width = u32::try_from(nums.len()).unwrap_or(1).max(1);
+    let week = i64::from(rest / width);
+    let slot = (rest % width) as usize;
+    let next_monday = start.checked_add_signed(Duration::days(i64::from(7 - start_wd)))?;
+    next_monday.checked_add_signed(Duration::days(week * 7 + i64::from(nums[slot])))
+}
+
+fn count_selected(start: NaiveDate, end: NaiveDate, days: &[Weekday]) -> i64 {
+    if end <= start || days.is_empty() {
+        return 0;
+    }
+    let total = end.signed_duration_since(start).num_days();
+    let weeks = total / 7;
+    let extra = total % 7;
+    let mut count = weeks * i64::try_from(days.len()).unwrap_or(0);
+    let Some(partial) = start.checked_add_signed(Duration::days(weeks * 7)) else {
+        return count;
+    };
+    for offset in 0..extra {
+        let Some(date) = partial.checked_add_signed(Duration::days(offset)) else {
+            break;
+        };
+        if days.contains(&date.weekday()) {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn gaps_through(rule: &Rule, date: NaiveDate) -> usize {
+    let Some(until) = date.checked_add_signed(Duration::days(1)) else {
+        return gap_dates(rule, rule.start_date, date).len();
+    };
+    gap_dates(rule, rule.start_date, until).len()
+}
+
+fn selected_gaps_through(rule: &Rule, date: NaiveDate) -> u32 {
+    let Some(until) = date.checked_add_signed(Duration::days(1)) else {
+        return 0;
+    };
+    u32::try_from(
+        gap_dates(rule, rule.start_date, until)
+            .into_iter()
+            .filter(|day| rule.weekdays.contains(&day.weekday()))
+            .count(),
+    )
+    .unwrap_or(u32::MAX)
+}
+
+/// Local days in `[from, until)` whose clock time does not exist.
+/// Only months whose noon offset changes are scanned.
+fn gap_dates(rule: &Rule, from: NaiveDate, until: NaiveDate) -> Vec<NaiveDate> {
+    if until <= from {
+        return Vec::new();
+    }
+    let mut found = Vec::new();
+    let mut year = from.year();
+    let last_year = until.year();
+    while year <= last_year {
+        gaps_in_year(rule, year, from, until, &mut found);
+        if year == i32::MAX {
+            break;
+        }
+        year += 1;
+    }
+    found
+}
+
+fn gaps_in_year(
+    rule: &Rule,
+    year: i32,
+    from: NaiveDate,
+    until: NaiveDate,
+    found: &mut Vec<NaiveDate>,
+) {
+    for month in 1..=12 {
+        let Some(first) = NaiveDate::from_ymd_opt(year, month, 1) else {
+            continue;
+        };
+        let next = if month == 12 {
+            NaiveDate::from_ymd_opt(year.saturating_add(1), 1, 1)
+        } else {
+            NaiveDate::from_ymd_opt(year, month + 1, 1)
+        };
+        let Some(next) = next else {
+            continue;
+        };
+        if next <= from || first >= until {
+            continue;
+        }
+        let left = noon_offset(rule.timezone, first);
+        let right = noon_offset(rule.timezone, next);
+        let changed = match (left, right) {
+            (Some(before), Some(after)) => before != after,
+            _ => true,
+        };
+        if !changed {
+            continue;
+        }
+        let mut day = first;
+        while day < next {
+            note_gap(rule, day, from, until, found);
+            let Some(following) = day.checked_add_signed(Duration::days(1)) else {
+                break;
+            };
+            day = following;
+        }
+        note_gap(rule, next, from, until, found);
+    }
+}
+
+fn note_gap(
+    rule: &Rule,
+    day: NaiveDate,
+    from: NaiveDate,
+    until: NaiveDate,
+    found: &mut Vec<NaiveDate>,
+) {
+    if day >= from
+        && day < until
+        && resolve(rule, day, rule.start_time).is_none()
+        && !found.contains(&day)
+    {
+        found.push(day);
+    }
+}
+
+fn noon_offset(timezone: Tz, date: NaiveDate) -> Option<i32> {
+    let noon = NaiveTime::from_hms_opt(12, 0, 0)?;
+    match timezone.offset_from_local_datetime(&date.and_time(noon)) {
+        chrono::LocalResult::Single(offset) | chrono::LocalResult::Ambiguous(offset, _) => {
+            Some(offset.fix().local_minus_utc())
+        }
+        chrono::LocalResult::None => None,
+    }
 }
 
 fn scan_months(rule: &Rule, index: u32) -> Result<Option<DateTime<Utc>>, &'static str> {
@@ -379,36 +747,38 @@ fn parse_time(text: &str) -> Result<NaiveTime, &'static str> {
 
 pub(crate) fn spawn(state: Shared) {
     tokio::spawn(async move {
-        if let Err(err) = pass(&state, true) {
+        if let Err(err) = pass(&state, true).await {
             tracing::error!(error = %err, "schedule startup");
         }
         loop {
             tokio::time::sleep(StdDuration::from_secs(15)).await;
-            if let Err(err) = pass(&state, false) {
+            if let Err(err) = pass(&state, false).await {
                 tracing::error!(error = %err, "schedule");
             }
         }
     });
 }
 
-fn pass(state: &Shared, startup: bool) -> AppResult<()> {
+async fn pass(state: &Shared, startup: bool) -> AppResult<()> {
     let now = Utc::now();
     let due = {
         let db = state.db()?;
         db::due_schedules(&db, &format_utc(now))?
     };
     for item in due {
-        if let Err(err) = one(state, &item, now, startup) {
+        if let Err(err) = one(state, &item, now, startup).await {
             tracing::error!(schedule = %item.id, error = %err, "schedule");
         }
     }
     Ok(())
 }
 
-fn one(state: &Shared, item: &Schedule, now: DateTime<Utc>, startup: bool) -> AppResult<()> {
+async fn one(state: &Shared, item: &Schedule, now: DateTime<Utc>, startup: bool) -> AppResult<()> {
     let rule = rule_from(item).map_err(ApiError::bad)?;
     let count = u32::try_from(item.occurrence_count).unwrap_or(0);
-    let decided = step(&rule, count, now, startup).map_err(ApiError::bad)?;
+    let decided = step_blocking(rule, count, now, startup)
+        .await
+        .map_err(ApiError::bad)?;
     let next = decided.next_run.map(format_utc);
     let count = i64::from(decided.occurrence_count);
     match decided.action {
@@ -680,5 +1050,188 @@ mod tests {
         assert_eq!(fired.occurrence_count, 1);
         let again = step(&rule, fired.occurrence_count, now, false).unwrap();
         assert!(matches!(again.action, Action::Fire(_)));
+    }
+
+    #[test]
+    fn a_daily_run_far_ahead_uses_the_calendar_day() {
+        let rule = sample("daily", "2026-01-01", "06:00", &[], "never");
+        let not_before = DateTime::parse_from_rfc3339("2026-10-01T03:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let (index, at) = first_from(&rule, not_before).unwrap();
+        assert_eq!(index, 273);
+        assert_eq!(
+            at.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            "2026-10-01T04:00:00Z"
+        );
+    }
+
+    #[test]
+    fn a_start_more_than_a_year_ago_is_rejected() {
+        let zone = berlin();
+        let today = Utc::now().with_timezone(&zone).date_naive();
+        let recent = today
+            .checked_sub_months(chrono::Months::new(12))
+            .expect("year");
+        assert!(ensure_start_is_recent(recent, zone).is_ok());
+        let too_old = recent.pred_opt().expect("day");
+        assert_eq!(
+            ensure_start_is_recent(too_old, zone),
+            Err("schedule_date_is_too_far_in_the_past")
+        );
+    }
+
+    #[tokio::test]
+    async fn an_operator_schedule_does_not_start_an_admin_only_local_run() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-schedule-operator-{nanos}"));
+        let state = crate::boot(admins_config(&dir)).expect("boot");
+        let team_id: String = {
+            let db = state.db().expect("db");
+            db.query_row("SELECT id FROM teams LIMIT 1", [], |row| row.get(0))
+                .expect("team")
+        };
+        let yesterday = Utc::now()
+            .date_naive()
+            .pred_opt()
+            .expect("yesterday")
+            .format("%Y-%m-%d")
+            .to_string();
+        let template_id = {
+            let db = state.db().expect("db");
+            db::insert_user(
+                &db,
+                "operator-user",
+                "operator",
+                "Operator",
+                None,
+                "local",
+                false,
+            )
+            .expect("operator");
+            let id = "operator-shell".to_string();
+            db::insert_template(
+                &db,
+                &db::Template {
+                    id: id.clone(),
+                    team_id: team_id.clone(),
+                    name: "Operator shell".into(),
+                    description: String::new(),
+                    tool: "shell".into(),
+                    project_id: None,
+                    inventory_id: None,
+                    credential_id: None,
+                    environment_id: None,
+                    entrypoint: String::new(),
+                    extra_vars: "{}".into(),
+                    spec: json!({"script": ":"}).to_string(),
+                    created_at: db::now(),
+                    update_on_launch: false,
+                    admin_saved: true,
+                },
+            )
+            .expect("template");
+            let now = db::now();
+            db::insert_schedule(
+                &db,
+                &db::Schedule {
+                    id: "operator-schedule".into(),
+                    team_id: team_id.clone(),
+                    name: "Operator clock".into(),
+                    target_kind: "template".into(),
+                    target_id: id.clone(),
+                    timezone: "UTC".into(),
+                    start_date: yesterday,
+                    start_time: "00:00".into(),
+                    frequency: "once".into(),
+                    weekdays: String::new(),
+                    end_kind: "never".into(),
+                    end_count: None,
+                    end_date: None,
+                    enabled: true,
+                    next_run_at: Some("2000-01-01T00:00:00Z".into()),
+                    missed_at: None,
+                    occurrence_count: 0,
+                    created_by: "operator".into(),
+                    created_at: now.clone(),
+                    updated_at: now,
+                },
+            )
+            .expect("schedule");
+            id
+        };
+        let item = {
+            let db = state.db().expect("db");
+            db::schedule(&db, "operator-schedule")
+                .expect("read")
+                .expect("schedule")
+        };
+        one(&state, &item, Utc::now(), false).await.expect("step");
+        {
+            let db = state.db().expect("db");
+            let jobs: i64 = db
+                .query_row(
+                    "SELECT COUNT(*) FROM jobs WHERE template_id = ?1",
+                    [&template_id],
+                    |row| row.get(0),
+                )
+                .expect("jobs");
+            assert_eq!(jobs, 0);
+            let missed: Option<String> = db
+                .query_row(
+                    "SELECT missed_at FROM schedules WHERE id = 'operator-schedule'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("miss");
+            assert!(missed.is_some(), "a refused run is kept as a miss");
+            db.execute(
+                "UPDATE schedules
+                 SET occurrence_count = 0, missed_at = NULL, created_by = 'admin'
+                 WHERE id = 'operator-schedule'",
+                [],
+            )
+            .expect("reset");
+        }
+        let item = {
+            let db = state.db().expect("db");
+            db::schedule(&db, "operator-schedule")
+                .expect("read")
+                .expect("schedule")
+        };
+        one(&state, &item, Utc::now(), false)
+            .await
+            .expect("admin step");
+        let db = state.db().expect("db");
+        let launched: String = db
+            .query_row(
+                "SELECT launched_by FROM jobs WHERE template_id = ?1",
+                [&template_id],
+                |row| row.get(0),
+            )
+            .expect("admin job");
+        assert_eq!(launched, "admin");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn admins_config(dir: &std::path::Path) -> crate::config::Config {
+        crate::config::Config {
+            bind: "127.0.0.1:0".into(),
+            data_dir: dir.to_path_buf(),
+            web_dir: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web"),
+            examples_dir: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples"),
+            admin_user: "admin".into(),
+            admin_password: Some("test-admin-pass".into()),
+            runner: crate::config::RunnerMode::Local,
+            job_timeout_secs: 60,
+            local_jobs: crate::config::LocalJobs::Admins,
+            project_roots: vec![
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples")
+            ],
+            ldap: None,
+        }
     }
 }

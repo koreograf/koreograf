@@ -685,6 +685,7 @@
   "schedule_add": "+ Schedule",
   "schedule_count_is_invalid": "The count is invalid.",
   "schedule_date_is_invalid": "The date is invalid.",
+  "schedule_date_is_too_far_in_the_past": "The start date is more than a year ago.",
   "schedule_edit": "Edit",
   "schedule_empty_template": "This template has no schedule yet.",
   "schedule_empty_workflow": "This workflow has no schedule yet.",
