@@ -23,6 +23,7 @@ mod metrics;
 mod netbox;
 mod runner;
 mod scan;
+mod schedule;
 mod seed;
 mod settings;
 mod workflow;
@@ -35,7 +36,7 @@ use rusqlite::Connection;
 use crate::error::ApiError;
 use crate::runner::RunningProc;
 
-pub use config::{Config, LdapConfig, RunnerMode};
+pub use config::{Config, LdapConfig, LocalJobs, RunnerMode};
 
 /// Shared process state. Cheap to clone because it is an `Arc`.
 pub struct AppState {
@@ -89,6 +90,7 @@ pub fn boot(mut cfg: Config) -> anyhow::Result<Shared> {
     // A relative data directory would be resolved again from the job work
     // directory. Local runs then miss wrapper.sh and the other job files.
     cfg.data_dir = std::path::absolute(&cfg.data_dir)?;
+    runner::scrub_job_dirs(&cfg.data_dir);
     let conn = db::open(&cfg.data_dir.join("koreograf.db"))?;
     let cipher = crypto::load_cipher(&cfg.data_dir)?;
     seed::seed(&conn, &cfg)?;
@@ -109,6 +111,7 @@ pub async fn serve(cfg: Config) -> anyhow::Result<()> {
     let url = std::env::var("KOREOGRAF_DATABASE_URL").unwrap_or_default();
     config::database_choice(&url).map_err(anyhow::Error::msg)?;
     let state = boot(cfg)?;
+    schedule::spawn(state.clone());
     let bind = state.cfg.bind.clone();
     let data_dir = state.cfg.data_dir.display().to_string();
     let app = router(state);

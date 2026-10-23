@@ -662,12 +662,30 @@ fn scm_material(
     }
 }
 
+pub(crate) fn reserved_env_name(name: &str) -> bool {
+    const EXACT: &[&str] = &["PATH", "HOME", "ENV", "BASH_ENV", "SHELL", "IFS"];
+    if EXACT.iter().any(|item| name.eq_ignore_ascii_case(item)) {
+        return true;
+    }
+    const PREFIXES: &[&str] = &[
+        "KOREOGRAF_",
+        "ANSIBLE_",
+        "LD_",
+        "PYTHON",
+        "GIT_",
+        "TF_",
+        "BASH_",
+    ];
+    let upper = name.to_ascii_uppercase();
+    PREFIXES.iter().any(|prefix| upper.starts_with(prefix))
+}
+
 fn env_material(secret: &Value, env: &mut Vec<(String, String)>) -> Result<(), String> {
     let Some(map) = secret.as_object() else {
         return Err("the_env_credential_must_be_a_json_object".into());
     };
     for (key, value) in map {
-        if !safe_ident(key) {
+        if !safe_ident(key) || reserved_env_name(key) {
             continue;
         }
         let Some(text) = value.as_str() else { continue };

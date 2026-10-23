@@ -8,7 +8,7 @@ Koreograf is a prototype for team-scoped automation. One Rust binary serves the 
 
 Alpha [0.1.0-alpha.1](CHANGELOG.md).
 
-This is an early prototype, not a replacement for AWX and not a rebuild of Semaphore. There are no surveys, no schedules, no Receptor, and no high-availability setup. The database today is one SQLite file with one writer. PostgreSQL is not connected yet.
+This is an early prototype, not a replacement for AWX and not a rebuild of Semaphore. There are no surveys, no Receptor, and no high-availability setup. A schedule can start a job or a workflow at a local clock time. The database today is one SQLite file with one writer. PostgreSQL is not connected yet.
 
 ## Quick start
 
@@ -53,7 +53,7 @@ Sign in, select the team `Plattform`, and press `Test alert`. The workflow runs 
 
 ## Security
 
-The prototype is meant for a trusted network; see [Security](docs/security.md). Report vulnerabilities as described in [SECURITY.md](SECURITY.md).
+The prototype is meant for a trusted network. Local jobs and arbitrary project paths are limited to administrators unless the environment opts in. See [Security](docs/security.md). Report vulnerabilities as described in [SECURITY.md](SECURITY.md).
 
 ## License
 

@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS projects (
   source TEXT NOT NULL,
   revision TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
+  admin_saved INTEGER NOT NULL DEFAULT 1,
   UNIQUE (team_id, name)
 );
 CREATE TABLE IF NOT EXISTS inventories (
@@ -68,6 +69,7 @@ CREATE TABLE IF NOT EXISTS inventories (
   source_kind TEXT NOT NULL DEFAULT 'ini',
   source_json TEXT NOT NULL DEFAULT '{}',
   credential_id TEXT,
+  admin_saved INTEGER NOT NULL DEFAULT 1,
   UNIQUE (team_id, name)
 );
 CREATE TABLE IF NOT EXISTS inventory_sources (
@@ -115,6 +117,7 @@ CREATE TABLE IF NOT EXISTS templates (
   spec TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL,
   update_on_launch INTEGER NOT NULL DEFAULT 1,
+  admin_saved INTEGER NOT NULL DEFAULT 1,
   UNIQUE (team_id, name)
 );
 CREATE TABLE IF NOT EXISTS template_credentials (
@@ -167,6 +170,7 @@ CREATE TABLE IF NOT EXISTS workflows (
   description TEXT NOT NULL DEFAULT '',
   graph TEXT NOT NULL,
   created_at TEXT NOT NULL,
+  admin_saved INTEGER NOT NULL DEFAULT 1,
   UNIQUE (team_id, name)
 );
 CREATE TABLE IF NOT EXISTS workflow_nodes (
@@ -215,9 +219,34 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS schedules (
+  id TEXT PRIMARY KEY,
+  team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  target_kind TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  timezone TEXT NOT NULL,
+  start_date TEXT NOT NULL,
+  start_time TEXT NOT NULL,
+  frequency TEXT NOT NULL,
+  weekdays TEXT NOT NULL DEFAULT '',
+  end_kind TEXT NOT NULL,
+  end_count INTEGER,
+  end_date TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  next_run_at TEXT,
+  missed_at TEXT,
+  occurrence_count INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (target_kind, target_id, name)
+);
 CREATE INDEX IF NOT EXISTS idx_jobs_team ON jobs(team_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_events_job ON job_events(job_id, id);
 CREATE INDEX IF NOT EXISTS idx_members_user ON memberships(user_id);
+CREATE INDEX IF NOT EXISTS idx_schedules_due ON schedules(enabled, next_run_at);
+CREATE INDEX IF NOT EXISTS idx_schedules_target ON schedules(target_kind, target_id);
 "#;
 
 fn column_exists(c: &Connection, table: &str, column: &str) -> AppResult<bool> {
@@ -361,6 +390,57 @@ fn migrate(c: &Connection) -> AppResult<()> {
             [],
         )?;
     }
+    if !column_exists(c, "projects", "admin_saved")? {
+        c.execute(
+            "ALTER TABLE projects ADD COLUMN admin_saved INTEGER NOT NULL DEFAULT 1",
+            [],
+        )?;
+    }
+    if !column_exists(c, "templates", "admin_saved")? {
+        c.execute(
+            "ALTER TABLE templates ADD COLUMN admin_saved INTEGER NOT NULL DEFAULT 1",
+            [],
+        )?;
+    }
+    if !column_exists(c, "inventories", "admin_saved")? {
+        c.execute(
+            "ALTER TABLE inventories ADD COLUMN admin_saved INTEGER NOT NULL DEFAULT 1",
+            [],
+        )?;
+    }
+    if !column_exists(c, "workflows", "admin_saved")? {
+        c.execute(
+            "ALTER TABLE workflows ADD COLUMN admin_saved INTEGER NOT NULL DEFAULT 1",
+            [],
+        )?;
+    }
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS schedules (
+  id TEXT PRIMARY KEY,
+  team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  target_kind TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  timezone TEXT NOT NULL,
+  start_date TEXT NOT NULL,
+  start_time TEXT NOT NULL,
+  frequency TEXT NOT NULL,
+  weekdays TEXT NOT NULL DEFAULT '',
+  end_kind TEXT NOT NULL,
+  end_count INTEGER,
+  end_date TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  next_run_at TEXT,
+  missed_at TEXT,
+  occurrence_count INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (target_kind, target_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_schedules_due ON schedules(enabled, next_run_at);
+CREATE INDEX IF NOT EXISTS idx_schedules_target ON schedules(target_kind, target_id);",
+    )?;
     Ok(())
 }
 
@@ -436,6 +516,9 @@ pub struct Project {
     pub revision: String,
     pub created_at: String,
     pub team_ids: Vec<String>,
+    /// True when an administrator last saved this project.
+    #[serde(skip)]
+    pub admin_saved: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -448,6 +531,9 @@ pub struct Inventory {
     pub source_kind: String,
     pub source_json: String,
     pub credential_id: Option<String>,
+    /// True when an administrator last saved this inventory.
+    #[serde(skip)]
+    pub admin_saved: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -504,6 +590,8 @@ pub struct Template {
     pub spec: String,
     pub created_at: String,
     pub update_on_launch: bool,
+    /// True when an administrator last saved this template.
+    pub admin_saved: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -544,6 +632,8 @@ pub struct Workflow {
     pub description: String,
     pub graph: String,
     pub created_at: String,
+    /// True when an administrator last saved this workflow.
+    pub admin_saved: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1099,13 +1189,14 @@ pub fn list_members(c: &Connection, team_id: &str) -> AppResult<Vec<Member>> {
 
 const PROJECT_SELECT: &str =
     "p.id, p.team_id, COALESCE(p.organization_id, ''), COALESCE(o.name, ''), \
-     p.name, p.source_type, p.source, p.revision, p.created_at";
+     p.name, p.source_type, p.source, p.revision, p.created_at, p.admin_saved";
 
 pub fn insert_project(c: &Connection, project: &Project) -> AppResult<()> {
     c.execute(
         "INSERT INTO projects (
-            id, team_id, organization_id, name, source_type, source, revision, created_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            id, team_id, organization_id, name, source_type, source, revision, created_at,
+            admin_saved
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             project.id,
             project.team_id,
@@ -1114,7 +1205,8 @@ pub fn insert_project(c: &Connection, project: &Project) -> AppResult<()> {
             project.source_type,
             project.source,
             project.revision,
-            project.created_at
+            project.created_at,
+            project.admin_saved as i64
         ],
     )?;
     replace_project_teams(c, &project.id, &project.team_ids)?;
@@ -1234,6 +1326,17 @@ pub fn set_project_organization(c: &Connection, id: &str, organization_id: &str)
     Ok(())
 }
 
+pub fn set_project_admin_saved(c: &Connection, id: &str, admin_saved: bool) -> AppResult<()> {
+    let n = c.execute(
+        "UPDATE projects SET admin_saved = ?2 WHERE id = ?1",
+        params![id, admin_saved as i64],
+    )?;
+    if n == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(())
+}
+
 fn map_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
     Ok(Project {
         id: row.get(0)?,
@@ -1246,6 +1349,7 @@ fn map_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
         revision: row.get(7)?,
         created_at: row.get(8)?,
         team_ids: Vec::new(),
+        admin_saved: flag(row.get(9)?),
     })
 }
 
@@ -1263,8 +1367,9 @@ pub fn delete_project(c: &Connection, id: &str, team_id: &str) -> AppResult<()> 
 pub fn insert_inventory(c: &Connection, item: &Inventory) -> AppResult<()> {
     c.execute(
         "INSERT INTO inventories (
-            id, team_id, name, body, created_at, source_kind, source_json, credential_id
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            id, team_id, name, body, created_at, source_kind, source_json, credential_id,
+            admin_saved
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             item.id,
             item.team_id,
@@ -1273,7 +1378,8 @@ pub fn insert_inventory(c: &Connection, item: &Inventory) -> AppResult<()> {
             item.created_at,
             item.source_kind,
             item.source_json,
-            item.credential_id
+            item.credential_id,
+            item.admin_saved as i64
         ],
     )?;
     Ok(())
@@ -1297,7 +1403,7 @@ pub fn update_inventory(
 }
 
 const INVENTORY_SELECT: &str =
-    "id, team_id, name, body, created_at, source_kind, source_json, credential_id";
+    "id, team_id, name, body, created_at, source_kind, source_json, credential_id, admin_saved";
 
 pub fn list_inventories(c: &Connection, team_id: &str) -> AppResult<Vec<Inventory>> {
     let mut stmt = c.prepare(&format!(
@@ -1315,6 +1421,14 @@ pub fn inventory(c: &Connection, id: &str) -> AppResult<Option<Inventory>> {
     )
     .optional()
     .map_err(Into::into)
+}
+
+pub fn set_inventory_admin_saved(c: &Connection, id: &str, admin_saved: bool) -> AppResult<()> {
+    c.execute(
+        "UPDATE inventories SET admin_saved = ?2 WHERE id = ?1",
+        params![id, admin_saved as i64],
+    )?;
+    Ok(())
 }
 
 pub fn set_inventory_body(c: &Connection, id: &str, team_id: &str, body: &str) -> AppResult<()> {
@@ -1338,6 +1452,7 @@ fn map_inventory(row: &rusqlite::Row<'_>) -> rusqlite::Result<Inventory> {
         source_kind: row.get(5)?,
         source_json: row.get(6)?,
         credential_id: row.get(7)?,
+        admin_saved: flag(row.get(8)?),
     })
 }
 
@@ -1691,8 +1806,9 @@ pub fn insert_template(c: &Connection, item: &Template) -> AppResult<()> {
     c.execute(
         "INSERT INTO templates (
             id, team_id, name, description, tool, project_id, inventory_id, credential_id,
-            environment_id, entrypoint, extra_vars, spec, created_at, update_on_launch
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            environment_id, entrypoint, extra_vars, spec, created_at, update_on_launch,
+            admin_saved
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
             item.id,
             item.team_id,
@@ -1707,7 +1823,8 @@ pub fn insert_template(c: &Connection, item: &Template) -> AppResult<()> {
             item.extra_vars,
             item.spec,
             item.created_at,
-            item.update_on_launch as i64
+            item.update_on_launch as i64,
+            item.admin_saved as i64
         ],
     )?;
     Ok(())
@@ -1717,7 +1834,7 @@ pub fn update_template(c: &Connection, item: &Template) -> AppResult<()> {
     let n = c.execute(
         "UPDATE templates SET name=?3, description=?4, tool=?5, project_id=?6, inventory_id=?7,
          credential_id=?8, environment_id=?9, entrypoint=?10, extra_vars=?11, spec=?12,
-         update_on_launch=?13
+         update_on_launch=?13, admin_saved=?14
          WHERE id=?1 AND team_id=?2",
         params![
             item.id,
@@ -1732,7 +1849,8 @@ pub fn update_template(c: &Connection, item: &Template) -> AppResult<()> {
             item.entrypoint,
             item.extra_vars,
             item.spec,
-            item.update_on_launch as i64
+            item.update_on_launch as i64,
+            item.admin_saved as i64
         ],
     )?;
     if n == 0 {
@@ -1744,7 +1862,8 @@ pub fn update_template(c: &Connection, item: &Template) -> AppResult<()> {
 pub fn list_templates(c: &Connection, team_id: &str) -> AppResult<Vec<Template>> {
     let mut stmt = c.prepare(
         "SELECT id, team_id, name, description, tool, project_id, inventory_id, credential_id,
-                environment_id, entrypoint, extra_vars, spec, created_at, update_on_launch
+                environment_id, entrypoint, extra_vars, spec, created_at, update_on_launch,
+                admin_saved
          FROM templates WHERE team_id = ?1 ORDER BY name",
     )?;
     let rows = stmt.query_map([team_id], map_template)?;
@@ -1754,7 +1873,8 @@ pub fn list_templates(c: &Connection, team_id: &str) -> AppResult<Vec<Template>>
 pub fn template(c: &Connection, id: &str) -> AppResult<Option<Template>> {
     c.query_row(
         "SELECT id, team_id, name, description, tool, project_id, inventory_id, credential_id,
-                environment_id, entrypoint, extra_vars, spec, created_at, update_on_launch
+                environment_id, entrypoint, extra_vars, spec, created_at, update_on_launch,
+                admin_saved
          FROM templates WHERE id = ?1",
         [id],
         map_template,
@@ -1779,6 +1899,7 @@ fn map_template(row: &rusqlite::Row<'_>) -> rusqlite::Result<Template> {
         spec: row.get(11)?,
         created_at: row.get(12)?,
         update_on_launch: flag(row.get(13)?),
+        admin_saved: flag(row.get(14)?),
     })
 }
 
@@ -1790,6 +1911,7 @@ pub fn delete_template(c: &Connection, id: &str, team_id: &str) -> AppResult<()>
     if n == 0 {
         return Err(ApiError::NotFound);
     }
+    delete_schedules_for(c, "template", id)?;
     Ok(())
 }
 
@@ -1963,15 +2085,17 @@ pub fn events_after(
 
 pub fn insert_workflow(c: &Connection, item: &Workflow) -> AppResult<()> {
     c.execute(
-        "INSERT INTO workflows (id, team_id, name, description, graph, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO workflows (
+            id, team_id, name, description, graph, created_at, admin_saved
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             item.id,
             item.team_id,
             item.name,
             item.description,
             item.graph,
-            item.created_at
+            item.created_at,
+            item.admin_saved as i64
         ],
     )?;
     Ok(())
@@ -1979,8 +2103,17 @@ pub fn insert_workflow(c: &Connection, item: &Workflow) -> AppResult<()> {
 
 pub fn update_workflow(c: &Connection, item: &Workflow) -> AppResult<()> {
     let n = c.execute(
-        "UPDATE workflows SET name = ?3, description = ?4, graph = ?5 WHERE id = ?1 AND team_id = ?2",
-        params![item.id, item.team_id, item.name, item.description, item.graph],
+        "UPDATE workflows
+         SET name = ?3, description = ?4, graph = ?5, admin_saved = ?6
+         WHERE id = ?1 AND team_id = ?2",
+        params![
+            item.id,
+            item.team_id,
+            item.name,
+            item.description,
+            item.graph,
+            item.admin_saved as i64
+        ],
     )?;
     if n == 0 {
         return Err(ApiError::NotFound);
@@ -1990,7 +2123,8 @@ pub fn update_workflow(c: &Connection, item: &Workflow) -> AppResult<()> {
 
 pub fn list_workflows(c: &Connection, team_id: &str) -> AppResult<Vec<Workflow>> {
     let mut stmt = c.prepare(
-        "SELECT id, team_id, name, description, graph, created_at FROM workflows WHERE team_id = ?1 ORDER BY name",
+        "SELECT id, team_id, name, description, graph, created_at, admin_saved
+         FROM workflows WHERE team_id = ?1 ORDER BY name",
     )?;
     let rows = stmt.query_map([team_id], map_workflow)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -1998,7 +2132,8 @@ pub fn list_workflows(c: &Connection, team_id: &str) -> AppResult<Vec<Workflow>>
 
 pub fn workflow(c: &Connection, id: &str) -> AppResult<Option<Workflow>> {
     c.query_row(
-        "SELECT id, team_id, name, description, graph, created_at FROM workflows WHERE id = ?1",
+        "SELECT id, team_id, name, description, graph, created_at, admin_saved
+         FROM workflows WHERE id = ?1",
         [id],
         map_workflow,
     )
@@ -2014,6 +2149,7 @@ fn map_workflow(row: &rusqlite::Row<'_>) -> rusqlite::Result<Workflow> {
         description: row.get(3)?,
         graph: row.get(4)?,
         created_at: row.get(5)?,
+        admin_saved: flag(row.get(6)?),
     })
 }
 
@@ -2025,12 +2161,13 @@ pub fn delete_workflow(c: &Connection, id: &str, team_id: &str) -> AppResult<()>
     if n == 0 {
         return Err(ApiError::NotFound);
     }
+    delete_schedules_for(c, "workflow", id)?;
     Ok(())
 }
 
 pub fn first_workflow(c: &Connection, team_id: &str) -> AppResult<Option<Workflow>> {
     c.query_row(
-        "SELECT id, team_id, name, description, graph, created_at FROM workflows
+        "SELECT id, team_id, name, description, graph, created_at, admin_saved FROM workflows
          WHERE team_id = ?1 ORDER BY created_at LIMIT 1",
         [team_id],
         map_workflow,
@@ -2275,6 +2412,254 @@ pub fn json_object(text: &str) -> Value {
     serde_json::from_str(text).unwrap_or_else(|_| Value::Object(Default::default()))
 }
 
+#[derive(Clone, Debug)]
+pub struct Schedule {
+    pub id: String,
+    pub team_id: String,
+    pub name: String,
+    pub target_kind: String,
+    pub target_id: String,
+    pub timezone: String,
+    pub start_date: String,
+    pub start_time: String,
+    pub frequency: String,
+    pub weekdays: String,
+    pub end_kind: String,
+    pub end_count: Option<i64>,
+    pub end_date: Option<String>,
+    pub enabled: bool,
+    pub next_run_at: Option<String>,
+    pub missed_at: Option<String>,
+    pub occurrence_count: i64,
+    pub created_by: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+const SCHEDULE_SELECT: &str = "id, team_id, name, target_kind, target_id, timezone, start_date, start_time, frequency, weekdays, end_kind, end_count, end_date, enabled, next_run_at, missed_at, occurrence_count, created_by, created_at, updated_at";
+
+fn map_schedule(row: &rusqlite::Row<'_>) -> rusqlite::Result<Schedule> {
+    Ok(Schedule {
+        id: row.get(0)?,
+        team_id: row.get(1)?,
+        name: row.get(2)?,
+        target_kind: row.get(3)?,
+        target_id: row.get(4)?,
+        timezone: row.get(5)?,
+        start_date: row.get(6)?,
+        start_time: row.get(7)?,
+        frequency: row.get(8)?,
+        weekdays: row.get(9)?,
+        end_kind: row.get(10)?,
+        end_count: row.get(11)?,
+        end_date: row.get(12)?,
+        enabled: flag(row.get(13)?),
+        next_run_at: row.get(14)?,
+        missed_at: row.get(15)?,
+        occurrence_count: row.get(16)?,
+        created_by: row.get(17)?,
+        created_at: row.get(18)?,
+        updated_at: row.get(19)?,
+    })
+}
+
+pub fn insert_schedule(c: &Connection, item: &Schedule) -> AppResult<()> {
+    c.execute(
+        "INSERT INTO schedules (
+            id, team_id, name, target_kind, target_id, timezone, start_date, start_time,
+            frequency, weekdays, end_kind, end_count, end_date, enabled, next_run_at, missed_at,
+            occurrence_count, created_by, created_at, updated_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+        params![
+            item.id,
+            item.team_id,
+            item.name,
+            item.target_kind,
+            item.target_id,
+            item.timezone,
+            item.start_date,
+            item.start_time,
+            item.frequency,
+            item.weekdays,
+            item.end_kind,
+            item.end_count,
+            item.end_date,
+            if item.enabled { 1 } else { 0 },
+            item.next_run_at,
+            item.missed_at,
+            item.occurrence_count,
+            item.created_by,
+            item.created_at,
+            item.updated_at,
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn update_schedule(c: &Connection, item: &Schedule) -> AppResult<()> {
+    let n = c.execute(
+        "UPDATE schedules SET
+            name = ?2, timezone = ?3, start_date = ?4, start_time = ?5, frequency = ?6,
+            weekdays = ?7, end_kind = ?8, end_count = ?9, end_date = ?10, enabled = ?11,
+            next_run_at = ?12, missed_at = ?13, occurrence_count = ?14, updated_at = ?15
+         WHERE id = ?1 AND team_id = ?16",
+        params![
+            item.id,
+            item.name,
+            item.timezone,
+            item.start_date,
+            item.start_time,
+            item.frequency,
+            item.weekdays,
+            item.end_kind,
+            item.end_count,
+            item.end_date,
+            if item.enabled { 1 } else { 0 },
+            item.next_run_at,
+            item.missed_at,
+            item.occurrence_count,
+            item.updated_at,
+            item.team_id,
+        ],
+    )?;
+    if n == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(())
+}
+
+pub fn schedule(c: &Connection, id: &str) -> AppResult<Option<Schedule>> {
+    let sql = format!("SELECT {SCHEDULE_SELECT} FROM schedules WHERE id = ?1");
+    c.query_row(&sql, [id], map_schedule)
+        .optional()
+        .map_err(Into::into)
+}
+
+pub fn list_schedules(c: &Connection, kind: &str, target_id: &str) -> AppResult<Vec<Schedule>> {
+    let sql = format!(
+        "SELECT {SCHEDULE_SELECT} FROM schedules
+         WHERE target_kind = ?1 AND target_id = ?2 ORDER BY name"
+    );
+    let mut stmt = c.prepare(&sql)?;
+    let rows = stmt.query_map(params![kind, target_id], map_schedule)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+pub fn list_team_schedules(c: &Connection, team_id: &str) -> AppResult<Vec<(Schedule, String)>> {
+    let sql = format!(
+        "SELECT {SCHEDULE_SELECT},
+            COALESCE(
+                CASE target_kind
+                    WHEN 'template' THEN (
+                        SELECT name FROM templates WHERE id = schedules.target_id
+                    )
+                    WHEN 'workflow' THEN (
+                        SELECT name FROM workflows WHERE id = schedules.target_id
+                    )
+                    ELSE ''
+                END,
+                ''
+            )
+         FROM schedules
+         WHERE team_id = ?1
+         ORDER BY name"
+    );
+    let mut stmt = c.prepare(&sql)?;
+    let rows = stmt.query_map(params![team_id], |row| {
+        let target_name: String = row.get(20)?;
+        Ok((map_schedule(row)?, target_name))
+    })?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+pub fn due_schedules(c: &Connection, now: &str) -> AppResult<Vec<Schedule>> {
+    let sql = format!(
+        "SELECT {SCHEDULE_SELECT} FROM schedules
+         WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ?1
+         ORDER BY next_run_at"
+    );
+    let mut stmt = c.prepare(&sql)?;
+    let rows = stmt.query_map([now], map_schedule)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+pub fn delete_schedule(c: &Connection, id: &str, team_id: &str) -> AppResult<()> {
+    let n = c.execute(
+        "DELETE FROM schedules WHERE id = ?1 AND team_id = ?2",
+        params![id, team_id],
+    )?;
+    if n == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(())
+}
+
+fn delete_schedules_for(c: &Connection, kind: &str, target_id: &str) -> AppResult<()> {
+    c.execute(
+        "DELETE FROM schedules WHERE target_kind = ?1 AND target_id = ?2",
+        params![kind, target_id],
+    )?;
+    Ok(())
+}
+
+pub fn advance_schedule(
+    c: &Connection,
+    id: &str,
+    next_run_at: Option<&str>,
+    occurrence_count: i64,
+) -> AppResult<()> {
+    c.execute(
+        "UPDATE schedules SET next_run_at = ?2, occurrence_count = ?3, updated_at = ?4 WHERE id = ?1",
+        params![id, next_run_at, occurrence_count, now()],
+    )?;
+    Ok(())
+}
+
+pub fn note_miss(c: &Connection, id: &str, missed_at: Option<&str>) -> AppResult<()> {
+    c.execute(
+        "UPDATE schedules SET missed_at = ?2, updated_at = ?3 WHERE id = ?1",
+        params![id, missed_at, now()],
+    )?;
+    Ok(())
+}
+
+/// Clears a missed run only when one is still recorded. One of two concurrent
+/// accepts wins; the other sees no row and must not start a job.
+pub fn claim_missed(c: &Connection, id: &str, team_id: &str) -> AppResult<bool> {
+    let n = c.execute(
+        "UPDATE schedules SET missed_at = NULL, updated_at = ?3
+         WHERE id = ?1 AND team_id = ?2 AND missed_at IS NOT NULL",
+        params![id, team_id, now()],
+    )?;
+    Ok(n == 1)
+}
+
+pub fn set_schedule_enabled(
+    c: &Connection,
+    id: &str,
+    team_id: &str,
+    enabled: bool,
+    next_run_at: Option<&str>,
+    occurrence_count: i64,
+) -> AppResult<()> {
+    let n = c.execute(
+        "UPDATE schedules SET enabled = ?3, next_run_at = ?4, occurrence_count = ?5, updated_at = ?6
+         WHERE id = ?1 AND team_id = ?2",
+        params![
+            id,
+            team_id,
+            if enabled { 1 } else { 0 },
+            next_run_at,
+            occurrence_count,
+            now()
+        ],
+    )?;
+    if n == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2290,6 +2675,8 @@ mod tests {
         let conn = open(&dir.join("koreograf.db")).unwrap();
         conn.execute("PRAGMA foreign_keys = OFF", []).unwrap();
         conn.execute("ALTER TABLE templates DROP COLUMN update_on_launch", [])
+            .unwrap();
+        conn.execute("ALTER TABLE templates DROP COLUMN admin_saved", [])
             .unwrap();
         conn.execute(
             "INSERT INTO templates (
@@ -2307,6 +2694,49 @@ mod tests {
             )
             .unwrap();
         assert_eq!(value, 1);
+        let saved: i64 = conn
+            .query_row(
+                "SELECT admin_saved FROM templates WHERE id = 't1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(saved, 1);
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_old_inventory_and_workflow_stay_released() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-release-migrate-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = open(&dir.join("koreograf.db")).unwrap();
+        conn.execute("PRAGMA foreign_keys = OFF", []).unwrap();
+        conn.execute("ALTER TABLE inventories DROP COLUMN admin_saved", [])
+            .unwrap();
+        conn.execute("ALTER TABLE workflows DROP COLUMN admin_saved", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO inventories (id, team_id, name, body, created_at)
+             VALUES ('i1', 'team', 'Old', '', '2020-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO workflows (id, team_id, name, graph, created_at)
+             VALUES ('w1', 'team', 'Old', '{}', '2020-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        ensure_schema(&conn).unwrap();
+        let inventory = inventory(&conn, "i1").unwrap().unwrap();
+        let workflow = workflow(&conn, "w1").unwrap().unwrap();
+        assert!(inventory.admin_saved);
+        assert!(workflow.admin_saved);
         drop(conn);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2365,6 +2795,7 @@ mod tests {
         assert_eq!(beta.organization_name, "Beta");
         let project = project(&conn, "p1").unwrap().unwrap();
         assert_eq!(project.organization_id, beta.organization_id);
+        assert!(project.admin_saved);
         assert!(list_projects(&conn, "beta")
             .unwrap()
             .iter()
