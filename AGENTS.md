@@ -46,7 +46,7 @@ node --check web/app.js
 
 - SQLite is the only database. `postgres://` and `postgresql://` are rejected on purpose in `config::database_choice`. Do not add a PostgreSQL driver unless asked.
 - Team roles stay `viewer`, `operator`, and `owner`. System admin is `users.is_admin`. Do not add per-object roles unless asked. `/api/users` is admin-only. `/api/me` is the signed-in account, including real memberships. LDAP memberships and the LDAP email stay directory-owned.
-- This is not an AWX drop-in. Do not add surveys, schedules, Receptor, or high availability unless asked.
+- This is not an AWX drop-in. Do not add surveys, Receptor, or high availability unless asked. Schedules are a local-time list. The menu lists every schedule of the team, and a template or workflow page lists its own. Editing stays in the overlay. There is no cron field and no replay of missed runs.
 - Credential kinds are the built-in list in `credentials::KINDS`. A template stores one credential of each kind. Ansible Vault is the exception: several vault credentials can be attached when each vault id is unique, and only one of them may omit the id. Do not add external secret plugins or a custom type designer unless asked. An `scm` credential applies to the job, not to project sync.
 - Demo playbooks must not delete arbitrary files on remote hosts. Cleanup stays under the job work directory and only for names the hook lists.
 - A new CLI tool needs an entry in `runner::tools()` and a branch in `src/wrapper.sh`.

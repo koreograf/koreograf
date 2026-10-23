@@ -1,5 +1,6 @@
 mod admin;
 mod catalog;
+mod schedules;
 mod session;
 mod settings;
 mod sources;
@@ -122,6 +123,22 @@ pub fn router(state: Shared) -> Router {
             axum::routing::put(work::update_template).delete(work::delete_template),
         )
         .route("/templates/{id}/launch", post(work::launch_template))
+        .route(
+            "/templates/{id}/schedules",
+            get(schedules::list_for_template).post(schedules::create_for_template),
+        )
+        .route(
+            "/workflows/{id}/schedules",
+            get(schedules::list_for_workflow).post(schedules::create_for_workflow),
+        )
+        .route("/schedules", get(schedules::list_for_team))
+        .route("/schedules/preview", post(schedules::preview))
+        .route(
+            "/schedules/{id}",
+            put(schedules::update).delete(schedules::remove),
+        )
+        .route("/schedules/{id}/enabled", post(schedules::set_enabled))
+        .route("/schedules/{id}/missed", post(schedules::answer_missed))
         .route("/jobs", get(work::list_jobs))
         .route("/jobs/{id}", get(work::get_job))
         .route("/jobs/{id}/cancel", post(work::cancel_job))
