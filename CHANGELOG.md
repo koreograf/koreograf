@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.0-alpha.3](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.2...v0.1.0-alpha.3) (2026-10-23)
+
+
+### ⚠ BREAKING CHANGES
+
+* Local jobs on the controller now default to administrators. An install that previously let operators, webhooks, or workflow nodes start those jobs sets `KOREOGRAF_LOCAL_RUNNER_FOR=all`. Every path project runs only when its directory is under an allowed root, including one an administrator saved. The examples directory is always allowed, so the seeded demo keeps running. Other directories go in `KOREOGRAF_PROJECT_ROOTS`. An empty LDAP service bind password fails sign-in with `ldap_is_not_fully_configured`.
+
+### Bug Fixes
+
+* close the five draft security advisories ([#53](https://github.com/koreograf/koreograf/issues/53)) ([6b29bdc](https://github.com/koreograf/koreograf/commit/6b29bdc6093af4371bdf4598790271890ea23e76))
+
 ## [0.1.0-alpha.2](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.1...v0.1.0-alpha.2) (2026-10-22)
 
 
