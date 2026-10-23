@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.0-alpha.5](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.4...v0.1.0-alpha.5) (2026-10-23)
+
+
+### Bug Fixes
+
+* allow editing a schedule with an old start date ([#75](https://github.com/koreograf/koreograf/issues/75)) ([05be71d](https://github.com/koreograf/koreograf/commit/05be71d11c392c8d9df3a0d2d4c95ef234cf7d4f)), closes [#72](https://github.com/koreograf/koreograf/issues/72)
+
 ## [0.1.0-alpha.4](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.3...v0.1.0-alpha.4) (2026-10-23)
 
 
