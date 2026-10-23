@@ -292,11 +292,15 @@ fn status_slug(value: Option<&Value>) -> Vec<String> {
 }
 
 fn primary_ip(value: &Value) -> Option<String> {
-    let address = value
-        .get("primary_ip4")
-        .or_else(|| value.get("primary_ip"))
-        .and_then(|item| item.get("address"))
-        .and_then(Value::as_str)?;
+    // NetBox always sends `primary_ip4`. JSON null means there is no IPv4
+    // primary, so a missing or empty address must not stop the search.
+    ["primary_ip4", "primary_ip", "primary_ip6"]
+        .into_iter()
+        .find_map(|key| address_host(value.get(key)))
+}
+
+fn address_host(value: Option<&Value>) -> Option<String> {
+    let address = value?.get("address")?.as_str()?;
     let host = address.split('/').next().unwrap_or(address).trim();
     if host.is_empty() {
         None
@@ -535,6 +539,96 @@ mod tests {
         assert!(ini.contains("[device_roles_web]\nweb_1\n"));
         assert!(ini.contains("[tags_prod]\nweb_1\n"));
         assert!(ini.contains("[tags_edge]\nweb_1\n"));
+    }
+
+    #[test]
+    fn uses_primary_ip_when_the_primary_ip4_key_is_absent() {
+        let device = json!({
+            "id": 13,
+            "name": "legacy",
+            "primary_ip": {"address": "2001:db8::13/64"}
+        });
+        let host = host_from_json(&device, false, &[]).unwrap();
+        assert_eq!(host.ansible_host.as_deref(), Some("2001:db8::13"));
+    }
+
+    #[test]
+    fn sets_ansible_host_from_primary_ip_when_primary_ip4_is_null() {
+        let device = json!({
+            "id": 8,
+            "name": "v6-only",
+            "primary_ip4": null,
+            "primary_ip": {"address": "2001:db8::8/64"},
+            "primary_ip6": {"address": "2001:db8::99/64"}
+        });
+        let host = host_from_json(&device, false, &[]).unwrap();
+        assert_eq!(host.ansible_host.as_deref(), Some("2001:db8::8"));
+        let ini = render_ini(&[host]);
+        assert!(ini.contains("v6-only ansible_host=2001:db8::8 netbox_id=8\n"));
+        let listed = crate::inventory::parse_hosts(&ini);
+        assert_eq!(
+            listed[0].vars.get("ansible_host").map(String::as_str),
+            Some("2001:db8::8")
+        );
+    }
+
+    #[test]
+    fn sets_ansible_host_from_primary_ip6_when_that_is_the_only_address() {
+        let device = json!({
+            "id": 9,
+            "name": "v6-field",
+            "primary_ip4": null,
+            "primary_ip": null,
+            "primary_ip6": {"address": "2001:db8::9/64"}
+        });
+        let host = host_from_json(&device, false, &[]).unwrap();
+        assert_eq!(host.ansible_host.as_deref(), Some("2001:db8::9"));
+        let ini = render_ini(&[host]);
+        assert!(ini.contains("v6-field ansible_host=2001:db8::9 netbox_id=9\n"));
+    }
+
+    #[test]
+    fn skips_a_primary_ip4_object_that_has_no_address() {
+        let device = json!({
+            "id": 12,
+            "name": "blank-v4",
+            "primary_ip4": {"address": null},
+            "primary_ip": null,
+            "primary_ip6": {"address": "2001:db8::12/64"}
+        });
+        let host = host_from_json(&device, false, &[]).unwrap();
+        assert_eq!(host.ansible_host.as_deref(), Some("2001:db8::12"));
+    }
+
+    #[test]
+    fn prefers_ipv4_when_both_families_are_set() {
+        let device = json!({
+            "id": 11,
+            "name": "dual",
+            "primary_ip4": {"address": "10.0.0.8/24"},
+            "primary_ip": {"address": "2001:db8::8/64"},
+            "primary_ip6": {"address": "2001:db8::8/64"}
+        });
+        let host = host_from_json(&device, false, &[]).unwrap();
+        assert_eq!(host.ansible_host.as_deref(), Some("10.0.0.8"));
+        let ini = render_ini(&[host]);
+        assert!(ini.contains("dual ansible_host=10.0.0.8 netbox_id=11\n"));
+    }
+
+    #[test]
+    fn lists_a_device_with_no_address_and_no_ansible_host() {
+        let device = json!({
+            "id": 10,
+            "name": "lonely",
+            "primary_ip4": null,
+            "primary_ip": null,
+            "primary_ip6": null
+        });
+        let host = host_from_json(&device, false, &[]).unwrap();
+        assert!(host.ansible_host.is_none());
+        let ini = render_ini(&[host]);
+        assert!(ini.contains("lonely netbox_id=10\n"));
+        assert!(!ini.contains("ansible_host"));
     }
 
     #[test]
