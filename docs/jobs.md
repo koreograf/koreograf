@@ -68,6 +68,8 @@ group_by:
 
 `netbox_id` is the numeric id from the endpoint that returned the host. A device and a virtual machine can share the same number. `group_by` with `is_virtual` adds the groups `is_virtual_true` and `is_virtual_false`. It does not change `netbox_id`.
 
+A group name contains only letters, digits, and underscores. A `-` or `.` in a NetBox slug becomes `_`. Repeated underscores collapse into one, and underscores at either end are removed. The tag `prod-fake` is the group `tags_prod_fake`, and the site `lab.west` is the group `sites_lab_west`. The host name keeps `-` and `.`. An inventory synced before this change receives the new group names on the next sync.
+
 An Ansible template stores the run in `spec`: `job_type` `run` or `check`, `tags`, `skip_tags`, `limit`, `diff`, `verbosity` from 0 to 4, and `forks` from 1 to 50. Check starts `ansible-playbook --check`.
 
 `POST /api/jobs/{id}/cancel` sets the job to `canceled` and stops the controller process. A local job is its own process group: the group receives `SIGTERM`, then `SIGKILL` after two seconds if the job has not exited. That second signal also stops a child that ignored `SIGTERM`, including one that closed the job's output pipes. A container job is stopped with `docker kill` or `podman kill`, and the command's result is checked. A container that is already gone counts as stopped. An engine that cannot be reached does not. Output that arrives after the cancel is discarded. The status stays `canceled`. A task Ansible already started on a remote host, such as a long `sleep`, is not stopped from here.
