@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.0-alpha.4](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.3...v0.1.0-alpha.4) (2026-10-23)
+
+
+### Features
+
+* schedule templates and workflows at a local time ([#66](https://github.com/koreograf/koreograf/issues/66)) ([7e9c955](https://github.com/koreograf/koreograf/commit/7e9c955943677452c883dc82b052e07b57f7ecac))
+
+
+### Bug Fixes
+
+* make netbox inventory group names ansible-safe ([#64](https://github.com/koreograf/koreograf/issues/64)) ([ab0a806](https://github.com/koreograf/koreograf/commit/ab0a8064177ffd38b82f37bca84a764e1a8096ad)), closes [#25](https://github.com/koreograf/koreograf/issues/25)
+* set ansible_host for ipv6-only netbox devices ([#65](https://github.com/koreograf/koreograf/issues/65)) ([3ad2528](https://github.com/koreograf/koreograf/commit/3ad2528b2afcf9c0825bca4258b33fedc646c009)), closes [#48](https://github.com/koreograf/koreograf/issues/48)
+
 ## [0.1.0-alpha.3](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.2...v0.1.0-alpha.3) (2026-10-23)
 
 
