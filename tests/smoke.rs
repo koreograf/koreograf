@@ -4839,6 +4839,98 @@ async fn a_schedule_runs_the_last_miss_once_and_lists_on_its_target() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{past}");
     assert_eq!(past["error"], "schedule_date_is_too_far_in_the_past");
 
+    let (status, past_preview, _) = call(
+        &app,
+        "POST",
+        "/api/schedules/preview",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "timezone": "Europe/Berlin",
+            "start_date": "2020-01-01",
+            "start_time": "06:00",
+            "frequency": "once",
+            "end_kind": "never"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{past_preview}");
+    assert_eq!(
+        past_preview["error"],
+        "schedule_date_is_too_far_in_the_past"
+    );
+
+    set_start_date(&state, &schedule_id, "2020-01-01");
+    let (status, kept, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/schedules/{schedule_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Morning kept",
+            "timezone": "Europe/Berlin",
+            "start_date": "2020-01-01",
+            "start_time": "07:00",
+            "frequency": "daily",
+            "end_kind": "never"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{kept}");
+    assert_eq!(kept["name"], "Morning kept");
+    assert_eq!(kept["start_date"], "2020-01-01");
+    assert_eq!(kept["start_time"], "07:00");
+    let (status, moved, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/schedules/{schedule_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Morning moved",
+            "timezone": "Europe/Berlin",
+            "start_date": "2019-12-31",
+            "start_time": "07:00",
+            "frequency": "daily",
+            "end_kind": "never"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{moved}");
+    assert_eq!(moved["error"], "schedule_date_is_too_far_in_the_past");
+    let (status, still, _) = call(
+        &app,
+        "GET",
+        &format!("/api/templates/{template_id}/schedules"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{still}");
+    let kept_row = still
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"].as_str() == Some(schedule_id.as_str()))
+        .expect("aged schedule");
+    assert_eq!(kept_row["name"], "Morning kept");
+    assert_eq!(kept_row["start_date"], "2020-01-01");
+    let (status, restored, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/schedules/{schedule_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(daily_schedule("Morning")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{restored}");
+    assert_eq!(restored["name"], "Morning");
+    assert_eq!(restored["start_date"], "2027-06-01");
+    assert_eq!(restored["next_run_at"], "2027-06-01T04:00:00Z");
+
     let yesterday = chrono::Utc::now()
         .date_naive()
         .pred_opt()
@@ -5124,6 +5216,17 @@ fn daily_schedule(name: &str) -> Value {
         "frequency": "daily",
         "end_kind": "never"
     })
+}
+
+fn set_start_date(state: &koreograf::Shared, id: &str, start_date: &str) {
+    let db = state.db().expect("database");
+    let changed = db
+        .execute(
+            "UPDATE schedules SET start_date = ?1 WHERE id = ?2",
+            (start_date, id),
+        )
+        .expect("set start date");
+    assert_eq!(changed, 1);
 }
 
 fn mark_missed(state: &koreograf::Shared, id: &str) {
