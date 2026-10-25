@@ -2,7 +2,7 @@
   "private": true,
   "description": "Commit message checks. The application itself is the Rust package.",
   "devDependencies": {
-    "@commitlint/cli": "21.2.3",
-    "@commitlint/config-conventional": "21.2.3"
+    "@commitlint/cli": "21.2.4",
+    "@commitlint/config-conventional": "21.2.4"
   }
 }
