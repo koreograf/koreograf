@@ -8,7 +8,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 RUN cargo build --release
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8
 # Renovate updates TOFU_VERSION from opentofu/opentofu releases.
 ARG TOFU_VERSION=1.12.1
 # hadolint ignore=DL3008 # Bookworm package names stay unpinned so security updates still apply.
