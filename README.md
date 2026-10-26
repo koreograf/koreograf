@@ -14,14 +14,16 @@ This is an early prototype, not a replacement for AWX and not a rebuild of Semap
 
 ### Docker Compose
 
-You need Docker Engine 20.10 or newer and Docker Compose v2, the `docker compose` command. This build uses the default builder. buildx is only for publishing a multi-architecture image.
+You need Docker Engine 20.10 or newer and Docker Compose v2, the `docker compose` command. The published image is `linux/amd64`.
 
 ```bash
 git clone https://github.com/koreograf/koreograf.git
 cd koreograf
 cp .env.example .env
-docker compose up --build -d
+docker compose up -d
 ```
+
+Compose pulls `ghcr.io/koreograf/koreograf:0.1.0-alpha.4`. It does not compile. To build this checkout instead, run `docker compose up --build -d`. buildx is only for publishing a multi-architecture image.
 
 The UI is at `http://127.0.0.1:8080`. Sign in as `admin`. The generated password is one line in the container. The file is mode `0600`, and the password is not written to the log.
 

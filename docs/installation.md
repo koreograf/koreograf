@@ -16,13 +16,13 @@ Environment variables, including the runner mode, are in [Configuration](configu
 
 ## Docker Compose
 
-Docker Engine 20.10 or newer, and Docker Compose v2. A local `docker compose up --build` does not need buildx.
+Docker Engine 20.10 or newer, and Docker Compose v2. The published image is `linux/amd64`.
 
 ```bash
 git clone https://github.com/koreograf/koreograf.git
 cd koreograf
 cp .env.example .env
-docker compose up --build -d
+docker compose up -d
 ```
 
 The UI is at `http://127.0.0.1:8080`. Sign in as `admin`. Read the generated password, then delete the file after the first sign-in. Koreograf does not remove it.
@@ -32,7 +32,7 @@ docker compose exec koreograf cat /var/lib/koreograf/initial-admin-password
 docker compose exec koreograf rm /var/lib/koreograf/initial-admin-password
 ```
 
-Compose builds the image on your machine. The published image `ghcr.io/koreograf/koreograf:0.1.0-alpha.4` matches the git tag `v0.1.0-alpha.4`. The image is `linux/amd64`. It contains Ansible from Debian bookworm, the Docker client, and OpenTofu 1.13.2. The process runs as root because a mounted Docker socket is root on the host.
+Compose pulls `ghcr.io/koreograf/koreograf:0.1.0-alpha.4`, the image published with git tag `v0.1.0-alpha.4`. It does not compile. `docker compose up --build -d` builds this checkout instead. That local build does not need buildx. buildx is only for publishing a multi-architecture image. The image contains Ansible from Debian bookworm, the Docker client, and OpenTofu 1.13.2. The process runs as root because a mounted Docker socket is root on the host.
 
 The socket is commented out in `docker-compose.yml`. Execution environments need that line. Without the socket the runner stays local, and the demo health check still runs.
 
@@ -57,7 +57,7 @@ Use `/srv/projects/my-project` as `source` with `source_type` `path`. The exampl
 helm upgrade --install koreograf deploy/helm/koreograf
 ```
 
-The chart version and `appVersion` are `0.1.0-alpha.4`. `image.tag` is the same release. That tag is published with the git tag `v0.1.0-alpha.4`. GitHub keeps a new package private until its visibility is public. Until the package exists and is public, build the image yourself and set `image.repository` and `image.tag` to that build.
+The chart version, `appVersion`, and `image.tag` are `0.1.0-alpha.4`. The chart pulls `ghcr.io/koreograf/koreograf:0.1.0-alpha.4`, the same image Compose uses. It is `linux/amd64`. On another architecture, build the image and set `image.repository` and `image.tag` to that build.
 
 `replicaCount` is 1. A second pod on the same SQLite file loses writes. The Docker socket is off by default (`runner.dockerSocket.enabled`).
 
