@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.0-alpha.5](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.4...v0.1.0-alpha.5) (2026-10-26)
+
+
+### Bug Fixes
+
+* allow editing a schedule with an old start date ([#75](https://github.com/koreograf/koreograf/issues/75)) ([05be71d](https://github.com/koreograf/koreograf/commit/05be71d11c392c8d9df3a0d2d4c95ef234cf7d4f)), closes [#72](https://github.com/koreograf/koreograf/issues/72)
+* **deps:** pin debian docker tag to 7ff6ba3 ([#77](https://github.com/koreograf/koreograf/issues/77)) ([5e8acfd](https://github.com/koreograf/koreograf/commit/5e8acfdc04e669d632b0d44393a54eaf5d38a3ea))
+* **deps:** update cargo non-major ([#87](https://github.com/koreograf/koreograf/issues/87)) ([4e0bdd5](https://github.com/koreograf/koreograf/commit/4e0bdd575ae64a10c204a39aafde6551bafef56d))
+* **deps:** update dependency opentofu to v1.13.2 ([#83](https://github.com/koreograf/koreograf/issues/83)) ([1c967dd](https://github.com/koreograf/koreograf/commit/1c967dd4a8545c176a9fc8e7b21bdc38b425bb0d))
+* pull the published image in compose ([#91](https://github.com/koreograf/koreograf/issues/91)) ([65b76fd](https://github.com/koreograf/koreograf/commit/65b76fde2bae46e4104339090f95cb4d7f7d770e))
+* use debian codenames in the demo role metadata ([#89](https://github.com/koreograf/koreograf/issues/89)) ([afd6ac1](https://github.com/koreograf/koreograf/commit/afd6ac16fdc7fccfe5aaf92323bc608281f0d834))
+
 ## [0.1.0-alpha.4](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.3...v0.1.0-alpha.4) (2026-10-23)
 
 
