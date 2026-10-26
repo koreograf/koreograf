@@ -9,5 +9,5 @@ galaxy_info:
     - name: EL
       versions: ["9", "10"]
     - name: Debian
-      versions: ["12", "13"]
+      versions: ["bookworm", "trixie"]
 dependencies: []
