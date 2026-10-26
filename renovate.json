@@ -87,7 +87,7 @@
     },
     {
       "description": "Release-please owns the product image tag",
-      "matchManagers": ["helm-values"],
+      "matchManagers": ["helm-values", "docker-compose"],
       "matchPackageNames": [
         "ghcr.io/koreograf/koreograf",
         "koreograf/koreograf"

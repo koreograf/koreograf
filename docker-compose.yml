@@ -1,5 +1,8 @@
 services:
   koreograf:
+    # Fertiges Image von GHCR. docker compose up --build kompiliert dieses Checkout.
+    image: ghcr.io/koreograf/koreograf:0.1.0-alpha.4
+    pull_policy: missing
     build: .
     ports:
       - "8080:8080"
