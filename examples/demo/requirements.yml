@@ -1,4 +1,5 @@
 ---
 collections:
+  # 2.x needs ansible-core >= 2.16. The image installs Debian bookworm's ansible (2.14).
   - name: ansible.posix
     version: "1.6.2"

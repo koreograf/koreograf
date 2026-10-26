@@ -150,6 +150,12 @@
       "semanticCommitType": "fix"
     },
     {
+      "description": "ansible.posix 2.x needs ansible-core >= 2.16. Bookworm's ansible package is 2.14.",
+      "matchManagers": ["ansible-galaxy"],
+      "matchPackageNames": ["ansible.posix"],
+      "allowedVersions": "<2.0.0"
+    },
+    {
       "description": "Keep the image on a bookworm patch tag",
       "matchDatasources": ["docker"],
       "matchPackageNames": ["rust", "library/rust"],
