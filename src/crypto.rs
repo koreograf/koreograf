@@ -7,7 +7,6 @@ use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use pbkdf2::pbkdf2_hmac;
-use rand::RngCore;
 use sha2::Sha256;
 
 use crate::error::{ApiError, AppResult};
@@ -23,10 +22,10 @@ impl Cipher {
         let cipher = Aes256Gcm::new_from_slice(&self.key)
             .map_err(|_| ApiError::Internal("key is invalid".into()))?;
         let mut nonce_bytes = [0u8; 12];
-        rand::rngs::OsRng.fill_bytes(&mut nonce_bytes);
-        let nonce = Nonce::from_slice(&nonce_bytes);
+        rand::fill(&mut nonce_bytes);
+        let nonce = Nonce::from(nonce_bytes);
         let ct = cipher
-            .encrypt(nonce, plain.as_bytes())
+            .encrypt(&nonce, plain.as_bytes())
             .map_err(|_| ApiError::Internal("encryption failed".into()))?;
         let mut packed = nonce_bytes.to_vec();
         packed.extend(ct);
@@ -43,8 +42,10 @@ impl Cipher {
         let (nonce_bytes, ct) = bytes.split_at(12);
         let cipher = Aes256Gcm::new_from_slice(&self.key)
             .map_err(|_| ApiError::Internal("key is invalid".into()))?;
+        let nonce = Nonce::try_from(nonce_bytes)
+            .map_err(|_| ApiError::Internal("secret cannot be read".into()))?;
         let plain = cipher
-            .decrypt(Nonce::from_slice(nonce_bytes), ct)
+            .decrypt(&nonce, ct)
             .map_err(|_| ApiError::Internal("secret cannot be read".into()))?;
         String::from_utf8(plain).map_err(|_| ApiError::Internal("secret is not text".into()))
     }
@@ -75,7 +76,7 @@ pub fn load_cipher(data_dir: &Path) -> AppResult<Cipher> {
         }
     }
     let mut key = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut key);
+    rand::fill(&mut key);
     write_key(&path, &key)?;
     Ok(Cipher { key })
 }
@@ -117,7 +118,7 @@ fn write_key(path: &Path, key: &[u8; 32]) -> AppResult<()> {
 
 pub fn hash_password(password: &str) -> String {
     let mut salt = [0u8; 16];
-    rand::rngs::OsRng.fill_bytes(&mut salt);
+    rand::fill(&mut salt);
     let mut out = [0u8; 32];
     pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, PBKDF2_ITERS, &mut out);
     format!(
@@ -152,13 +153,13 @@ pub fn verify_password(stored: &str, password: &str) -> bool {
 
 pub fn random_token() -> String {
     let mut buf = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut buf);
+    rand::fill(&mut buf);
     hex::encode(buf)
 }
 
 pub fn random_password() -> String {
     let mut buf = [0u8; 18];
-    rand::rngs::OsRng.fill_bytes(&mut buf);
+    rand::fill(&mut buf);
     hex::encode(buf)
 }
 
