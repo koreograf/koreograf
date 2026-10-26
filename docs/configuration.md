@@ -8,7 +8,7 @@ Create-lists use the same pill button, for example `+ Projekt` (English: `+ Proj
 
 ## Environment variables
 
-See `.env.example`. Comments in that file are still German.
+See `.env.example`. Comments in that file are English. Copy it to `.env` before `docker compose up` when you want to override a forwarded variable.
 
 | Variable | Default |
 | --- | --- |

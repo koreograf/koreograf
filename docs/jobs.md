@@ -48,6 +48,29 @@ Secrets are stored with AES-GCM. The list API returns the name and the kind, nev
 
 `GET /api/projects/{id}/contents` reads an Ansible project and lists playbooks. A file counts when it ends in `.yml` or `.yaml`, the first content line is a list, and `hosts:` appears somewhere. `requirements.yml`, `galaxy.yml`, and role directories such as `tasks`, `handlers`, and `group_vars` stay out. A git project has to be synced first. The template offers the files that were found. Another path can still be typed by hand.
 
+### Path projects
+
+`source_type` is `path` or `git`. A path project is a directory on the machine that runs Koreograf. In Docker or Helm that directory is inside the container. A bind mount on the host is not visible until it is mounted into the container.
+
+With Compose, mount the directory read-only and list its parent in `KOREOGRAF_PROJECT_ROOTS`. The stock `docker-compose.yml` does not forward that variable, so both lines have to be added. The [Installation](installation.md#docker-compose) page shows the fragment. Create the project with `source` set to the container path, for example `/srv/projects/my-project`.
+
+The Helm chart has no extra-volume value. Add a volume, a volume mount, and `KOREOGRAF_PROJECT_ROOTS` on the deployment. The examples directory in the image is always an allowed root, which is why the seeded Demo project runs without an extra mount.
+
+An administrator can save a path outside the allowed roots. At run time the canonical directory still has to sit under one of those roots, so that saved path does not start until the directory is listed. `/`, `/etc`, `/proc`, `/sys`, `/dev`, `/run`, `/boot`, `/root`, `/var/run`, and the data directory are rejected for everyone. An operator can save a path only when it is already under an allowed root.
+
+A public git project needs no mount. `revision` is optional. An empty revision follows the default branch. A non-empty revision is a branch, tag, or commit: letters, digits, `.`, `/`, `_`, and `-`, at most 200 characters, and it must not start with `-`.
+
+```json
+{
+  "name": "Koreograf",
+  "source_type": "git",
+  "source": "https://github.com/koreograf/koreograf.git",
+  "revision": "v0.1.0-alpha.4"
+}
+```
+
+Allowed git addresses are `http(s)`, `ssh`, `git@`, and `file`. A `file://` URL is accepted for an empty host or `localhost` and then follows the same root rules as a path project. The project Sync button does not use an `scm` credential. That credential applies to git commands inside a job.
+
 A template updates its git project on every launch. Turn **Update the project on launch** off to run the checkout from the last sync, including when the remote cannot be reached. A revision pinned on the project stays as it is on disk until the next sync. In the German UI the checkbox is **Projekt vor dem Start aktualisieren**. The project still needs one successful sync. The Sync button on the project page is unchanged.
 
 Inventory files are named `hosts` or `inventory`, or they live in `inventory/` and `inventories/`. A relative `inventory=` entry under `[defaults]` in `ansible.cfg` is included. `POST /api/inventories/import` stores the file text. INI and the usual YAML inventory show up in the host list. Ansible receives the same text.
