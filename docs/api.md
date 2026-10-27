@@ -1,6 +1,6 @@
 # API
 
-Session cookie `koreograf_session`, HttpOnly, SameSite=Lax, seven days. Team routes need `X-Team-Id`. Job events use the team membership stored on the job, because `EventSource` cannot set custom headers. The stream is `GET /api/jobs/{id}/events?after=`.
+Session cookie `koreograf_session`, HttpOnly, SameSite=Lax, seven days. `Secure` is added when `KOREOGRAF_COOKIE_SECURE` is `true`, and when it is `auto` and a trusted proxy sends `X-Forwarded-Proto: https`. The default is `auto` with that proxy off, so a plain HTTP sign-in still receives the cookie. Team routes need `X-Team-Id`. Job events use the team membership stored on the job, because `EventSource` cannot set custom headers. The stream is `GET /api/jobs/{id}/events?after=`.
 
 ## Walkthrough
 

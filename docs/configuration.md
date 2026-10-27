@@ -25,6 +25,8 @@ See `.env.example`. Comments in that file are English. Copy it to `.env` before 
 | `KOREOGRAF_SECRET_KEY` | 64 hex characters, otherwise `data/secret.key` |
 | `KOREOGRAF_LOG_FORMAT` | empty, text on stdout. `json` for Promtail |
 | `KOREOGRAF_HSTS` | false. `true` sends `Strict-Transport-Security` |
+| `KOREOGRAF_COOKIE_SECURE` | `auto`. `true` sets `Secure` on the session cookie |
+| `KOREOGRAF_TRUSTED_PROXY` | false. When true, `auto` reads `X-Forwarded-Proto` |
 | `KOREOGRAF_DATABASE_URL` | empty, SQLite. `postgres://` is rejected |
 | `KOREOGRAF_LDAP_BIND_DN` | empty. Required when `KOREOGRAF_LDAP_URL` is set |
 | `KOREOGRAF_LDAP_BIND_PASSWORD` | empty. Required when `KOREOGRAF_LDAP_URL` is set |
@@ -36,6 +38,8 @@ See `.env.example`. Comments in that file are English. Copy it to `.env` before 
 Directory sign-in, including these four variables, is described in [Organizations, teams, LDAP, and Active Directory](authentication.md).
 
 `auto` looks for `docker` and `podman`. If the runtime is missing, jobs run locally. `local` ignores execution environments and writes that into the job log. `docker` fails a run that has an image set when no runtime is reachable. Templates without an environment always run locally.
+
+`KOREOGRAF_COOKIE_SECURE` is `true`, `false`, or `auto`. The process speaks HTTP, so `auto` leaves `Secure` off unless `KOREOGRAF_TRUSTED_PROXY` is true and the proxy sends `X-Forwarded-Proto: https`. Set `true` when TLS ends in front of the process. `false` never sets the flag. An unknown value is treated as `auto` and written to the log. The same flag is applied when the cookie is cleared.
 
 `KOREOGRAF_LOCAL_RUNNER_FOR` is `admins` or `all`. The default is `admins`. An operator, an anonymous webhook, and a workflow started by either of those cannot start a job on the controller. An administrator can, and a workflow they start keeps that attribution. The workflow and the inventory still have to have been saved by an administrator. A workflow or inventory an operator edited does not start a local job until an administrator saves it again. The Test button on a webhook runs as the signed-in user. `all` is for a trusted network where those jobs must run locally. The value comes from the environment, not from Settings. An install that already ran those jobs locally sets `KOREOGRAF_LOCAL_RUNNER_FOR=all`. An operator path project also needs that directory listed in `KOREOGRAF_PROJECT_ROOTS`. An unknown value is treated as `admins` and written to the log.
 
@@ -54,6 +58,6 @@ What the database file holds, and why a `postgres://` URL stops startup, is in [
 | `KOREOGRAF_WEB` | `/opt/koreograf/web` |
 | `KOREOGRAF_EXAMPLES` | `/opt/koreograf/examples` |
 
-Compose forwards the other names from `.env` into the container. That includes `KOREOGRAF_LOG_FORMAT`, `KOREOGRAF_DATABASE_URL`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, and the lowercase `http_proxy`, `https_proxy`, and `no_proxy`. Log format and the database URL are passed through even when they are empty. A proxy name is passed only when `.env` or the shell sets it. An unset proxy is left out of the container. An empty `https_proxy` would turn off `HTTPS_PROXY` for git and for Python, so do not set a proxy name to an empty string.
+Compose forwards the other names from `.env` into the container. That includes `KOREOGRAF_LOG_FORMAT`, `KOREOGRAF_HSTS`, `KOREOGRAF_COOKIE_SECURE`, `KOREOGRAF_TRUSTED_PROXY`, `KOREOGRAF_DATABASE_URL`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, and the lowercase `http_proxy`, `https_proxy`, and `no_proxy`. Log format and the database URL are passed through even when they are empty. A proxy name is passed only when `.env` or the shell sets it. An unset proxy is left out of the container. An empty `https_proxy` would turn off `HTTPS_PROXY` for git and for Python, so do not set a proxy name to an empty string.
 
 Compose also reads the shell. A proxy exported in the shell is forwarded even when the line in `.env` is commented out. Leave those variables unset in the shell when the container should not use them. The container does not copy a proxy that is configured only on the Docker daemon.

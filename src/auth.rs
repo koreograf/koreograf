@@ -238,12 +238,28 @@ pub fn sync_ldap_teams(
     Ok(())
 }
 
-pub fn session_cookie(token: &str) -> String {
-    format!("koreograf_session={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800")
+pub fn session_cookie(token: &str, secure: bool) -> String {
+    let mut cookie =
+        format!("koreograf_session={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800");
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    cookie
 }
 
-pub fn clear_cookie() -> String {
-    "koreograf_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0".into()
+pub fn clear_cookie(secure: bool) -> String {
+    let mut cookie = String::from("koreograf_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    cookie
+}
+
+pub fn request_cookie_secure(cfg: &crate::config::Config, headers: &HeaderMap) -> bool {
+    let proto = headers
+        .get("x-forwarded-proto")
+        .and_then(|value| value.to_str().ok());
+    cfg.cookie_secure.enabled(cfg.trusted_proxy, proto)
 }
 
 pub fn read_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -260,9 +276,28 @@ pub fn read_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::command_matches_template;
+    use super::{clear_cookie, command_matches_template, session_cookie};
     use crate::db::Template;
     use serde_json::json;
+
+    #[test]
+    fn cookies_carry_secure_only_when_asked() {
+        let plain = session_cookie("tok", false);
+        assert_eq!(
+            plain,
+            "koreograf_session=tok; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800"
+        );
+        let secure = session_cookie("tok", true);
+        assert_eq!(format!("{plain}; Secure"), secure);
+        assert_eq!(
+            clear_cookie(false),
+            "koreograf_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0"
+        );
+        assert_eq!(
+            clear_cookie(true),
+            "koreograf_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0; Secure"
+        );
+    }
 
     fn template(spec: &str) -> Template {
         Template {
