@@ -297,6 +297,109 @@ async fn a_team_description_stops_at_one_thousand_characters() {
 }
 
 #[tokio::test]
+async fn an_empty_template_entry_path_is_rejected_and_marked_in_the_form() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-entry-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let script = script.as_str().unwrap_or("");
+    assert!(script.contains("for_example_site_yml"));
+    assert!(script.contains("id=\"entrypoint-error\""));
+    assert!(script.contains("form.entrypoint.value = books[0]"));
+    assert!(script.contains("ansible_needs_a_playbook_as_the_entry"));
+    assert!(script.contains("opentofu_needs_a_module_directory"));
+    assert!(!script.contains("placeholder=\"site.yml\""));
+    let (status, style, _) = call(&app, "GET", "/app.css", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(style.as_str().unwrap_or("").contains("field-error"));
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap();
+
+    let (status, ansible, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(team),
+        Some(json!({
+            "name": "Empty playbook",
+            "tool": "ansible",
+            "entrypoint": "  ",
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{ansible}");
+    assert_eq!(ansible["error"], "ansible_needs_a_playbook_as_the_entry");
+
+    let (status, tofu, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(team),
+        Some(json!({
+            "name": "Empty module",
+            "tool": "opentofu",
+            "entrypoint": "",
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{tofu}");
+    assert_eq!(tofu["error"], "opentofu_needs_a_module_directory");
+
+    let (status, outside, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(team),
+        Some(json!({
+            "name": "Outside",
+            "tool": "ansible",
+            "entrypoint": "../secret",
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{outside}");
+    assert_eq!(outside["error"], "the_entry_path_must_be_relative_and_must");
+
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(team),
+        Some(json!({
+            "name": "Site",
+            "tool": "ansible",
+            "entrypoint": "site.yml",
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["entrypoint"], "site.yml");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn login_shell_job_and_webhook() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

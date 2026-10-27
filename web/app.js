@@ -929,7 +929,7 @@ async function pageTemplateForm(id) {
         ${templateCredentialFields(credentials, selectedCredentialIds(item))}
         <label class="field" id="playbook-field" hidden><span>${h("playbook_from_the_project")}</span><select name="playbook"><option value="">${h("other_path")}</option></select></label>
         <p class="small muted" id="entrypoint-note"></p>
-        <label class="field"><span id="entrypoint-label">${h("entry_path")}</span><input name="entrypoint" value="${esc(item.entrypoint)}" placeholder="site.yml"></label>
+        <label class="field" id="entrypoint-field"><span id="entrypoint-label">${h("entry_path")}</span><input name="entrypoint" value="${esc(item.entrypoint)}" placeholder="${h("for_example_site_yml")}"><span class="field-error" id="entrypoint-error" aria-live="polite"></span></label>
         <p class="small muted">${h("without_an_execution_environment_the_template_runs_on")}</p>
       </div>
       <div class="form-section" id="ansible-options"${item.tool === "ansible" ? "" : " hidden"}>
@@ -988,9 +988,52 @@ async function pageTemplateForm(id) {
   const form = document.querySelector("#template-form");
   bindChips(form);
   bindVaultPicker(form, credentials, selectedCredentialIds(item));
+  const entrypointErrors = new Set([
+    "ansible_needs_a_playbook_as_the_entry",
+    "opentofu_needs_a_module_directory",
+    "shell_needs_a_path_or_spec_script",
+    "the_entry_path_must_be_relative_and_must",
+  ]);
+  const chosenEntrypoint = () => {
+    const picked = form.tool.value === "ansible" && form.playbook.value
+      ? form.playbook.value
+      : form.entrypoint.value;
+    return picked.trim();
+  };
+  const showEntrypointError = (key, vars) => {
+    const node = document.querySelector("#entrypoint-error");
+    const message = t(key, vars);
+    if (node) node.textContent = message;
+    // A shell entry may stay empty when the script is set, so that
+    // pair must not stick as a validity error on the path field.
+    if (key === "shell_needs_a_path_or_spec_script") {
+      form.entrypoint.setCustomValidity("");
+      return;
+    }
+    form.entrypoint.setCustomValidity(message);
+  };
+  const clearEntrypointError = () => {
+    const node = document.querySelector("#entrypoint-error");
+    if (node) node.textContent = "";
+    form.entrypoint.setCustomValidity("");
+  };
+  const entrypointProblem = () => {
+    const entry = chosenEntrypoint();
+    if (form.tool.value === "ansible" && !entry) return "ansible_needs_a_playbook_as_the_entry";
+    if (form.tool.value === "opentofu" && !entry) return "opentofu_needs_a_module_directory";
+    return "";
+  };
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (!flushChips(form)) return;
+    const missing = entrypointProblem();
+    if (missing) {
+      showEntrypointError(missing);
+      form.entrypoint.reportValidity();
+      form.entrypoint.focus();
+      return;
+    }
+    clearEntrypointError();
     try {
       const selectedProject = projects.find((item) => item.id === form.project_id.value);
       const body = {
@@ -1005,7 +1048,7 @@ async function pageTemplateForm(id) {
         ],
         environment_id: form.environment_id.value || null,
         update_on_launch: selectedProject && selectedProject.source_type === "git" ? form.update_on_launch.checked : true,
-        entrypoint: form.tool.value === "ansible" && form.playbook.value ? form.playbook.value : form.entrypoint.value,
+        entrypoint: chosenEntrypoint(),
         extra_vars: jsonObject(form.extra_vars.value, "extra_variables"),
         spec: templateSpec(form),
         prompt_on_launch: form.prompt_on_launch.checked,
@@ -1014,6 +1057,11 @@ async function pageTemplateForm(id) {
       else await api("POST", "/api/templates", body);
       go("#/templates");
     } catch (error) {
+      if (error && entrypointErrors.has(error.message)) {
+        showEntrypointError(error.message, error.vars);
+        form.entrypoint.reportValidity();
+        form.entrypoint.focus();
+      }
       handle(error);
     }
   });
@@ -1034,7 +1082,15 @@ async function pageTemplateForm(id) {
         ? `<option value="${esc(current)}">${esc(current)}</option>`
         : "";
       select.innerHTML = `${known}${extra}<option value="">${h("other_path")}</option>`;
-      select.value = current && (books.includes(current) || extra) ? current : "";
+      if (current && (books.includes(current) || extra)) {
+        select.value = current;
+      } else if (books.length) {
+        select.value = books[0];
+        form.entrypoint.value = books[0];
+        clearEntrypointError();
+      } else {
+        select.value = "";
+      }
       if (!books.length) {
         note.textContent = t("no_playbooks_found_sync_the_git_project_first");
       }
@@ -1050,11 +1106,20 @@ async function pageTemplateForm(id) {
     document.querySelector("#shell-options").hidden = tool !== "shell";
     document.querySelector("#inventory-field").hidden = tool !== "ansible";
     const label = document.querySelector("#entrypoint-label");
-    if (tool === "ansible") label.textContent = t("playbook_path");
-    else if (tool === "opentofu") label.textContent = t("module_directory");
-    else label.textContent = t("script_path");
+    if (tool === "ansible") {
+      label.textContent = t("playbook_path");
+      form.entrypoint.placeholder = t("for_example_site_yml");
+    } else if (tool === "opentofu") {
+      label.textContent = t("module_directory");
+      form.entrypoint.placeholder = t("for_example_current_directory");
+    } else {
+      label.textContent = t("script_path");
+      form.entrypoint.placeholder = t("for_example_scripts_run_sh");
+    }
+    form.entrypoint.setAttribute("aria-required", tool === "shell" ? "false" : "true");
   };
   form.tool.addEventListener("change", () => {
+    clearEntrypointError();
     showToolSections();
     loadPlaybooks();
   });
@@ -1070,7 +1135,14 @@ async function pageTemplateForm(id) {
   });
   showProjectUpdate();
   form.playbook.addEventListener("change", () => {
-    if (form.playbook.value) form.entrypoint.value = form.playbook.value;
+    if (form.playbook.value) {
+      form.entrypoint.value = form.playbook.value;
+      clearEntrypointError();
+    }
+  });
+  form.entrypoint.addEventListener("input", () => clearEntrypointError());
+  form.script.addEventListener("input", () => {
+    if (form.tool.value === "shell") clearEntrypointError();
   });
   loadPlaybooks();
   const remove = document.querySelector("#delete-template");
