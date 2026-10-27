@@ -21,6 +21,7 @@ fn config(dir: &std::path::Path) -> Config {
         job_timeout_secs: 60,
         local_jobs: LocalJobs::All,
         project_roots: vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples")],
+        hsts: false,
         ldap: None,
     }
 }
@@ -64,6 +65,61 @@ async fn call(
             .unwrap_or(Value::String(String::from_utf8_lossy(&bytes).to_string()))
     };
     (status, parsed, cookie)
+}
+
+#[tokio::test]
+async fn responses_carry_standard_headers() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-headers-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    assert!(!state.cfg.hsts);
+    let app = koreograf::router(state);
+    for path in ["/", "/app.js", "/api/me", "/healthz", "/metrics"] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let headers = response.headers();
+        assert_eq!(headers["x-content-type-options"], "nosniff", "{path}");
+        assert_eq!(headers["x-frame-options"], "DENY", "{path}");
+        let policy = headers["content-security-policy"].to_str().unwrap();
+        assert!(policy.contains("frame-ancestors 'none'"), "{path} {policy}");
+        assert!(
+            policy.contains("style-src-attr 'unsafe-inline'"),
+            "{path} {policy}"
+        );
+        assert_eq!(headers["referrer-policy"], "no-referrer", "{path}");
+        assert_eq!(
+            headers["permissions-policy"], "camera=(), microphone=(), geolocation=()",
+            "{path}"
+        );
+        assert!(headers.get("strict-transport-security").is_none(), "{path}");
+    }
+    drop(app);
+
+    let mut enabled = config(&dir);
+    enabled.hsts = true;
+    let state = koreograf::boot(enabled).unwrap();
+    let app = koreograf::router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.headers()["strict-transport-security"],
+        "max-age=31536000"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]

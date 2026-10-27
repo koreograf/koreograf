@@ -19,6 +19,7 @@ services:
       KOREOGRAF_SECRET_KEY: ${KOREOGRAF_SECRET_KEY:-}
       # Logformat und Datenbank-URL gelten beim Prozessstart und kommen aus .env.
       KOREOGRAF_LOG_FORMAT: ${KOREOGRAF_LOG_FORMAT:-}
+      KOREOGRAF_HSTS: ${KOREOGRAF_HSTS:-false}
       KOREOGRAF_DATABASE_URL: ${KOREOGRAF_DATABASE_URL:-}
       # Verzeichnis, Proxy, Runner und Zeitlimit gelten bis zum ersten Speichern
       # unter Einstellungen. Danach ersetzt die Datenbank diese Variablen.

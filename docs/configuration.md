@@ -24,6 +24,7 @@ See `.env.example`. Comments in that file are English. Copy it to `.env` before 
 | `KOREOGRAF_JOB_TIMEOUT_SECS` | `1800` (30–86400) |
 | `KOREOGRAF_SECRET_KEY` | 64 hex characters, otherwise `data/secret.key` |
 | `KOREOGRAF_LOG_FORMAT` | empty, text on stdout. `json` for Promtail |
+| `KOREOGRAF_HSTS` | false. `true` sends `Strict-Transport-Security` |
 | `KOREOGRAF_DATABASE_URL` | empty, SQLite. `postgres://` is rejected |
 | `KOREOGRAF_LDAP_BIND_DN` | empty. Required when `KOREOGRAF_LDAP_URL` is set |
 | `KOREOGRAF_LDAP_BIND_PASSWORD` | empty. Required when `KOREOGRAF_LDAP_URL` is set |

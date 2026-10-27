@@ -21,6 +21,9 @@ admin:
 # 64 Hex-Zeichen. Leer: der Pod erzeugt data/secret.key im Volume.
 secretKey: ""
 
+# true nur hinter HTTPS. Auf plain HTTP bleibt Strict-Transport-Security aus.
+hsts: false
+
 # Name eines bestehenden Secrets. Leer: das Chart legt das Secret an.
 # existingSecretKeys sind die Schlüsselnamen in diesem Secret.
 existingSecret: ""

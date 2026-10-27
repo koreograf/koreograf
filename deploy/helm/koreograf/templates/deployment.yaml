@@ -68,6 +68,8 @@ spec:
               value: /opt/koreograf/web
             - name: KOREOGRAF_EXAMPLES
               value: /opt/koreograf/examples
+            - name: KOREOGRAF_HSTS
+              value: {{ .Values.hsts | quote }}
             - name: KOREOGRAF_RUNNER
               value: {{ .Values.runner.mode | quote }}
             - name: KOREOGRAF_LOCAL_RUNNER_FOR

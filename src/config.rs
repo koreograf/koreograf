@@ -102,6 +102,8 @@ pub struct Config {
     /// Allowed path-project directories. `from_env` always includes `examples_dir`.
     pub project_roots: Vec<PathBuf>,
     pub ldap: Option<LdapConfig>,
+    /// `KOREOGRAF_HSTS`. Off unless the process is reached over HTTPS.
+    pub hsts: bool,
 }
 
 impl Config {
@@ -162,6 +164,7 @@ impl Config {
             local_jobs: LocalJobs::parse(&env_string("KOREOGRAF_LOCAL_RUNNER_FOR")),
             project_roots,
             ldap,
+            hsts: env_flag("KOREOGRAF_HSTS"),
         }
     }
 }

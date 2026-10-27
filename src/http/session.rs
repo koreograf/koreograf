@@ -498,6 +498,7 @@ mod tests {
             job_timeout_secs: 60,
             local_jobs: LocalJobs::All,
             project_roots: Vec::new(),
+            hsts: false,
             ldap: None,
         })
         .expect("boot");
