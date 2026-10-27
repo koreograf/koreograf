@@ -22,6 +22,7 @@ See `.env.example`. Comments in that file are English. Copy it to `.env` before 
 | `KOREOGRAF_LOCAL_RUNNER_FOR` | `admins` (`all` on a trusted network) |
 | `KOREOGRAF_PROJECT_ROOTS` | empty, plus the examples directory. Comma-separated absolute directories |
 | `KOREOGRAF_JOB_TIMEOUT_SECS` | `1800` (30–86400) |
+| `KOREOGRAF_JOB_OUTPUT_LINES` | `8000` (100 to 100000) |
 | `KOREOGRAF_SECRET_KEY` | 64 hex characters, otherwise `data/secret.key` |
 | `KOREOGRAF_LOG_FORMAT` | empty, text on stdout. `json` for Promtail |
 | `KOREOGRAF_HSTS` | false. `true` sends `Strict-Transport-Security` |
@@ -45,7 +46,9 @@ Directory sign-in, including these four variables, is described in [Organization
 
 `KOREOGRAF_PROJECT_ROOTS` lists absolute directories separated by commas. The directory in `KOREOGRAF_EXAMPLES` is always an allowed root, so the seeded Demo project runs on a default install. An operator can add a path project or a `file://` Git URL when the directory is under one of these roots. An administrator can save a path outside them. At run time the canonical directory must still be under an allowed root, including a path that was accepted when it was saved, so that saved path does not run until its directory is listed. `/`, `/etc`, `/proc`, `/sys`, `/dev`, `/run`, `/boot`, `/root`, `/var/run`, and the data directory are rejected for everyone. A `file://` URL is accepted for an empty host or `localhost`. Git's file protocol stays off for every other URL.
 
-What the database file holds, and why a `postgres://` URL stops startup, is in [Database and backup](backup-restore.md). Log fields are in [Logs and Prometheus](observability.md). Directory, proxy, runner, and timeout values saved in the UI are in [Organizations, teams, LDAP, and Active Directory](authentication.md#saved-settings).
+`KOREOGRAF_JOB_OUTPUT_LINES` is the number of lines kept for each of stdout and stderr. The process clamps a value outside 100 to 100000. The job keeps the first three quarters and the last quarter. Download and the job page are described in the [README](../README.md#job-output).
+
+What the database file holds, and why a `postgres://` URL stops startup, is in [Database and backup](backup-restore.md). Log fields are in [Logs and Prometheus](observability.md). Directory, proxy, runner, timeout, and output-line values saved in the UI are in [Organizations, teams, LDAP, and Active Directory](authentication.md#saved-settings).
 
 ## Docker Compose
 

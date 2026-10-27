@@ -2083,6 +2083,24 @@ pub fn events_after(
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
 }
 
+pub fn events_last(c: &Connection, job_id: &str, limit: i64) -> AppResult<Vec<JobEvent>> {
+    let mut stmt = c.prepare(
+        "SELECT id, ts, stream, line FROM job_events
+         WHERE job_id = ?1 ORDER BY id DESC LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(params![job_id, limit], |row| {
+        Ok(JobEvent {
+            id: row.get(0)?,
+            ts: row.get(1)?,
+            stream: row.get(2)?,
+            line: row.get(3)?,
+        })
+    })?;
+    let mut events = rows.collect::<Result<Vec<_>, _>>()?;
+    events.reverse();
+    Ok(events)
+}
+
 pub fn insert_workflow(c: &Connection, item: &Workflow) -> AppResult<()> {
     c.execute(
         "INSERT INTO workflows (

@@ -74,6 +74,8 @@ curl -fsS -N -b "$JAR" "$BASE/api/jobs/$JOB_ID/events?after=0"
 curl -fsS -b "$JAR" "$BASE/api/jobs/$JOB_ID/output"
 ```
 
+`/output` is the kept log: the first three quarters of the line limit and the last quarter, for stdout and for stderr. The default limit is 8000 lines. The download stops at 8 MiB.
+
 `POST /api/login` takes `username` and `password` and returns 200 with the session cookie. Creating a credential needs an owner. Launch returns 202 and needs a JSON object. `extra_vars` is that object, or `{}`.
 
 On a machine without Compose, read `data/initial-admin-password` instead of `docker compose exec`, and use the same JSON.

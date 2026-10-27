@@ -4310,6 +4310,7 @@ function settingsBody(form) {
     },
     runner: form.runner.value,
     job_timeout_secs: Number(form.job_timeout_secs.value),
+    job_output_lines: Number(form.job_output_lines.value),
     clear,
   };
 }
@@ -4396,7 +4397,9 @@ async function pageSettings(notice) {
           </select>
         </label>
         <label class="field"><span>${h("time_limit_in_seconds")}</span><input class="tiny" name="job_timeout_secs" type="number" min="30" max="86400" required value="${esc(String(item.job_timeout_secs || 1800))}"></label>
+        <label class="field"><span>${h("output_lines")}</span><input class="tiny" name="job_output_lines" type="number" min="100" max="100000" required value="${esc(String(item.job_output_lines || 8000))}"></label>
       </div>
+      <p class="small muted">${h("the_log_keeps_the_first_three_quarters_and_the_last")}</p>
       <p class="small muted">${h("automatic_uses_an_execution_environment_when_docker_or")}</p>
     </section>
     <p class="small muted">${h("saving_replaces_the_environment_variables_an_empty_password")}</p>

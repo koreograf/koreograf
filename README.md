@@ -77,6 +77,16 @@ Sign in, select the team `Plattform`, and press `Test alert`. The workflow runs 
 
 `plan` reads the saved state and does not change resources. `apply` keeps that state for one team and one template at `data/cache/<team>/tofu-state/<template>/terraform.tfstate`. The next apply of the same template sees the resources from the last run. The plugin cache stays at `data/cache/<team>/tofu`, and `TF_DATA_DIR` stays in the job directory. Another team has a different directory. The state file is local to this controller and is not in the backup zip. Use a remote backend when the state has to survive a new data directory or be used from more than one machine. `apply` writes a warning when the module has no remote backend. Details are in [Jobs](docs/jobs.md#what-the-cache-changes).
 
+## Job output
+
+Each of stdout and stderr keeps the first three quarters of a line limit and the last quarter. The default limit is 8000 lines, so a long job keeps the first 6000 and the last 2000. A system line between those parts says how many lines were left out. Lines after a cancel are still discarded.
+
+`KOREOGRAF_JOB_OUTPUT_LINES` sets the limit. Values outside 100 to 100000 are clamped. An administrator can change the same limit under Settings. The next job uses the new value. The tail lines wait in memory until the stream ends, and that buffer stays within 8 MiB per stream.
+
+`GET /api/jobs/{id}/output` downloads the kept log. The file stops at 8 MiB and then ends with `… output truncated.` The job page shows that log. When more than 2000 lines are stored, the page shows the start and the end and says that the middle of the view was left out.
+
+Play recap lines and `fatal:` lines are read from the whole stream, including lines that are not kept, so failed hosts still follow the real end of the play.
+
 ## Documentation
 
 - [Installation](docs/installation.md) — run on a machine, Docker Compose, and Helm.

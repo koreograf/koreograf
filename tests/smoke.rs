@@ -19,6 +19,7 @@ fn config(dir: &std::path::Path) -> Config {
         admin_password: Some("test-admin-pass".into()),
         runner: RunnerMode::Local,
         job_timeout_secs: 60,
+        job_output_lines: 8_000,
         local_jobs: LocalJobs::All,
         project_roots: vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples")],
         hsts: false,
@@ -711,6 +712,108 @@ async fn failed_job_shows_parameters_and_can_be_relaunched() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{denied}");
     assert_eq!(denied["error"], "only_ansible_jobs_have_failed_hosts");
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn oversized_job_output_keeps_the_recap_in_the_download() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-output-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut cfg = config(&dir);
+    cfg.job_output_lines = 100;
+    let state = koreograf::boot(cfg).unwrap();
+    let app = koreograf::router(state);
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+    let script = "i=1\nwhile [ \"$i\" -le 140 ]; do\n  printf 'bulk-%s\\n' \"$i\"\n  i=$((i + 1))\ndone\nprintf '%s\\n' 'fatal: [ghost]: FAILED! => {}'\nprintf '%s\\n' 'PLAY RECAP'\nprintf '%s\\n' 'web-9 : ok=1 changed=0 unreachable=0 failed=1 skipped=0 rescued=0 ignored=0'\nprintf '%s\\n' 'MARKER-TAIL-19'\nexit 1\n";
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Overflow",
+            "tool": "shell",
+            "entrypoint": "",
+            "spec": {"script": script}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().unwrap();
+    let (status, launched, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"extra_vars": {}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{launched}");
+    let job_id = launched["id"].as_str().unwrap();
+    let mut failed = Value::Null;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let (status, body, _) = call(
+            &app,
+            "GET",
+            &format!("/api/jobs/{job_id}"),
+            Some(&cookie),
+            Some(&team),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        if body["status"] == "failed" || body["status"] == "successful" {
+            failed = body;
+            break;
+        }
+    }
+    assert_eq!(failed["status"], "failed", "{failed}");
+    assert_eq!(failed["failed_hosts"], json!(["web-9"]));
+    let events = failed["events"].as_array().unwrap();
+    assert!(events.iter().any(|event| event["line"]
+        .as_str()
+        .unwrap_or("")
+        .contains("MARKER-TAIL-19")));
+    let output_request = Request::builder()
+        .method("GET")
+        .uri(format!("/api/jobs/{job_id}/output"))
+        .header("cookie", &cookie)
+        .header("x-team-id", &team)
+        .body(Body::empty())
+        .unwrap();
+    let output = app.clone().oneshot(output_request).await.unwrap();
+    assert_eq!(output.status(), StatusCode::OK);
+    let output_body = output.into_body().collect().await.unwrap().to_bytes();
+    let output_text = String::from_utf8_lossy(&output_body);
+    assert!(output_text.contains("MARKER-TAIL-19"), "{output_text}");
+    assert!(output_text.contains("bulk-1"), "{output_text}");
+    assert!(
+        output_text.contains("limit 100; kept the first 75 and the last 25"),
+        "{output_text}"
+    );
+    assert!(!output_text.contains("bulk-80"), "{output_text}");
+    assert!(
+        !output_text.contains("Further output is discarded (limit"),
+        "{output_text}"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -3866,7 +3969,8 @@ async fn admin_settings_hide_secrets_and_apply_without_restart() {
             "no_proxy": "localhost,127.0.0.1"
         },
         "runner": "docker",
-        "job_timeout_secs": 90
+        "job_timeout_secs": 90,
+        "job_output_lines": 4000
     });
     let (status, saved, _) = call(
         &app,
@@ -3890,6 +3994,7 @@ async fn admin_settings_hide_secrets_and_apply_without_restart() {
     assert_eq!(saved["proxy"]["url"], "http://proxy.example:3128");
     assert_eq!(saved["runner"], "docker");
     assert_eq!(saved["job_timeout_secs"], 90);
+    assert_eq!(saved["job_output_lines"], 4000);
     assert!(saved["ldap"].get("bind_password").is_none());
     assert!(saved["proxy"].get("password").is_none());
 
@@ -4024,6 +4129,7 @@ async fn admin_settings_hide_secrets_and_apply_without_restart() {
     assert_eq!(reset["source"], "env");
     assert_eq!(reset["runner"], "local");
     assert_eq!(reset["job_timeout_secs"], 60);
+    assert_eq!(reset["job_output_lines"], 8000);
 
     let _ = std::fs::remove_dir_all(&dir);
 }

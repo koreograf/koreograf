@@ -131,6 +131,13 @@ impl CookieSecure {
     }
 }
 
+/// Default lines kept for each of stdout and stderr.
+pub const OUTPUT_LINES_DEFAULT: u64 = 8_000;
+/// Lowest accepted output line limit.
+pub const OUTPUT_LINES_MIN: u64 = 100;
+/// Highest accepted output line limit.
+pub const OUTPUT_LINES_MAX: u64 = 100_000;
+
 #[derive(Clone)]
 pub struct Config {
     pub bind: String,
@@ -142,6 +149,8 @@ pub struct Config {
     pub admin_password: Option<String>,
     pub runner: RunnerMode,
     pub job_timeout_secs: u64,
+    /// `KOREOGRAF_JOB_OUTPUT_LINES`. Lines kept for each of stdout and stderr.
+    pub job_output_lines: u64,
     /// `KOREOGRAF_LOCAL_RUNNER_FOR`. Not a saved setting.
     pub local_jobs: LocalJobs,
     /// Allowed path-project directories. `from_env` always includes `examples_dir`.
@@ -210,6 +219,10 @@ impl Config {
                 .parse()
                 .unwrap_or(1800)
                 .clamp(30, 86_400),
+            job_output_lines: env_or("KOREOGRAF_JOB_OUTPUT_LINES", "8000")
+                .parse()
+                .unwrap_or(OUTPUT_LINES_DEFAULT)
+                .clamp(OUTPUT_LINES_MIN, OUTPUT_LINES_MAX),
             local_jobs: LocalJobs::parse(&env_string("KOREOGRAF_LOCAL_RUNNER_FOR")),
             project_roots,
             ldap,

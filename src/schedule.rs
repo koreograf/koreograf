@@ -1227,6 +1227,7 @@ mod tests {
             admin_password: Some("test-admin-pass".into()),
             runner: crate::config::RunnerMode::Local,
             job_timeout_secs: 60,
+            job_output_lines: 8_000,
             local_jobs: crate::config::LocalJobs::Admins,
             project_roots: vec![
                 std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples")
