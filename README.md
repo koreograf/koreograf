@@ -6,7 +6,8 @@ Koreograf is a prototype for team-scoped automation. One Rust binary serves the 
 
 ## Status
 
-Alpha [0.1.0-alpha.4](CHANGELOG.md). `Cargo.toml` uses the same pre-release version.
+Alpha [0.1.0-alpha.5](CHANGELOG.md). <!-- x-release-please-version -->
+`Cargo.toml` uses the same pre-release version.
 
 This is an early prototype, not a replacement for AWX and not a rebuild of Semaphore. There are no surveys, no Receptor, and no high-availability setup. A schedule can start a job or a workflow at a local clock time. The database today is one SQLite file with one writer. PostgreSQL is not connected yet.
 
@@ -23,7 +24,16 @@ cp .env.example .env
 docker compose up -d
 ```
 
-Compose pulls `ghcr.io/koreograf/koreograf:0.1.0-alpha.4`. It does not compile. To build this checkout instead, run `docker compose up --build -d`. buildx is only for publishing a multi-architecture image.
+Compose pulls `ghcr.io/koreograf/koreograf:0.1.0-alpha.5`. <!-- x-release-please-version -->
+It does not compile. Build this checkout without replacing that published tag:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up --build -d
+```
+
+The local image is tagged `koreograf:local`. buildx is only for publishing a multi-architecture image.
+
+The port mapping is `127.0.0.1:8080:8080`, so the UI is only on loopback. Change it to `8080:8080` to publish every interface, and put TLS on a reverse proxy when other machines should reach the UI.
 
 The UI is at `http://127.0.0.1:8080`. Sign in as `admin`. The generated password is one line in the container. The file is mode `0600`, and the password is not written to the log.
 
@@ -57,7 +67,7 @@ The UI is at `http://127.0.0.1:8080`. Without `KOREOGRAF_ADMIN_PASSWORD`, the fi
 helm upgrade --install koreograf deploy/helm/koreograf
 ```
 
-If `admin.password` is empty, the first password is in the volume at `/var/lib/koreograf/initial-admin-password`. Delete that file after the first sign-in. Tool requirements, the image tag, and path projects are in [Installation](docs/installation.md). A copy-paste API session is in [API](docs/api.md#walkthrough).
+If `admin.password` is empty, the first password is in the volume at `/var/lib/koreograf/initial-admin-password`. Delete that file after the first sign-in. Set `existingSecret` when the admin password, the secret key, and the LDAP bind password already live in a Secret. `existingSecretKeys` selects the key names. The chart then skips its own Secret. Tool requirements, the image tag, the non-root defaults, and path projects are in [Installation](docs/installation.md). A copy-paste API session is in [API](docs/api.md#walkthrough).
 
 ## Demo
 

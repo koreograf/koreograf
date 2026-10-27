@@ -71,7 +71,7 @@ jobs:
         run: |
           curl -fsSL -o /tmp/shellcheck.tar.xz https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
           tar -xJf /tmp/shellcheck.tar.xz -C /tmp
-          /tmp/shellcheck-v0.11.0/shellcheck src/wrapper.sh examples/demo/health.sh examples/demo/escalate.sh
+          /tmp/shellcheck-v0.11.0/shellcheck src/wrapper.sh entrypoint.sh examples/demo/health.sh examples/demo/escalate.sh
 
   hooks:
     name: pre-commit
@@ -110,8 +110,17 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v3.22.1
-      - name: Render the chart
-        run: helm template koreograf deploy/helm/koreograf >/tmp/koreograf.yaml
+      - name: Lint and render the chart
+        run: |
+          helm lint deploy/helm/koreograf
+          helm template koreograf deploy/helm/koreograf >/tmp/koreograf.yaml
+          helm template koreograf deploy/helm/koreograf \
+            --set runner.dockerSocket.enabled=true >/tmp/koreograf-root.yaml
+          helm template koreograf deploy/helm/koreograf \
+            --set existingSecret=koreograf-secrets >/tmp/koreograf-external.yaml
+          curl -fsSL -o /tmp/kubeconform.tar.gz https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
+          /tmp/kubeconform -strict -summary /tmp/koreograf.yaml /tmp/koreograf-root.yaml /tmp/koreograf-external.yaml
 
   compose:
     name: compose
@@ -142,11 +151,25 @@ jobs:
           assert env["KOREOGRAF_BIND"] == "0.0.0.0:8080"
           for name in ("HTTP_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"):
               assert env.get(name) is None, (name, env.get(name))
+          svc = data["services"]["koreograf"]
+          image = svc["image"]
+          assert image.startswith("ghcr.io/koreograf/koreograf:"), image
+          assert not svc.get("build"), svc.get("build")
+          ports = svc["ports"]
+          assert any(
+              p.get("host_ip") == "127.0.0.1"
+              and str(p.get("published")) == "8080"
+              and p.get("target") == 8080
+              for p in ports
+          ), ports
           PY
 
   image:
     name: image
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Lint the Dockerfile
@@ -154,9 +177,19 @@ jobs:
           curl -fsSL -o /tmp/hadolint https://github.com/hadolint/hadolint/releases/download/v2.15.1/hadolint-Linux-x86_64
           chmod +x /tmp/hadolint
           /tmp/hadolint Dockerfile
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build the image
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: docker build --tag koreograf:ci .
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: false
+          load: false
+          provenance: false
+          sbom: false
+          tags: koreograf:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   renovate:
     name: renovate
