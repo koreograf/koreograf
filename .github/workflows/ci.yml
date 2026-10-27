@@ -71,7 +71,7 @@ jobs:
         run: |
           curl -fsSL -o /tmp/shellcheck.tar.xz https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
           tar -xJf /tmp/shellcheck.tar.xz -C /tmp
-          /tmp/shellcheck-v0.11.0/shellcheck src/wrapper.sh examples/demo/health.sh examples/demo/escalate.sh
+          /tmp/shellcheck-v0.11.0/shellcheck src/wrapper.sh entrypoint.sh examples/demo/health.sh examples/demo/escalate.sh
 
   hooks:
     name: pre-commit
@@ -110,8 +110,17 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v3.22.1
-      - name: Render the chart
-        run: helm template koreograf deploy/helm/koreograf >/tmp/koreograf.yaml
+      - name: Lint and render the chart
+        run: |
+          helm lint deploy/helm/koreograf
+          helm template koreograf deploy/helm/koreograf >/tmp/koreograf.yaml
+          helm template koreograf deploy/helm/koreograf \
+            --set runner.dockerSocket.enabled=true >/tmp/koreograf-root.yaml
+          helm template koreograf deploy/helm/koreograf \
+            --set existingSecret=koreograf-secrets >/tmp/koreograf-external.yaml
+          curl -fsSL -o /tmp/kubeconform.tar.gz https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
+          /tmp/kubeconform -strict -summary /tmp/koreograf.yaml /tmp/koreograf-root.yaml /tmp/koreograf-external.yaml
 
   compose:
     name: compose
@@ -142,6 +151,17 @@ jobs:
           assert env["KOREOGRAF_BIND"] == "0.0.0.0:8080"
           for name in ("HTTP_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"):
               assert env.get(name) is None, (name, env.get(name))
+          svc = data["services"]["koreograf"]
+          image = svc["image"]
+          assert image.startswith("ghcr.io/koreograf/koreograf:"), image
+          assert not svc.get("build"), svc.get("build")
+          ports = svc["ports"]
+          assert any(
+              p.get("host_ip") == "127.0.0.1"
+              and str(p.get("published")) == "8080"
+              and p.get("target") == 8080
+              for p in ports
+          ), ports
           PY
 
   image:
@@ -154,9 +174,44 @@ jobs:
           curl -fsSL -o /tmp/hadolint https://github.com/hadolint/hadolint/releases/download/v2.15.1/hadolint-Linux-x86_64
           chmod +x /tmp/hadolint
           /tmp/hadolint Dockerfile
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build the image
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: docker build --tag koreograf:ci .
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: false
+          load: true
+          provenance: false
+          sbom: false
+          tags: koreograf:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Start on a root-owned data volume
+        run: |
+          digest=sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8
+          docker volume create koreograf-upgrade >/dev/null
+          cleanup() {
+            docker rm -f koreograf-upgrade >/dev/null 2>&1 || true
+            docker volume rm koreograf-upgrade >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker run --rm -v koreograf-upgrade:/var/lib/koreograf "debian:bookworm-slim@${digest}" \
+            sh -c 'printf secret > /var/lib/koreograf/secret.key && chmod 600 /var/lib/koreograf/secret.key && chown 0:0 /var/lib/koreograf /var/lib/koreograf/secret.key'
+          docker run -d --name koreograf-upgrade -v koreograf-upgrade:/var/lib/koreograf koreograf:ci
+          ok=0
+          for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+            if docker exec koreograf-upgrade python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"; then
+              ok=1
+              break
+            fi
+            sleep 2
+          done
+          docker logs koreograf-upgrade || true
+          docker stop koreograf-upgrade >/dev/null
+          owner=$(docker run --rm -v koreograf-upgrade:/var/lib/koreograf "debian:bookworm-slim@${digest}" stat -c '%u:%g' /var/lib/koreograf/secret.key)
+          test "$ok" = 1
+          test "$owner" = "10001:10001"
 
   renovate:
     name: renovate

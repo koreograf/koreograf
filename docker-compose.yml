@@ -1,11 +1,10 @@
 services:
   koreograf:
-    # Fertiges Image von GHCR. docker compose up --build kompiliert dieses Checkout.
-    image: ghcr.io/koreograf/koreograf:0.1.0-alpha.4
+    # Published image. A local build uses docker-compose.build.yml and the tag koreograf:local.
+    image: ghcr.io/koreograf/koreograf:0.1.0-alpha.5 # x-release-please-version
     pull_policy: missing
-    build: .
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       KOREOGRAF_BIND: 0.0.0.0:8080
       KOREOGRAF_DATA: /var/lib/koreograf

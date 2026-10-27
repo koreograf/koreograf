@@ -6,7 +6,7 @@ fullnameOverride: ""
 
 image:
   repository: ghcr.io/koreograf/koreograf
-  tag: "0.1.0-alpha.4"
+  tag: "0.1.0-alpha.5" # x-release-please-version
   pullPolicy: IfNotPresent
 
 service:
@@ -20,6 +20,20 @@ admin:
 
 # 64 Hex-Zeichen. Leer: der Pod erzeugt data/secret.key im Volume.
 secretKey: ""
+
+# Name eines bestehenden Secrets. Leer: das Chart legt das Secret an.
+# existingSecretKeys sind die Schlüsselnamen in diesem Secret.
+existingSecret: ""
+existingSecretKeys:
+  adminPassword: admin-password
+  secretKey: secret-key
+  ldapBindPassword: ldap-bind-password
+
+# Leer: non-root (uid 10001), ausser runner.dockerSocket.enabled ist true.
+# Ein gesetztes Objekt ersetzt die Vorgabe komplett.
+# fsGroup 10001 setzt der Volume-Treiber. Ohne fsGroup bleiben alte Dateien root.
+podSecurityContext: {}
+securityContext: {}
 
 runner:
   # auto, docker oder local

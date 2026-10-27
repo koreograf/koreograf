@@ -26,7 +26,11 @@
           "type": "yaml",
           "path": "deploy/helm/koreograf/Chart.yaml",
           "jsonpath": "$.appVersion"
-        }
+        },
+        "docker-compose.yml",
+        "deploy/helm/koreograf/values.yaml",
+        "README.md",
+        "docs/installation.md"
       ]
     }
   }
