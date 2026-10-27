@@ -9,11 +9,15 @@ mod work;
 use std::path::Path;
 
 use axum::extract::{DefaultBodyLimit, State};
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::Router;
+use tower_http::set_header::response::SetMultipleResponseHeadersLayer;
 use tower_http::trace::TraceLayer;
+
+/// Style attributes stay inline. `style-src 'self'` alone would block them.
+const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; img-src 'self' data:; style-src 'self'; style-src-attr 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 
 use crate::auth::{self, AuthUser, Role};
 use crate::db::{self, Job, JobEvent};
@@ -184,7 +188,36 @@ pub fn router(state: Shared) -> Router {
         .route("/hooks/{id}/{token}", post(work::ingest))
         .nest("/api", api)
         .layer(TraceLayer::new_for_http())
+        .layer(response_headers(state.cfg.hsts))
         .with_state(state)
+}
+
+fn response_headers(hsts: bool) -> SetMultipleResponseHeadersLayer<Response> {
+    let hsts = hsts.then(|| HeaderValue::from_static("max-age=31536000"));
+    SetMultipleResponseHeadersLayer::if_not_present(vec![
+        (
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        )
+            .into(),
+        (header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY")).into(),
+        (
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(CONTENT_SECURITY_POLICY),
+        )
+            .into(),
+        (
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("no-referrer"),
+        )
+            .into(),
+        (
+            HeaderName::from_static("permissions-policy"),
+            HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
+        )
+            .into(),
+        (header::STRICT_TRANSPORT_SECURITY, hsts).into(),
+    ])
 }
 
 async fn health() -> &'static str {

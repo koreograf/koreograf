@@ -1231,6 +1231,7 @@ mod tests {
             project_roots: vec![
                 std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples")
             ],
+            hsts: false,
             ldap: None,
         }
     }
