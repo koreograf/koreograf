@@ -433,6 +433,18 @@ textarea { min-height: 88px; resize: vertical; }
 }
 .log div.system { color: #fdba74; }
 .log div.stderr { color: #fda4af; }
+.log div.warn { color: #fbbf24; }
+.log div.fail { color: #fb7185; font-weight: 700; }
+.log .log-summary {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: -14px -16px 8px;
+  padding: 8px 16px;
+  background: #292524;
+  color: #fecdd3;
+  border-bottom: 1px solid #fb7185;
+}
 .tabs { display: flex; gap: 8px; margin: 0; }
 .tab-bar { flex-wrap: wrap; margin: 0 0 12px; }
 .kv { display: grid; grid-template-columns: minmax(140px, 220px) 1fr; gap: 8px 16px; margin: 0 0 16px; }
