@@ -1,0 +1,269 @@
+# Lab stack for a manual end-to-end pass. It does not replace docker-compose.yml.
+# up.sh generates tests/harness/.secrets/compose.env. Host ports stay on loopback.
+name: koreograf-harness
+
+networks:
+  lab:
+    driver: bridge
+
+volumes:
+  koreograf-data:
+  ldap-data:
+  ldap-config:
+  netbox-postgres:
+  netbox-redis:
+  netbox-media:
+
+services:
+  ldap:
+    image: osixia/openldap:1.5.0
+    environment:
+      LDAP_ORGANISATION: Koreograf Lab
+      LDAP_DOMAIN: example.com
+      LDAP_ADMIN_PASSWORD: ${LDAP_ADMIN_PASSWORD}
+      LDAP_TLS: "false"
+      LDAP_RFC2307BIS_SCHEMA: "false"
+    volumes:
+      - ldap-data:/var/lib/ldap
+      - ldap-config:/etc/ldap/slapd.d
+    networks:
+      - lab
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - ldapsearch -x -H ldap://127.0.0.1:389 -b dc=example,dc=com -D cn=admin,dc=example,dc=com -w "$$LDAP_ADMIN_PASSWORD" -s base dn >/dev/null
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: netbox
+      POSTGRES_USER: netbox
+      POSTGRES_PASSWORD: ${NETBOX_DB_PASSWORD}
+    volumes:
+      - netbox-postgres:/var/lib/postgresql/data
+    networks:
+      - lab
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U netbox -d netbox"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--requirepass", "${NETBOX_REDIS_PASSWORD}"]
+    volumes:
+      - netbox-redis:/data
+    networks:
+      - lab
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - redis-cli -a "$$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    environment:
+      REDIS_PASSWORD: ${NETBOX_REDIS_PASSWORD}
+
+  netbox:
+    image: docker.io/netboxcommunity/netbox:v4.7.3-5.1.1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres
+      DB_NAME: netbox
+      DB_USER: netbox
+      DB_PASSWORD: ${NETBOX_DB_PASSWORD}
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ${NETBOX_REDIS_PASSWORD}
+      REDIS_DATABASE: "0"
+      REDIS_CACHE_HOST: redis
+      REDIS_CACHE_PASSWORD: ${NETBOX_REDIS_PASSWORD}
+      REDIS_CACHE_DATABASE: "1"
+      SECRET_KEY: ${NETBOX_SECRET_KEY}
+      ALLOWED_HOSTS: "*"
+      SKIP_SUPERUSER: "false"
+      SUPERUSER_NAME: admin
+      SUPERUSER_EMAIL: admin@example.com
+      SUPERUSER_PASSWORD: ${NETBOX_SUPERUSER_PASSWORD}
+      API_TOKEN_PEPPER_1: ${NETBOX_API_TOKEN_PEPPER}
+      NETBOX_HARNESS_TOKEN: ${NETBOX_HARNESS_TOKEN}
+      MAX_DB_WAIT_TIME: "180"
+      DB_WAIT_TIMEOUT: "3"
+    volumes:
+      - netbox-media:/opt/netbox/netbox/media
+    ports:
+      - "127.0.0.1:18081:8080"
+    networks:
+      - lab
+    healthcheck:
+      test:
+        - CMD
+        - /opt/netbox/venv/bin/python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/login/', timeout=5)
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  koreograf:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: koreograf:harness
+    depends_on:
+      ldap:
+        condition: service_healthy
+    environment:
+      KOREOGRAF_BIND: 0.0.0.0:8080
+      KOREOGRAF_DATA: /var/lib/koreograf
+      KOREOGRAF_WEB: /opt/koreograf/web
+      KOREOGRAF_EXAMPLES: /opt/koreograf/examples
+      KOREOGRAF_ADMIN_USER: admin
+      KOREOGRAF_ADMIN_PASSWORD: ${KOREOGRAF_ADMIN_PASSWORD}
+      KOREOGRAF_RUNNER: local
+      KOREOGRAF_LOCAL_RUNNER_FOR: all
+      KOREOGRAF_PROJECT_ROOTS: /opt/koreograf/harness
+      KOREOGRAF_JOB_TIMEOUT_SECS: "900"
+      KOREOGRAF_COOKIE_SECURE: "false"
+      KOREOGRAF_LDAP_URL: ldap://ldap:389
+      KOREOGRAF_LDAP_MODE: ldap
+      KOREOGRAF_LDAP_BIND_DN: cn=admin,dc=example,dc=com
+      KOREOGRAF_LDAP_BIND_PASSWORD: ${LDAP_ADMIN_PASSWORD}
+      KOREOGRAF_LDAP_USER_BASE: ou=people,dc=example,dc=com
+      KOREOGRAF_LDAP_GROUP_BASE: ou=groups,dc=example,dc=com
+      KOREOGRAF_LDAP_USER_FILTER: "(uid={username})"
+      KOREOGRAF_LDAP_USERNAME_ATTR: uid
+      KOREOGRAF_LDAP_GROUP_ATTR: memberOf
+      KOREOGRAF_LDAP_STARTTLS: "false"
+    volumes:
+      - koreograf-data:/var/lib/koreograf
+      - ./project:/opt/koreograf/harness:ro
+    ports:
+      - "127.0.0.1:18080:8080"
+    networks:
+      - lab
+
+  debian:
+    build:
+      context: ./targets
+      args:
+        BASE: debian:bookworm-slim
+    image: koreograf-harness-debian
+    environment:
+      HARNESS_SSH_PUBLIC_KEY: ${HARNESS_SSH_PUBLIC_KEY}
+    networks:
+      - lab
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - import socket; socket.create_connection(("127.0.0.1", 22), 3).close()
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  ubuntu:
+    build:
+      context: ./targets
+      args:
+        BASE: ubuntu:24.04
+    image: koreograf-harness-ubuntu
+    environment:
+      HARNESS_SSH_PUBLIC_KEY: ${HARNESS_SSH_PUBLIC_KEY}
+    networks:
+      - lab
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - import socket; socket.create_connection(("127.0.0.1", 22), 3).close()
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 15s
+
+  rocky:
+    build:
+      context: ./targets
+      args:
+        BASE: rockylinux:9
+    image: koreograf-harness-rocky
+    environment:
+      HARNESS_SSH_PUBLIC_KEY: ${HARNESS_SSH_PUBLIC_KEY}
+    networks:
+      - lab
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - import socket; socket.create_connection(("127.0.0.1", 22), 3).close()
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+
+  alma:
+    build:
+      context: ./targets
+      args:
+        BASE: almalinux:9
+    image: koreograf-harness-alma
+    environment:
+      HARNESS_SSH_PUBLIC_KEY: ${HARNESS_SSH_PUBLIC_KEY}
+    networks:
+      - lab
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - import socket; socket.create_connection(("127.0.0.1", 22), 3).close()
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+
+  nosudo:
+    image: koreograf-harness-debian
+    pull_policy: never
+    depends_on:
+      debian:
+        condition: service_healthy
+    environment:
+      HARNESS_SSH_PUBLIC_KEY: ${HARNESS_SSH_PUBLIC_KEY}
+    networks:
+      - lab
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - import socket; socket.create_connection(("127.0.0.1", 22), 3).close()
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  unreachable:
+    image: koreograf-harness-debian
+    pull_policy: never
+    depends_on:
+      debian:
+        condition: service_started
+    entrypoint: ["sleep", "infinity"]
+    networks:
+      - lab
