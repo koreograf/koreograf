@@ -423,9 +423,9 @@ fn parameters_for_launch(
         effective.inventory_id = inventory_id;
     }
     let credential_ids = if let Some(ids) = &req.overrides.credential_ids {
-        let checked = credentials_for_launch(state, db, &template.team_id, ids)?;
-        effective.credential_id = primary_credential(db, &checked)?;
-        Some(checked)
+        let chosen = credentials_for_launch(state, db, &template.team_id, ids)?;
+        effective.credential_id = chosen.primary_id;
+        Some(chosen.ids)
     } else {
         None
     };
@@ -465,10 +465,8 @@ fn credentials_for_launch(
     db: &rusqlite::Connection,
     team_id: &str,
     ids: &[String],
-) -> AppResult<Vec<String>> {
-    let mut clean = Vec::with_capacity(ids.len());
+) -> AppResult<crate::credentials::AssignedSet> {
     let mut loaded = Vec::with_capacity(ids.len());
-    let mut vault_labels = Vec::with_capacity(ids.len());
     for id in ids {
         let id = id.trim();
         if id.is_empty() {
@@ -476,57 +474,9 @@ fn credentials_for_launch(
         }
         let credential =
             db::credential(db, id)?.ok_or_else(|| ApiError::bad("credential_is_missing"))?;
-        if credential.team_id != team_id {
-            return Err(ApiError::bad("the_credential_belongs_to_another_team"));
-        }
-        let vault_id = if credential.kind == "vault" {
-            let plain = state
-                .decrypt(&credential.secret_blob)
-                .map_err(|_| ApiError::bad("credentials_cannot_be_read"))?;
-            let secret: Value = serde_json::from_str(&plain)
-                .map_err(|_| ApiError::bad("credentials_are_not_json"))?;
-            crate::credentials::check("vault", &secret).map_err(ApiError::bad)?;
-            secret
-                .get("vault_id")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .trim()
-                .to_string()
-        } else {
-            String::new()
-        };
-        clean.push(credential.id.clone());
-        vault_labels.push(vault_id);
         loaded.push(credential);
     }
-    let view = clean
-        .iter()
-        .zip(loaded.iter().zip(vault_labels.iter()))
-        .map(
-            |(id, (row, vault_id))| crate::credentials::AssignedCredential {
-                id,
-                kind: &row.kind,
-                vault_id,
-            },
-        )
-        .collect::<Vec<_>>();
-    crate::credentials::check_assignment(&view).map_err(ApiError::bad)?;
-    Ok(clean)
-}
-
-fn primary_credential(db: &rusqlite::Connection, ids: &[String]) -> AppResult<Option<String>> {
-    let mut first = None;
-    for id in ids {
-        let credential =
-            db::credential(db, id)?.ok_or_else(|| ApiError::bad("credential_is_missing"))?;
-        if first.is_none() {
-            first = Some(credential.id.clone());
-        }
-        if credential.kind != "vault" {
-            return Ok(Some(credential.id));
-        }
-    }
-    Ok(first)
+    crate::credentials::assign_loaded(state, team_id, &loaded).map_err(ApiError::bad)
 }
 
 /// Prompt fields replace the template spec. An empty string or null clears the key.

@@ -825,6 +825,102 @@ async fn prompt_on_launch_overrides_the_job_and_keeps_the_template() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{shell_denied}");
     assert_eq!(shell_denied["error"], "launch_fields_are_only_for_ansible");
 
+    let (status, inventory, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Prompt hosts", "body": "[web]\nweb-1\n"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{inventory}");
+    let inventory_id = inventory["id"].as_str().unwrap();
+    let (status, credential, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Prompt SSH",
+            "kind": "ssh",
+            "secret": {"username": "deploy", "password": "prompt-ssh-pass"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{credential}");
+    assert!(
+        !credential.to_string().contains("prompt-ssh-pass"),
+        "response echoed the secret"
+    );
+    let credential_id = credential["id"].as_str().unwrap();
+    let (status, other_team, _) = call(
+        &app,
+        "POST",
+        "/api/teams",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Other prompt team"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{other_team}");
+    let other = other_team["id"].as_str().unwrap();
+    let (status, foreign_inventory, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(other),
+        Some(json!({"name": "Foreign hosts", "body": "[db]\ndb-1\n"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{foreign_inventory}");
+    let foreign_inventory_id = foreign_inventory["id"].as_str().unwrap();
+    let (status, foreign_credential, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&cookie),
+        Some(other),
+        Some(json!({
+            "name": "Foreign SSH",
+            "kind": "ssh",
+            "secret": {"username": "other", "password": "foreign-ssh-pass"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{foreign_credential}");
+    let foreign_credential_id = foreign_credential["id"].as_str().unwrap();
+    let (status, wrong_inventory, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"extra_vars": {}, "inventory_id": foreign_inventory_id})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{wrong_inventory}");
+    assert_eq!(
+        wrong_inventory["error"],
+        "the_inventory_belongs_to_another_team"
+    );
+    let (status, wrong_credential, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"extra_vars": {}, "credential_ids": [foreign_credential_id]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{wrong_credential}");
+    assert_eq!(
+        wrong_credential["error"],
+        "the_credential_belongs_to_another_team"
+    );
+
     let (status, launched, _) = call(
         &app,
         "POST",
@@ -833,8 +929,8 @@ async fn prompt_on_launch_overrides_the_job_and_keeps_the_template() {
         Some(&team),
         Some(json!({
             "extra_vars": {"from_launch": "yes"},
-            "inventory_id": "",
-            "credential_ids": [],
+            "inventory_id": inventory_id,
+            "credential_ids": [credential_id],
             "spec": {
                 "limit": "db",
                 "tags": "heal",
@@ -856,6 +952,17 @@ async fn prompt_on_launch_overrides_the_job_and_keeps_the_template() {
     assert!(launched["parameters"]["spec"].get("skip_tags").is_none());
     assert_eq!(launched["parameters"]["extra_vars"]["keep"], "template");
     assert_eq!(launched["parameters"]["extra_vars"]["from_launch"], "yes");
+    assert_eq!(launched["parameters"]["inventory_id"], inventory_id);
+    assert_eq!(launched["parameters"]["inventory_name"], "Prompt hosts");
+    assert_eq!(launched["parameters"]["credential_id"], credential_id);
+    assert_eq!(
+        launched["parameters"]["credentials"][0]["id"],
+        credential_id
+    );
+    assert!(
+        !launched.to_string().contains("prompt-ssh-pass"),
+        "job echoed the secret"
+    );
     let _ = call(
         &app,
         "POST",
@@ -888,6 +995,9 @@ async fn prompt_on_launch_overrides_the_job_and_keeps_the_template() {
     assert_eq!(row["spec"]["job_type"], "run");
     assert_eq!(row["extra_vars"]["keep"], "template");
     assert!(row["extra_vars"].get("from_launch").is_none());
+    assert!(row["inventory_id"].is_null());
+    assert!(row.get("credential_id").is_none_or(Value::is_null));
+    assert!(row["credential_ids"].as_array().unwrap().is_empty());
 
     let _ = std::fs::remove_dir_all(&dir);
 }

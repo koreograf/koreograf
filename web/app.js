@@ -710,12 +710,12 @@ function templateOptionLine(item) {
 async function openLaunchPrompt(item) {
   const previous = document.querySelector("#launch-prompt");
   if (previous) previous.remove();
-  const [inventories, credentials] = await Promise.all([
-    api("GET", "/api/inventories"),
-    api("GET", "/api/credentials"),
-  ]);
   const spec = item.spec || {};
   const ansible = item.tool === "ansible";
+  const [inventories, credentials] = await Promise.all([
+    ansible ? api("GET", "/api/inventories") : Promise.resolve([]),
+    api("GET", "/api/credentials"),
+  ]);
   const verbosity = Number(spec.verbosity) || 0;
   const inventory = ansible
     ? `<label class="field"><span>${h("inventory")}</span><select name="inventory_id">${selectOptions(inventories, item.inventory_id, true, (row) => row.name)}</select></label>`
