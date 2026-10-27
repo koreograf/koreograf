@@ -25,8 +25,8 @@ services:
       KOREOGRAF_COOKIE_SECURE: ${KOREOGRAF_COOKIE_SECURE:-auto}
       KOREOGRAF_TRUSTED_PROXY: ${KOREOGRAF_TRUSTED_PROXY:-false}
       KOREOGRAF_DATABASE_URL: ${KOREOGRAF_DATABASE_URL:-}
-      # Verzeichnis, Proxy, Runner, Zeitlimit und Zeilenlimit gelten bis zum ersten Speichern
-      # unter Einstellungen. Danach ersetzt die Datenbank diese Variablen.
+      # Directory, proxy, runner, time limit, and output line limit apply until the first save
+      # under Settings. After that, the database replaces these variables.
       # Ein Proxy-Name wird nur gesetzt, wenn .env oder die Shell ihn setzen.
       # Eine leere Zeichenkette würde den großgeschriebenen Proxy für git abschalten.
       HTTP_PROXY:

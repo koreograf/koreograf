@@ -10,7 +10,7 @@ OpenTofu uses `TF_PLUGIN_CACHE_DIR` on that same cache (`data/cache/<team>/tofu`
 
 ## Job log
 
-Each of stdout and stderr keeps the first three quarters of the line limit and the last quarter. The default is 8000 lines: the first 6000 and the last 2000. A system line between them records how many lines were left out. `KOREOGRAF_JOB_OUTPUT_LINES` sets the limit, from 100 to 100000. Settings can replace that value for the next job. `GET /api/jobs/{id}/output` downloads the kept log and stops at 8 MiB. The job page shows the start and the end when the stored log is longer than 2000 lines. Play recap lines and `fatal:` lines are read from the whole stream, including lines the log does not keep.
+Each of stdout and stderr keeps the first three quarters of the line limit and the last quarter. The tail lines wait in memory and stay within 8 MiB per stream. The default is 8000 lines: the first 6000 and the last 2000. A system line between them records how many lines were left out. `KOREOGRAF_JOB_OUTPUT_LINES` sets the limit, from 100 to 100000. Settings can replace that value for the next job. `GET /api/jobs/{id}/output` downloads the kept log and stops at 8 MiB. The job page shows the start and the end when the stored log is longer than 2000 lines. Play recap lines and `fatal:` lines are read from the whole stream, including lines the log does not keep.
 
 ## Execution environments
 

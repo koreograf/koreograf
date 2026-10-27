@@ -2308,25 +2308,36 @@ fn output_split(limit: u64) -> (u64, u64) {
     (head, tail)
 }
 
+/// Tail lines wait in memory until the stream ends. One stream, 8 MiB.
+const OUTPUT_TAIL_BYTES: usize = 8 * 1024 * 1024;
+
 struct OutputTail {
     limit: u64,
     head_limit: u64,
     tail_limit: u64,
+    byte_cap: usize,
     count: u64,
     omitted: u64,
+    tail_bytes: usize,
     tail: VecDeque<String>,
     flushed: bool,
 }
 
 impl OutputTail {
     fn new(limit: u64) -> Self {
+        Self::with_byte_cap(limit, OUTPUT_TAIL_BYTES)
+    }
+
+    fn with_byte_cap(limit: u64, byte_cap: usize) -> Self {
         let (head_limit, tail_limit) = output_split(limit);
         Self {
             limit,
             head_limit,
             tail_limit,
+            byte_cap,
             count: 0,
             omitted: 0,
+            tail_bytes: 0,
             tail: VecDeque::new(),
             flushed: false,
         }
@@ -2342,12 +2353,24 @@ impl OutputTail {
             self.omitted += 1;
             return None;
         }
-        if self.tail.len() as u64 >= self.tail_limit {
-            self.tail.pop_front();
+        self.push_tail(line);
+        None
+    }
+
+    fn push_tail(&mut self, line: String) {
+        let incoming = line.len();
+        while !self.tail.is_empty()
+            && (self.tail.len() as u64 >= self.tail_limit
+                || self.tail_bytes.saturating_add(incoming) > self.byte_cap)
+        {
+            let Some(old) = self.tail.pop_front() else {
+                break;
+            };
+            self.tail_bytes = self.tail_bytes.saturating_sub(old.len());
             self.omitted += 1;
         }
+        self.tail_bytes = self.tail_bytes.saturating_add(line.len());
         self.tail.push_back(line);
-        None
     }
 }
 
@@ -2411,13 +2434,14 @@ fn flush_tail(state: &Shared, job_id: &str, stream: &str, kept: &mut OutputTail)
     }
     kept.flushed = true;
     if kept.omitted > 0 {
+        let kept_tail = kept.tail.len();
         log(
             state,
             job_id,
             "system",
             &format!(
                 "Omitted {} lines (limit {}; kept the first {} and the last {}).",
-                kept.omitted, kept.limit, kept.head_limit, kept.tail_limit
+                kept.omitted, kept.limit, kept.head_limit, kept_tail
             ),
         );
     }
@@ -2974,6 +2998,23 @@ exit 0
     fn output_limit_keeps_three_quarters_and_a_quarter() {
         assert_eq!(output_split(8_000), (6_000, 2_000));
         assert_eq!(output_split(100), (75, 25));
+    }
+
+    #[test]
+    fn output_tail_stays_within_the_byte_cap() {
+        let mut kept = OutputTail::with_byte_cap(8_000, 64);
+        for i in 0..8_100 {
+            let line = format!("row-{i:05}-xxxxxxxx");
+            if let Some(stored) = kept.accept(line) {
+                assert!(stored.starts_with("row-"), "{stored}");
+            }
+        }
+        assert!(kept.tail_bytes <= 64, "{}", kept.tail_bytes);
+        assert!(kept.omitted > 0);
+        assert!(kept.accept("MARKER-TAIL-19".into()).is_none());
+        assert!(kept.tail_bytes <= 64, "{}", kept.tail_bytes);
+        assert_eq!(kept.tail.back().map(String::as_str), Some("MARKER-TAIL-19"));
+        assert!(kept.tail.iter().all(|line| line.len() <= 64));
     }
 
     #[tokio::test]
