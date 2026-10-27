@@ -124,8 +124,10 @@ pub fn relaunch(
     let (team_id, template_id, extra, parameters, workflow_job_id) = {
         let db = state.db()?;
         let job = db::job(&db, source_id)?.ok_or(ApiError::NotFound)?;
-        if job.status != "failed" {
-            return Err(ApiError::bad("only_a_failed_job_can_be_relaunched"));
+        if job.status != "failed" && job.status != "canceled" {
+            return Err(ApiError::bad(
+                "only_a_failed_or_canceled_job_can_be_relaunched",
+            ));
         }
         let template_id = job
             .template_id
@@ -1118,9 +1120,124 @@ mod tests {
         assert!(
             running
                 .to_string()
-                .contains("only_a_failed_job_can_be_relaunched"),
+                .contains("only_a_failed_or_canceled_job_can_be_relaunched"),
             "{running}"
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn relaunch_accepts_a_canceled_job_and_keeps_the_failed_host_limit() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-relaunch-canceled-{nanos}"));
+        let state = crate::boot(config(&dir)).expect("boot");
+        let (template_id, team_id) = {
+            let db = state.db().expect("db");
+            db.query_row(
+                "SELECT id, team_id FROM templates WHERE name = 'Self-Heal'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .expect("template")
+        };
+        let parameters = json!({
+            "template_name": "Self-Heal",
+            "tool": "ansible",
+            "entrypoint": "site.yml",
+            "extra_vars": {"alertname": "canceled"},
+            "spec": {"tags": "heal"}
+        })
+        .to_string();
+        {
+            let db = state.db().expect("db");
+            db::insert_job(
+                &db,
+                &db::Job {
+                    id: "src-canceled".into(),
+                    team_id: team_id.clone(),
+                    template_id: Some(template_id.clone()),
+                    workflow_job_id: None,
+                    workflow_node_id: None,
+                    name: "Self-Heal".into(),
+                    tool: "ansible".into(),
+                    status: "canceled".into(),
+                    extra_vars: r#"{"alertname":"canceled"}"#.into(),
+                    launched_by: "admin".into(),
+                    trigger: "manual".into(),
+                    started_at: None,
+                    finished_at: Some(db::now()),
+                    created_at: db::now(),
+                    parameters: parameters.clone(),
+                    failed_hosts: "[]".into(),
+                },
+            )
+            .expect("insert canceled");
+            db::insert_job(
+                &db,
+                &db::Job {
+                    id: "src-canceled-hosts".into(),
+                    team_id,
+                    template_id: Some(template_id),
+                    workflow_job_id: None,
+                    workflow_node_id: None,
+                    name: "Self-Heal".into(),
+                    tool: "ansible".into(),
+                    status: "canceled".into(),
+                    extra_vars: r#"{"alertname":"canceled"}"#.into(),
+                    launched_by: "admin".into(),
+                    trigger: "manual".into(),
+                    started_at: None,
+                    finished_at: Some(db::now()),
+                    created_at: db::now(),
+                    parameters,
+                    failed_hosts: json!({"hosts": ["web-1"], "recap": true}).to_string(),
+                },
+            )
+            .expect("insert hosts");
+        }
+        let empty = relaunch(&state, "src-canceled", "admin", true).expect_err("no hosts");
+        assert!(
+            empty
+                .to_string()
+                .contains("no_failed_hosts_are_stored_for_this_job"),
+            "{empty}"
+        );
+        let copy = relaunch(&state, "src-canceled", "admin", false).expect("relaunch");
+        {
+            let db = state.db().expect("db");
+            let job = db::job(&db, &copy).expect("read").expect("job");
+            assert_eq!(job.trigger, "relaunch");
+            assert_eq!(job.status, "pending");
+            let params = db::json_object(&job.parameters);
+            assert_eq!(params["extra_vars"]["alertname"], "canceled");
+            assert_eq!(params["spec"]["tags"], "heal");
+            assert!(params["spec"].get("limit").is_none());
+        }
+        for status in ["pending", "running", "successful"] {
+            {
+                let db = state.db().expect("db");
+                db.execute("UPDATE jobs SET status = ?1 WHERE id = ?2", (status, &copy))
+                    .expect("status");
+            }
+            let rejected = relaunch(&state, &copy, "admin", false).expect_err(status);
+            assert!(
+                rejected
+                    .to_string()
+                    .contains("only_a_failed_or_canceled_job_can_be_relaunched"),
+                "{status}: {rejected}"
+            );
+        }
+        let limited = relaunch(&state, "src-canceled-hosts", "admin", true).expect("limit");
+        {
+            let db = state.db().expect("db");
+            let job = db::job(&db, &limited).expect("read").expect("job");
+            let params = db::json_object(&job.parameters);
+            assert_eq!(params["spec"]["limit"], "web-1");
+            assert_eq!(params["spec"]["tags"], "heal");
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 

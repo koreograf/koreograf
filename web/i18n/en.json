@@ -319,7 +319,7 @@
   "one_address_is_used_for_http_and_https": "One address is used for HTTP and HTTPS. Git over HTTP and HTTPS, NetBox, and jobs use it. Inside an execution environment, Galaxy does too. SSH git does not. An image pull uses the container daemon's proxy.",
   "one_credential_of_each_kind_choose_vault_credentials": "One credential of each kind. Choose vault credentials with Select. They show up here as pills.",
   "one_predecessor": "one predecessor",
-  "only_a_failed_job_can_be_relaunched": "Only a failed job can be relaunched.",
+  "only_a_failed_or_canceled_job_can_be_relaunched": "Only a failed or canceled job can be relaunched.",
   "only_ansible_jobs_have_failed_hosts": "Only Ansible jobs have failed hosts.",
   "only_one_credential_of_each_kind_is_allowed": "Only one credential of each kind is allowed.",
   "only_one_vault_credential_may_omit_the_vault": "Only one vault credential may omit the vault id.",

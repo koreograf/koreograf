@@ -319,7 +319,7 @@
   "one_address_is_used_for_http_and_https": "Eine Adresse gilt für HTTP und HTTPS. Git über HTTP und HTTPS, NetBox und Aufträge nutzen sie. Im Execution Environment gilt das auch für Galaxy. SSH-Git geht nicht darüber. Ein Image-Pull nutzt den Proxy des Container-Daemons.",
   "one_credential_of_each_kind_choose_vault_credentials": "Pro Art ein Zugang. Vault-Zugänge wählst du über Auswählen. Sie stehen hier als Pillen.",
   "one_predecessor": "ein Vorgänger",
-  "only_a_failed_job_can_be_relaunched": "Nur ein fehlgeschlagener Auftrag kann erneut gestartet werden.",
+  "only_a_failed_or_canceled_job_can_be_relaunched": "Nur ein fehlgeschlagener oder abgebrochener Auftrag kann erneut gestartet werden.",
   "only_ansible_jobs_have_failed_hosts": "Nur Ansible-Aufträge haben fehlgeschlagene Hosts.",
   "only_one_credential_of_each_kind_is_allowed": "Pro Art ist nur ein Zugang erlaubt.",
   "only_one_vault_credential_may_omit_the_vault": "Nur ein Vault-Zugang darf ohne Vault-Id sein.",

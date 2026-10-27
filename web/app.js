@@ -1774,7 +1774,7 @@ function jobParameters(job) {
 }
 
 function jobListActions(job) {
-  if (!can("operator") || job.status !== "failed") return "";
+  if (!can("operator") || (job.status !== "failed" && job.status !== "canceled")) return "";
   const hosts = Array.isArray(job.failed_hosts) ? job.failed_hosts : [];
   const failedHosts = job.tool === "ansible" && hosts.length
     ? `<button class="btn" type="button" data-relaunch="${esc(job.id)}" data-failed="1">${h("failed_hosts_only")}</button>`
@@ -1787,7 +1787,7 @@ function jobActions(job) {
   const hosts = Array.isArray(job.failed_hosts) ? job.failed_hosts : [];
   if (!can("operator")) return "";
   if (running) return `<button class="btn danger" type="button" data-action="cancel">${h("cancel")}</button>`;
-  if (job.status !== "failed") return "";
+  if (job.status !== "failed" && job.status !== "canceled") return "";
   const failedHosts = job.tool === "ansible" && hosts.length
     ? `<button class="btn" type="button" data-action="relaunch-failed">${h("failed_hosts_only")}</button>`
     : "";
@@ -1916,7 +1916,7 @@ async function pageJob(id) {
     document.querySelectorAll("[data-action=cancel]").forEach((button) => button.remove());
     source.close();
     source = null;
-    if (payload.status === "failed") pageJob(id);
+    if (payload.status === "failed" || payload.status === "canceled") pageJob(id);
   });
 }
 
