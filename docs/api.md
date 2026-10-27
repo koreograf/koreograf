@@ -156,6 +156,7 @@ A source has `kind` `ini`, `project`, or `netbox`.
 | `extra_vars` | no | Object. Default `{}` |
 | `spec` | no | Object. Default `{}` |
 | `update_on_launch` | no | Default true. Git projects only |
+| `prompt_on_launch` | no | Default false. The launch dialog asks for inventory, credentials, limit, tags, skip tags, job type, verbosity, and extra variables |
 
 Ansible `spec`: `job_type` `run` or `check`, `tags`, `skip_tags`, `limit`, `diff` (boolean), `verbosity` from 0 to 4, `forks` from 1 to 50.
 
@@ -176,7 +177,7 @@ Shell: `entrypoint` or `spec.script`. The script is written as `inline.sh`.
 
 ### Launch
 
-`POST /api/templates/{id}/launch` and `POST /api/workflows/{id}/launch` take `{"extra_vars": {}}`. The value is an object.
+`POST /api/templates/{id}/launch` and `POST /api/workflows/{id}/launch` take `{"extra_vars": {}}`. The value is an object. A template launch may also send `inventory_id`, `credential_ids`, and an Ansible `spec` with `job_type`, `tags`, `skip_tags`, `limit`, and `verbosity`. Omit a field to keep the template value. An empty `inventory_id` clears it. An empty string in those spec fields clears that field. `extra_vars` is still merged. Those three fields are accepted only when the template has `prompt_on_launch` set. Otherwise the launch is rejected. A body that sends none of them keeps the template, including for hooks and scripts. The template row is not changed. Workflow launch ignores those three fields and uses the graph.
 
 | Method | Path |
 | --- | --- |

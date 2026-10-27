@@ -13,9 +13,9 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, Role};
-use crate::credentials::{self, AssignedCredential};
+use crate::credentials;
 use crate::crypto;
-use crate::db::{self, Credential, Hook, Template, Workflow};
+use crate::db::{self, Hook, Template, Workflow};
 use crate::error::{ApiError, ApiJson, AppResult};
 use crate::jobs::{self, LaunchRequest};
 use crate::runner;
@@ -50,6 +50,8 @@ pub struct TemplateBody {
     spec: Option<Value>,
     #[serde(default = "default_true")]
     update_on_launch: bool,
+    #[serde(default)]
+    prompt_on_launch: bool,
 }
 
 fn default_true() -> bool {
@@ -60,6 +62,15 @@ fn default_true() -> bool {
 pub struct LaunchBody {
     #[serde(default = "empty_object")]
     extra_vars: Value,
+    /// Empty string clears the inventory. Omit the field to keep the template value.
+    #[serde(default)]
+    inventory_id: Option<String>,
+    /// Replaces the template credentials for this job. Omit the field to keep them.
+    #[serde(default)]
+    credential_ids: Option<Vec<String>>,
+    /// Ansible prompt fields merged onto the template spec.
+    #[serde(default)]
+    spec: Option<Value>,
 }
 
 fn empty_object() -> Value {
@@ -195,6 +206,11 @@ pub async fn launch_template(
             workflow_job_id: None,
             workflow_node_id: None,
             parameters_override: None,
+            overrides: jobs::LaunchOverrides {
+                inventory_id: body.inventory_id,
+                credential_ids: body.credential_ids,
+                spec: body.spec,
+            },
         },
     )?;
     let db = state.db()?;
@@ -732,17 +748,9 @@ fn build_template(
         }
         (created_at, loaded)
     };
-    let credential_ids = assign_credentials(state, team, &loaded)?;
-    let credential_id = credential_ids
-        .iter()
-        .find(|id| {
-            loaded
-                .iter()
-                .find(|row| row.id == **id)
-                .is_some_and(|row| row.kind != "vault")
-        })
-        .or_else(|| credential_ids.first())
-        .cloned();
+    let chosen = credentials::assign_loaded(state, team, &loaded).map_err(ApiError::bad)?;
+    let credential_ids = chosen.ids;
+    let credential_id = chosen.primary_id;
     Ok((
         Template {
             id: id.unwrap_or_else(|| Uuid::new_v4().to_string()),
@@ -760,6 +768,7 @@ fn build_template(
             created_at,
             update_on_launch: body.update_on_launch,
             admin_saved: false,
+            prompt_on_launch: body.prompt_on_launch,
         },
         credential_ids,
     ))
@@ -770,45 +779,6 @@ fn requested_credential_ids(body: &TemplateBody) -> Vec<String> {
         return ids.iter().map(|id| id.trim().to_string()).collect();
     }
     blank(body.credential_id.clone()).into_iter().collect()
-}
-
-fn assign_credentials(state: &Shared, team: &str, loaded: &[Credential]) -> AppResult<Vec<String>> {
-    let mut assigned = Vec::with_capacity(loaded.len());
-    let mut vault_labels = Vec::with_capacity(loaded.len());
-    for credential in loaded {
-        if credential.team_id != team {
-            return Err(ApiError::bad("the_credential_belongs_to_another_team"));
-        }
-        let vault_id = if credential.kind == "vault" {
-            let plain = state
-                .decrypt(&credential.secret_blob)
-                .map_err(|_| ApiError::bad("credentials_cannot_be_read"))?;
-            let secret: Value = serde_json::from_str(&plain)
-                .map_err(|_| ApiError::bad("credentials_are_not_json"))?;
-            credentials::check("vault", &secret).map_err(ApiError::bad)?;
-            secret
-                .get("vault_id")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .trim()
-                .to_string()
-        } else {
-            String::new()
-        };
-        vault_labels.push(vault_id);
-        assigned.push(credential.id.clone());
-    }
-    let view = assigned
-        .iter()
-        .zip(loaded.iter().zip(vault_labels.iter()))
-        .map(|(id, (row, vault_id))| AssignedCredential {
-            id,
-            kind: &row.kind,
-            vault_id,
-        })
-        .collect::<Vec<_>>();
-    credentials::check_assignment(&view).map_err(ApiError::bad)?;
-    Ok(assigned)
 }
 
 fn check_node_overrides(
@@ -978,6 +948,7 @@ fn template_json(template: &Template, credential_ids: &[String]) -> Value {
         "spec": db::json_object(&template.spec),
         "created_at": template.created_at,
         "update_on_launch": template.update_on_launch,
+        "prompt_on_launch": template.prompt_on_launch,
     })
 }
 

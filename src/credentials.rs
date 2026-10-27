@@ -81,6 +81,62 @@ pub fn check_assignment(items: &[AssignedCredential<'_>]) -> Result<(), String> 
     Ok(())
 }
 
+/// Ids accepted for one team, plus the credential shown as the primary.
+/// The primary is the first credential that is not a vault password.
+pub struct AssignedSet {
+    pub ids: Vec<String>,
+    pub primary_id: Option<String>,
+}
+
+/// Team, vault id, and kind rules for credentials that are already loaded.
+pub fn assign_loaded(
+    state: &crate::Shared,
+    team: &str,
+    loaded: &[crate::db::Credential],
+) -> Result<AssignedSet, String> {
+    let mut ids = Vec::with_capacity(loaded.len());
+    let mut vault_labels = Vec::with_capacity(loaded.len());
+    for credential in loaded {
+        if credential.team_id != team {
+            return Err("the_credential_belongs_to_another_team".into());
+        }
+        let vault_id = if credential.kind == "vault" {
+            let plain = state
+                .decrypt(&credential.secret_blob)
+                .map_err(|_| "credentials_cannot_be_read".to_string())?;
+            let secret: Value =
+                serde_json::from_str(&plain).map_err(|_| "credentials_are_not_json".to_string())?;
+            check("vault", &secret)?;
+            secret
+                .get("vault_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        } else {
+            String::new()
+        };
+        vault_labels.push(vault_id);
+        ids.push(credential.id.clone());
+    }
+    let view = ids
+        .iter()
+        .zip(loaded.iter().zip(vault_labels.iter()))
+        .map(|(id, (row, vault_id))| AssignedCredential {
+            id,
+            kind: &row.kind,
+            vault_id,
+        })
+        .collect::<Vec<_>>();
+    check_assignment(&view)?;
+    let primary_id = loaded
+        .iter()
+        .find(|row| row.kind != "vault")
+        .or_else(|| loaded.first())
+        .map(|row| row.id.clone());
+    Ok(AssignedSet { ids, primary_id })
+}
+
 /// Values the edit form must not display again. Every `env` key is secret.
 pub fn is_secret_field(kind: &str, key: &str) -> bool {
     match kind {

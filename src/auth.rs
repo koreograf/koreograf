@@ -173,7 +173,8 @@ pub fn content_saved_by_admin(
 
 /// True when `params` would run the same command as `template`. A missing
 /// `tool` means the runner keeps the template. `spec.limit` is ignored because
-/// relaunch of failed hosts adds it.
+/// relaunch of failed hosts adds it. A template that asks at launch also
+/// ignores inventory, tags, skip tags, job type, and verbosity.
 pub(crate) fn command_matches_template(
     template: &db::Template,
     params: &serde_json::Value,
@@ -192,10 +193,10 @@ pub(crate) fn command_matches_template(
     if saved_target(params, "project_id") != template.project_id {
         return false;
     }
-    if saved_target(params, "inventory_id") != template.inventory_id {
+    if !template.prompt_on_launch && saved_target(params, "inventory_id") != template.inventory_id {
         return false;
     }
-    specs_match(&template.spec, params)
+    specs_match(&template.spec, params, template.prompt_on_launch)
 }
 
 fn saved_target(params: &serde_json::Value, key: &str) -> Option<String> {
@@ -206,16 +207,21 @@ fn saved_target(params: &serde_json::Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn specs_match(template_spec: &str, params: &serde_json::Value) -> bool {
+fn specs_match(template_spec: &str, params: &serde_json::Value, prompt: bool) -> bool {
     let Some(saved) = params.get("spec").filter(|value| value.is_object()) else {
         return true;
     };
-    spec_map(saved) == spec_map(&db::json_object(template_spec))
+    spec_map(saved, prompt) == spec_map(&db::json_object(template_spec), prompt)
 }
 
-fn spec_map(value: &serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+fn spec_map(value: &serde_json::Value, prompt: bool) -> serde_json::Map<String, serde_json::Value> {
     let mut map = value.as_object().cloned().unwrap_or_default();
     map.remove("limit");
+    if prompt {
+        for key in ["tags", "skip_tags", "job_type", "verbosity"] {
+            map.remove(key);
+        }
+    }
     map
 }
 
@@ -316,6 +322,7 @@ mod tests {
             created_at: String::new(),
             update_on_launch: true,
             admin_saved: true,
+            prompt_on_launch: false,
         }
     }
 
@@ -330,6 +337,17 @@ mod tests {
             "spec": {"tags": "heal", "limit": "web-1,db-1"}
         });
         assert!(command_matches_template(&template, &limited));
+        let mut prompted = template.clone();
+        prompted.prompt_on_launch = true;
+        let varied = json!({
+            "tool": "ansible",
+            "entrypoint": "site.yml",
+            "project_id": "project",
+            "inventory_id": "other",
+            "spec": {"tags": "other", "skip_tags": "slow", "job_type": "check", "verbosity": 2, "limit": "db"}
+        });
+        assert!(command_matches_template(&prompted, &varied));
+        assert!(!command_matches_template(&template, &varied));
         let replaced = json!({
             "tool": "shell",
             "entrypoint": "",

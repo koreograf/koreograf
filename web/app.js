@@ -707,6 +707,99 @@ function templateOptionLine(item) {
   return item.entrypoint || t("script");
 }
 
+async function openLaunchPrompt(item) {
+  const previous = document.querySelector("#launch-prompt");
+  if (previous) previous.remove();
+  const spec = item.spec || {};
+  const ansible = item.tool === "ansible";
+  const [inventories, credentials] = await Promise.all([
+    ansible ? api("GET", "/api/inventories") : Promise.resolve([]),
+    api("GET", "/api/credentials"),
+  ]);
+  const verbosity = Number(spec.verbosity) || 0;
+  const inventory = ansible
+    ? `<label class="field"><span>${h("inventory")}</span><select name="inventory_id">${selectOptions(inventories, item.inventory_id, true, (row) => row.name)}</select></label>`
+    : "";
+  const ansibleFields = ansible ? `
+    <div class="field-row">
+      <label class="field"><span>${h("type")}</span>
+        <select class="fit" name="job_type">
+          <option value="run"${spec.job_type === "check" ? "" : " selected"}>${h("run_2")}</option>
+          <option value="check"${spec.job_type === "check" ? " selected" : ""}>${h("check_dry_run")}</option>
+        </select>
+      </label>
+      <label class="field"><span>${h("verbosity")}</span>
+        <select class="fit" name="verbosity">
+          ${[0, 1, 2, 3, 4].map((level) => `<option value="${level}"${verbosity === level ? " selected" : ""}>${h(verbosityLabel(level))}</option>`).join("")}
+        </select>
+      </label>
+    </div>
+    <div class="field-row">
+      ${chipBox("tags", "tags", spec.tags)}
+      ${chipBox("skip_tags", "skip_tags", spec.skip_tags)}
+    </div>
+    <label class="field"><span>${h("limit")}</span><input class="fit" name="limit" value="${esc(spec.limit || "")}"></label>` : "";
+  document.querySelector(".main").insertAdjacentHTML("beforeend", `
+    <div class="overlay" id="launch-prompt">
+      <div class="overlay-card launch-prompt" role="dialog" aria-modal="true" aria-labelledby="launch-prompt-title">
+        <div class="spread">
+          <h2 id="launch-prompt-title">${h("launch")}</h2>
+          <button class="btn" type="button" id="launch-prompt-close">${h("close")}</button>
+        </div>
+        <p class="small muted">${h("the_launch_dialog_starts_from_the_template")}</p>
+        <form class="form" id="launch-prompt-form">
+          ${inventory}
+          ${templateCredentialFields(credentials, selectedCredentialIds(item))}
+          ${ansibleFields}
+          <label class="field"><span>${h("extra_variables_json")}</span><textarea name="extra_vars">${esc(JSON.stringify(item.extra_vars || {}, null, 2))}</textarea></label>
+          <div class="row">
+            <button class="btn pill primary" type="submit">${h("launch")}</button>
+            <button class="btn" type="button" id="launch-prompt-cancel">${h("cancel")}</button>
+          </div>
+        </form>
+      </div>
+    </div>`);
+  const overlay = document.querySelector("#launch-prompt");
+  const form = document.querySelector("#launch-prompt-form");
+  bindChips(form);
+  bindVaultPicker(form, credentials, selectedCredentialIds(item));
+  const close = () => overlay.remove();
+  document.querySelector("#launch-prompt-close").addEventListener("click", close);
+  document.querySelector("#launch-prompt-cancel").addEventListener("click", close);
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) close();
+  });
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!flushChips(form)) return;
+    try {
+      const body = {
+        extra_vars: jsonObject(form.extra_vars.value, "extra_variables"),
+        credential_ids: [
+          ...[...form.querySelectorAll("[data-credential-kind]")].map((select) => select.value).filter(Boolean),
+          ...[...form.querySelectorAll("#vault-pills [data-vault-id]")].map((node) => node.dataset.vaultId),
+        ],
+      };
+      if (ansible) {
+        body.inventory_id = form.inventory_id.value;
+        const level = Number(form.verbosity.value);
+        body.spec = {
+          job_type: form.job_type.value === "check" ? "check" : "run",
+          tags: form.tags.value.trim(),
+          skip_tags: form.skip_tags.value.trim(),
+          limit: form.limit.value.trim(),
+          verbosity: Number.isInteger(level) ? level : 0,
+        };
+      }
+      const job = await api("POST", `/api/templates/${encodeURIComponent(item.id)}/launch`, body);
+      close();
+      go(`#/jobs/${job.id}`);
+    } catch (error) {
+      handle(error);
+    }
+  });
+}
+
 async function pageTemplates() {
   if (!needTeam()) return;
   const items = await api("GET", "/api/templates");
@@ -748,6 +841,15 @@ async function pageTemplates() {
     document.querySelector("#template-table").innerHTML = table([t("name"), t("tool"), t("entry"), t("run_2"), ""], rows);
     document.querySelectorAll("[data-launch]").forEach((button) => {
       button.addEventListener("click", async () => {
+        const item = items.find((row) => row.id === button.dataset.launch);
+        if (item && item.prompt_on_launch) {
+          try {
+            await openLaunchPrompt(item);
+          } catch (error) {
+            handle(error);
+          }
+          return;
+        }
         button.disabled = true;
         try {
           const job = await api("POST", `/api/templates/${encodeURIComponent(button.dataset.launch)}/launch`, { extra_vars: {} });
@@ -801,6 +903,8 @@ async function pageTemplateForm(id) {
         <h2>${h("general")}</h2>
         <label class="field"><span>${h("name")}</span><input name="name" required value="${esc(item.name)}"></label>
         <label class="field"><span>${h("description")}</span><input name="description" maxlength="1000" value="${esc(item.description)}"></label>
+        <label class="field check"><span>${h("prompt_on_launch")}</span><input name="prompt_on_launch" type="checkbox"${item.prompt_on_launch ? " checked" : ""}></label>
+        <p class="small muted">${h("the_launch_dialog_starts_from_the_template")}</p>
         <div class="field-row">
           <label class="field"><span>${h("tool")}</span>
             <select class="fit" name="tool">
@@ -904,6 +1008,7 @@ async function pageTemplateForm(id) {
         entrypoint: form.tool.value === "ansible" && form.playbook.value ? form.playbook.value : form.entrypoint.value,
         extra_vars: jsonObject(form.extra_vars.value, "extra_variables"),
         spec: templateSpec(form),
+        prompt_on_launch: form.prompt_on_launch.checked,
       };
       if (id) await api("PUT", `/api/templates/${encodeURIComponent(id)}`, body);
       else await api("POST", "/api/templates", body);

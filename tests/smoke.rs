@@ -716,6 +716,293 @@ async fn failed_job_shows_parameters_and_can_be_relaunched() {
 }
 
 #[tokio::test]
+async fn prompt_on_launch_overrides_the_job_and_keeps_the_template() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-prompt-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut cfg = config(&dir);
+    cfg.local_jobs = LocalJobs::Admins;
+    let state = koreograf::boot(cfg).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let script = script.as_str().unwrap_or("");
+    assert!(script.contains("prompt_on_launch"));
+    assert!(script.contains("launch-prompt"));
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Prompted",
+            "tool": "ansible",
+            "entrypoint": "site.yml",
+            "prompt_on_launch": true,
+            "extra_vars": {"keep": "template"},
+            "spec": {"job_type": "run", "tags": "ping", "limit": "web", "forks": 5, "diff": true}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    assert_eq!(template["prompt_on_launch"], true);
+    let template_id = template["id"].as_str().unwrap();
+
+    let (status, denied, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Quiet",
+            "tool": "ansible",
+            "entrypoint": "site.yml",
+            "spec": {"limit": "web"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{denied}");
+    assert_eq!(denied["prompt_on_launch"], false);
+    let quiet_id = denied["id"].as_str().unwrap();
+    let (status, blocked, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{quiet_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"extra_vars": {}, "spec": {"limit": "db"}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{blocked}");
+    assert_eq!(blocked["error"], "prompt_on_launch_is_off");
+
+    let (status, shell, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Prompt shell",
+            "tool": "shell",
+            "entrypoint": "",
+            "prompt_on_launch": true,
+            "spec": {"script": "true"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{shell}");
+    let shell_id = shell["id"].as_str().unwrap();
+    let (status, shell_denied, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{shell_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"extra_vars": {}, "spec": {"limit": "db"}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{shell_denied}");
+    assert_eq!(shell_denied["error"], "launch_fields_are_only_for_ansible");
+
+    let (status, inventory, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Prompt hosts", "body": "[web]\nweb-1\n"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{inventory}");
+    let inventory_id = inventory["id"].as_str().unwrap();
+    let (status, credential, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Prompt SSH",
+            "kind": "ssh",
+            "secret": {"username": "deploy", "password": "prompt-ssh-pass"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{credential}");
+    assert!(
+        !credential.to_string().contains("prompt-ssh-pass"),
+        "response echoed the secret"
+    );
+    let credential_id = credential["id"].as_str().unwrap();
+    let (status, other_team, _) = call(
+        &app,
+        "POST",
+        "/api/teams",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Other prompt team"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{other_team}");
+    let other = other_team["id"].as_str().unwrap();
+    let (status, foreign_inventory, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(other),
+        Some(json!({"name": "Foreign hosts", "body": "[db]\ndb-1\n"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{foreign_inventory}");
+    let foreign_inventory_id = foreign_inventory["id"].as_str().unwrap();
+    let (status, foreign_credential, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&cookie),
+        Some(other),
+        Some(json!({
+            "name": "Foreign SSH",
+            "kind": "ssh",
+            "secret": {"username": "other", "password": "foreign-ssh-pass"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{foreign_credential}");
+    let foreign_credential_id = foreign_credential["id"].as_str().unwrap();
+    let (status, wrong_inventory, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"extra_vars": {}, "inventory_id": foreign_inventory_id})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{wrong_inventory}");
+    assert_eq!(
+        wrong_inventory["error"],
+        "the_inventory_belongs_to_another_team"
+    );
+    let (status, wrong_credential, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"extra_vars": {}, "credential_ids": [foreign_credential_id]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{wrong_credential}");
+    assert_eq!(
+        wrong_credential["error"],
+        "the_credential_belongs_to_another_team"
+    );
+
+    let (status, launched, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "extra_vars": {"from_launch": "yes"},
+            "inventory_id": inventory_id,
+            "credential_ids": [credential_id],
+            "spec": {
+                "limit": "db",
+                "tags": "heal",
+                "skip_tags": "",
+                "job_type": "check",
+                "verbosity": 1
+            }
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{launched}");
+    let job_id = launched["id"].as_str().unwrap();
+    assert_eq!(launched["parameters"]["spec"]["limit"], "db");
+    assert_eq!(launched["parameters"]["spec"]["tags"], "heal");
+    assert_eq!(launched["parameters"]["spec"]["job_type"], "check");
+    assert_eq!(launched["parameters"]["spec"]["verbosity"], 1);
+    assert_eq!(launched["parameters"]["spec"]["forks"], 5);
+    assert_eq!(launched["parameters"]["spec"]["diff"], true);
+    assert!(launched["parameters"]["spec"].get("skip_tags").is_none());
+    assert_eq!(launched["parameters"]["extra_vars"]["keep"], "template");
+    assert_eq!(launched["parameters"]["extra_vars"]["from_launch"], "yes");
+    assert_eq!(launched["parameters"]["inventory_id"], inventory_id);
+    assert_eq!(launched["parameters"]["inventory_name"], "Prompt hosts");
+    assert_eq!(launched["parameters"]["credential_id"], credential_id);
+    assert_eq!(
+        launched["parameters"]["credentials"][0]["id"],
+        credential_id
+    );
+    assert!(
+        !launched.to_string().contains("prompt-ssh-pass"),
+        "job echoed the secret"
+    );
+    let _ = call(
+        &app,
+        "POST",
+        &format!("/api/jobs/{job_id}/cancel"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+
+    let (status, stored, _) = call(
+        &app,
+        "GET",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{stored}");
+    let row = stored
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == template_id)
+        .unwrap();
+    assert_eq!(row["prompt_on_launch"], true);
+    assert_eq!(row["spec"]["limit"], "web");
+    assert_eq!(row["spec"]["tags"], "ping");
+    assert_eq!(row["spec"]["job_type"], "run");
+    assert_eq!(row["extra_vars"]["keep"], "template");
+    assert!(row["extra_vars"].get("from_launch").is_none());
+    assert!(row["inventory_id"].is_null());
+    assert!(row.get("credential_id").is_none_or(Value::is_null));
+    assert!(row["credential_ids"].as_array().unwrap().is_empty());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn oversized_job_output_keeps_the_recap_in_the_download() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

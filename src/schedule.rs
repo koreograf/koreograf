@@ -828,6 +828,7 @@ pub(crate) fn start(state: &Shared, item: &Schedule, actor: &str) -> AppResult<(
                     workflow_job_id: None,
                     workflow_node_id: None,
                     parameters_override: None,
+                    overrides: jobs::LaunchOverrides::default(),
                 },
             )?;
         }
@@ -1131,6 +1132,7 @@ mod tests {
                     created_at: db::now(),
                     update_on_launch: false,
                     admin_saved: true,
+                    prompt_on_launch: false,
                 },
             )
             .expect("template");

@@ -323,7 +323,8 @@ textarea.secret-mask { -webkit-text-security: disc; }
 .vault-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .vault-row .chips { flex: 1 1 16rem; }
 .overlay-card.vault-picker { width: min(32rem, 100%); }
-.overlay-card.schedule-form {
+.overlay-card.schedule-form,
+.overlay-card.launch-prompt {
   width: min(40rem, 100%);
   max-height: min(90vh, 860px);
   overflow: auto;

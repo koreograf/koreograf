@@ -308,6 +308,7 @@ fn insert_template(conn: &Connection, item: DemoTemplate<'_>) -> AppResult<Strin
             created_at: db::now(),
             update_on_launch: true,
             admin_saved: true,
+            prompt_on_launch: false,
         },
     )?;
     Ok(id)

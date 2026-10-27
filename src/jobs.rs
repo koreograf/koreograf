@@ -12,6 +12,17 @@ use crate::runner;
 use crate::workflow::{self, NodePhase};
 use crate::Shared;
 
+/// Fields a prompted launch may replace for one job. `None` keeps the template.
+#[derive(Default)]
+pub struct LaunchOverrides {
+    /// An empty string clears the inventory.
+    pub inventory_id: Option<String>,
+    /// Replaces the credential list, including an empty list.
+    pub credential_ids: Option<Vec<String>>,
+    /// Ansible fields merged onto the template spec.
+    pub spec: Option<Value>,
+}
+
 pub struct LaunchRequest {
     pub team_id: String,
     pub template_id: String,
@@ -22,6 +33,7 @@ pub struct LaunchRequest {
     pub workflow_node_id: Option<String>,
     /// When set, this is stored instead of a fresh snapshot of the template.
     pub parameters_override: Option<String>,
+    pub overrides: LaunchOverrides,
 }
 
 pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
@@ -33,10 +45,7 @@ pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
         if template.team_id != req.team_id {
             return Err(ApiError::Forbidden);
         }
-        let parameters = match &req.parameters_override {
-            Some(raw) => stored_parameters(raw)?,
-            None => capture_parameters(&db, &template, &req.extra_vars),
-        };
+        let parameters = parameters_for_launch(state, &db, &template, &req)?;
         let parsed = db::json_object(&parameters);
         if refuses_local_launch(
             state.cfg.local_jobs,
@@ -134,7 +143,7 @@ pub fn relaunch(
         {
             job.parameters.clone()
         } else {
-            capture_parameters(&db, &template, &db::json_object(&job.extra_vars))
+            capture_parameters(&db, &template, &db::json_object(&job.extra_vars), None)
         };
         if only_failed_hosts {
             if job.tool != "ansible" {
@@ -173,6 +182,7 @@ pub fn relaunch(
             workflow_job_id,
             workflow_node_id: None,
             parameters_override: Some(parameters),
+            overrides: LaunchOverrides::default(),
         },
     )
 }
@@ -233,7 +243,7 @@ fn parameters_for_node(
     node: &workflow::GraphNode,
     workflow_extra: &Value,
 ) -> AppResult<String> {
-    let mut params = db::json_object(&capture_parameters(db, template, workflow_extra));
+    let mut params = db::json_object(&capture_parameters(db, template, workflow_extra, None));
     let had_extra = node.overrides.extra_vars.is_some();
     let had_spec = node.overrides.spec.is_some();
     {
@@ -372,10 +382,136 @@ fn replace_credential_kind(list: &mut Vec<Value>, credential: &db::Credential) {
     list.push(credential_entry(credential));
 }
 
+fn parameters_for_launch(
+    state: &Shared,
+    db: &rusqlite::Connection,
+    template: &db::Template,
+    req: &LaunchRequest,
+) -> AppResult<String> {
+    if let Some(raw) = &req.parameters_override {
+        return stored_parameters(raw);
+    }
+    if let Some(spec) = &req.overrides.spec {
+        if !spec.is_object() {
+            return Err(ApiError::bad("spec_must_be_an_object"));
+        }
+    }
+    let spec_overlay = req
+        .overrides
+        .spec
+        .as_ref()
+        .filter(|spec| spec.as_object().is_some_and(|map| !map.is_empty()));
+    let asked = req.overrides.inventory_id.is_some()
+        || req.overrides.credential_ids.is_some()
+        || spec_overlay.is_some();
+    if !asked {
+        return Ok(capture_parameters(db, template, &req.extra_vars, None));
+    }
+    if !template.prompt_on_launch {
+        return Err(ApiError::bad("prompt_on_launch_is_off"));
+    }
+    let mut effective = template.clone();
+    if let Some(inventory_id) = &req.overrides.inventory_id {
+        let inventory_id = blank_text(inventory_id);
+        if let Some(id) = &inventory_id {
+            let inventory =
+                db::inventory(db, id)?.ok_or_else(|| ApiError::bad("inventory_is_missing"))?;
+            if inventory.team_id != template.team_id {
+                return Err(ApiError::bad("the_inventory_belongs_to_another_team"));
+            }
+        }
+        effective.inventory_id = inventory_id;
+    }
+    let credential_ids = if let Some(ids) = &req.overrides.credential_ids {
+        let chosen = credentials_for_launch(state, db, &template.team_id, ids)?;
+        effective.credential_id = chosen.primary_id;
+        Some(chosen.ids)
+    } else {
+        None
+    };
+    let mut params = db::json_object(&capture_parameters(
+        db,
+        &effective,
+        &req.extra_vars,
+        credential_ids.as_deref(),
+    ));
+    if let Some(spec) = spec_overlay {
+        if template.tool != "ansible" {
+            return Err(ApiError::bad("launch_fields_are_only_for_ansible"));
+        }
+        let empty = json!({});
+        let base = params.get("spec").unwrap_or(&empty);
+        let merged = merge_prompt_spec(base, spec).map_err(ApiError::bad)?;
+        runner::check_ansible_spec(&merged).map_err(ApiError::bad)?;
+        let Some(map) = params.as_object_mut() else {
+            return Err(ApiError::bad("parameters_are_invalid"));
+        };
+        map.insert("spec".into(), merged);
+    }
+    Ok(params.to_string())
+}
+
+fn blank_text(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn credentials_for_launch(
+    state: &Shared,
+    db: &rusqlite::Connection,
+    team_id: &str,
+    ids: &[String],
+) -> AppResult<crate::credentials::AssignedSet> {
+    let mut loaded = Vec::with_capacity(ids.len());
+    for id in ids {
+        let id = id.trim();
+        if id.is_empty() {
+            return Err(ApiError::bad("credential_is_missing"));
+        }
+        let credential =
+            db::credential(db, id)?.ok_or_else(|| ApiError::bad("credential_is_missing"))?;
+        loaded.push(credential);
+    }
+    crate::credentials::assign_loaded(state, team_id, &loaded).map_err(ApiError::bad)
+}
+
+/// Prompt fields replace the template spec. An empty string or null clears the key.
+fn merge_prompt_spec(base: &Value, overlay: &Value) -> Result<Value, String> {
+    let Some(incoming) = overlay.as_object() else {
+        return Err("spec_must_be_an_object".into());
+    };
+    let mut spec = base.as_object().cloned().unwrap_or_default();
+    for (key, value) in incoming {
+        if !matches!(
+            key.as_str(),
+            "job_type" | "tags" | "skip_tags" | "limit" | "verbosity"
+        ) {
+            return Err("launch_fields_are_only_for_ansible".into());
+        }
+        let clear = match value {
+            Value::Null => true,
+            Value::String(text) if text.trim().is_empty() => true,
+            Value::Number(number) if key == "verbosity" && number.as_u64() == Some(0) => true,
+            _ => false,
+        };
+        if clear {
+            spec.remove(key);
+        } else {
+            spec.insert(key.clone(), value.clone());
+        }
+    }
+    Ok(Value::Object(spec))
+}
+
 fn capture_parameters(
     db: &rusqlite::Connection,
     template: &db::Template,
     request_extra: &Value,
+    credential_override: Option<&[String]>,
 ) -> String {
     let project_name = template
         .project_id
@@ -390,17 +526,21 @@ fn capture_parameters(
         .as_deref()
         .and_then(|id| db::credential(db, id).ok().flatten())
         .map(|item| (item.name, item.kind));
-    let linked = db::template_credential_ids(db, &template.id)
-        .ok()
-        .unwrap_or_default();
-    let linked = if linked.is_empty() {
-        template
-            .credential_id
-            .clone()
-            .into_iter()
-            .collect::<Vec<_>>()
+    let linked = if let Some(ids) = credential_override {
+        ids.to_vec()
     } else {
-        linked
+        let linked = db::template_credential_ids(db, &template.id)
+            .ok()
+            .unwrap_or_default();
+        if linked.is_empty() {
+            template
+                .credential_id
+                .clone()
+                .into_iter()
+                .collect::<Vec<_>>()
+        } else {
+            linked
+        }
     };
     let credentials = linked
         .iter()
@@ -661,6 +801,7 @@ fn apply_step(
                         workflow_job_id: Some(wf_job_id.to_string()),
                         workflow_node_id: Some(node_id.clone()),
                         parameters_override: Some(parameters),
+                        overrides: LaunchOverrides::default(),
                     },
                 ),
                 Err(err) => {
@@ -803,6 +944,7 @@ pub fn accept_hook(
                     workflow_job_id: None,
                     workflow_node_id: None,
                     parameters_override: None,
+                    overrides: LaunchOverrides::default(),
                 },
             )?;
             if first_job.is_none() {
@@ -858,6 +1000,26 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use std::path::PathBuf;
+
+    #[test]
+    fn prompt_spec_replaces_listed_fields_and_clears_blanks() {
+        let base =
+            json!({"job_type": "run", "tags": "ping", "limit": "web", "forks": 5, "diff": true});
+        let merged = merge_prompt_spec(
+            &base,
+            &json!({"limit": "db", "tags": "", "skip_tags": "slow", "job_type": "check", "verbosity": 0}),
+        )
+        .expect("merge");
+        assert_eq!(merged["limit"], "db");
+        assert_eq!(merged["job_type"], "check");
+        assert_eq!(merged["skip_tags"], "slow");
+        assert_eq!(merged["forks"], 5);
+        assert_eq!(merged["diff"], true);
+        assert!(merged.get("tags").is_none());
+        assert!(merged.get("verbosity").is_none());
+        let rejected = merge_prompt_spec(&base, &json!({"forks": 2})).expect_err("forks");
+        assert_eq!(rejected, "launch_fields_are_only_for_ansible");
+    }
 
     fn config(dir: &std::path::Path) -> Config {
         Config {
@@ -1002,6 +1164,7 @@ mod tests {
                 created_at: db::now(),
                 update_on_launch: false,
                 admin_saved: true,
+                prompt_on_launch: false,
             },
         )
         .expect("template");
@@ -1113,6 +1276,7 @@ mod tests {
                 workflow_job_id: None,
                 workflow_node_id: None,
                 parameters_override: None,
+                overrides: LaunchOverrides::default(),
             },
         )
         .expect_err("operator inventory");
@@ -1141,6 +1305,7 @@ mod tests {
                 workflow_job_id: None,
                 workflow_node_id: None,
                 parameters_override: None,
+                overrides: LaunchOverrides::default(),
             },
         )
         .expect("admin inventory");
