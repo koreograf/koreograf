@@ -29,6 +29,8 @@ See `.env.example`. Comments in that file are English. Copy it to `.env` before 
 | `KOREOGRAF_LDAP_BIND_PASSWORD` | empty. Required when `KOREOGRAF_LDAP_URL` is set |
 | `KOREOGRAF_LDAP_USER_BASE` | empty. Required when `KOREOGRAF_LDAP_URL` is set |
 | `KOREOGRAF_LDAP_GROUP_BASE` | empty |
+| `KOREOGRAF_LDAP_TLS_INSECURE` | false. Skips certificate checks and writes a warning |
+| `KOREOGRAF_LDAP_CA_FILE` | empty. Absolute PEM path. When set, checks stay on |
 
 Directory sign-in, including these four variables, is described in [Organizations, teams, LDAP, and Active Directory](authentication.md).
 

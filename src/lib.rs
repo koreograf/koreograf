@@ -26,6 +26,7 @@ mod scan;
 mod schedule;
 mod seed;
 mod settings;
+mod tls;
 mod workflow;
 
 use std::collections::{HashMap, HashSet};
@@ -111,6 +112,9 @@ pub async fn serve(cfg: Config) -> anyhow::Result<()> {
     let url = std::env::var("KOREOGRAF_DATABASE_URL").unwrap_or_default();
     config::database_choice(&url).map_err(anyhow::Error::msg)?;
     let state = boot(cfg)?;
+    if let Ok(effective) = settings::load(&state) {
+        tls::warn_directory(&effective.ldap);
+    }
     schedule::spawn(state.clone());
     let bind = state.cfg.bind.clone();
     let data_dir = state.cfg.data_dir.display().to_string();

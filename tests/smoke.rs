@@ -3604,6 +3604,7 @@ async fn admin_settings_hide_secrets_and_apply_without_restart() {
     assert_eq!(current["source"], "env");
     assert_eq!(current["runner"], "local");
     assert_eq!(current["ldap"]["url"], "");
+    assert_eq!(current["ldap"]["ca_file"], "");
     assert_eq!(current["ldap"]["bind_password_set"], false);
     assert_eq!(current["proxy"]["password_set"], false);
     assert!(!current.to_string().contains("password\":"));
@@ -3653,6 +3654,7 @@ async fn admin_settings_hide_secrets_and_apply_without_restart() {
     assert!(!saved_text.contains("proxy-secret-value"), "{saved_text}");
     assert_eq!(saved["source"], "saved");
     assert_eq!(saved["ldap"]["mode"], "ad");
+    assert_eq!(saved["ldap"]["ca_file"], "");
     assert_eq!(saved["ldap"]["user_filter"], "(sAMAccountName={username})");
     assert_eq!(saved["ldap"]["bind_password_set"], true);
     assert_eq!(saved["proxy"]["password_set"], true);

@@ -2929,6 +2929,15 @@ function sourceSummary(item) {
   return t("text");
 }
 
+function certificateCheckOff(source) {
+  const data = (source && source.source) || {};
+  return source && source.kind === "netbox" && data.validate_certs === false && !String(data.ca_file || "").trim();
+}
+
+function certificateBadge(on) {
+  return on ? ` <span class="pill warn">${h("certificate_check_off")}</span>` : "";
+}
+
 function mountSourceDraft(container, projects, kind, preset) {
   const data = preset || {};
   const card = document.createElement("section");
@@ -2952,6 +2961,8 @@ function mountSourceDraft(container, projects, kind, preset) {
       <label class="field"><span>${h("group_by")}</span><input name="group_by" value="${esc(groupBy)}" placeholder="sites, device_roles"></label>
       <label class="field"><span>${h("filters_one_key_value_per_line")}</span><textarea name="query">${esc(filters)}</textarea></label>
       <label class="field"><span>${h("verify_certificate")}</span><input name="validate_certs" type="checkbox"${data.validate_certs === false ? "" : " checked"}></label>
+      <label class="field"><span>${h("private_ca_file")}</span><input name="ca_file" value="${esc(data.ca_file || "")}" placeholder="/etc/ssl/certs/internal-ca.pem" autocomplete="off" spellcheck="false"></label>
+      <p class="small muted">${h("an_absolute_pem_path_empty_uses_the_system_cas")}</p>
       <label class="field"><span>${h("virtual_machines")}</span><input name="virtual_machines" type="checkbox"${data.virtual_machines === false ? "" : " checked"}></label>`;
   }
   card.innerHTML = `<div class="spread"><h2>${esc(title)}</h2><button class="btn ghost" type="button" data-remove-draft>${h("remove")}</button></div>
@@ -3009,6 +3020,7 @@ function readSourceDraft(card) {
     group_by: card.querySelector("[name=group_by]").value.split(",").map((item) => item.trim()).filter(Boolean),
     query_filters: card.querySelector("[name=query]").value.split("\n").map((item) => item.trim()).filter(Boolean),
     validate_certs: card.querySelector("[name=validate_certs]").checked,
+    ca_file: card.querySelector("[name=ca_file]").value.trim(),
     virtual_machines: card.querySelector("[name=virtual_machines]").checked,
   };
 }
@@ -3041,7 +3053,8 @@ async function pageInventories() {
       const kinds = (item.sources || []).map((source) => sourceKindLabel(source.kind));
       const label = kinds.length ? [...new Set(kinds)].join(", ") : sourceKindLabel(item.source_kind);
       const count = item.source_count != null ? item.source_count : kinds.length;
-      return `<tr><td><a href="#/inventories/${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(count)}</td><td>${esc(label)}</td><td>${esc(item.host_count)}</td></tr>`;
+      const insecure = (item.sources || []).some(certificateCheckOff) || certificateCheckOff({ kind: item.source_kind, source: item.source });
+      return `<tr><td><a href="#/inventories/${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(count)}</td><td>${esc(label)}${certificateBadge(insecure)}</td><td>${esc(item.host_count)}</td></tr>`;
     });
     document.querySelector("#inventory-table").innerHTML = table([t("name"), t("sources"), t("type"), t("hosts")], rows);
   };
@@ -3097,7 +3110,7 @@ async function pageInventory(id) {
   const sourceCards = (item.sources || []).map((source) => `
     <section class="card" style="margin-top:10px">
       <div class="spread">
-        <div><strong>${esc(source.name)}</strong> <span class="small muted">${esc(sourceKindLabel(source.kind))} · ${esc(sourceSummary(source))}</span></div>
+        <div><strong>${esc(source.name)}</strong>${certificateBadge(certificateCheckOff(source))} <span class="small muted">${esc(sourceKindLabel(source.kind))} · ${esc(sourceSummary(source))}</span></div>
         <div class="row">
           ${can("operator") && source.kind !== "ini" ? `<button class="btn" type="button" data-sync-source="${esc(source.id)}">${h("refresh")}</button>` : ""}
           ${can("operator") ? `<button class="btn danger" type="button" data-drop-source="${esc(source.id)}">${h("remove")}</button>` : ""}
@@ -4285,6 +4298,7 @@ function settingsBody(form) {
       group_base: form.ldap_group_base.value.trim(),
       starttls: form.ldap_starttls.checked,
       tls_insecure: form.ldap_tls_insecure.checked,
+      ca_file: form.ldap_ca_file.value.trim(),
     },
     proxy: {
       url: form.proxy_url.value.trim(),
@@ -4353,6 +4367,8 @@ async function pageSettings(notice) {
       </div>
       <label class="row"><input name="ldap_starttls" type="checkbox"${ldap.starttls ? " checked" : ""}> ${h("starttls")}</label>
       <label class="row"><input name="ldap_tls_insecure" type="checkbox"${ldap.tls_insecure ? " checked" : ""}> ${h("skip_certificate_checks_only_on_a_network_you")}</label>
+      <label class="field"><span>${h("private_ca_file")}</span><input name="ldap_ca_file" value="${esc(ldap.ca_file || "")}" placeholder="/etc/ssl/certs/internal-ca.pem" autocomplete="off" spellcheck="false"></label>
+      <p class="small muted">${h("an_absolute_pem_path_empty_uses_the_system_cas")}</p>
     </section>
     <section class="form-section">
       <h2>${h("proxy")}</h2>

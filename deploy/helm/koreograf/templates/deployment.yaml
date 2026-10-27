@@ -110,6 +110,8 @@ spec:
               value: {{ .Values.ldap.starttls | quote }}
             - name: KOREOGRAF_LDAP_TLS_INSECURE
               value: {{ .Values.ldap.tlsInsecure | quote }}
+            - name: KOREOGRAF_LDAP_CA_FILE
+              value: {{ .Values.ldap.caFile | quote }}
             {{- end }}
           readinessProbe:
             httpGet:
