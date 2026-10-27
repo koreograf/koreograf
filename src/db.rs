@@ -118,6 +118,7 @@ CREATE TABLE IF NOT EXISTS templates (
   created_at TEXT NOT NULL,
   update_on_launch INTEGER NOT NULL DEFAULT 1,
   admin_saved INTEGER NOT NULL DEFAULT 1,
+  prompt_on_launch INTEGER NOT NULL DEFAULT 0,
   UNIQUE (team_id, name)
 );
 CREATE TABLE IF NOT EXISTS template_credentials (
@@ -402,6 +403,12 @@ fn migrate(c: &Connection) -> AppResult<()> {
             [],
         )?;
     }
+    if !column_exists(c, "templates", "prompt_on_launch")? {
+        c.execute(
+            "ALTER TABLE templates ADD COLUMN prompt_on_launch INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
     if !column_exists(c, "inventories", "admin_saved")? {
         c.execute(
             "ALTER TABLE inventories ADD COLUMN admin_saved INTEGER NOT NULL DEFAULT 1",
@@ -592,6 +599,8 @@ pub struct Template {
     pub update_on_launch: bool,
     /// True when an administrator last saved this template.
     pub admin_saved: bool,
+    /// When set, the launch dialog may replace inventory, credentials, and Ansible options.
+    pub prompt_on_launch: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1807,8 +1816,8 @@ pub fn insert_template(c: &Connection, item: &Template) -> AppResult<()> {
         "INSERT INTO templates (
             id, team_id, name, description, tool, project_id, inventory_id, credential_id,
             environment_id, entrypoint, extra_vars, spec, created_at, update_on_launch,
-            admin_saved
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            admin_saved, prompt_on_launch
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
             item.id,
             item.team_id,
@@ -1824,7 +1833,8 @@ pub fn insert_template(c: &Connection, item: &Template) -> AppResult<()> {
             item.spec,
             item.created_at,
             item.update_on_launch as i64,
-            item.admin_saved as i64
+            item.admin_saved as i64,
+            item.prompt_on_launch as i64
         ],
     )?;
     Ok(())
@@ -1834,7 +1844,7 @@ pub fn update_template(c: &Connection, item: &Template) -> AppResult<()> {
     let n = c.execute(
         "UPDATE templates SET name=?3, description=?4, tool=?5, project_id=?6, inventory_id=?7,
          credential_id=?8, environment_id=?9, entrypoint=?10, extra_vars=?11, spec=?12,
-         update_on_launch=?13, admin_saved=?14
+         update_on_launch=?13, admin_saved=?14, prompt_on_launch=?15
          WHERE id=?1 AND team_id=?2",
         params![
             item.id,
@@ -1850,7 +1860,8 @@ pub fn update_template(c: &Connection, item: &Template) -> AppResult<()> {
             item.extra_vars,
             item.spec,
             item.update_on_launch as i64,
-            item.admin_saved as i64
+            item.admin_saved as i64,
+            item.prompt_on_launch as i64
         ],
     )?;
     if n == 0 {
@@ -1863,7 +1874,7 @@ pub fn list_templates(c: &Connection, team_id: &str) -> AppResult<Vec<Template>>
     let mut stmt = c.prepare(
         "SELECT id, team_id, name, description, tool, project_id, inventory_id, credential_id,
                 environment_id, entrypoint, extra_vars, spec, created_at, update_on_launch,
-                admin_saved
+                admin_saved, prompt_on_launch
          FROM templates WHERE team_id = ?1 ORDER BY name",
     )?;
     let rows = stmt.query_map([team_id], map_template)?;
@@ -1874,7 +1885,7 @@ pub fn template(c: &Connection, id: &str) -> AppResult<Option<Template>> {
     c.query_row(
         "SELECT id, team_id, name, description, tool, project_id, inventory_id, credential_id,
                 environment_id, entrypoint, extra_vars, spec, created_at, update_on_launch,
-                admin_saved
+                admin_saved, prompt_on_launch
          FROM templates WHERE id = ?1",
         [id],
         map_template,
@@ -1900,6 +1911,7 @@ fn map_template(row: &rusqlite::Row<'_>) -> rusqlite::Result<Template> {
         created_at: row.get(12)?,
         update_on_launch: flag(row.get(13)?),
         admin_saved: flag(row.get(14)?),
+        prompt_on_launch: flag(row.get(15)?),
     })
 }
 
@@ -2696,6 +2708,8 @@ mod tests {
             .unwrap();
         conn.execute("ALTER TABLE templates DROP COLUMN admin_saved", [])
             .unwrap();
+        conn.execute("ALTER TABLE templates DROP COLUMN prompt_on_launch", [])
+            .unwrap();
         conn.execute(
             "INSERT INTO templates (
                 id, team_id, name, description, tool, entrypoint, extra_vars, spec, created_at
@@ -2720,6 +2734,14 @@ mod tests {
             )
             .unwrap();
         assert_eq!(saved, 1);
+        let prompt: i64 = conn
+            .query_row(
+                "SELECT prompt_on_launch FROM templates WHERE id = 't1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(prompt, 0);
         drop(conn);
         let _ = std::fs::remove_dir_all(&dir);
     }

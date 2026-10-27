@@ -50,6 +50,8 @@ pub struct TemplateBody {
     spec: Option<Value>,
     #[serde(default = "default_true")]
     update_on_launch: bool,
+    #[serde(default)]
+    prompt_on_launch: bool,
 }
 
 fn default_true() -> bool {
@@ -60,6 +62,15 @@ fn default_true() -> bool {
 pub struct LaunchBody {
     #[serde(default = "empty_object")]
     extra_vars: Value,
+    /// Empty string clears the inventory. Omit the field to keep the template value.
+    #[serde(default)]
+    inventory_id: Option<String>,
+    /// Replaces the template credentials for this job. Omit the field to keep them.
+    #[serde(default)]
+    credential_ids: Option<Vec<String>>,
+    /// Ansible prompt fields merged onto the template spec.
+    #[serde(default)]
+    spec: Option<Value>,
 }
 
 fn empty_object() -> Value {
@@ -195,6 +206,11 @@ pub async fn launch_template(
             workflow_job_id: None,
             workflow_node_id: None,
             parameters_override: None,
+            overrides: jobs::LaunchOverrides {
+                inventory_id: body.inventory_id,
+                credential_ids: body.credential_ids,
+                spec: body.spec,
+            },
         },
     )?;
     let db = state.db()?;
@@ -760,6 +776,7 @@ fn build_template(
             created_at,
             update_on_launch: body.update_on_launch,
             admin_saved: false,
+            prompt_on_launch: body.prompt_on_launch,
         },
         credential_ids,
     ))
@@ -978,6 +995,7 @@ fn template_json(template: &Template, credential_ids: &[String]) -> Value {
         "spec": db::json_object(&template.spec),
         "created_at": template.created_at,
         "update_on_launch": template.update_on_launch,
+        "prompt_on_launch": template.prompt_on_launch,
     })
 }
 

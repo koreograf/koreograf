@@ -12,6 +12,10 @@ OpenTofu uses `TF_PLUGIN_CACHE_DIR` on that same cache (`data/cache/<team>/tofu`
 
 Each of stdout and stderr keeps the first three quarters of the line limit and the last quarter. The tail lines wait in memory and stay within 8 MiB per stream. The default is 8000 lines: the first 6000 and the last 2000. A system line between them records how many lines were left out. `KOREOGRAF_JOB_OUTPUT_LINES` sets the limit, from 100 to 100000. Settings can replace that value for the next job. `GET /api/jobs/{id}/output` downloads the kept log and stops at 8 MiB. The job page shows the start and the end when the stored log is longer than 2000 lines. Play recap lines and `fatal:` lines are read from the whole stream, including lines the log does not keep.
 
+## Prompt on launch
+
+A template can ask before it starts. The launch button then opens a dialog filled with the template's inventory, credentials, limit, tags, skip tags, job type, verbosity, and extra variables. Cancel starts nothing. Confirm runs that one job with the dialog values and leaves the template row unchanged. `POST /api/templates/{id}/launch` with only `extra_vars`, or with none of the prompt fields, still uses the template. The same applies to hooks and scripts. Inventory, credentials, and the Ansible fields above are accepted only when prompt on launch is on.
+
 ## Execution environments
 
 An environment is an image plus a pull policy (`if_not_present`, `always`, `never`). It has one of three scopes. **Global** is visible to every team, and only an administrator can create or change it. **Organization** is visible to every team in that organization. An owner of a team in the organization, or an administrator, can manage it. The organization is the organization of the team selected in the UI. **Team** stays private to that one team, and an owner of that team manages it. A template may use any environment the selected team can see. The demo creates `quay.io/ansible/awx-ee:latest` on the demo team and attaches it to no template, so the first run works without an image pull.
