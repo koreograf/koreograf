@@ -14,7 +14,7 @@ use crate::jobs;
 use crate::runner;
 use crate::Shared;
 
-use super::{blank, created, gate, no_content, require_name, team_header};
+use super::{blank, created, gate, no_content, require_description, require_name, team_header};
 
 #[derive(Deserialize)]
 pub struct TeamBody {
@@ -165,7 +165,7 @@ pub async fn create_team(
         &id,
         &organization_id,
         &name,
-        body.description.trim(),
+        &require_description(&body.description)?,
         ldap_group.as_deref(),
     )?;
     db::upsert_membership(&db, &id, &user.id, "owner", "manual")?;
@@ -195,7 +195,7 @@ pub async fn update_team(
         &db,
         &id,
         &name,
-        body.description.trim(),
+        &require_description(&body.description)?,
         ldap_group.as_deref(),
     )?;
     let team = db::team_by_id(&db, &id)?.ok_or(ApiError::NotFound)?;
@@ -832,7 +832,7 @@ fn environment_fields(body: &EnvironmentBody) -> AppResult<(String, String, Stri
         require_name(&body.name)?,
         image.to_string(),
         body.pull_policy.clone(),
-        body.description.trim().to_string(),
+        require_description(&body.description)?,
     ))
 }
 
@@ -975,7 +975,7 @@ pub async fn create_organization(
     let name = require_name(&body.name)?;
     let id = Uuid::new_v4().to_string();
     let db = state.db()?;
-    db::insert_organization(&db, &id, &name, body.description.trim())?;
+    db::insert_organization(&db, &id, &name, &require_description(&body.description)?)?;
     let item = db::organization(&db, &id)?.ok_or(ApiError::NotFound)?;
     Ok(created(json!(item)))
 }
@@ -1015,7 +1015,7 @@ pub async fn update_organization(
     }
     let name = require_name(&body.name)?;
     let db = state.db()?;
-    db::update_organization(&db, &id, &name, body.description.trim())?;
+    db::update_organization(&db, &id, &name, &require_description(&body.description)?)?;
     let item = db::organization(&db, &id)?.ok_or(ApiError::NotFound)?;
     Ok(Json(json!(item)))
 }

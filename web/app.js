@@ -800,7 +800,7 @@ async function pageTemplateForm(id) {
       <div class="form-section">
         <h2>${h("general")}</h2>
         <label class="field"><span>${h("name")}</span><input name="name" required value="${esc(item.name)}"></label>
-        <label class="field"><span>${h("description")}</span><input name="description" value="${esc(item.description)}"></label>
+        <label class="field"><span>${h("description")}</span><input name="description" maxlength="1000" value="${esc(item.description)}"></label>
         <div class="field-row">
           <label class="field"><span>${h("tool")}</span>
             <select class="fit" name="tool">
@@ -1709,7 +1709,7 @@ async function pageWorkflowNew() {
   shell(t("new_workflow"), `
     <form class="card form" id="workflow-new">
       <label class="field"><span>${h("name")}</span><input name="name" required></label>
-      <label class="field"><span>${h("description")}</span><input name="description"></label>
+      <label class="field"><span>${h("description")}</span><input name="description" maxlength="1000"></label>
       <button class="btn pill primary" type="submit">${h("create_and_open")}</button>
     </form>`);
   document.querySelector("#workflow-new").addEventListener("submit", async (event) => {
@@ -1767,7 +1767,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
         ${readonly ? "" : `
           <div class="row" style="margin-bottom:10px">
             <input id="wf-name" value="${esc(workflow.name)}" ${can("operator") ? "" : "disabled"}>
-            <input id="wf-description" value="${esc(workflow.description)}" placeholder="${h("description")}" ${can("operator") ? "" : "disabled"}>
+            <input id="wf-description" maxlength="1000" value="${esc(workflow.description)}" placeholder="${h("description")}" ${can("operator") ? "" : "disabled"}>
           </div>`}
         <p class="small muted" id="wf-hint">${readonly ? h("colors_show_the_run_a_click_shows_the") : h("drag_nodes_add_more_nodes_on_the_right")}</p>
         <div class="canvas" id="canvas"><div id="board" style="position:relative;min-width:100%;min-height:560px"><svg class="edges" id="edges"></svg><div id="nodes"></div></div></div>
@@ -2709,7 +2709,7 @@ function environmentForm(item) {
       <label class="field"><span>${h("applies_to")}</span><select class="fit" name="scope">${environmentScopeOptions(scope)}</select></label>
     </div>
     <p class="small muted">${h("global_applies_to_every_team_the_organization_applies")}</p>
-    <label class="field"><span>${h("description")}</span><input name="description" value="${item ? esc(item.description) : ""}"></label>
+    <label class="field"><span>${h("description")}</span><input name="description" maxlength="1000" value="${item ? esc(item.description) : ""}"></label>
     <button class="btn pill primary" type="submit">${item ? h("save") : h("create")}</button>
   </form>`;
 }
@@ -3832,7 +3832,7 @@ async function pageOrganizationNew() {
   shell(t("new_organization"), `
     <form class="card form" id="org-form">
       <label class="field"><span>${h("name")}</span><input name="name" required></label>
-      <label class="field"><span>${h("description")}</span><input name="description"></label>
+      <label class="field"><span>${h("description")}</span><input name="description" maxlength="1000"></label>
       <button class="btn pill primary" type="submit">${h("create")}</button>
     </form>`);
   document.querySelector("#org-form").addEventListener("submit", async (event) => {
@@ -3854,7 +3854,7 @@ async function pageOrganization(id) {
     <section class="card" style="margin-bottom:14px">
       ${me.is_admin ? `<form class="form" id="org-edit">
         <label class="field"><span>${h("name")}</span><input name="name" value="${esc(item.name)}" required></label>
-        <label class="field"><span>${h("description")}</span><input name="description" value="${esc(item.description || "")}"></label>
+        <label class="field"><span>${h("description")}</span><input name="description" maxlength="1000" value="${esc(item.description || "")}"></label>
         <button class="btn pill primary" type="submit">${h("save")}</button>
       </form>` : `<p class="muted">${esc(item.description || "")}</p>`}
     </section>
@@ -3911,7 +3911,7 @@ async function pageTeam() {
       <p class="small">${h("organization_name_2", { name: current.organization_name || "—" })}</p>
       ${can("owner") ? `<form class="form" id="team-form">
         <label class="field"><span>${h("name")}</span><input name="name" value="${esc(current.name)}" required></label>
-        <label class="field"><span>${h("description")}</span><input name="description" value="${esc(current.description || "")}"></label>
+        <label class="field"><span>${h("description")}</span><input name="description" maxlength="1000" value="${esc(current.description || "")}"></label>
         <label class="field"><span>${h("ldap_or_ad_group")}</span><input name="ldap_group" value="${esc(current.ldap_group || "")}" placeholder="${h("cn_or_dn_for_example_platform")}"></label>
         ${me.is_admin ? `<label class="field"><span>${h("move_organization")}</span><select name="organization_id">${orgOptions(organizations, current.organization_id)}</select></label>` : ""}
         <button class="btn pill primary" type="submit">${h("save_team")}</button>
@@ -4006,7 +4006,7 @@ async function pageTeamNew() {
   shell(t("new_team_2"), `
     <form class="card form" id="create-team">
       <label class="field"><span>${h("name")}</span><input name="name" required></label>
-      <label class="field"><span>${h("description")}</span><input name="description"></label>
+      <label class="field"><span>${h("description")}</span><input name="description" maxlength="1000"></label>
       <label class="field"><span>${h("organization")}</span><select name="organization_id"><option value="">${h("new_organization_named_after_the_team")}</option>${orgOptions(organizations, current && current.organization_id)}</select></label>
       <label class="field"><span>${h("ldap_group")}</span><input name="ldap_group"></label>
       <button class="btn pill primary" type="submit">${h("create")}</button>

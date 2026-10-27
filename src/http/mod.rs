@@ -319,10 +319,18 @@ pub fn gate(state: &Shared, user: &AuthUser, team_id: &str, min: Role) -> AppRes
 
 pub fn require_name(name: &str) -> AppResult<String> {
     let name = name.trim();
-    if name.is_empty() || name.len() > 120 {
+    if name.is_empty() || name.chars().count() > 120 {
         return Err(ApiError::bad("name_is_missing_or_too_long"));
     }
     Ok(name.to_string())
+}
+
+pub fn require_description(description: &str) -> AppResult<String> {
+    let description = description.trim();
+    if description.chars().count() > 1000 {
+        return Err(ApiError::bad("description_is_too_long"));
+    }
+    Ok(description.to_string())
 }
 
 pub fn blank(value: Option<String>) -> Option<String> {
@@ -379,4 +387,28 @@ pub fn accepted(body: serde_json::Value) -> Response {
 
 pub fn no_content() -> Response {
     StatusCode::NO_CONTENT.into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{require_description, require_name};
+
+    #[test]
+    fn names_and_descriptions_count_characters() {
+        let mark = "é";
+        assert_eq!(mark.len(), 2);
+        assert!(require_name(&mark.repeat(120)).is_ok());
+        assert!(require_name(&mark.repeat(121))
+            .unwrap_err()
+            .to_string()
+            .contains("name_is_missing_or_too_long"));
+        assert_eq!(require_description("  ").unwrap(), "");
+        let ok = require_description(&mark.repeat(1000)).unwrap();
+        assert_eq!(ok.chars().count(), 1000);
+        assert!(ok.len() > 1000);
+        assert!(require_description(&mark.repeat(1001))
+            .unwrap_err()
+            .to_string()
+            .contains("description_is_too_long"));
+    }
 }

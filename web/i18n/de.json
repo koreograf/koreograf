@@ -130,6 +130,7 @@
   "deliveries": "Eingänge",
   "dependency_cache": "Abhängigkeits-Cache",
   "description": "Beschreibung",
+  "description_is_too_long": "Beschreibung ist zu lang.",
   "diff": "Diff",
   "diff_is_yes_or_no": "Diff ist ja oder nein.",
   "directory": "Verzeichnis",

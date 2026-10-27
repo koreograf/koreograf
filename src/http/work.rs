@@ -22,7 +22,10 @@ use crate::runner;
 use crate::workflow::{self, Graph};
 use crate::Shared;
 
-use super::{accepted, blank, created, gate, job_json, no_content, require_name, team_header};
+use super::{
+    accepted, blank, created, gate, job_json, no_content, require_description, require_name,
+    team_header,
+};
 
 #[derive(Deserialize)]
 pub(super) struct RelaunchBody {
@@ -700,7 +703,7 @@ fn build_template(
             id: id.unwrap_or_else(|| Uuid::new_v4().to_string()),
             team_id: team.to_string(),
             name: require_name(&body.name)?,
-            description: body.description.trim().to_string(),
+            description: require_description(&body.description)?,
             tool: body.tool,
             project_id,
             inventory_id,
@@ -847,7 +850,7 @@ fn build_workflow(
         id: id.unwrap_or_else(|| Uuid::new_v4().to_string()),
         team_id: team.to_string(),
         name: require_name(&body.name)?,
-        description: body.description.trim().to_string(),
+        description: require_description(&body.description)?,
         graph: serde_json::to_string(&body.graph)
             .map_err(|err| ApiError::Internal(err.to_string()))?,
         created_at,
