@@ -73,6 +73,10 @@ If `admin.password` is empty, the first password is in the volume at `/var/lib/k
 
 Sign in, select the team `Plattform`, and press `Test alert`. The workflow runs the files in [examples/demo](examples/demo). The steps are in [Workflows and webhooks](docs/workflows-webhooks.md#demo).
 
+## OpenTofu state
+
+`plan` reads the saved state and does not change resources. `apply` keeps that state for one team and one template at `data/cache/<team>/tofu-state/<template>/terraform.tfstate`. The next apply of the same template sees the resources from the last run. The plugin cache stays at `data/cache/<team>/tofu`, and `TF_DATA_DIR` stays in the job directory. Another team has a different directory. The state file is local to this controller and is not in the backup zip. Use a remote backend when the state has to survive a new data directory or be used from more than one machine. `apply` writes a warning when the module has no remote backend. Details are in [Jobs](docs/jobs.md#what-the-cache-changes).
+
 ## Documentation
 
 - [Installation](docs/installation.md) — run on a machine, Docker Compose, and Helm.

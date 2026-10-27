@@ -653,7 +653,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
     fs::create_dir_all(&stage).map_err(|e| e.to_string())?;
     let _scrub = SecretScrub { work: work.clone() };
     let cache = state.cfg.data_dir.join("cache").join(&job.team_id);
-    for sub in ["collections", "roles", "tofu"] {
+    for sub in ["collections", "roles", "tofu", "tofu-state"] {
         fs::create_dir_all(cache.join(sub)).map_err(|e| e.to_string())?;
     }
 
@@ -801,6 +801,16 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
         &inventory_rel,
         &extra_file,
     );
+    if template.tool == "opentofu" {
+        let state = tofu_state_dir(&cache, &template.id)?;
+        fs::create_dir_all(&state).map_err(|e| e.to_string())?;
+        let visible = if container_mode.is_some() {
+            format!("/cache/tofu-state/{}", template.id)
+        } else {
+            state.display().to_string()
+        };
+        env.push(("KOREOGRAF_TOFU_STATE".into(), visible));
+    }
     let credential_ids = saved_credential_ids(&job, &template);
     apply_credentials(
         state,
@@ -998,6 +1008,25 @@ fn push_paths(
     env.push(("KOREOGRAF_TOFU".into(), tofu));
     env.push(("KOREOGRAF_INVENTORY".into(), inventory));
     env.push(("KOREOGRAF_EXTRA".into(), extra));
+}
+
+/// State for one template, under that team's cache. The plugin cache stays
+/// in `cache/<team>/tofu`. A second team gets a different directory.
+fn tofu_state_dir(cache: &Path, template_id: &str) -> Result<PathBuf, String> {
+    if !safe_cache_key(template_id) {
+        return Err("The template id cannot be used as an OpenTofu state directory.".into());
+    }
+    Ok(cache.join("tofu-state").join(template_id))
+}
+
+fn safe_cache_key(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    value.len() <= 80
+        && (first.is_ascii_alphanumeric() || first == '_')
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
 }
 
 fn apply_proxy_env(env: &mut Vec<(String, String)>, proxy: &crate::settings::ProxySettings) {
@@ -2025,6 +2054,11 @@ async fn run_container(state: &Shared, job_id: &str, run: ContainerRun<'_>) -> R
                 "/cache/tofu".into(),
                 false,
             ),
+            (
+                cache.join("tofu-state").display().to_string(),
+                "/cache/tofu-state".into(),
+                false,
+            ),
         ],
         env_file: work.join("container.env").display().to_string(),
         command: vec!["/runner/work/wrapper.sh".into()],
@@ -2480,6 +2514,188 @@ mod tests {
         assert!(check_relative("site.yml").is_ok());
         assert!(check_relative("../site.yml").is_err());
         assert!(check_relative("/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn tofu_state_dir_is_per_team_and_template() {
+        let team_a = Path::new("/data/cache/team-a");
+        let team_b = Path::new("/data/cache/team-b");
+        let a = tofu_state_dir(team_a, "tpl-1").unwrap();
+        let b = tofu_state_dir(team_b, "tpl-1").unwrap();
+        assert_eq!(a, team_a.join("tofu-state").join("tpl-1"));
+        assert_eq!(b, team_b.join("tofu-state").join("tpl-1"));
+        assert_ne!(a, b);
+        assert!(tofu_state_dir(team_a, "").is_err());
+        assert!(tofu_state_dir(team_a, "../tpl").is_err());
+        assert!(tofu_state_dir(team_a, "tpl/other").is_err());
+        assert!(tofu_state_dir(team_a, &"x".repeat(81)).is_err());
+    }
+
+    fn write_executable(path: &Path, body: &str) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, body).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(path).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(path, perms).unwrap();
+        }
+    }
+
+    fn run_wrapper(root: &Path, action: &str, state: &Path, module: &str) -> String {
+        let bin = root.join("bin");
+        let project = root.join("project");
+        let work = root.join("work");
+        let module_dir = project.join("tofu");
+        // Each job has its own work directory. TF_DATA_DIR lives there, so a
+        // reused directory would still remember the previous backend path.
+        let _ = std::fs::remove_dir_all(&work);
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&module_dir).unwrap();
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::write(module_dir.join("main.tf"), module).unwrap();
+        let path = format!("{}:/usr/bin:/bin", bin.display());
+        let output = std::process::Command::new("sh")
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/wrapper.sh"))
+            .env_clear()
+            .env("PATH", &path)
+            .env("HOME", &work)
+            .env("KOREOGRAF_TOOL", "opentofu")
+            .env("KOREOGRAF_ACTION", action)
+            .env("KOREOGRAF_WORK", &work)
+            .env("KOREOGRAF_PROJECT", &project)
+            .env("KOREOGRAF_COLLECTIONS", root.join("collections"))
+            .env("KOREOGRAF_ROLES", root.join("roles"))
+            .env("KOREOGRAF_TOFU", root.join("plugins"))
+            .env("KOREOGRAF_TOFU_STATE", state)
+            .env("KOREOGRAF_INVENTORY", work.join("hosts"))
+            .env("KOREOGRAF_ENTRYPOINT", "tofu")
+            .env("KOREOGRAF_EXTRA", work.join("extra.json"))
+            .output()
+            .expect("wrapper");
+        let text = String::from_utf8_lossy(&output.stdout).to_string();
+        let err = String::from_utf8_lossy(&output.stderr).to_string();
+        assert!(
+            output.status.success(),
+            "status {:?} stdout={text} stderr={err}",
+            output.status
+        );
+        text
+    }
+
+    #[test]
+    fn opentofu_apply_keeps_state_for_the_team_and_template() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("koreograf-tofu-state-{nanos}"));
+        let fake = root.join("bin").join("tofu");
+        write_executable(
+            &fake,
+            r#"#!/bin/sh
+state=""
+if [ -f koreograf-local-backend.tf ]; then
+  state=$(sed -n 's/.*path = "\(.*\)".*/\1/p' koreograf-local-backend.tf)
+fi
+printf '%s\n' "plugin=$TF_PLUGIN_CACHE_DIR"
+printf '%s\n' "data=$TF_DATA_DIR"
+if [ "$1" = "apply" ]; then
+  if [ -n "$state" ] && [ -f "$state" ]; then
+    printf '%s\n' "No changes. Your infrastructure matches the configuration."
+  else
+    printf '%s\n' "Apply complete! Resources: 1 added, 0 changed, 0 destroyed."
+    if [ -n "$state" ]; then
+      printf '%s\n' '{"version":4}' > "$state"
+    fi
+  fi
+fi
+exit 0
+"#,
+        );
+        let module = "resource \"terraform_data\" \"marker\" {\n  input = \"koreograf\"\n}\n";
+        let team_a = root.join("cache").join("team-a").join("tpl");
+        let first = run_wrapper(&root, "apply", &team_a, module);
+        assert!(first.contains("1 added"), "{first}");
+        assert!(first.contains("no remote backend"), "{first}");
+        assert!(
+            first.contains(&format!(
+                "OpenTofu state: {}/terraform.tfstate",
+                team_a.display()
+            )),
+            "{first}"
+        );
+        assert!(
+            first.contains(&format!("plugin={}", root.join("plugins").display())),
+            "{first}"
+        );
+        let state_file = team_a.join("terraform.tfstate");
+        assert!(state_file.is_file(), "state file missing");
+        assert!(!state_file.starts_with(root.join("work")));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&state_file).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "state mode {mode:o}");
+        }
+        let second = run_wrapper(&root, "apply", &team_a, module);
+        assert!(second.contains("No changes"), "{second}");
+        assert!(!second.contains("1 added"), "{second}");
+        let team_b = root.join("cache").join("team-b").join("tpl");
+        let other = run_wrapper(&root, "apply", &team_b, module);
+        assert!(other.contains("1 added"), "{other}");
+        assert!(team_b.join("terraform.tfstate").is_file());
+        let remote =
+            "terraform {\n  backend \"s3\" {\n    bucket = \"demo\"\n    key = \"demo\"\n  }\n}\n";
+        let logged = run_wrapper(&root, "apply", &team_a, remote);
+        assert!(logged.contains("does not keep a copy"), "{logged}");
+        assert!(!logged.contains("no remote backend"), "{logged}");
+        let stage = root
+            .join("work")
+            .join("tfsrc")
+            .join("koreograf-local-backend.tf");
+        assert!(!stage.exists(), "remote backend must not be replaced");
+        let rejected = root.join("cache").join("..").join("escaped");
+        let bounced = run_wrapper(&root, "apply", &rejected, module);
+        assert!(bounced.contains("state path was rejected"), "{bounced}");
+        assert!(!rejected.join("terraform.tfstate").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn opentofu_apply_is_a_no_op_the_second_time() {
+        let tofu = std::process::Command::new("tofu")
+            .arg("version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success());
+        if !tofu {
+            eprintln!("tofu is not installed; the live state test was skipped");
+            return;
+        }
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("koreograf-tofu-live-{nanos}"));
+        let module = "terraform {\n  required_version = \">= 1.5.0\"\n}\nresource \"terraform_data\" \"marker\" {\n  input = \"koreograf\"\n}\n";
+        let team_a = root.join("cache").join("team-a").join("tpl");
+        let first = run_wrapper(&root, "apply", &team_a, module);
+        assert!(first.contains("1 added"), "{first}");
+        let second = run_wrapper(&root, "apply", &team_a, module);
+        assert!(
+            second.contains("No changes. Your infrastructure matches the configuration."),
+            "{second}"
+        );
+        assert!(second.contains("0 added"), "{second}");
+        let team_b = root.join("cache").join("team-b").join("tpl");
+        let other = run_wrapper(&root, "apply", &team_b, module);
+        assert!(other.contains("1 added"), "{other}");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
