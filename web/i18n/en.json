@@ -130,6 +130,7 @@
   "deliveries": "Deliveries",
   "dependency_cache": "Dependency cache",
   "description": "Description",
+  "description_is_too_long": "Description is too long.",
   "diff": "Diff",
   "diff_is_yes_or_no": "Diff is yes or no.",
   "directory": "Directory",
