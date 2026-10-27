@@ -41,6 +41,7 @@ services:
       KOREOGRAF_LDAP_GROUP_BASE: ${KOREOGRAF_LDAP_GROUP_BASE:-}
       KOREOGRAF_LDAP_STARTTLS: ${KOREOGRAF_LDAP_STARTTLS:-}
       KOREOGRAF_LDAP_TLS_INSECURE: ${KOREOGRAF_LDAP_TLS_INSECURE:-}
+      KOREOGRAF_LDAP_CA_FILE: ${KOREOGRAF_LDAP_CA_FILE:-}
     volumes:
       - koreograf-data:/var/lib/koreograf
       # Execution Environments brauchen den Docker-Socket.

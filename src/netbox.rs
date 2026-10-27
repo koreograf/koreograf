@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 const MAX_PAGES: usize = 20;
 const MAX_HOSTS: usize = 2_000;
@@ -10,6 +10,7 @@ const MAX_HOSTS: usize = 2_000;
 pub struct NetboxSource {
     pub api_endpoint: String,
     pub validate_certs: bool,
+    pub ca_file: String,
     pub group_by: Vec<String>,
     pub query: Vec<(String, String)>,
     pub virtual_machines: bool,
@@ -30,6 +31,17 @@ pub fn valid_endpoint(url: &str) -> bool {
         && !url.chars().any(|ch| ch.is_whitespace() || ch.is_control())
 }
 
+pub fn source_json(source: &NetboxSource) -> Value {
+    json!({
+        "api_endpoint": source.api_endpoint,
+        "validate_certs": source.validate_certs,
+        "ca_file": source.ca_file,
+        "group_by": source.group_by,
+        "query": source.query,
+        "virtual_machines": source.virtual_machines,
+    })
+}
+
 pub fn valid_token(token: &str) -> bool {
     !token.is_empty()
         && token.len() < 300
@@ -47,6 +59,7 @@ pub fn parse_plugin(text: &str) -> Option<NetboxSource> {
     Some(NetboxSource {
         api_endpoint: api_endpoint.trim_end_matches('/').to_string(),
         validate_certs: flag(text, "validate_certs").unwrap_or(true),
+        ca_file: String::new(),
         group_by: list_items(text, "group_by"),
         query: query_items(text, "query_filters"),
         virtual_machines: flag(text, "virtual_machines").unwrap_or(true),
@@ -98,13 +111,30 @@ pub async fn fetch_ini(
             ));
         }
     }
+    crate::tls::warn_netbox(
+        &source.api_endpoint,
+        !source.validate_certs,
+        &source.ca_file,
+    );
+    let mut builder = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none());
+    match crate::tls::reqwest_roots(&source.ca_file) {
+        Ok(Some(certs)) => {
+            for cert in certs {
+                builder = builder.add_root_certificate(cert);
+            }
+        }
+        Ok(None) => {
+            builder = builder.danger_accept_invalid_certs(!source.validate_certs);
+        }
+        Err(error) => {
+            tracing::warn!(endpoint = %source.api_endpoint, %error, "NetBox TLS setup failed");
+            return Err(error);
+        }
+    }
     let client = proxy
-        .apply_reqwest(
-            reqwest::Client::builder()
-                .timeout(Duration::from_secs(30))
-                .redirect(reqwest::redirect::Policy::none())
-                .danger_accept_invalid_certs(!source.validate_certs),
-        )?
+        .apply_reqwest(builder)?
         .build()
         .map_err(|err| err.to_string())?;
     let mut hosts = Vec::new();
@@ -702,6 +732,7 @@ mod tests {
         let source = NetboxSource {
             api_endpoint: format!("http://{addr}"),
             validate_certs: true,
+            ca_file: String::new(),
             group_by: vec!["sites".into()],
             query: vec![("status".into(), "active".into())],
             virtual_machines: true,
@@ -714,6 +745,21 @@ mod tests {
         assert!(ini.contains("[sites_berlin]"));
         let denied = fetch_ini(&source, "wrong-token", &proxy).await.unwrap_err();
         assert!(denied.contains("403"), "{denied}");
+    }
+
+    #[tokio::test]
+    async fn a_missing_ca_file_fails_closed_when_checks_are_off() {
+        let source = NetboxSource {
+            api_endpoint: "http://127.0.0.1:9".into(),
+            validate_certs: false,
+            ca_file: "/no/such/koreograf-ca.pem".into(),
+            group_by: Vec::new(),
+            query: Vec::new(),
+            virtual_machines: false,
+        };
+        let proxy = crate::settings::ProxySettings::inherit();
+        let error = fetch_ini(&source, "token", &proxy).await.unwrap_err();
+        assert_eq!(error, "the_ca_file_cannot_be_read");
     }
 
     async fn devices(headers: HeaderMap, request: Request) -> axum::response::Response {

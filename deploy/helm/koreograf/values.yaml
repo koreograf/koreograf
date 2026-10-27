@@ -57,6 +57,8 @@ ldap:
   groupBase: ""
   starttls: false
   tlsInsecure: false
+  # Absoluter PEM-Pfad im Container. Leer nutzt die System-CAs.
+  caFile: ""
 
 ingress:
   enabled: false

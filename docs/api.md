@@ -109,7 +109,7 @@ A source has `kind` `ini`, `project`, or `netbox`.
 | --- | --- |
 | `ini` | `name`, `body` (the inventory text) |
 | `project` | `name`, `project_id`, `path` relative to that project |
-| `netbox` | `name`, `api_endpoint`, `token`, and optionally `validate_certs` (default true), `group_by`, `query_filters`, `virtual_machines` (default true) |
+| `netbox` | `name`, `api_endpoint`, `token`, and optionally `validate_certs` (default true), `ca_file` (absolute PEM path, empty uses the system CAs), `group_by`, `query_filters`, `virtual_machines` (default true) |
 
 `POST /api/inventories/import` takes `project_id`, `path`, and an optional `name`. `POST /api/inventories/netbox` takes the same NetBox fields as a source, with `name` required.
 

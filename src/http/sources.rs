@@ -36,6 +36,8 @@ pub(super) struct SourceInput {
     #[serde(default = "yes")]
     validate_certs: bool,
     #[serde(default)]
+    ca_file: String,
+    #[serde(default)]
     group_by: Vec<String>,
     #[serde(default)]
     query_filters: Vec<String>,
@@ -58,6 +60,8 @@ pub(super) struct NetboxBody {
     #[serde(default = "yes")]
     validate_certs: bool,
     #[serde(default)]
+    ca_file: String,
+    #[serde(default)]
     group_by: Vec<String>,
     #[serde(default)]
     query_filters: Vec<String>,
@@ -74,6 +78,8 @@ struct StoredNetbox {
     api_endpoint: String,
     #[serde(default = "yes")]
     validate_certs: bool,
+    #[serde(default)]
+    ca_file: String,
     #[serde(default)]
     group_by: Vec<String>,
     #[serde(default)]
@@ -173,14 +179,7 @@ pub async fn create_netbox(
         body: ini,
         created_at: db::now(),
         source_kind: "netbox".into(),
-        source_json: json!({
-            "api_endpoint": source.api_endpoint,
-            "validate_certs": source.validate_certs,
-            "group_by": source.group_by,
-            "query": source.query,
-            "virtual_machines": source.virtual_machines,
-        })
-        .to_string(),
+        source_json: netbox::source_json(&source).to_string(),
         credential_id: Some(credential_id.clone()),
         admin_saved: user.is_admin,
     };
@@ -296,6 +295,7 @@ async fn refresh_netbox(
     let source = NetboxSource {
         api_endpoint: stored.api_endpoint,
         validate_certs: stored.validate_certs,
+        ca_file: stored.ca_file,
         group_by: stored.group_by,
         query: stored.query,
         virtual_machines: stored.virtual_machines,
@@ -336,9 +336,12 @@ fn netbox_source(body: &NetboxBody) -> AppResult<NetboxSource> {
         .filter(|item| !item.is_empty())
         .map(str::to_string)
         .collect();
+    let ca_file = body.ca_file.trim().to_string();
+    crate::tls::absolute_ca_path(&ca_file).map_err(ApiError::bad)?;
     Ok(NetboxSource {
         api_endpoint: endpoint,
         validate_certs: body.validate_certs,
+        ca_file,
         group_by,
         query: netbox::parse_filters(&body.query_filters).map_err(ApiError::bad)?,
         virtual_machines: body.virtual_machines,
@@ -690,6 +693,7 @@ async fn resolve_source(
                 api_endpoint: input.api_endpoint.clone(),
                 token: input.token.clone(),
                 validate_certs: input.validate_certs,
+                ca_file: input.ca_file.clone(),
                 group_by: input.group_by.clone(),
                 query_filters: input.query_filters.clone(),
                 virtual_machines: input.virtual_machines,
@@ -703,14 +707,7 @@ async fn resolve_source(
                 credential_blob: Some(blob),
                 name,
                 kind: "netbox".into(),
-                source_json: json!({
-                    "api_endpoint": parsed.api_endpoint,
-                    "validate_certs": parsed.validate_certs,
-                    "group_by": parsed.group_by,
-                    "query": parsed.query,
-                    "virtual_machines": parsed.virtual_machines,
-                })
-                .to_string(),
+                source_json: netbox::source_json(&parsed).to_string(),
                 body: ini,
             })
         }

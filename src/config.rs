@@ -83,6 +83,7 @@ pub struct LdapConfig {
     pub group_base: String,
     pub starttls: bool,
     pub tls_insecure: bool,
+    pub ca_file: String,
 }
 
 #[derive(Clone)]
@@ -134,6 +135,7 @@ impl Config {
                 group_base: env_string("KOREOGRAF_LDAP_GROUP_BASE"),
                 starttls: env_flag("KOREOGRAF_LDAP_STARTTLS"),
                 tls_insecure: env_flag("KOREOGRAF_LDAP_TLS_INSECURE"),
+                ca_file: env_string("KOREOGRAF_LDAP_CA_FILE"),
             })
         };
 
