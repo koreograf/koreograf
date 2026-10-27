@@ -70,6 +70,12 @@ ingress:
   path: /
   tls: false
 
+# Leer folgt ingress.tls: true wird "true", sonst "auto".
+# Sonst true, false oder auto. auto setzt Secure nur mit trustedProxy.
+cookieSecure: ""
+# true liest X-Forwarded-Proto für das Session-Cookie. Nur hinter einem Proxy.
+trustedProxy: false
+
 persistence:
   size: 2Gi
   storageClass: ""

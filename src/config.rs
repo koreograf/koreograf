@@ -86,6 +86,51 @@ pub struct LdapConfig {
     pub ca_file: String,
 }
 
+/// When the session cookie carries `Secure`.
+///
+/// `auto` sets it only when `trusted_proxy` is on and the proxy sends
+/// `X-Forwarded-Proto: https`. The process itself speaks HTTP.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CookieSecure {
+    True,
+    False,
+    Auto,
+}
+
+impl CookieSecure {
+    pub fn parse(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "" | "auto" => Self::Auto,
+            "1" | "true" | "yes" | "ja" => Self::True,
+            "0" | "false" | "no" | "nein" => Self::False,
+            _ => {
+                let shown: String = value
+                    .chars()
+                    .filter(|ch| !ch.is_control())
+                    .take(64)
+                    .collect();
+                tracing::warn!(
+                    value = %shown,
+                    "KOREOGRAF_COOKIE_SECURE is not true, false, or auto; using auto"
+                );
+                Self::Auto
+            }
+        }
+    }
+
+    pub fn enabled(self, trust_proxy: bool, forwarded_proto: Option<&str>) -> bool {
+        match self {
+            Self::True => true,
+            Self::False => false,
+            Self::Auto => {
+                trust_proxy
+                    && forwarded_proto
+                        .is_some_and(|value| value.trim().eq_ignore_ascii_case("https"))
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Config {
     pub bind: String,
@@ -104,6 +149,10 @@ pub struct Config {
     pub ldap: Option<LdapConfig>,
     /// `KOREOGRAF_HSTS`. Off unless the process is reached over HTTPS.
     pub hsts: bool,
+    /// `KOREOGRAF_COOKIE_SECURE`. Default `auto`.
+    pub cookie_secure: CookieSecure,
+    /// `KOREOGRAF_TRUSTED_PROXY`. Off ignores `X-Forwarded-Proto`.
+    pub trusted_proxy: bool,
 }
 
 impl Config {
@@ -165,6 +214,8 @@ impl Config {
             project_roots,
             ldap,
             hsts: env_flag("KOREOGRAF_HSTS"),
+            cookie_secure: CookieSecure::parse(&env_string("KOREOGRAF_COOKIE_SECURE")),
+            trusted_proxy: env_flag("KOREOGRAF_TRUSTED_PROXY"),
         }
     }
 }
@@ -279,5 +330,20 @@ mod tests {
             effective_project_roots(vec![examples.clone()], &examples),
             vec![examples]
         );
+    }
+
+    #[test]
+    fn cookie_secure_auto_follows_only_a_trusted_https_proxy() {
+        assert_eq!(CookieSecure::parse(""), CookieSecure::Auto);
+        assert_eq!(CookieSecure::parse("auto"), CookieSecure::Auto);
+        assert_eq!(CookieSecure::parse("true"), CookieSecure::True);
+        assert_eq!(CookieSecure::parse("FALSE"), CookieSecure::False);
+        assert!(CookieSecure::True.enabled(false, None));
+        assert!(!CookieSecure::False.enabled(true, Some("https")));
+        assert!(!CookieSecure::Auto.enabled(false, Some("https")));
+        assert!(!CookieSecure::Auto.enabled(true, Some("http")));
+        assert!(!CookieSecure::Auto.enabled(true, None));
+        assert!(!CookieSecure::Auto.enabled(true, Some("https,http")));
+        assert!(CookieSecure::Auto.enabled(true, Some(" HTTPS ")));
     }
 }

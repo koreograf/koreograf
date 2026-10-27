@@ -82,7 +82,7 @@ Sign in, select the team `Plattform`, and press `Test alert`. The workflow runs 
 - [Organizations, teams, LDAP, and Active Directory](docs/authentication.md) — roles, directory sign-in, and users.
 - [Jobs](docs/jobs.md) — tools, execution environments, playbooks, inventory sources, and the cache.
 - [Workflows and webhooks](docs/workflows-webhooks.md) — graphs, Alertmanager and Grafana hooks, and the demo.
-- [API](docs/api.md) — session cookie, team header, and routes.
+- [API](docs/api.md) — session cookie (`Secure` with `KOREOGRAF_COOKIE_SECURE`), team header, and routes.
 - [Security](docs/security.md) — the trusted network, the key, and the backup zip.
 - [Contributing](CONTRIBUTING.md) — local checks and what GitHub Actions runs.
 

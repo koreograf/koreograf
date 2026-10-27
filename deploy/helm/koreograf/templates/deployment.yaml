@@ -74,6 +74,10 @@ spec:
               value: {{ .Values.runner.mode | quote }}
             - name: KOREOGRAF_LOCAL_RUNNER_FOR
               value: {{ .Values.runner.localJobs | default "admins" | quote }}
+            - name: KOREOGRAF_COOKIE_SECURE
+              value: {{ if kindIs "bool" .Values.cookieSecure }}{{ ternary "true" "false" .Values.cookieSecure | quote }}{{ else if .Values.cookieSecure }}{{ .Values.cookieSecure | quote }}{{ else if .Values.ingress.tls }}"true"{{ else }}"auto"{{ end }}
+            - name: KOREOGRAF_TRUSTED_PROXY
+              value: {{ .Values.trustedProxy | quote }}
             - name: KOREOGRAF_ADMIN_USER
               value: {{ .Values.admin.user | quote }}
             - name: KOREOGRAF_ADMIN_PASSWORD

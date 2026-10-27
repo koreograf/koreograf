@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use koreograf::{Config, LocalJobs, RunnerMode};
+use koreograf::{Config, CookieSecure, LocalJobs, RunnerMode};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
@@ -22,6 +22,8 @@ fn config(dir: &std::path::Path) -> Config {
         local_jobs: LocalJobs::All,
         project_roots: vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples")],
         hsts: false,
+        cookie_secure: CookieSecure::Auto,
+        trusted_proxy: false,
         ldap: None,
     }
 }
@@ -119,6 +121,97 @@ async fn responses_carry_standard_headers() {
         response.headers()["strict-transport-security"],
         "max-age=31536000"
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn session_cookie_secure_follows_the_setting_and_the_proxy() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-cookie-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let login = br#"{"username":"admin","password":"test-admin-pass"}"#.to_vec();
+
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+    let (status, _, headers) = call_raw(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        &[
+            ("content-type", "application/json"),
+            ("x-forwarded-proto", "https"),
+        ],
+        Some(login.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let set_cookie = headers["set-cookie"].to_str().unwrap();
+    assert!(set_cookie.contains("HttpOnly"), "{set_cookie}");
+    assert!(!set_cookie.contains("Secure"), "{set_cookie}");
+    drop(app);
+
+    let mut forced = config(&dir);
+    forced.cookie_secure = CookieSecure::True;
+    let state = koreograf::boot(forced).unwrap();
+    let app = koreograf::router(state);
+    let (status, _, headers) = call_raw(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        &[("content-type", "application/json")],
+        Some(login.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let set_cookie = headers["set-cookie"].to_str().unwrap().to_string();
+    assert!(set_cookie.ends_with("; Secure"), "{set_cookie}");
+    let session = set_cookie.split(';').next().unwrap();
+    let (status, _, headers) =
+        call_raw(&app, "POST", "/api/logout", Some(session), &[], None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let cleared = headers["set-cookie"].to_str().unwrap();
+    assert!(cleared.contains("Max-Age=0"), "{cleared}");
+    assert!(cleared.ends_with("; Secure"), "{cleared}");
+    drop(app);
+
+    let mut automatic = config(&dir);
+    automatic.trusted_proxy = true;
+    let state = koreograf::boot(automatic).unwrap();
+    let app = koreograf::router(state);
+    let (status, _, headers) = call_raw(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        &[
+            ("content-type", "application/json"),
+            ("x-forwarded-proto", "https"),
+        ],
+        Some(login.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(headers["set-cookie"]
+        .to_str()
+        .unwrap()
+        .ends_with("; Secure"));
+    let (status, _, headers) = call_raw(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        &[("content-type", "application/json")],
+        Some(login),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!headers["set-cookie"].to_str().unwrap().contains("Secure"));
+    drop(app);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -37,7 +37,7 @@ use rusqlite::Connection;
 use crate::error::ApiError;
 use crate::runner::RunningProc;
 
-pub use config::{Config, LdapConfig, LocalJobs, RunnerMode};
+pub use config::{Config, CookieSecure, LdapConfig, LocalJobs, RunnerMode};
 
 /// Shared process state. Cheap to clone because it is an `Arc`.
 pub struct AppState {

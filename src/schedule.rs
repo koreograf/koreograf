@@ -1232,6 +1232,8 @@ mod tests {
                 std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples")
             ],
             hsts: false,
+            cookie_secure: crate::config::CookieSecure::Auto,
+            trusted_proxy: false,
             ldap: None,
         }
     }

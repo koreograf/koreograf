@@ -58,8 +58,10 @@ pub async fn restore(
         })),
     )
         .into_response();
-    let cookie = HeaderValue::from_str(&auth::clear_cookie())
-        .map_err(|err| ApiError::Internal(err.to_string()))?;
+    let cookie = HeaderValue::from_str(&auth::clear_cookie(auth::request_cookie_secure(
+        &state.cfg, &headers,
+    )))
+    .map_err(|err| ApiError::Internal(err.to_string()))?;
     response.headers_mut().insert(header::SET_COOKIE, cookie);
     Ok(response)
 }

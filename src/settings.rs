@@ -816,6 +816,8 @@ mod tests {
             local_jobs: crate::config::LocalJobs::All,
             project_roots: Vec::new(),
             hsts: false,
+            cookie_secure: crate::config::CookieSecure::Auto,
+            trusted_proxy: false,
             ldap: None,
         })
         .unwrap()

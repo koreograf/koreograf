@@ -1,5 +1,5 @@
 use axum::extract::{Path, State};
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Deserialize;
@@ -47,6 +47,7 @@ pub(super) struct UserUpdate {
 
 pub async fn login(
     State(state): State<Shared>,
+    headers: HeaderMap,
     ApiJson(body): ApiJson<LoginBody>,
 ) -> Result<Response, ApiError> {
     let username = normalize(&body.username)?;
@@ -59,7 +60,7 @@ pub async fn login(
     };
     if auth::local_password_ok(local.as_ref(), &body.password) {
         if let Some(user) = local {
-            return session_response(&state, &user);
+            return session_response(&state, &headers, &user);
         }
     }
     let directory = crate::settings::load(&state)?.directory().cloned();
@@ -67,7 +68,7 @@ pub async fn login(
         match ldap::authenticate(&cfg, &username, &body.password).await {
             Ok(identity) => {
                 let user = provision_ldap(&state, identity)?;
-                return session_response(&state, &user);
+                return session_response(&state, &headers, &user);
             }
             Err(err) => {
                 tracing::info!(error = %err, "LDAP sign-in rejected");
@@ -88,8 +89,10 @@ pub async fn logout(
     let mut response = StatusCode::NO_CONTENT.into_response();
     response.headers_mut().insert(
         header::SET_COOKIE,
-        HeaderValue::from_str(&auth::clear_cookie())
-            .map_err(|err| ApiError::Internal(err.to_string()))?,
+        HeaderValue::from_str(&auth::clear_cookie(auth::request_cookie_secure(
+            &state.cfg, &headers,
+        )))
+        .map_err(|err| ApiError::Internal(err.to_string()))?,
     );
     Ok(response)
 }
@@ -275,7 +278,7 @@ fn provision_ldap(state: &Shared, identity: ldap::LdapIdentity) -> AppResult<Use
     db::user_by_id(&db, &user.id)?.ok_or(ApiError::NotFound)
 }
 
-fn session_response(state: &Shared, user: &User) -> AppResult<Response> {
+fn session_response(state: &Shared, headers: &HeaderMap, user: &User) -> AppResult<Response> {
     if user.disabled {
         return Err(ApiError::bad("the_account_is_disabled"));
     }
@@ -286,8 +289,11 @@ fn session_response(state: &Shared, user: &User) -> AppResult<Response> {
     let body = profile_json(&db, &auth_user)?;
     drop(db);
     let mut response = (StatusCode::OK, Json(body)).into_response();
-    let cookie = HeaderValue::from_str(&auth::session_cookie(&token))
-        .map_err(|err| ApiError::Internal(err.to_string()))?;
+    let cookie = HeaderValue::from_str(&auth::session_cookie(
+        &token,
+        auth::request_cookie_secure(&state.cfg, headers),
+    ))
+    .map_err(|err| ApiError::Internal(err.to_string()))?;
     response.headers_mut().insert(header::SET_COOKIE, cookie);
     Ok(response)
 }
@@ -477,7 +483,7 @@ mod tests {
 
     #[test]
     fn ldap_sign_in_does_not_take_over_a_local_account() {
-        use crate::config::{Config, LocalJobs, RunnerMode};
+        use crate::config::{Config, CookieSecure, LocalJobs, RunnerMode};
         use crate::db;
         use crate::error::ApiError;
         use std::path::PathBuf;
@@ -499,6 +505,8 @@ mod tests {
             local_jobs: LocalJobs::All,
             project_roots: Vec::new(),
             hsts: false,
+            cookie_secure: CookieSecure::Auto,
+            trusted_proxy: false,
             ldap: None,
         })
         .expect("boot");
