@@ -1616,13 +1616,88 @@ async function pageJobs() {
   drawJobs();
 }
 
+function plainLogLine(text) {
+  return String(text || "").replace(/\u001b\[[0-9;]*m/g, "");
+}
+
+// ansible-galaxy prints ERROR! and the playbook still runs from the cache.
+function galaxyPhase(log, text) {
+  const install = text.includes("ansible-galaxy collection install")
+    || text.includes("ansible-galaxy role install");
+  const cacheNote = text.includes("Galaxy install failed. The existing cache is used anyway.")
+    || text.includes("Role install failed. The existing cache is used anyway.");
+  if (install) {
+    log.dataset.galaxy = "1";
+    return "";
+  }
+  if (cacheNote) {
+    log.dataset.galaxy = "";
+    return "warn";
+  }
+  if (log.dataset.galaxy !== "1") return "";
+  if (text.startsWith("KOREOGRAF ")) {
+    log.dataset.galaxy = "";
+    return "";
+  }
+  return "output";
+}
+
+function failureKind(text) {
+  if (/fatal:\s*\[/.test(text) || text.includes("UNREACHABLE!") || text.includes("ERROR!")) return "fail";
+  if (/\bfailed=[1-9]\d*\b/.test(text) || /\bunreachable=[1-9]\d*\b/.test(text)) return "fail";
+  return "";
+}
+
+function classifyLogLine(log, row) {
+  const text = plainLogLine(row.line);
+  const galaxy = galaxyPhase(log, text);
+  const failure = failureKind(text);
+  if (galaxy === "warn") return "warn";
+  if (galaxy === "output") {
+    if (failure && !text.includes("ERROR!")) return "fail";
+    if (row.stream === "stderr" || text.includes("ERROR!")) return "warn";
+    if (row.stream === "system") return "system";
+    return "";
+  }
+  if (failure) return "fail";
+  if (row.stream === "system") return "system";
+  if (row.stream === "stderr") return "stderr";
+  return "";
+}
+
+function markRecap(line) {
+  const text = plainLogLine(line.textContent);
+  if (!(/\bfailed=[1-9]\d*\b/.test(text) || /\bunreachable=[1-9]\d*\b/.test(text))) return;
+  let prev = line.previousElementSibling;
+  for (let index = 0; index < 8 && prev; index += 1) {
+    if (prev.classList.contains("log-summary")) break;
+    if (prev.textContent.includes("PLAY RECAP")) {
+      prev.classList.add("fail");
+      break;
+    }
+    prev = prev.previousElementSibling;
+  }
+}
+
+function pinFailure(log, text, kind) {
+  if (kind !== "fail" || log.querySelector(".log-summary")) return;
+  const bar = document.createElement("div");
+  bar.className = "log-summary";
+  const shown = text.length > 240 ? `${text.slice(0, 239)}...` : text;
+  bar.textContent = `${t("first_failure")}: ${shown}`;
+  log.prepend(bar);
+}
+
 function appendLog(row) {
   const log = document.querySelector("#log");
   if (!log) return;
   const line = document.createElement("div");
-  if (row.stream === "system" || row.stream === "stderr") line.className = row.stream;
+  const kind = classifyLogLine(log, row);
+  if (kind) line.className = kind;
   line.textContent = row.line;
   log.appendChild(line);
+  if (kind === "fail") markRecap(line);
+  pinFailure(log, plainLogLine(row.line), kind);
   log.scrollTop = log.scrollHeight;
 }
 
@@ -2607,6 +2682,7 @@ async function pageRun(id) {
     document.querySelector("#overlay-meta").innerHTML = overlayMeta(phase);
     const log = document.querySelector("#log");
     log.replaceChildren();
+    delete log.dataset.galaxy;
     const note = (text) => {
       const line = document.createElement("div");
       line.className = "system";

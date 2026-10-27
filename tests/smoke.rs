@@ -400,6 +400,41 @@ async fn an_empty_template_entry_path_is_rejected_and_marked_in_the_form() {
 }
 
 #[tokio::test]
+async fn the_job_log_marks_a_fatal_line_and_keeps_galaxy_as_a_warning() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-log-style-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let script = script.as_str().unwrap_or("");
+    assert!(script.contains("function classifyLogLine"));
+    assert!(script.contains("fatal:\\s*\\["));
+    assert!(script.contains("UNREACHABLE!"));
+    assert!(script.contains("ERROR!"));
+    assert!(script.contains("failed=[1-9]"));
+    assert!(script.contains("unreachable=[1-9]"));
+    assert!(script.contains("PLAY RECAP"));
+    assert!(script.contains("Galaxy install failed. The existing cache is used anyway."));
+    assert!(script.contains("Role install failed. The existing cache is used anyway."));
+    assert!(script.contains("ansible-galaxy collection install"));
+    assert!(script.contains("first_failure"));
+    assert!(script.contains("log-summary"));
+    let (status, style, _) = call(&app, "GET", "/app.css", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let style = style.as_str().unwrap_or("");
+    assert!(style.contains(".log div.fail"));
+    assert!(style.contains(".log div.warn"));
+    assert!(style.contains(".log .log-summary"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn login_shell_job_and_webhook() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
