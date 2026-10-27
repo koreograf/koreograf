@@ -9,3 +9,4 @@ secret.key
 initial-admin-password
 restore-previous.zip
 *.log
+tests/harness/.secrets

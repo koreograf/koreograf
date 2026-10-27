@@ -69,6 +69,30 @@ helm upgrade --install koreograf deploy/helm/koreograf
 
 If `admin.password` is empty, the first password is in the volume at `/var/lib/koreograf/initial-admin-password`. Delete that file after the first sign-in. Set `existingSecret` when the admin password, the secret key, and the LDAP bind password already live in a Secret. `existingSecretKeys` selects the key names. The chart then skips its own Secret. Tool requirements, the image tag, the non-root defaults, and path projects are in [Installation](docs/installation.md). A copy-paste API session is in [API](docs/api.md#walkthrough).
 
+## End-to-end harness
+
+A local Docker stack runs the demo workflow, an Ansible ping, an LDAP sign-in, and a NetBox inventory against this checkout. Run it on a machine with Docker. The CI workflow does not start this stack, and `cargo test` does not need Docker.
+
+The stack builds Koreograf from the current source. It also starts OpenLDAP, NetBox 4.7 with its own PostgreSQL and Redis, and SSH targets for Debian, Ubuntu, Rocky Linux, and AlmaLinux. One more container is that Debian image without `sshd`, and the ping inventory names it as an unreachable host. The containers share a private bridge. Published ports listen on `127.0.0.1` only. The harness compose file is `tests/harness/compose.yml`. The published image stays in `docker-compose.yml`.
+
+You need Docker Engine 20.10 or newer, Docker Compose v2, Python 3, `openssl`, and `ssh-keygen`. The first start compiles the release binary and pulls the lab images. Plan for about 4 GB of RAM, several GB of disk, and a long first build. NetBox migrations take a few minutes after that.
+
+`tests/harness/scripts/up.sh` writes passwords, an SSH key, and a NetBox token under `tests/harness/.secrets/`. That directory is gitignored. `tests/harness/.env.example` lists the names with placeholders. The generated values belong to this lab. They are not production credentials.
+
+```bash
+tests/harness/scripts/up.sh
+tests/harness/scripts/verify.sh
+tests/harness/scripts/down.sh
+```
+
+`verify.sh` exits non-zero when a check fails. It covers `/healthz`, an admin sign-in, a successful run of the demo workflow `Self-Heal Ablauf`, one Ansible ping of the four distros, an LDAP user on the team `Plattform`, and a NetBox inventory whose host count is the two seeded devices.
+
+`down.sh -v` removes the volumes. The next `up.sh` creates the directory entries and the devices again. Without `-v`, a second start keeps the data and the seed scripts leave existing entries in place.
+
+The UI is at `http://127.0.0.1:18080`. The admin password is the file `tests/harness/.secrets/admin-password`. NetBox is at `http://127.0.0.1:18081` when you want to look at the devices.
+
+The demo project asks Galaxy for `ansible.posix` 1.6.2. The role itself uses `ansible.builtin`. A Galaxy failure is logged and the play still runs.
+
 ## Demo
 
 Sign in, select the team `Plattform`, and press `Test alert`. The workflow runs the files in [examples/demo](examples/demo). The steps are in [Workflows and webhooks](docs/workflows-webhooks.md#demo).
