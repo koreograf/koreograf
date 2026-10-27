@@ -52,11 +52,11 @@ When the user entry has no groups, Koreograf binds again as the service account 
 
 ## Saved settings
 
-An administrator can change the directory, the HTTP proxy, the runner, and the job timeout under **Settings** (German: **Einstellungen**). `GET` and `PUT /api/settings` are administrator-only. The response never includes the bind password or the proxy password, only whether one is stored. An empty password keeps the stored value. Removing a password uses `clear` with `ldap_bind_password` or `proxy_password`. `PUT` with `{"reset": true}` drops the saved values and returns to the environment variables.
+An administrator can change the directory, the HTTP proxy, the runner, the job timeout, and the output line limit under **Settings** (German: **Einstellungen**). `GET` and `PUT /api/settings` are administrator-only. The response never includes the bind password or the proxy password, only whether one is stored. An empty password keeps the stored value. Removing a password uses `clear` with `ldap_bind_password` or `proxy_password`. `PUT` with `{"reset": true}` drops the saved values and returns to the environment variables.
 
 The environment variables apply until the first save. After that, the saved values apply immediately: the next sign-in, the next git sync, the next NetBox fetch, and the next job. A restart is not required. One proxy address is used for both HTTP and HTTPS. It covers git over HTTP and HTTPS, NetBox, and the cleaned job environment, so Galaxy and git inside an execution environment can use it. SSH git does not. An image pull uses the proxy of the container daemon, not this setting. The proxy password is not written to the log. A saved empty proxy address turns the proxy off for those calls, including a proxy that was set on the process. Before the first save, git and NetBox still follow `http_proxy`, `https_proxy`, and `no_proxy` from the process, and a job copies those variables into its environment.
 
-The job timeout is 30 to 86400 seconds. The runner mode is `auto`, `docker`, or `local`.
+The job timeout is 30 to 86400 seconds. The runner mode is `auto`, `docker`, or `local`. The output line limit is 100 to 100000 lines for each of stdout and stderr. The default is 8000. The job keeps the first three quarters and the last quarter. A save that leaves the limit out keeps the current value. `GET /api/jobs/{id}/output` downloads that kept log and stops at 8 MiB.
 
 ## Users and permissions
 

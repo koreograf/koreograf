@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 
-use crate::config::{LdapConfig, RunnerMode};
+use crate::config::{LdapConfig, RunnerMode, OUTPUT_LINES_MAX, OUTPUT_LINES_MIN};
 use crate::error::{ApiError, AppResult};
 use crate::Shared;
 
@@ -133,6 +133,7 @@ pub struct Effective {
     pub proxy: ProxySettings,
     pub runner: RunnerMode,
     pub job_timeout_secs: u64,
+    pub job_output_lines: u64,
     pub saved: bool,
     pub unsupported_proxy: bool,
 }
@@ -167,6 +168,7 @@ pub struct SettingsWrite {
     pub proxy_no_proxy: String,
     pub runner: String,
     pub job_timeout_secs: u64,
+    pub job_output_lines: u64,
     pub clear_ldap_password: bool,
     pub clear_proxy_password: bool,
     pub reset: bool,
@@ -191,6 +193,7 @@ struct Draft {
     proxy_no_proxy: String,
     runner: RunnerMode,
     job_timeout_secs: u64,
+    job_output_lines: u64,
 }
 
 pub fn load(state: &Shared) -> AppResult<Effective> {
@@ -242,6 +245,7 @@ pub fn save(state: &Shared, input: &SettingsWrite) -> AppResult<Value> {
         ("proxy_no_proxy", draft.proxy_no_proxy.clone()),
         ("runner", draft.runner.as_str().to_string()),
         ("job_timeout_secs", draft.job_timeout_secs.to_string()),
+        ("job_output_lines", draft.job_output_lines.to_string()),
     ];
     if let Some(secret) = ldap_secret {
         pairs.push((LDAP_PASSWORD, secret));
@@ -270,6 +274,7 @@ pub fn save(state: &Shared, input: &SettingsWrite) -> AppResult<Value> {
     };
     effective.runner = draft.runner;
     effective.job_timeout_secs = draft.job_timeout_secs;
+    effective.job_output_lines = draft.job_output_lines;
     crate::tls::warn_directory(&effective.ldap);
     Ok(public_json(&effective))
 }
@@ -301,6 +306,7 @@ fn public_json(effective: &Effective) -> Value {
         },
         "runner": effective.runner.as_str(),
         "job_timeout_secs": effective.job_timeout_secs,
+        "job_output_lines": effective.job_output_lines,
     })
 }
 
@@ -312,6 +318,7 @@ fn from_env(state: &Shared) -> Effective {
         proxy,
         runner: state.cfg.runner,
         job_timeout_secs: state.cfg.job_timeout_secs,
+        job_output_lines: state.cfg.job_output_lines,
         saved: false,
         unsupported_proxy,
     }
@@ -366,6 +373,11 @@ fn from_saved(state: &Shared, rows: &HashMap<String, String>) -> AppResult<Effec
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|value| (30..=86_400).contains(value))
         .unwrap_or(state.cfg.job_timeout_secs);
+    let job_output_lines = rows
+        .get("job_output_lines")
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| (OUTPUT_LINES_MIN..=OUTPUT_LINES_MAX).contains(value))
+        .unwrap_or(state.cfg.job_output_lines);
     Ok(Effective {
         ldap,
         proxy: ProxySettings {
@@ -377,6 +389,7 @@ fn from_saved(state: &Shared, rows: &HashMap<String, String>) -> AppResult<Effec
         },
         runner,
         job_timeout_secs,
+        job_output_lines,
         saved: true,
         unsupported_proxy: false,
     })
@@ -492,6 +505,15 @@ fn validate(input: &SettingsWrite, current: &Effective) -> AppResult<Draft> {
     if !(30..=86_400).contains(&input.job_timeout_secs) {
         return Err(ApiError::bad("the_time_limit_must_be_between_30_and"));
     }
+    let job_output_lines = if input.job_output_lines == 0 {
+        current.job_output_lines
+    } else if !(OUTPUT_LINES_MIN..=OUTPUT_LINES_MAX).contains(&input.job_output_lines) {
+        return Err(ApiError::bad(
+            "the_output_line_limit_must_be_between_100_and",
+        ));
+    } else {
+        input.job_output_lines
+    };
     Ok(Draft {
         ldap_url,
         ldap_mode: ldap_mode.to_string(),
@@ -511,6 +533,7 @@ fn validate(input: &SettingsWrite, current: &Effective) -> AppResult<Draft> {
         proxy_no_proxy,
         runner,
         job_timeout_secs: input.job_timeout_secs,
+        job_output_lines,
     })
 }
 
@@ -813,6 +836,7 @@ mod tests {
             admin_password: Some("test-admin-pass".into()),
             runner: RunnerMode::Local,
             job_timeout_secs: 60,
+            job_output_lines: 8_000,
             local_jobs: crate::config::LocalJobs::All,
             project_roots: Vec::new(),
             hsts: false,
@@ -843,6 +867,7 @@ mod tests {
             proxy_no_proxy: "localhost, 127.0.0.1".into(),
             runner: "docker".into(),
             job_timeout_secs: 120,
+            job_output_lines: 4_000,
             clear_ldap_password: false,
             clear_proxy_password: false,
             reset: false,
@@ -880,6 +905,7 @@ mod tests {
         assert_eq!(saved["proxy"]["password_set"], true);
         assert_eq!(saved["ldap"]["user_filter"], "(uid={username})");
         assert_eq!(saved["runner"], "docker");
+        assert_eq!(saved["job_output_lines"], 4_000);
         let loaded = load(&state).unwrap();
         assert!(loaded.directory().is_some());
         assert_eq!(loaded.ldap.bind_password, "bind-secret");
@@ -924,6 +950,25 @@ mod tests {
         assert_eq!(reset["source"], "env");
         assert_eq!(reset["ldap"]["url"], "");
         assert_eq!(reset["runner"], "local");
+        assert_eq!(reset["job_output_lines"], 8_000);
+    }
+
+    #[test]
+    fn an_omitted_output_limit_keeps_the_current_value() {
+        let state = state();
+        let mut keep = sample("bind-secret");
+        keep.job_output_lines = 0;
+        let saved = save(&state, &keep).unwrap();
+        assert_eq!(saved["job_output_lines"], 8_000);
+        let mut bad = sample("bind-secret");
+        bad.job_output_lines = 50;
+        let err = save(&state, &bad).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "the_output_line_limit_must_be_between_100_and"
+        );
+        assert_eq!(load(&state).unwrap().job_output_lines, 8_000);
+        let _ = std::fs::remove_dir_all(&state.cfg.data_dir);
     }
 
     #[test]

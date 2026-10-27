@@ -16,6 +16,7 @@ services:
       # admins oder all. Vorgabe admins. all nur im vertrauten Netz.
       KOREOGRAF_LOCAL_RUNNER_FOR: ${KOREOGRAF_LOCAL_RUNNER_FOR:-admins}
       KOREOGRAF_JOB_TIMEOUT_SECS: ${KOREOGRAF_JOB_TIMEOUT_SECS:-1800}
+      KOREOGRAF_JOB_OUTPUT_LINES: ${KOREOGRAF_JOB_OUTPUT_LINES:-8000}
       KOREOGRAF_SECRET_KEY: ${KOREOGRAF_SECRET_KEY:-}
       # Logformat und Datenbank-URL gelten beim Prozessstart und kommen aus .env.
       KOREOGRAF_LOG_FORMAT: ${KOREOGRAF_LOG_FORMAT:-}
@@ -24,7 +25,7 @@ services:
       KOREOGRAF_COOKIE_SECURE: ${KOREOGRAF_COOKIE_SECURE:-auto}
       KOREOGRAF_TRUSTED_PROXY: ${KOREOGRAF_TRUSTED_PROXY:-false}
       KOREOGRAF_DATABASE_URL: ${KOREOGRAF_DATABASE_URL:-}
-      # Verzeichnis, Proxy, Runner und Zeitlimit gelten bis zum ersten Speichern
+      # Verzeichnis, Proxy, Runner, Zeitlimit und Zeilenlimit gelten bis zum ersten Speichern
       # unter Einstellungen. Danach ersetzt die Datenbank diese Variablen.
       # Ein Proxy-Name wird nur gesetzt, wenn .env oder die Shell ihn setzen.
       # Eine leere Zeichenkette würde den großgeschriebenen Proxy für git abschalten.

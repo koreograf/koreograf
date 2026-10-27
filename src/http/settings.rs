@@ -21,6 +21,8 @@ pub(super) struct SettingsBody {
     #[serde(default)]
     job_timeout_secs: u64,
     #[serde(default)]
+    job_output_lines: u64,
+    #[serde(default)]
     clear: Vec<String>,
 }
 
@@ -96,6 +98,7 @@ pub async fn put_settings(
         proxy_no_proxy: body.proxy.no_proxy,
         runner: body.runner,
         job_timeout_secs: body.job_timeout_secs,
+        job_output_lines: body.job_output_lines,
         clear_ldap_password,
         clear_proxy_password,
         reset: body.reset,

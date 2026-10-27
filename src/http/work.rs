@@ -225,8 +225,43 @@ pub async fn get_job(
     let db = state.db()?;
     let job = db::job(&db, &id)?.ok_or(ApiError::NotFound)?;
     crate::auth::authorize(&db, &user, &job.team_id, Role::Viewer)?;
-    let events = db::events_after(&db, &id, 0, 2_000)?;
+    let events = events_for_page(&db, &id)?;
     Ok(Json(job_json(&job, Some(&events))))
+}
+
+const PAGE_EVENTS: i64 = 2_000;
+const PAGE_TAIL: i64 = 500;
+
+fn events_for_page(db: &rusqlite::Connection, job_id: &str) -> AppResult<Vec<db::JobEvent>> {
+    let head = db::events_after(db, job_id, 0, PAGE_EVENTS)?;
+    if (head.len() as i64) < PAGE_EVENTS {
+        return Ok(head);
+    }
+    let tail = db::events_last(db, job_id, PAGE_TAIL)?;
+    let keep = (PAGE_EVENTS - PAGE_TAIL) as usize;
+    let next_id = head.get(keep).map(|event| event.id);
+    let mut shown: Vec<db::JobEvent> = head.into_iter().take(keep).collect();
+    let last_id = shown.last().map(|event| event.id).unwrap_or(0);
+    let tail: Vec<db::JobEvent> = tail
+        .into_iter()
+        .filter(|event| event.id > last_id)
+        .collect();
+    let contiguous = match (next_id, tail.first()) {
+        (_, None) => true,
+        (Some(next), Some(first)) => first.id == next,
+        (None, Some(_)) => false,
+    };
+    if !contiguous {
+        shown.push(db::JobEvent {
+            id: 0,
+            ts: String::new(),
+            stream: "system".into(),
+            line: "Earlier lines are omitted from this view. Download the output for the kept log."
+                .into(),
+        });
+    }
+    shown.extend(tail);
+    Ok(shown)
 }
 
 const OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
@@ -359,7 +394,8 @@ pub async fn job_events(
     let after = query.after.unwrap_or(0);
     let stream = async_stream::stream! {
         let mut last = after;
-        for _ in 0..8_000 {
+        let mut waits = 0u32;
+        loop {
             let snapshot = {
                 let Ok(db) = state.db() else { break };
                 let events = db::events_after(&db, &id, last, 200).unwrap_or_default();
@@ -370,6 +406,7 @@ pub async fn job_events(
                     .unwrap_or_else(|| "failed".into());
                 (events, status)
             };
+            let count = snapshot.0.len();
             for event in snapshot.0 {
                 last = event.id;
                 let data = json!({
@@ -380,8 +417,16 @@ pub async fn job_events(
                 });
                 yield Ok(Event::default().event("log").id(event.id.to_string()).data(data.to_string()));
             }
-            if matches!(snapshot.1.as_str(), "successful" | "failed" | "canceled") {
+            let terminal = matches!(snapshot.1.as_str(), "successful" | "failed" | "canceled");
+            if terminal && count < 200 {
                 yield Ok(Event::default().event("end").data(json!({"status": snapshot.1}).to_string()));
+                break;
+            }
+            if count == 200 {
+                continue;
+            }
+            waits += 1;
+            if waits >= 8_000 {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(400)).await;
@@ -1002,4 +1047,55 @@ fn run_json(db: &rusqlite::Connection, run: &db::WorkflowJob) -> AppResult<Value
         "graph": graph,
         "nodes": node_rows,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn job_page_keeps_the_start_and_the_end() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-page-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = crate::boot(crate::Config {
+            bind: "127.0.0.1:0".into(),
+            data_dir: dir,
+            web_dir: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web"),
+            examples_dir: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples"),
+            admin_user: "admin".into(),
+            admin_password: Some("test-admin-pass".into()),
+            runner: crate::config::RunnerMode::Local,
+            job_timeout_secs: 60,
+            job_output_lines: 8_000,
+            local_jobs: crate::config::LocalJobs::All,
+            project_roots: Vec::new(),
+            hsts: false,
+            cookie_secure: crate::config::CookieSecure::Auto,
+            trusted_proxy: false,
+            ldap: None,
+        })
+        .expect("boot");
+        {
+            let db = state.db().unwrap();
+            for i in 1..=2_500 {
+                db::insert_event(&db, "job", "stdout", &format!("line-{i}")).unwrap();
+            }
+        }
+        let db = state.db().unwrap();
+        let events = events_for_page(&db, "job").unwrap();
+        let lines: Vec<_> = events.iter().map(|event| event.line.as_str()).collect();
+        assert_eq!(lines[0], "line-1");
+        assert_eq!(lines[1_499], "line-1500");
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("omitted from this view")));
+        assert_eq!(*lines.last().unwrap(), "line-2500");
+        assert!(!lines.contains(&"line-1600"));
+        assert!(lines.contains(&"line-2001"));
+        let _ = std::fs::remove_dir_all(&state.cfg.data_dir);
+    }
 }

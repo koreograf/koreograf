@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::fs::{self, OpenOptions};
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
@@ -869,6 +870,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
                 cache: &cache,
                 env: &env,
                 timeout_secs: settings.job_timeout_secs,
+                output_lines: settings.job_output_lines,
                 tofu_state: tofu_state.as_deref(),
                 template_id: &template.id,
             },
@@ -930,7 +932,14 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
         if canceled(state, job_id) {
             signal_stop(state, job_id, proc);
         }
-        wait_child(state, job_id, child, settings.job_timeout_secs).await?
+        wait_child(
+            state,
+            job_id,
+            child,
+            settings.job_timeout_secs,
+            settings.job_output_lines,
+        )
+        .await?
     };
 
     if canceled(state, job_id) {
@@ -2044,6 +2053,7 @@ struct ContainerRun<'a> {
     cache: &'a Path,
     env: &'a [(String, String)],
     timeout_secs: u64,
+    output_lines: u64,
     /// Host directory for this template only. Absent for every other tool.
     tofu_state: Option<&'a Path>,
     template_id: &'a str,
@@ -2094,6 +2104,7 @@ async fn run_container(state: &Shared, job_id: &str, run: ContainerRun<'_>) -> R
         cache,
         env,
         timeout_secs,
+        output_lines,
         tofu_state,
         template_id,
     } = run;
@@ -2140,7 +2151,7 @@ async fn run_container(state: &Shared, job_id: &str, run: ContainerRun<'_>) -> R
     if canceled(state, job_id) {
         signal_stop(state, job_id, proc);
     }
-    wait_child(state, job_id, child, timeout_secs).await
+    wait_child(state, job_id, child, timeout_secs, output_lines).await
 }
 
 fn write_env_file(path: &Path, env: &[(String, String)]) -> Result<(), String> {
@@ -2234,6 +2245,7 @@ async fn wait_child(
     job_id: &str,
     mut child: tokio::process::Child,
     timeout_secs: u64,
+    output_lines: u64,
 ) -> Result<i32, String> {
     let stdout = child
         .stdout
@@ -2248,12 +2260,14 @@ async fn wait_child(
         job_id.to_string(),
         "stdout".to_string(),
         stdout,
+        output_lines,
     ));
     let err = tokio::spawn(pump(
         state.clone(),
         job_id.to_string(),
         "stderr".to_string(),
         stderr,
+        output_lines,
     ));
     let timeout = Duration::from_secs(timeout_secs);
     let status = match tokio::time::timeout(timeout, child.wait()).await {
@@ -2288,13 +2302,62 @@ async fn wait_child(
     Ok(status.code().unwrap_or(1))
 }
 
-async fn pump<R>(state: Shared, job_id: String, stream: String, reader: R)
+fn output_split(limit: u64) -> (u64, u64) {
+    let tail = limit / 4;
+    let head = limit.saturating_sub(tail);
+    (head, tail)
+}
+
+struct OutputTail {
+    limit: u64,
+    head_limit: u64,
+    tail_limit: u64,
+    count: u64,
+    omitted: u64,
+    tail: VecDeque<String>,
+    flushed: bool,
+}
+
+impl OutputTail {
+    fn new(limit: u64) -> Self {
+        let (head_limit, tail_limit) = output_split(limit);
+        Self {
+            limit,
+            head_limit,
+            tail_limit,
+            count: 0,
+            omitted: 0,
+            tail: VecDeque::new(),
+            flushed: false,
+        }
+    }
+
+    /// A line to store now. `None` means the line is held for the tail.
+    fn accept(&mut self, line: String) -> Option<String> {
+        self.count += 1;
+        if self.count <= self.head_limit {
+            return Some(line);
+        }
+        if self.tail_limit == 0 {
+            self.omitted += 1;
+            return None;
+        }
+        if self.tail.len() as u64 >= self.tail_limit {
+            self.tail.pop_front();
+            self.omitted += 1;
+        }
+        self.tail.push_back(line);
+        None
+    }
+}
+
+async fn pump<R>(state: Shared, job_id: String, stream: String, reader: R, output_lines: u64)
 where
     R: AsyncRead + Unpin,
 {
     let mut lines = BufReader::new(reader);
     let mut buf = Vec::new();
-    let mut count = 0i64;
+    let mut kept = OutputTail::new(output_lines);
     let mut discarded = false;
     loop {
         buf.clear();
@@ -2308,10 +2371,10 @@ where
                 if buf.last() == Some(&b'\r') {
                     buf.pop();
                 }
-                count += 1;
                 if canceled(&state, &job_id) {
                     if !discarded {
                         discarded = true;
+                        flush_tail(&state, &job_id, &stream, &mut kept);
                         log(
                             &state,
                             &job_id,
@@ -2321,43 +2384,70 @@ where
                     }
                     continue;
                 }
-                if count > 8_000 {
-                    if count == 8_001 {
-                        log(
-                            &state,
-                            &job_id,
-                            "system",
-                            "Further output is discarded (limit 8000 lines).",
-                        );
-                    }
-                    continue;
-                }
                 let mut line = String::from_utf8_lossy(&buf).to_string();
                 if line.len() > 4_000 {
                     line.truncate(4_000);
                     line.push('…');
                 }
-                log(&state, &job_id, &stream, &line);
+                note_hosts(&state, &job_id, &stream, &line);
                 if stream == "stdout" {
                     state.metrics.observe(&job_id, &line);
+                }
+                if let Some(line) = kept.accept(line) {
+                    store_event(&state, &job_id, &stream, &line);
                 }
             }
             Err(_) => break,
         }
     }
+    if !discarded {
+        flush_tail(&state, &job_id, &stream, &mut kept);
+    }
 }
 
-fn log(state: &Shared, job_id: &str, stream: &str, line: &str) {
+fn flush_tail(state: &Shared, job_id: &str, stream: &str, kept: &mut OutputTail) {
+    if kept.flushed {
+        return;
+    }
+    kept.flushed = true;
+    if kept.omitted > 0 {
+        log(
+            state,
+            job_id,
+            "system",
+            &format!(
+                "Omitted {} lines (limit {}; kept the first {} and the last {}).",
+                kept.omitted, kept.limit, kept.head_limit, kept.tail_limit
+            ),
+        );
+    }
+    for line in kept.tail.drain(..) {
+        store_event(state, job_id, stream, &line);
+    }
+}
+
+fn store_event(state: &Shared, job_id: &str, stream: &str, line: &str) {
     if let Ok(db) = state.db() {
         let _ = db::insert_event(&db, job_id, stream, line);
-        if matches!(stream, "stdout" | "stderr") && host_line(line) {
-            if let Ok(Some(job)) = db::job(&db, job_id) {
-                if let Some(next) = observe_host_line(&job.failed_hosts, line) {
-                    let _ = db::set_failed_hosts(&db, job_id, &next);
-                }
+    }
+}
+
+fn note_hosts(state: &Shared, job_id: &str, stream: &str, line: &str) {
+    if !(matches!(stream, "stdout" | "stderr") && host_line(line)) {
+        return;
+    }
+    if let Ok(db) = state.db() {
+        if let Ok(Some(job)) = db::job(&db, job_id) {
+            if let Some(next) = observe_host_line(&job.failed_hosts, line) {
+                let _ = db::set_failed_hosts(&db, job_id, &next);
             }
         }
     }
+}
+
+fn log(state: &Shared, job_id: &str, stream: &str, line: &str) {
+    store_event(state, job_id, stream, line);
+    note_hosts(state, job_id, stream, line);
 }
 
 fn host_line(line: &str) -> bool {
@@ -2878,6 +2968,195 @@ exit 0
         let stored = observe_host_line("", "fatal: [web-1]: FAILED! => {}").unwrap();
         assert_eq!(failed_host_names(&stored), vec!["web-1".to_string()]);
         assert!(observe_host_line(&stored, "ok: [web-1]").is_none());
+    }
+
+    #[test]
+    fn output_limit_keeps_three_quarters_and_a_quarter() {
+        assert_eq!(output_split(8_000), (6_000, 2_000));
+        assert_eq!(output_split(100), (75, 25));
+    }
+
+    #[tokio::test]
+    async fn oversized_stdout_keeps_the_tail_and_the_failed_hosts() {
+        let state = output_state(8_000);
+        insert_output_job(&state, "job-1");
+        state.metrics.begin(&JobMeta {
+            job_id: "job-1",
+            team_id: "team",
+            tool: "ansible",
+            playbook: "site.yml",
+            template: "Overflow",
+        });
+        let mut lines = Vec::new();
+        for i in 1..=8_010 {
+            lines.push(format!("bulk-{i}"));
+        }
+        lines[6_000] = "TASK [hidden.role : drop]".into();
+        lines[6_001] = "ok: [h1]".into();
+        lines.push("TASK [kept.role : stay]".into());
+        lines.push("ok: [h2]".into());
+        lines.push("fatal: [ghost]: FAILED! => {}".into());
+        lines.push("PLAY RECAP".into());
+        lines.push(
+            "web-9 : ok=1    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0"
+                .into(),
+        );
+        lines.push("MARKER-TAIL-19".into());
+        let body = lines.join("\n") + "\n";
+        pump(
+            state.clone(),
+            "job-1".into(),
+            "stdout".into(),
+            std::io::Cursor::new(body.into_bytes()),
+            8_000,
+        )
+        .await;
+        let text = event_text(&state, "job-1");
+        assert!(text.contains("MARKER-TAIL-19"), "{text}");
+        assert!(text.contains("bulk-1\n"), "{text}");
+        assert!(text.contains("bulk-6000\n"), "{text}");
+        assert!(
+            text.contains("Omitted 16 lines (limit 8000; kept the first 6000 and the last 2000)."),
+            "{text}"
+        );
+        assert!(!text.contains("bulk-6016"), "{text}");
+        let head_at = text.find("bulk-6000").expect("head");
+        let omit_at = text.find("Omitted 16 lines").expect("omission");
+        let tail_at = text.find("bulk-6017").expect("tail");
+        assert!(head_at < omit_at && omit_at < tail_at);
+        let hosts = {
+            let db = state.db().unwrap();
+            let job = db::job(&db, "job-1").unwrap().unwrap();
+            failed_host_names(&job.failed_hosts)
+        };
+        assert_eq!(hosts, vec!["web-9".to_string()]);
+        let metrics = state.metrics.render(&[]);
+        assert!(metrics.contains("role=\"hidden.role\""), "{metrics}");
+        assert!(metrics.contains("role=\"kept.role\""), "{metrics}");
+        let _ = std::fs::remove_dir_all(&state.cfg.data_dir);
+    }
+
+    #[tokio::test]
+    async fn a_short_log_is_stored_without_an_omission_line() {
+        let state = output_state(8_000);
+        insert_output_job(&state, "job-short");
+        pump(
+            state.clone(),
+            "job-short".into(),
+            "stdout".into(),
+            std::io::Cursor::new(b"one\ntwo\nthree\n".to_vec()),
+            8_000,
+        )
+        .await;
+        let text = event_text(&state, "job-short");
+        assert_eq!(text, "one\ntwo\nthree");
+        assert!(!text.contains("Omitted"));
+        let _ = std::fs::remove_dir_all(&state.cfg.data_dir);
+    }
+
+    #[tokio::test]
+    async fn cancel_still_discards_the_rest_of_the_log() {
+        let state = output_state(8_000);
+        insert_output_job(&state, "job-cancel");
+        state
+            .canceled
+            .lock()
+            .unwrap()
+            .insert("job-cancel".to_string());
+        let body = "bulk-1\nfatal: [ghost]: FAILED! => {}\nweb-9 : ok=1 changed=0 unreachable=0 failed=1 skipped=0 rescued=0 ignored=0\n";
+        pump(
+            state.clone(),
+            "job-cancel".into(),
+            "stdout".into(),
+            std::io::Cursor::new(body.as_bytes().to_vec()),
+            8_000,
+        )
+        .await;
+        let text = event_text(&state, "job-cancel");
+        assert_eq!(
+            text,
+            "Further output is discarded because the job was canceled."
+        );
+        let hosts = {
+            let db = state.db().unwrap();
+            let job = db::job(&db, "job-cancel").unwrap().unwrap();
+            failed_host_names(&job.failed_hosts)
+        };
+        assert!(hosts.is_empty(), "{hosts:?}");
+        let _ = std::fs::remove_dir_all(&state.cfg.data_dir);
+    }
+
+    fn output_state(lines: u64) -> Shared {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-output-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::boot(crate::Config {
+            bind: "127.0.0.1:0".into(),
+            data_dir: dir,
+            web_dir: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web"),
+            examples_dir: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples"),
+            admin_user: "admin".into(),
+            admin_password: Some("test-admin-pass".into()),
+            runner: crate::config::RunnerMode::Local,
+            job_timeout_secs: 60,
+            job_output_lines: lines,
+            local_jobs: crate::config::LocalJobs::All,
+            project_roots: Vec::new(),
+            hsts: false,
+            cookie_secure: crate::config::CookieSecure::Auto,
+            trusted_proxy: false,
+            ldap: None,
+        })
+        .expect("boot")
+    }
+
+    fn insert_output_job(state: &Shared, id: &str) {
+        let db = state.db().unwrap();
+        db::insert_job(
+            &db,
+            &db::Job {
+                id: id.into(),
+                team_id: "team".into(),
+                template_id: None,
+                workflow_job_id: None,
+                workflow_node_id: None,
+                name: "Overflow".into(),
+                tool: "ansible".into(),
+                status: "running".into(),
+                extra_vars: "{}".into(),
+                launched_by: "admin".into(),
+                trigger: "manual".into(),
+                started_at: None,
+                finished_at: None,
+                created_at: "2026-01-01T00:00:00Z".into(),
+                parameters: "{}".into(),
+                failed_hosts: "[]".into(),
+            },
+        )
+        .unwrap();
+    }
+
+    fn event_text(state: &Shared, job_id: &str) -> String {
+        let db = state.db().unwrap();
+        let mut after = 0;
+        let mut lines = Vec::new();
+        loop {
+            let batch = db::events_after(&db, job_id, after, 500).unwrap();
+            if batch.is_empty() {
+                break;
+            }
+            for event in &batch {
+                after = event.id;
+                lines.push(event.line.clone());
+            }
+            if batch.len() < 500 {
+                break;
+            }
+        }
+        lines.join("\n")
     }
 
     #[test]
