@@ -4961,6 +4961,60 @@ fn has_line(job: &Value, stream: &str, line: &str) -> bool {
 }
 
 #[tokio::test]
+async fn a_rejected_sign_in_uses_one_message_and_keeps_the_username() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-signin-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let script = script.as_str().unwrap_or("");
+    assert!(script.contains("invalid_username_or_password"));
+    assert!(script.contains("value=\"${esc(username || \"\")}\""));
+    assert!(script.contains("[name=password]"));
+    assert!(script.contains("password.focus()"));
+
+    let (status, missing, _) = call(&app, "GET", "/api/me", None, None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{missing}");
+    assert_eq!(missing["error"], "sign_in_is_required");
+
+    for (name, password) in [
+        ("admin", "wrong-password"),
+        ("nobody", "wrong-password"),
+        ("admin", ""),
+    ] {
+        let (status, rejected, _) = call(
+            &app,
+            "POST",
+            "/api/login",
+            None,
+            None,
+            Some(json!({ "username": name, "password": password })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{name} {rejected}");
+        assert_eq!(rejected["error"], "invalid_username_or_password", "{name}");
+    }
+
+    let (status, me, _) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn a_request_without_json_returns_a_catalog_error() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

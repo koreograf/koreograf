@@ -52,7 +52,7 @@ pub async fn login(
 ) -> Result<Response, ApiError> {
     let username = normalize(&body.username)?;
     if body.password.is_empty() {
-        return Err(ApiError::Unauthorized);
+        return Err(ApiError::SignInFailed);
     }
     let local = {
         let db = state.db()?;
@@ -71,11 +71,15 @@ pub async fn login(
                 return session_response(&state, &headers, &user);
             }
             Err(err) => {
-                tracing::info!(error = %err, "LDAP sign-in rejected");
+                tracing::warn!(
+                    error = %err,
+                    hint = ldap_failure_hint(&err),
+                    "LDAP sign-in failed"
+                );
             }
         }
     }
-    Err(ApiError::Unauthorized)
+    Err(ApiError::SignInFailed)
 }
 
 pub async fn logout(
@@ -253,7 +257,7 @@ fn provision_ldap(state: &Shared, identity: ldap::LdapIdentity) -> AppResult<Use
                 username = %identity.username,
                 "LDAP sign-in matches a local account"
             );
-            return Err(ApiError::Unauthorized);
+            return Err(ApiError::SignInFailed);
         }
         user
     } else {
@@ -441,6 +445,20 @@ fn normalize_email(value: &str) -> AppResult<Option<String>> {
     Ok(Some(value.to_string()))
 }
 
+fn ldap_failure_hint(error: &str) -> &'static str {
+    let lower = error.to_ascii_lowercase();
+    if lower.contains("timed out") || lower.contains("timeout") {
+        "timeout"
+    } else if lower.contains("connection")
+        || lower.contains("tls")
+        || lower.contains("name resolution")
+    {
+        "unreachable"
+    } else {
+        "reject"
+    }
+}
+
 fn normalize(username: &str) -> AppResult<String> {
     let name = username.trim().to_ascii_lowercase();
     if name.is_empty() || name.len() > 128 || name.chars().any(|ch| ch.is_control()) {
@@ -451,7 +469,23 @@ fn normalize(username: &str) -> AppResult<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_email, profile_email};
+    use super::{ldap_failure_hint, normalize_email, profile_email};
+
+    #[test]
+    fn ldap_failure_hint_splits_timeout_from_a_rejected_bind() {
+        assert_eq!(ldap_failure_hint("LDAP connection: timed out"), "timeout");
+        assert_eq!(ldap_failure_hint("operation timeout"), "timeout");
+        assert_eq!(
+            ldap_failure_hint("LDAP connection: connection refused"),
+            "unreachable"
+        );
+        assert_eq!(ldap_failure_hint("LDAP TLS setup failed"), "unreachable");
+        assert_eq!(ldap_failure_hint("ldap_rejected_the_password"), "reject");
+        assert_eq!(
+            ldap_failure_hint("the_user_was_not_found_uniquely"),
+            "reject"
+        );
+    }
 
     #[test]
     fn email_trims_and_rejects_a_broken_address() {
@@ -521,7 +555,7 @@ mod tests {
             },
         )
         .expect_err("local account");
-        assert!(matches!(err, ApiError::Unauthorized));
+        assert!(matches!(err, ApiError::SignInFailed));
         let db = state.db().expect("db");
         let user = db::user_by_username(&db, "admin")
             .expect("read")

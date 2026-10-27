@@ -25,6 +25,9 @@ impl std::fmt::Display for UserMessage {
 pub enum ApiError {
     #[error("unauthorized")]
     Unauthorized,
+    /// A rejected sign-in. The key stays the same for every cause.
+    #[error("sign-in failed")]
+    SignInFailed,
     #[error("forbidden")]
     Forbidden,
     #[error("not found")]
@@ -97,6 +100,11 @@ impl IntoResponse for ApiError {
             Self::Unauthorized => (
                 StatusCode::UNAUTHORIZED,
                 "sign_in_is_required".to_string(),
+                BTreeMap::new(),
+            ),
+            Self::SignInFailed => (
+                StatusCode::UNAUTHORIZED,
+                "invalid_username_or_password".to_string(),
                 BTreeMap::new(),
             ),
             Self::Forbidden => (
