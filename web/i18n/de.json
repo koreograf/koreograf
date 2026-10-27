@@ -220,6 +220,7 @@
   "ignored": "Ignoriert",
   "image": "Image",
   "ini_or_yaml": "INI oder YAML",
+  "invalid_username_or_password": "Ungültiger Benutzername oder ungültiges Passwort.",
   "inventories": "Inventare",
   "inventory": "Inventar",
   "inventory_2": "+ Inventar",

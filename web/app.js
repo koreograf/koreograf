@@ -431,7 +431,7 @@ function jsonObject(text, label) {
   return value;
 }
 
-function renderLogin(message, tone, vars) {
+function renderLogin(message, tone, vars, username) {
   const kind = tone === "good" ? "good" : "bad";
   app.innerHTML = `
     <div class="login-wrap">
@@ -443,7 +443,7 @@ function renderLogin(message, tone, vars) {
         <p class="lede">${h("jobs_workflows_and_alerts_for_several_teams_local")}</p>
         ${message ? `<div class="banner ${kind}">${h(message, vars)}</div>` : ""}
         <div class="form">
-          <label class="field"><span>${h("username")}</span><input name="username" autocomplete="username" required></label>
+          <label class="field"><span>${h("username")}</span><input name="username" autocomplete="username" required value="${esc(username || "")}"></label>
           <label class="field"><span>${h("password")}</span><input name="password" type="password" autocomplete="current-password" required></label>
           <button class="btn primary" type="submit">${h("sign_in")}</button>
         </div>
@@ -455,9 +455,10 @@ function renderLogin(message, tone, vars) {
     const form = event.currentTarget;
     const button = form.querySelector("button[type=submit]");
     button.disabled = true;
+    const entered = form.username.value;
     try {
       me = await api("POST", "/api/login", {
-        username: form.username.value,
+        username: entered,
         password: form.password.value,
       });
       const known = (me.teams || []).some((team) => team.id === teamId);
@@ -465,7 +466,9 @@ function renderLogin(message, tone, vars) {
       localStorage.setItem("koreograf.team", teamId);
       go("#/");
     } catch (error) {
-      renderLogin(error.message || "login.rejected", "bad", error.vars);
+      renderLogin(error.message || "invalid_username_or_password", "bad", error.vars, entered);
+      const password = document.querySelector("#login-form [name=password]");
+      if (password) password.focus();
     }
   });
 }
