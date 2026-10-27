@@ -10,8 +10,8 @@ COPY src ./src
 RUN cargo build --release
 
 FROM debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8
-# Renovate updates TOFU_VERSION from opentofu/opentofu releases.
-# The checksums are the lines for linux_amd64 and linux_arm64 in that release's SHA256SUMS.
+# Renovate updates TOFU_VERSION only. Copy TOFU_SHA256_AMD64 and
+# TOFU_SHA256_ARM64 from that release's SHA256SUMS. A stale checksum fails the build.
 ARG TOFU_VERSION=1.13.2
 ARG TOFU_SHA256_AMD64=723bebb0df8411daff1e5fc3862e28ff5581fe5634087f4c29a9aa41d78208b5
 ARG TOFU_SHA256_ARM64=6e815c58a09ee957de606ff48cefad082942e70afc43b737ff975654c54ec453

@@ -167,9 +167,6 @@ jobs:
   image:
     name: image
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Lint the Dockerfile
@@ -184,12 +181,37 @@ jobs:
         with:
           context: .
           push: false
-          load: false
+          load: true
           provenance: false
           sbom: false
           tags: koreograf:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Start on a root-owned data volume
+        run: |
+          digest=sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8
+          docker volume create koreograf-upgrade >/dev/null
+          cleanup() {
+            docker rm -f koreograf-upgrade >/dev/null 2>&1 || true
+            docker volume rm koreograf-upgrade >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker run --rm -v koreograf-upgrade:/var/lib/koreograf "debian:bookworm-slim@${digest}" \
+            sh -c 'printf secret > /var/lib/koreograf/secret.key && chmod 600 /var/lib/koreograf/secret.key && chown 0:0 /var/lib/koreograf /var/lib/koreograf/secret.key'
+          docker run -d --name koreograf-upgrade -v koreograf-upgrade:/var/lib/koreograf koreograf:ci
+          ok=0
+          for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+            if docker exec koreograf-upgrade python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"; then
+              ok=1
+              break
+            fi
+            sleep 2
+          done
+          docker logs koreograf-upgrade || true
+          docker stop koreograf-upgrade >/dev/null
+          owner=$(docker run --rm -v koreograf-upgrade:/var/lib/koreograf "debian:bookworm-slim@${digest}" stat -c '%u:%g' /var/lib/koreograf/secret.key)
+          test "$ok" = 1
+          test "$owner" = "10001:10001"
 
   renovate:
     name: renovate

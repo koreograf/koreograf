@@ -24,7 +24,7 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "OpenTofu binary baked into the image",
+      "description": "OpenTofu version in the image. TOFU_SHA256_AMD64 and TOFU_SHA256_ARM64 are not updated; copy them from that release's SHA256SUMS or the image build fails.",
       "managerFilePatterns": ["/^Dockerfile$/"],
       "matchStrings": [
         "ARG TOFU_VERSION=(?<currentValue>\\d+\\.\\d+\\.\\d+)"

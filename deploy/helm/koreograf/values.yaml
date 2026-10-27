@@ -31,6 +31,7 @@ existingSecretKeys:
 
 # Leer: non-root (uid 10001), ausser runner.dockerSocket.enabled ist true.
 # Ein gesetztes Objekt ersetzt die Vorgabe komplett.
+# fsGroup 10001 setzt der Volume-Treiber. Ohne fsGroup bleiben alte Dateien root.
 podSecurityContext: {}
 securityContext: {}
 
