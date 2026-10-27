@@ -232,8 +232,18 @@ EOF
   exec "$@"
 }
 
+# Root module only. A backend in a nested module is not the root backend,
+# and a commented line is not a block. `cloud` and `backend` cannot both be set.
+config_text() {
+  dir=$1
+  for file in "$dir"/*.tf "$dir"/*.tf.json; do
+    [ -f "$file" ] || continue
+    sed -e 's|/\*[^*]*\*/||g' -e 's/[[:space:]]*#.*$//' -e 's/[[:space:]]*\/\/.*$//' "$file"
+  done
+}
+
 backend_lines() {
-  find "$1" -type f \( -name '*.tf' -o -name '*.tf.json' \) -exec grep -E -h 'backend[[:space:]]+"[A-Za-z0-9_-]+"' {} + 2>/dev/null || true
+  config_text "$1" | grep -E 'backend[[:space:]]+"[A-Za-z0-9_-]+"' || true
 }
 
 has_backend_block() {
@@ -244,6 +254,10 @@ has_backend_block() {
 has_remote_backend() {
   lines=$(backend_lines "$1")
   printf '%s\n' "$lines" | grep -E -v 'backend[[:space:]]+"local"' | grep -E -q 'backend[[:space:]]+"'
+}
+
+has_cloud_block() {
+  config_text "$1" | grep -E -q 'cloud[[:space:]]*\{'
 }
 
 run_tofu() {
@@ -279,9 +293,12 @@ run_tofu() {
     log "OpenTofu state directory is missing. This run keeps state in the job directory."
   fi
   mkdir -p "$state_dir"
+  if [ "$state_kept" -eq 1 ]; then
+    chmod 700 "$state_dir" 2>/dev/null || true
+  fi
   state_file="$state_dir/terraform.tfstate"
   injected=0
-  if has_remote_backend "$stage"; then
+  if has_cloud_block "$stage" || has_remote_backend "$stage"; then
     log "OpenTofu uses the backend in the module. This controller does not keep a copy of that state."
   elif has_backend_block "$stage"; then
     if [ "$KOREOGRAF_ACTION" = "apply" ]; then

@@ -654,7 +654,11 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
     let _scrub = SecretScrub { work: work.clone() };
     let cache = state.cfg.data_dir.join("cache").join(&job.team_id);
     for sub in ["collections", "roles", "tofu", "tofu-state"] {
-        fs::create_dir_all(cache.join(sub)).map_err(|e| e.to_string())?;
+        let path = cache.join(sub);
+        fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+        if sub == "tofu-state" {
+            set_private(&path)?;
+        }
     }
 
     let settings = crate::settings::load(state).map_err(|err| err.to_string())?;
@@ -801,16 +805,23 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
         &inventory_rel,
         &extra_file,
     );
-    if template.tool == "opentofu" {
+    let tofu_state = if template.tool == "opentofu" {
         let state = tofu_state_dir(&cache, &template.id)?;
         fs::create_dir_all(&state).map_err(|e| e.to_string())?;
+        if let Some(parent) = state.parent() {
+            set_private(parent)?;
+        }
+        set_private(&state)?;
         let visible = if container_mode.is_some() {
             format!("/cache/tofu-state/{}", template.id)
         } else {
             state.display().to_string()
         };
         env.push(("KOREOGRAF_TOFU_STATE".into(), visible));
-    }
+        Some(state)
+    } else {
+        None
+    };
     let credential_ids = saved_credential_ids(&job, &template);
     apply_credentials(
         state,
@@ -858,6 +869,8 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
                 cache: &cache,
                 env: &env,
                 timeout_secs: settings.job_timeout_secs,
+                tofu_state: tofu_state.as_deref(),
+                template_id: &template.id,
             },
         )
         .await?
@@ -1017,6 +1030,19 @@ fn tofu_state_dir(cache: &Path, template_id: &str) -> Result<PathBuf, String> {
         return Err("The template id cannot be used as an OpenTofu state directory.".into());
     }
     Ok(cache.join("tofu-state").join(template_id))
+}
+
+fn set_private(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(path).map_err(|e| e.to_string())?.permissions();
+        perms.set_mode(0o700);
+        fs::set_permissions(path, perms).map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
 }
 
 fn safe_cache_key(value: &str) -> bool {
@@ -2018,6 +2044,45 @@ struct ContainerRun<'a> {
     cache: &'a Path,
     env: &'a [(String, String)],
     timeout_secs: u64,
+    /// Host directory for this template only. Absent for every other tool.
+    tofu_state: Option<&'a Path>,
+    template_id: &'a str,
+}
+
+fn container_mounts(
+    stage: &Path,
+    work: &Path,
+    cache: &Path,
+    tofu_state: Option<&Path>,
+    template_id: &str,
+) -> Vec<(String, String, bool)> {
+    let mut mounts = vec![
+        (stage.display().to_string(), "/runner/project".into(), true),
+        (work.display().to_string(), "/runner/work".into(), false),
+        (
+            cache.join("collections").display().to_string(),
+            "/cache/collections".into(),
+            false,
+        ),
+        (
+            cache.join("roles").display().to_string(),
+            "/cache/roles".into(),
+            false,
+        ),
+        (
+            cache.join("tofu").display().to_string(),
+            "/cache/tofu".into(),
+            false,
+        ),
+    ];
+    if let Some(state) = tofu_state {
+        mounts.push((
+            state.display().to_string(),
+            format!("/cache/tofu-state/{template_id}"),
+            false,
+        ));
+    }
+    mounts
 }
 
 async fn run_container(state: &Shared, job_id: &str, run: ContainerRun<'_>) -> Result<i32, String> {
@@ -2029,6 +2094,8 @@ async fn run_container(state: &Shared, job_id: &str, run: ContainerRun<'_>) -> R
         cache,
         env,
         timeout_secs,
+        tofu_state,
+        template_id,
     } = run;
     ensure_image(bin, &environment.image, &environment.pull_policy).await?;
     write_env_file(&work.join("container.env"), env)?;
@@ -2036,30 +2103,7 @@ async fn run_container(state: &Shared, job_id: &str, run: ContainerRun<'_>) -> R
     let spec = ContainerSpec {
         image: environment.image.clone(),
         name: name.clone(),
-        mounts: vec![
-            (stage.display().to_string(), "/runner/project".into(), true),
-            (work.display().to_string(), "/runner/work".into(), false),
-            (
-                cache.join("collections").display().to_string(),
-                "/cache/collections".into(),
-                false,
-            ),
-            (
-                cache.join("roles").display().to_string(),
-                "/cache/roles".into(),
-                false,
-            ),
-            (
-                cache.join("tofu").display().to_string(),
-                "/cache/tofu".into(),
-                false,
-            ),
-            (
-                cache.join("tofu-state").display().to_string(),
-                "/cache/tofu-state".into(),
-                false,
-            ),
-        ],
+        mounts: container_mounts(stage, work, cache, tofu_state, template_id),
         env_file: work.join("container.env").display().to_string(),
         command: vec!["/runner/work/wrapper.sh".into()],
     };
@@ -2546,6 +2590,16 @@ mod tests {
     }
 
     fn run_wrapper(root: &Path, action: &str, state: &Path, module: &str) -> String {
+        run_wrapper_files(root, action, state, module, &[])
+    }
+
+    fn run_wrapper_files(
+        root: &Path,
+        action: &str,
+        state: &Path,
+        module: &str,
+        extras: &[(&str, &str)],
+    ) -> String {
         let bin = root.join("bin");
         let project = root.join("project");
         let work = root.join("work");
@@ -2557,6 +2611,13 @@ mod tests {
         std::fs::create_dir_all(&module_dir).unwrap();
         std::fs::create_dir_all(&work).unwrap();
         std::fs::write(module_dir.join("main.tf"), module).unwrap();
+        for (rel, body) in extras {
+            let path = module_dir.join(rel);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(path, body).unwrap();
+        }
         let path = format!("{}:/usr/bin:/bin", bin.display());
         let output = std::process::Command::new("sh")
             .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/wrapper.sh"))
@@ -2634,6 +2695,12 @@ exit 0
         );
         let state_file = team_a.join("terraform.tfstate");
         assert!(state_file.is_file(), "state file missing");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let dir_mode = std::fs::metadata(&team_a).unwrap().permissions().mode() & 0o777;
+            assert_eq!(dir_mode, 0o700, "state directory mode {dir_mode:o}");
+        }
         assert!(!state_file.starts_with(root.join("work")));
         #[cfg(unix)]
         {
@@ -2663,6 +2730,86 @@ exit 0
         assert!(bounced.contains("state path was rejected"), "{bounced}");
         assert!(!rejected.join("terraform.tfstate").exists());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn opentofu_backend_detection_stays_in_the_root_module() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("koreograf-tofu-backend-{nanos}"));
+        write_executable(&root.join("bin").join("tofu"), "#!/bin/sh\nexit 0\n");
+        let plain = "resource \"terraform_data\" \"marker\" {\n  input = \"koreograf\"\n}\n";
+        let state = root.join("cache").join("team-a").join("tpl");
+        let commented = run_wrapper_files(
+            &root,
+            "apply",
+            &state,
+            "# backend \"s3\" {\n#   bucket = \"demo\"\n# }\n// backend \"gcs\" {}\n",
+            &[],
+        );
+        assert!(commented.contains("no remote backend"), "{commented}");
+        assert!(root
+            .join("work")
+            .join("tfsrc")
+            .join("koreograf-local-backend.tf")
+            .is_file());
+        let nested = run_wrapper_files(
+            &root,
+            "apply",
+            &state,
+            plain,
+            &[(
+                "modules/child/main.tf",
+                "terraform {\n  backend \"s3\" {\n    bucket = \"demo\"\n  }\n}\n",
+            )],
+        );
+        assert!(nested.contains("no remote backend"), "{nested}");
+        assert!(root
+            .join("work")
+            .join("tfsrc")
+            .join("koreograf-local-backend.tf")
+            .is_file());
+        let cloud = run_wrapper_files(
+            &root,
+            "apply",
+            &state,
+            "terraform {\n  cloud {\n    organization = \"demo\"\n  }\n}\n",
+            &[],
+        );
+        assert!(cloud.contains("does not keep a copy"), "{cloud}");
+        assert!(!cloud.contains("no remote backend"), "{cloud}");
+        assert!(!root
+            .join("work")
+            .join("tfsrc")
+            .join("koreograf-local-backend.tf")
+            .exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn container_mounts_the_template_state_only_for_opentofu() {
+        let cache = Path::new("/data/cache/team-a");
+        let stage = Path::new("/data/jobs/job/project");
+        let work = Path::new("/data/jobs/job");
+        let ansible = container_mounts(stage, work, cache, None, "tpl-1");
+        assert!(ansible
+            .iter()
+            .all(|(_, guest, _)| guest != "/cache/tofu-state"));
+        assert!(ansible
+            .iter()
+            .all(|(_, guest, _)| !guest.starts_with("/cache/tofu-state")));
+        let state = cache.join("tofu-state").join("tpl-1");
+        let tofu = container_mounts(stage, work, cache, Some(&state), "tpl-1");
+        let mounted: Vec<_> = tofu
+            .iter()
+            .filter(|(_, guest, _)| guest.starts_with("/cache/tofu-state"))
+            .collect();
+        assert_eq!(mounted.len(), 1);
+        assert_eq!(mounted[0].0, state.display().to_string());
+        assert_eq!(mounted[0].1, "/cache/tofu-state/tpl-1");
+        assert!(!mounted[0].2);
     }
 
     #[test]
