@@ -192,6 +192,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Start on a root-owned data volume
+        if: github.event_name != 'workflow_call'
         run: |
           digest=sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8
           docker volume create koreograf-upgrade >/dev/null

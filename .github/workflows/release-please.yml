@@ -36,7 +36,6 @@ jobs:
       contents: read
       packages: write
       id-token: write
-      actions: write
     uses: ./.github/workflows/release.yml
     with:
       tag: ${{ needs.release-please.outputs.tag_name }}
