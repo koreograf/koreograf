@@ -232,6 +232,34 @@ EOF
   exec "$@"
 }
 
+# Root module only. A backend in a nested module is not the root backend,
+# and a commented line is not a block. `cloud` and `backend` cannot both be set.
+config_text() {
+  dir=$1
+  for file in "$dir"/*.tf "$dir"/*.tf.json; do
+    [ -f "$file" ] || continue
+    sed -e 's|/\*[^*]*\*/||g' -e 's/[[:space:]]*#.*$//' -e 's/[[:space:]]*\/\/.*$//' "$file"
+  done
+}
+
+backend_lines() {
+  config_text "$1" | grep -E 'backend[[:space:]]+"[A-Za-z0-9_-]+"' || true
+}
+
+has_backend_block() {
+  lines=$(backend_lines "$1")
+  [ -n "$lines" ]
+}
+
+has_remote_backend() {
+  lines=$(backend_lines "$1")
+  printf '%s\n' "$lines" | grep -E -v 'backend[[:space:]]+"local"' | grep -E -q 'backend[[:space:]]+"'
+}
+
+has_cloud_block() {
+  config_text "$1" | grep -E -q 'cloud[[:space:]]*\{'
+}
+
 run_tofu() {
   export TF_PLUGIN_CACHE_DIR="$KOREOGRAF_TOFU"
   export TF_DATA_DIR="$KOREOGRAF_WORK/tfdata"
@@ -243,18 +271,80 @@ run_tofu() {
   mkdir -p "$stage"
   cp -a "$src"/. "$stage"/
   cd "$stage" || exit 1
+
+  # The local backend writes terraform.tfstate in the module directory.
+  # That directory is the job work dir, so the file used to die with the job.
+  # A module with no backend gets a local backend whose path lives in the
+  # team cache. TF_DATA_DIR stays in the job directory. The plugin cache is
+  # unchanged.
+  state_dir="$KOREOGRAF_WORK/tfdata"
+  state_kept=0
+  if [ -n "${KOREOGRAF_TOFU_STATE:-}" ]; then
+    case "$KOREOGRAF_TOFU_STATE" in
+      *..*)
+        log "OpenTofu state path was rejected. This run keeps state in the job directory."
+        ;;
+      *)
+        state_dir="$KOREOGRAF_TOFU_STATE"
+        state_kept=1
+        ;;
+    esac
+  else
+    log "OpenTofu state directory is missing. This run keeps state in the job directory."
+  fi
+  mkdir -p "$state_dir"
+  if [ "$state_kept" -eq 1 ]; then
+    chmod 700 "$state_dir" 2>/dev/null || true
+  fi
+  state_file="$state_dir/terraform.tfstate"
+  injected=0
+  if has_cloud_block "$stage" || has_remote_backend "$stage"; then
+    log "OpenTofu uses the backend in the module. This controller does not keep a copy of that state."
+  elif has_backend_block "$stage"; then
+    if [ "$KOREOGRAF_ACTION" = "apply" ]; then
+      log "Warning: backend \"local\" stores state on a path from the module. A relative path is removed with the job directory. Use an absolute path or a remote backend."
+    fi
+  elif [ "$state_kept" -eq 1 ]; then
+    cat > "$stage/koreograf-local-backend.tf" <<EOF
+terraform {
+  backend "local" {
+    path = "$state_file"
+  }
+}
+EOF
+    injected=1
+    log "OpenTofu state: $state_file"
+    if [ "$KOREOGRAF_ACTION" = "apply" ]; then
+      log "Warning: this module has no remote backend. State for this team and template stays on this controller. A remote backend is the setup to use when that state must outlive this data directory."
+    fi
+  fi
+
   log "OpenTofu plugin cache: $TF_PLUGIN_CACHE_DIR"
   before=$(find "$TF_PLUGIN_CACHE_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')
   log "Plugin files in the cache before: $before"
   tofu init -input=false -no-color
+  init_code=$?
   after=$(find "$TF_PLUGIN_CACHE_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')
   log "Plugin files in the cache after: $after"
+  if [ "$init_code" -ne 0 ]; then
+    exit "$init_code"
+  fi
   if [ "$KOREOGRAF_ACTION" = "apply" ]; then
     log "tofu apply"
-    exec tofu apply -input=false -auto-approve -no-color
+    tofu apply -input=false -auto-approve -no-color
+    code=$?
+  else
+    log "tofu plan"
+    tofu plan -input=false -no-color
+    code=$?
   fi
-  log "tofu plan"
-  exec tofu plan -input=false -no-color
+  if [ "$injected" -eq 1 ] && [ -f "$state_file" ]; then
+    chmod 600 "$state_file" 2>/dev/null || true
+    if [ -f "$state_dir/terraform.tfstate.backup" ]; then
+      chmod 600 "$state_dir/terraform.tfstate.backup" 2>/dev/null || true
+    fi
+  fi
+  exit "$code"
 }
 
 run_shell() {

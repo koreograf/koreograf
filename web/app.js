@@ -865,6 +865,7 @@ async function pageTemplateForm(id) {
             </select>
           </label>
         </div>
+        <p class="small muted">${h("opentofu_plan_reads_state_apply_keeps_it")}</p>
       </div>
       <div class="form-section" id="shell-options"${item.tool === "shell" ? "" : " hidden"}>
         <h2>Shell</h2>
@@ -1855,7 +1856,8 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
             <option value="plan"${action === "apply" ? "" : " selected"}>plan</option>
             <option value="apply"${action === "apply" ? " selected" : ""}>apply</option>
           </select>
-        </label>`;
+        </label>
+        <p class="small muted">${h("opentofu_plan_reads_state_apply_keeps_it")}</p>`;
     }
     return `
       <details class="node-params" open>
