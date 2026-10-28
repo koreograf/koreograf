@@ -196,7 +196,9 @@ jobs:
         run: |
           version="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' koreograf:ci)"
           source="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.source"}}' koreograf:ci)"
-          test -n "$version"
+          expected="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
+          test -n "$expected"
+          test "$version" = "$expected"
           test "$source" = "https://github.com/koreograf/koreograf"
       - name: Start on a root-owned data volume
         if: github.event_name != 'workflow_call'

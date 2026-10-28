@@ -44,7 +44,9 @@ COPY --from=build /src/target/release/koreograf /usr/local/bin/koreograf
 COPY web /opt/koreograf/web
 COPY examples /opt/koreograf/examples
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-ARG VERSION=0.1.0-alpha.5 # x-release-please-version
+# x-release-please-start-version
+ARG VERSION=0.1.0-alpha.5
+# x-release-please-end
 ARG SOURCE=https://github.com/koreograf/koreograf
 LABEL org.opencontainers.image.version="${VERSION}" \
     org.opencontainers.image.source="${SOURCE}"
