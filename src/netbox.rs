@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::net::IpAddr;
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -324,18 +325,45 @@ fn status_slug(value: Option<&Value>) -> Vec<String> {
 fn primary_ip(value: &Value) -> Option<String> {
     // NetBox always sends `primary_ip4`. JSON null means there is no IPv4
     // primary, so a missing or empty address must not stop the search.
-    ["primary_ip4", "primary_ip", "primary_ip6"]
-        .into_iter()
-        .find_map(|key| address_host(value.get(key)))
+    // A present value that is not an IP address stops the search.
+    let device = value.get("name").and_then(Value::as_str).unwrap_or("");
+    for key in ["primary_ip4", "primary_ip", "primary_ip6"] {
+        match address_host(value.get(key)) {
+            HostAddress::Missing => continue,
+            HostAddress::Invalid => {
+                tracing::warn!(
+                    device,
+                    "NetBox address is not an IP address, so ansible_host was left unset"
+                );
+                return None;
+            }
+            HostAddress::Ip(address) => return Some(address),
+        }
+    }
+    None
 }
 
-fn address_host(value: Option<&Value>) -> Option<String> {
-    let address = value?.get("address")?.as_str()?;
-    let host = address.split('/').next().unwrap_or(address).trim();
+enum HostAddress {
+    Missing,
+    Invalid,
+    Ip(String),
+}
+
+fn address_host(value: Option<&Value>) -> HostAddress {
+    let Some(address) = value
+        .and_then(|item| item.get("address"))
+        .and_then(Value::as_str)
+    else {
+        return HostAddress::Missing;
+    };
+    let host = address.split_once('/').map_or(address, |(host, _)| host);
+    let host = host.trim();
     if host.is_empty() {
-        None
-    } else {
-        Some(host.to_string())
+        return HostAddress::Missing;
+    }
+    match host.parse::<IpAddr>() {
+        Ok(address) => HostAddress::Ip(address.to_string()),
+        Err(_) => HostAddress::Invalid,
     }
 }
 
@@ -538,6 +566,9 @@ fn query_items(text: &str, key: &str) -> Vec<(String, String)> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{self, Write};
+    use std::sync::{Arc, Mutex};
+
     use super::*;
     use axum::extract::Request;
     use axum::http::{HeaderMap, StatusCode};
@@ -545,6 +576,28 @@ mod tests {
     use axum::routing::get;
     use axum::Router;
     use serde_json::json;
+
+    #[derive(Clone)]
+    struct LogBuf(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for LogBuf {
+        fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+            self.0.lock().expect("log lock").extend_from_slice(data);
+            Ok(data.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogBuf {
+        type Writer = Self;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
 
     #[test]
     fn renders_groups_like_the_ansible_plugin() {
@@ -643,6 +696,79 @@ mod tests {
         assert_eq!(host.ansible_host.as_deref(), Some("10.0.0.8"));
         let ini = render_ini(&[host]);
         assert!(ini.contains("dual ansible_host=10.0.0.8 netbox_id=11\n"));
+    }
+
+    #[test]
+    fn keeps_only_an_ip_address_as_ansible_host() {
+        let v4 = json!({
+            "id": 21,
+            "name": "v4",
+            "primary_ip4": {"address": "10.1.2.3"}
+        });
+        let host = host_from_json(&v4, false, &[]).unwrap();
+        assert_eq!(host.ansible_host.as_deref(), Some("10.1.2.3"));
+
+        let v6 = json!({
+            "id": 22,
+            "name": "v6",
+            "primary_ip4": null,
+            "primary_ip6": {"address": "2001:db8::20"}
+        });
+        let host = host_from_json(&v6, false, &[]).unwrap();
+        assert_eq!(host.ansible_host.as_deref(), Some("2001:db8::20"));
+
+        let prefixed = json!({
+            "id": 23,
+            "name": "prefixed",
+            "primary_ip4": {"address": "192.0.2.10/24"}
+        });
+        let host = host_from_json(&prefixed, false, &[]).unwrap();
+        assert_eq!(host.ansible_host.as_deref(), Some("192.0.2.10"));
+        assert!(render_ini(&[host]).contains("prefixed ansible_host=192.0.2.10 netbox_id=23\n"));
+
+        let bad_address = "10.0.0.1 = injected\n[all]\nhacked ansible_host=1.2.3.4";
+        let bad = json!({
+            "id": 24,
+            "name": "odd one",
+            "primary_ip4": {"address": bad_address},
+            "primary_ip": {"address": "10.9.9.9/32"},
+            "primary_ip6": {"address": "2001:db8::99/64"},
+            "site": {"slug": "berlin"}
+        });
+        let clean = json!({
+            "id": 24,
+            "name": "odd one",
+            "primary_ip4": null,
+            "site": {"slug": "berlin"}
+        });
+        let groups = ["sites".to_string()];
+        let buf = LogBuf(Arc::new(Mutex::new(Vec::new())));
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(buf.clone())
+            .finish();
+        let (bad_host, clean_host) = tracing::subscriber::with_default(subscriber, || {
+            (
+                host_from_json(&bad, false, &groups).unwrap(),
+                host_from_json(&clean, false, &groups).unwrap(),
+            )
+        });
+        assert!(bad_host.ansible_host.is_none());
+        let ini = render_ini(&[bad_host]);
+        assert_eq!(ini, render_ini(&[clean_host]));
+        assert!(ini.contains("odd_one netbox_id=24\n"));
+        assert!(ini.contains("[sites_berlin]\nodd_one\n"));
+        assert!(!ini.contains("ansible_host"));
+        assert!(!ini.contains("hacked"));
+        let text = String::from_utf8(buf.0.lock().expect("log lock").clone()).expect("utf-8");
+        assert!(text.contains("odd one"), "{text}");
+        assert!(
+            text.contains("NetBox address is not an IP address, so ansible_host was left unset"),
+            "{text}"
+        );
+        assert!(!text.contains("hacked"), "{text}");
+        assert_eq!(text.matches("not an IP address").count(), 1, "{text}");
     }
 
     #[test]
