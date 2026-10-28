@@ -5,7 +5,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 use tokio::process::Command;
 
 use crate::cacheinfo::dir_size;
@@ -21,6 +21,8 @@ const DEFAULT_INVENTORY: &str = "[all]\nlocalhost ansible_connection=local\n";
 /// Docker or Podman inspect can stall when the daemon does not answer.
 /// The timeout does not abort the blocking thread.
 const STOP_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+/// Bytes of pull stderr kept for the failure line. The tail holds the reason.
+const PULL_STDERR_TAIL: usize = 8 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct RunningProc {
@@ -2435,7 +2437,7 @@ fn probe_script(mounts: &[(String, String, bool)]) -> String {
 
 fn last_stderr_line(stderr: &str) -> String {
     stderr
-        .lines()
+        .split(['\n', '\r'])
         .rev()
         .find(|line| !line.trim().is_empty())
         .unwrap_or("")
@@ -2686,18 +2688,178 @@ async fn image_present(bin: &str, image: &str) -> bool {
 }
 
 async fn pull_image(bin: &str, image: &str) -> Result<(), String> {
-    let status = Command::new(bin)
-        .args(["pull", image])
+    let mut cmd = Command::new(bin);
+    cmd.args(["pull", image])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .status()
-        .await
-        .map_err(|e| format!("Image pull: {e}"))?;
+        .kill_on_drop(true);
+    let mut child = cmd.spawn().map_err(|e| format!("Image pull: {e}"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Image pull: stderr is missing".to_string())?;
+    // Read stderr while the process runs. An unread pipe fills and stalls the pull.
+    let (status, tail) = tokio::join!(child.wait(), read_stderr_tail(stderr, PULL_STDERR_TAIL));
+    let status = status.map_err(|e| format!("Image pull: {e}"))?;
     if status.success() {
         Ok(())
     } else {
-        Err(format!("Image {image} could not be pulled."))
+        Err(pull_failure(image, &String::from_utf8_lossy(&tail)))
     }
+}
+
+fn pull_failure(image: &str, stderr: &str) -> String {
+    let image = mask_pull_credentials(image);
+    let detail = last_stderr_line(&mask_pull_credentials(stderr));
+    if detail.is_empty() {
+        format!("Image {image} could not be pulled.")
+    } else {
+        format!("Image {image} could not be pulled. {detail}")
+    }
+}
+
+async fn read_stderr_tail(mut reader: impl AsyncRead + Unpin, limit: usize) -> Vec<u8> {
+    let mut chunk = [0u8; 4096];
+    let mut kept = Vec::new();
+    loop {
+        match reader.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                kept.extend_from_slice(&chunk[..n]);
+                if kept.len() > limit {
+                    let drop_n = kept.len() - limit;
+                    kept = kept.split_off(drop_n);
+                }
+            }
+        }
+    }
+    kept
+}
+
+const SECRET_KEYS: &[&str] = &[
+    "access_token",
+    "authorization",
+    "password",
+    "passwd",
+    "secret",
+    "token",
+];
+
+fn mask_pull_credentials(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(index) = rest.find('@') {
+        let after = &rest[index + 1..];
+        if after.starts_with("sha256:") || after.starts_with("sha512:") {
+            out.push_str(&rest[..=index]);
+            rest = after;
+            continue;
+        }
+        out.push_str(&rest[..index]);
+        if let Some(userinfo_len) = userinfo_len(&out) {
+            out.truncate(out.len() - userinfo_len);
+            out.push_str("[redacted]");
+        }
+        out.push('@');
+        rest = after;
+    }
+    out.push_str(rest);
+    mask_secret_assignments(&out)
+}
+
+fn userinfo_len(out: &str) -> Option<usize> {
+    let start =
+        match out.rfind(|ch: char| ch.is_whitespace() || matches!(ch, '"' | '\'' | '<' | '(')) {
+            Some(index) => {
+                let ch = out[index..].chars().next()?;
+                index + ch.len_utf8()
+            }
+            None => 0,
+        };
+    let token = &out[start..];
+    let userinfo = match token.rfind("://") {
+        Some(scheme) => &token[scheme + 3..],
+        None => token,
+    };
+    if userinfo.is_empty() || userinfo.contains('/') || !userinfo.contains(':') {
+        return None;
+    }
+    Some(userinfo.len())
+}
+
+fn mask_secret_assignments(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while !rest.is_empty() {
+        if let Some((key_len, sep_len, value_len)) =
+            secret_assignment(rest, out.chars().next_back())
+        {
+            out.push_str(&rest[..key_len + sep_len]);
+            out.push_str("[redacted]");
+            rest = &rest[key_len + sep_len + value_len..];
+            continue;
+        }
+        let Some(ch) = rest.chars().next() else {
+            break;
+        };
+        out.push(ch);
+        rest = &rest[ch.len_utf8()..];
+    }
+    out
+}
+
+fn secret_assignment(rest: &str, previous: Option<char>) -> Option<(usize, usize, usize)> {
+    if previous.is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+        return None;
+    }
+    for key in SECRET_KEYS {
+        if rest.len() < key.len() || !rest.is_char_boundary(key.len()) {
+            continue;
+        }
+        if !rest[..key.len()].eq_ignore_ascii_case(key) {
+            continue;
+        }
+        let after_key = &rest[key.len()..];
+        if after_key
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        {
+            continue;
+        }
+        let sep = assignment_separator(after_key)?;
+        let value = assignment_value_len(&after_key[sep..]);
+        return Some((key.len(), sep, value));
+    }
+    None
+}
+
+fn assignment_separator(rest: &str) -> Option<usize> {
+    let quoted = rest.starts_with('"');
+    let mut n = usize::from(quoted);
+    let mut body = if quoted { &rest[1..] } else { rest };
+    let ws = body.len() - body.trim_start_matches([' ', '\t']).len();
+    body = &body[ws..];
+    n += ws;
+    let sep = body.as_bytes().first().copied()?;
+    if sep == b'=' || (sep == b':' && quoted) {
+        body = &body[1..];
+        n += 1;
+    } else {
+        return None;
+    }
+    let ws = body.len() - body.trim_start_matches([' ', '\t']).len();
+    body = &body[ws..];
+    n += ws;
+    if body.starts_with(['"', '\'']) {
+        n += 1;
+    }
+    Some(n)
+}
+
+fn assignment_value_len(rest: &str) -> usize {
+    rest.find(|ch: char| ch.is_whitespace() || matches!(ch, '"' | '\'' | ',' | '&' | '}' | '\\'))
+        .unwrap_or(rest.len())
 }
 
 fn remember(state: &Shared, job_id: &str, proc: RunningProc) {
@@ -3388,6 +3550,121 @@ mod tests {
             "crun: executable file `wrapper.sh` not found in $PATH"
         ));
         let _ = std::fs::remove_dir_all(data);
+    }
+
+    #[test]
+    fn pull_failure_keeps_the_daemon_reason_and_masks_credentials() {
+        let denied = pull_failure(
+            "registry.example/app:missing",
+            "progress\rError: Get \"https://robot:s3cret-token@registry.example/v2/app/manifests/missing\": manifest unknown\n",
+        );
+        assert!(denied.contains("manifest unknown"), "{denied}");
+        assert!(denied.contains("registry.example/app:missing"), "{denied}");
+        assert!(
+            denied.contains("https://[redacted]@registry.example/v2/app/manifests/missing"),
+            "{denied}"
+        );
+        assert!(!denied.contains("s3cret-token"), "{denied}");
+        assert!(!denied.contains("robot:"), "{denied}");
+
+        let digest = pull_failure(
+            "registry.example/app:tag@sha256:0123456789abcdef",
+            "Error: manifest unknown\n",
+        );
+        assert!(
+            digest.contains("registry.example/app:tag@sha256:0123456789abcdef"),
+            "{digest}"
+        );
+        assert!(digest.contains("manifest unknown"), "{digest}");
+        assert!(!digest.contains("[redacted]"), "{digest}");
+
+        let embedded = pull_failure(
+            "user:s3cret-token@registry.example/app:missing",
+            "Error: manifest unknown\n",
+        );
+        assert!(embedded.contains("manifest unknown"), "{embedded}");
+        assert!(
+            embedded.starts_with("Image [redacted]@registry.example/app:missing"),
+            "{embedded}"
+        );
+        assert!(!embedded.contains("s3cret-token"), "{embedded}");
+
+        let assigned = pull_failure(
+            "app:missing",
+            "denied password=s3cret-token token = \"other-secret\"\n",
+        );
+        assert!(assigned.contains("denied"), "{assigned}");
+        assert!(assigned.contains("password=[redacted]"), "{assigned}");
+        assert!(assigned.contains("token = \"[redacted]\""), "{assigned}");
+        assert!(!assigned.contains("s3cret-token"), "{assigned}");
+        assert!(!assigned.contains("other-secret"), "{assigned}");
+
+        let json = pull_failure(
+            "app:missing",
+            "{\"message\":\"unauthorized\",\"password\":\"s3cret-token\"}\n",
+        );
+        assert!(json.contains("unauthorized"), "{json}");
+        assert!(json.contains("\"password\":\"[redacted]\""), "{json}");
+        assert!(!json.contains("s3cret-token"), "{json}");
+
+        let prose = pull_failure(
+            "app:latest",
+            "toomanyrequests: You have reached your pull rate limit. password: not a secret field\n",
+        );
+        assert_eq!(
+            prose,
+            "Image app:latest could not be pulled. toomanyrequests: You have reached your pull rate limit. password: not a secret field"
+        );
+        assert_eq!(
+            pull_failure("app:missing", " \n"),
+            "Image app:missing could not be pulled."
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_pull_logs_the_daemon_reason_without_stalling() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-pull-{nanos}"));
+        let fail = dir.join("docker-fail");
+        let ok_bin = dir.join("docker-ok");
+        write_executable(
+            &fail,
+            r#"#!/bin/sh
+i=0
+while [ "$i" -lt 2000 ]; do
+  printf '%s\n' 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' >&2
+  i=$((i + 1))
+done
+printf '%s\n' 'Error: Get "https://robot:s3cret-token@registry.example/v2/missing/manifests/nope": manifest unknown' >&2
+exit 1
+"#,
+        );
+        write_executable(
+            &ok_bin,
+            "#!/bin/sh\nprintf '%s\n' 'secret-line' >&2\nexit 0\n",
+        );
+        let fail_arg = fail.display().to_string();
+        let ok_arg = ok_bin.display().to_string();
+        let started = std::time::Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            pull_image(&fail_arg, "missing:nope"),
+        )
+        .await;
+        let ok = pull_image(&ok_arg, "app:latest").await;
+        let _ = std::fs::remove_dir_all(&dir);
+        let err = result
+            .expect("pull stalled on stderr")
+            .expect_err("pull fails");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(err.contains("manifest unknown"), "{err}");
+        assert!(err.contains("missing:nope"), "{err}");
+        assert!(err.contains("[redacted]"), "{err}");
+        assert!(!err.contains("s3cret-token"), "{err}");
+        assert!(ok.is_ok(), "{ok:?}");
     }
 
     #[test]
