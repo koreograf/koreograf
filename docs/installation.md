@@ -47,7 +47,7 @@ PID 1 in the image is [tini](https://github.com/krallin/tini). It reaps processe
 
 The UI is published on `127.0.0.1` only. To listen on every interface, change the port mapping to `8080:8080`. Use a reverse proxy with TLS when other machines should open the UI.
 
-The socket is commented out in `docker-compose.yml`. Execution environments need that line. Without the socket the runner stays local, and the demo health check still runs.
+The socket is commented out in `docker-compose.yml`. Execution environments need that line. Without the socket the runner stays local, and the demo health check still runs. With the socket mounted, the runner uses the daemon path of the `koreograf-data` volume. Set `KOREOGRAF_DATA_HOST` when that path has to be chosen by hand. A path the daemon cannot see fails the job before the container starts, so the daemon does not create empty `jobs/` or `cache/` directories on the host.
 
 The named volume in the file is `koreograf-data`. Compose prefixes the project name, so `docker volume ls` shows `<project>_koreograf-data`. The project name is the directory name in lowercase unless `COMPOSE_PROJECT_NAME` is set. A checkout named `Koreograf` therefore uses `koreograf_koreograf-data`.
 

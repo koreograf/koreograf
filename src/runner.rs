@@ -33,8 +33,9 @@ pub struct RunningProc {
 pub struct ContainerSpec {
     pub image: String,
     pub name: String,
+    /// Daemon path, guest path, and whether the mount is read-only.
     pub mounts: Vec<(String, String, bool)>,
-    /// Host path. Docker reads `--env-file` on the host, not inside the container.
+    /// Client path. Docker and Podman read `--env-file` in this process.
     pub env_file: String,
     pub command: Vec<String>,
 }
@@ -413,12 +414,14 @@ pub fn container_argv(spec: &ContainerSpec) -> Vec<String> {
         "--label".into(),
         "koreograf=1".into(),
     ];
+    // `--mount type=bind` fails when the source is missing.
+    // `-v` would create that directory on the daemon's host.
     for (host, guest, readonly) in &spec.mounts {
-        let mut mount = format!("{host}:{guest}");
+        let mut mount = format!("type=bind,source={host},target={guest}");
         if *readonly {
-            mount.push_str(":ro");
+            mount.push_str(",readonly");
         }
-        args.push("-v".into());
+        args.push("--mount".into());
         args.push(mount);
     }
     args.push("--env-file".into());
@@ -2115,6 +2118,346 @@ fn container_mounts(
     mounts
 }
 
+#[derive(Debug)]
+struct DaemonLayout {
+    /// Path the daemon uses for the data directory. Absent on a host install.
+    host_data: Option<PathBuf>,
+    /// True when the path was configured and not confirmed by inspect.
+    probe: bool,
+}
+
+fn layout_decision(
+    configured: Option<&Path>,
+    detected: Option<&Path>,
+    in_container: bool,
+) -> Result<DaemonLayout, String> {
+    match (configured, detected) {
+        (Some(configured), Some(detected)) if !same_dir(configured, detected) => Err(format!(
+            "KOREOGRAF_DATA_HOST ({}) is not the data directory the container daemon mounted ({}). The job was not started.",
+            configured.display(),
+            detected.display()
+        )),
+        (_, Some(detected)) => Ok(DaemonLayout {
+            host_data: Some(detected.to_path_buf()),
+            probe: false,
+        }),
+        (Some(configured), None) => Ok(DaemonLayout {
+            host_data: Some(configured.to_path_buf()),
+            probe: true,
+        }),
+        (None, None) if in_container => Err(
+            "The container daemon cannot see the data directory. Set KOREOGRAF_DATA_HOST to the host path of that directory. The job was not started."
+                .into(),
+        ),
+        (None, None) => Ok(DaemonLayout {
+            host_data: None,
+            probe: false,
+        }),
+    }
+}
+
+fn same_dir(left: &Path, right: &Path) -> bool {
+    lexical_normal(left) == lexical_normal(right)
+}
+
+fn check_mount_token(path: &str) -> Result<(), String> {
+    if path.contains(',') {
+        return Err(format!(
+            "The mount path {path} cannot be passed to the container daemon. The job was not started."
+        ));
+    }
+    Ok(())
+}
+
+fn require_visible_sources(mounts: &[(String, String, bool)]) -> Result<(), String> {
+    for (host, guest, _) in mounts {
+        check_mount_token(host)?;
+        check_mount_token(guest)?;
+        if !Path::new(host).exists() {
+            return Err(format!(
+                "The container daemon cannot see {host}. The job was not started."
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn translate_mounts(
+    mounts: &[(String, String, bool)],
+    data_dir: &Path,
+    host_data: &Path,
+) -> Result<Vec<(String, String, bool)>, String> {
+    let data = data_path(data_dir);
+    let host_data = lexical_normal(host_data);
+    let mut out = Vec::with_capacity(mounts.len());
+    for (host, guest, readonly) in mounts {
+        check_mount_token(host)?;
+        check_mount_token(guest)?;
+        let source = fs::canonicalize(host).map_err(|_| {
+            format!("The container daemon cannot see {host}. The job was not started.")
+        })?;
+        let relative = source.strip_prefix(&data).map_err(|_| {
+            format!("The container daemon cannot see {host}. The job was not started.")
+        })?;
+        let daemon = lexical_normal(&host_data.join(relative));
+        let daemon_text = daemon.display().to_string();
+        check_mount_token(&daemon_text)?;
+        out.push((daemon_text, guest.clone(), *readonly));
+    }
+    Ok(out)
+}
+
+fn container_id_from_text(mountinfo: &str, cgroup: &str) -> Option<String> {
+    hex_id_after(mountinfo, "/containers/")
+        .or_else(|| hex_id_after(cgroup, "docker-"))
+        .or_else(|| hex_id_after(cgroup, "/docker/"))
+        .or_else(|| hex_id_after(cgroup, "libpod-"))
+}
+
+fn hex_id_after(text: &str, marker: &str) -> Option<String> {
+    let mut rest = text;
+    while let Some(index) = rest.find(marker) {
+        let after = &rest[index + marker.len()..];
+        let id: String = after
+            .chars()
+            .take_while(|ch| ch.is_ascii_hexdigit())
+            .collect();
+        if id.len() >= 64 {
+            return Some(id[..64].to_string());
+        }
+        if after.is_empty() {
+            break;
+        }
+        rest = &after[id.len().min(after.len())..];
+        if rest.is_empty() {
+            break;
+        }
+    }
+    None
+}
+
+fn own_container_id() -> Option<String> {
+    let mountinfo = fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
+    let cgroup = fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
+    container_id_from_text(&mountinfo, &cgroup)
+}
+
+fn process_in_container() -> bool {
+    Path::new("/.dockerenv").exists()
+        || Path::new("/run/.containerenv").exists()
+        || own_container_id().is_some()
+}
+
+fn relative_to_dest(data_dir: &Path, dest: &Path) -> Option<PathBuf> {
+    let dest = lexical_normal(dest);
+    let lexical = lexical_normal(data_dir);
+    if lexical == dest || lexical.starts_with(&dest) {
+        return lexical.strip_prefix(&dest).ok().map(Path::to_path_buf);
+    }
+    let canonical = data_path(data_dir);
+    if canonical == dest || canonical.starts_with(&dest) {
+        return canonical.strip_prefix(&dest).ok().map(Path::to_path_buf);
+    }
+    None
+}
+
+fn inspect_data_root(json: &Value, data_dir: &Path) -> Option<PathBuf> {
+    let node = json
+        .as_array()
+        .and_then(|items| items.first())
+        .unwrap_or(json);
+    let mounts = node
+        .get("Mounts")
+        .or_else(|| node.get("mounts"))?
+        .as_array()?;
+    let mut best: Option<(usize, PathBuf)> = None;
+    for mount in mounts {
+        let Some(dest) = mount
+            .get("Destination")
+            .or_else(|| mount.get("destination"))
+            .and_then(Value::as_str)
+        else {
+            continue;
+        };
+        let Some(source) = mount
+            .get("Source")
+            .or_else(|| mount.get("source"))
+            .and_then(Value::as_str)
+        else {
+            continue;
+        };
+        let Some(relative) = relative_to_dest(data_dir, Path::new(dest)) else {
+            continue;
+        };
+        let len = lexical_normal(Path::new(dest)).components().count();
+        if best.as_ref().is_some_and(|(best_len, _)| len <= *best_len) {
+            continue;
+        }
+        best = Some((len, lexical_normal(&Path::new(source).join(relative))));
+    }
+    best.map(|(_, path)| path)
+}
+
+async fn detected_data_root(bin: &str, data_dir: &Path) -> Option<PathBuf> {
+    let id = own_container_id()?;
+    let mut cmd = Command::new(bin);
+    cmd.args(["inspect", "--type", "container", &id])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let Ok(Ok(output)) = tokio::time::timeout(STOP_COMMAND_TIMEOUT, cmd.output()).await else {
+        return None;
+    };
+    if !output.status.success() {
+        return None;
+    }
+    let json: Value = serde_json::from_slice(&output.stdout).ok()?;
+    inspect_data_root(&json, data_dir)
+}
+
+async fn resolve_daemon_layout(
+    bin: &str,
+    data_dir: &Path,
+    configured: Option<&Path>,
+) -> Result<DaemonLayout, String> {
+    let detected = detected_data_root(bin, data_dir).await;
+    layout_decision(configured, detected.as_deref(), process_in_container())
+}
+
+fn probe_script(mounts: &[(String, String, bool)]) -> String {
+    let mut parts = Vec::with_capacity(mounts.len());
+    for (index, (_, guest, _)) in mounts.iter().enumerate() {
+        if guest == "/runner/work" {
+            parts.push(format!("test -f /mnt{index}/wrapper.sh"));
+        } else {
+            parts.push(format!("test -d /mnt{index}"));
+        }
+    }
+    parts.join(" && ")
+}
+
+fn last_stderr_line(stderr: &str) -> String {
+    stderr
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("")
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(180)
+        .collect()
+}
+
+fn mount_check_error(stderr: &str) -> String {
+    let detail = last_stderr_line(stderr);
+    if detail.is_empty() {
+        "The container daemon cannot see the job directory. The job was not started.".into()
+    } else {
+        format!(
+            "The container daemon cannot see the job directory ({detail}). The job was not started."
+        )
+    }
+}
+
+/// The daemon reports a missing entrypoint only after it has accepted the
+/// mounts. That is not an invisible directory. Match the shell name itself,
+/// not a path that merely ends in `.sh`.
+fn shell_is_missing(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    let missing = lower.contains("not found") || lower.contains("no such file");
+    if !missing {
+        return false;
+    }
+    [
+        "exec: \"sh\"",
+        "exec: \"/bin/sh\"",
+        "exec: \"/usr/bin/sh\"",
+        "executable file `sh`",
+        "executable file \"sh\"",
+        "executable file '/bin/sh'",
+        "executable file `/bin/sh`",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+async fn remove_probe_container(bin: &str, name: &str) {
+    let _ = tokio::time::timeout(
+        STOP_COMMAND_TIMEOUT,
+        Command::new(bin)
+            .args(["rm", "-f", name])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status(),
+    )
+    .await;
+}
+
+async fn probe_daemon_dirs(
+    bin: &str,
+    image: &str,
+    job_id: &str,
+    mounts: &[(String, String, bool)],
+) -> Result<(), String> {
+    if mounts.is_empty() {
+        return Ok(());
+    }
+    let name = format!("koreograf-mount-{job_id}");
+    remove_probe_container(bin, &name).await;
+    let mut args = vec![
+        "run".to_string(),
+        "--rm".into(),
+        "--name".into(),
+        name.clone(),
+        "--network".into(),
+        "none".into(),
+        "--entrypoint".into(),
+        "sh".into(),
+    ];
+    for (index, (host, _, _)) in mounts.iter().enumerate() {
+        check_mount_token(host)?;
+        args.push("--mount".into());
+        args.push(format!(
+            "type=bind,source={host},target=/mnt{index},readonly"
+        ));
+    }
+    args.push(image.to_string());
+    args.push("-c".into());
+    args.push(probe_script(mounts));
+    let mut cmd = Command::new(bin);
+    cmd.args(&args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    #[cfg(unix)]
+    cmd.process_group(0);
+    let output = match tokio::time::timeout(Duration::from_secs(60), cmd.output()).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(err)) => {
+            remove_probe_container(bin, &name).await;
+            return Err(format!(
+                "The mount check could not be started ({err}). The job was not started."
+            ));
+        }
+        Err(_) => {
+            remove_probe_container(bin, &name).await;
+            return Err(
+                "The container daemon did not answer the mount check. The job was not started."
+                    .into(),
+            );
+        }
+    };
+    remove_probe_container(bin, &name).await;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if shell_is_missing(&stderr) {
+        return Ok(());
+    }
+    Err(mount_check_error(&stderr))
+}
+
 async fn run_container(state: &Shared, job_id: &str, run: ContainerRun<'_>) -> Result<i32, String> {
     let ContainerRun {
         bin,
@@ -2131,18 +2474,39 @@ async fn run_container(state: &Shared, job_id: &str, run: ContainerRun<'_>) -> R
     ensure_image(bin, &environment.image, &environment.pull_policy).await?;
     write_env_file(&work.join("container.env"), env)?;
     let name = format!("koreograf-{}", &job_id[..8]);
-    let spec = ContainerSpec {
-        image: environment.image.clone(),
-        name: name.clone(),
-        mounts: container_mounts(stage, work, cache, tofu_state, template_id),
-        env_file: work.join("container.env").display().to_string(),
-        command: vec!["/runner/work/wrapper.sh".into()],
-    };
-    for (host, _, _) in &spec.mounts {
+    // `--env-file` is read by the client in this process.
+    // Mount sources are paths the daemon can see.
+    let mut mounts = container_mounts(stage, work, cache, tofu_state, template_id);
+    for (host, _, _) in &mounts {
         if covers_data_dir(Path::new(host), &state.cfg.data_dir) {
             return Err("The job container cannot mount the data directory.".into());
         }
     }
+    require_visible_sources(&mounts)?;
+    let layout =
+        resolve_daemon_layout(bin, &state.cfg.data_dir, state.cfg.data_host.as_deref()).await?;
+    if let Some(host_data) = &layout.host_data {
+        log(
+            state,
+            job_id,
+            "system",
+            &format!(
+                "The container daemon sees the data directory at {}.",
+                host_data.display()
+            ),
+        );
+        mounts = translate_mounts(&mounts, &state.cfg.data_dir, host_data)?;
+    }
+    if layout.probe {
+        probe_daemon_dirs(bin, &environment.image, job_id, &mounts).await?;
+    }
+    let spec = ContainerSpec {
+        image: environment.image.clone(),
+        name: name.clone(),
+        mounts,
+        env_file: work.join("container.env").display().to_string(),
+        command: vec!["/runner/work/wrapper.sh".into()],
+    };
     log(
         state,
         job_id,
@@ -2674,6 +3038,11 @@ mod tests {
         };
         let argv = container_argv(&spec);
         assert!(argv.iter().any(|arg| arg.contains("/cache/collections")));
+        assert!(argv.iter().any(|arg| arg == "--mount"));
+        assert!(!argv.iter().any(|arg| arg == "-v"));
+        assert!(argv.iter().any(|arg| {
+            arg == "type=bind,source=/data/cache/team/collections,target=/cache/collections"
+        }));
         assert!(argv
             .iter()
             .any(|arg| arg == "quay.io/ansible/awx-ee:latest"));
@@ -2681,6 +3050,148 @@ mod tests {
             argv.last().map(String::as_str),
             Some("/runner/work/wrapper.sh")
         );
+        let readonly = ContainerSpec {
+            mounts: vec![(
+                "/data/jobs/abc/project".into(),
+                "/runner/project".into(),
+                true,
+            )],
+            ..spec
+        };
+        let argv = container_argv(&readonly);
+        assert!(argv.iter().any(|arg| {
+            arg == "type=bind,source=/data/jobs/abc/project,target=/runner/project,readonly"
+        }));
+    }
+
+    #[test]
+    fn daemon_layout_uses_the_mounted_volume_and_refuses_a_mismatch() {
+        let detected = Path::new("/var/lib/docker/volumes/koreograf_koreograf-data/_data");
+        let host = layout_decision(None, None, false).expect("host");
+        assert!(host.host_data.is_none());
+        assert!(!host.probe);
+        let seen = layout_decision(None, Some(detected), true).expect("detected");
+        assert_eq!(seen.host_data.as_deref(), Some(detected));
+        assert!(!seen.probe);
+        let configured = layout_decision(Some(detected), None, true).expect("configured");
+        assert!(configured.probe);
+        let matched = layout_decision(
+            Some(Path::new(
+                "/var/lib/docker/volumes/koreograf_koreograf-data/_data/",
+            )),
+            Some(detected),
+            true,
+        )
+        .expect("same directory");
+        assert!(!matched.probe);
+        let mismatch = layout_decision(Some(Path::new("/tmp/other-data")), Some(detected), true)
+            .expect_err("mismatch");
+        assert!(mismatch.contains("KOREOGRAF_DATA_HOST"));
+        assert!(mismatch.contains("was not started"));
+        let missing = layout_decision(None, None, true).expect_err("container without a path");
+        assert!(missing.contains("KOREOGRAF_DATA_HOST"));
+        assert!(missing.contains("was not started"));
+    }
+
+    #[test]
+    fn container_id_comes_from_the_runtime_files() {
+        let id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let mountinfo =
+            format!("42 12 0:0 /var/lib/docker/containers/{id}/hostname /etc/hostname ro\n");
+        assert_eq!(
+            container_id_from_text(&mountinfo, "0::/"),
+            Some(id.to_string())
+        );
+        let cgroup = format!("0::/system.slice/docker-{id}.scope\n");
+        assert_eq!(container_id_from_text("", &cgroup), Some(id.to_string()));
+        assert_eq!(
+            container_id_from_text("", "0::/docker/abcd"),
+            None,
+            "a short id is not a container id"
+        );
+        assert_eq!(container_id_from_text("overlay2/abcdef", ""), None);
+    }
+
+    #[test]
+    fn inspect_picks_the_data_volume_and_not_a_sibling() {
+        let json = serde_json::json!([{
+            "Mounts": [
+                {
+                    "Type": "bind",
+                    "Source": "/host/var/lib",
+                    "Destination": "/var/lib"
+                },
+                {
+                    "Type": "volume",
+                    "Source": "/var/lib/docker/volumes/proj_koreograf-data/_data",
+                    "Destination": "/var/lib/koreograf"
+                },
+                {
+                    "Type": "volume",
+                    "Source": "/var/lib/docker/volumes/other/_data",
+                    "Destination": "/var/lib/koreograf-extra"
+                }
+            ]
+        }]);
+        let root = inspect_data_root(&json, Path::new("/var/lib/koreograf")).expect("root");
+        assert_eq!(
+            root,
+            Path::new("/var/lib/docker/volumes/proj_koreograf-data/_data")
+        );
+        assert!(inspect_data_root(&json, Path::new("/opt/missing")).is_none());
+    }
+
+    #[test]
+    fn translated_mounts_stay_under_the_daemon_data_path() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let data = std::env::temp_dir().join(format!("koreograf-mount-{nanos}"));
+        let work = data.join("jobs").join("job");
+        std::fs::create_dir_all(&work).unwrap();
+        let mounts = vec![(work.display().to_string(), "/runner/work".into(), false)];
+        let host = Path::new("/var/lib/docker/volumes/proj_koreograf-data/_data");
+        let translated = translate_mounts(&mounts, &data, host).expect("translate");
+        assert_eq!(translated.len(), 1);
+        assert_eq!(
+            translated[0].0,
+            host.join("jobs").join("job").display().to_string()
+        );
+        assert_eq!(translated[0].1, "/runner/work");
+        let outside = vec![(
+            std::env::temp_dir().display().to_string(),
+            "/runner/work".into(),
+            false,
+        )];
+        let err = translate_mounts(&outside, &data, host).expect_err("outside");
+        assert!(err.contains("was not started"));
+        let missing = Path::new("/no/such/koreograf-mount");
+        let absent = vec![(missing.display().to_string(), "/runner/work".into(), false)];
+        let err = require_visible_sources(&absent).expect_err("missing");
+        assert!(err.contains("was not started"));
+        assert!(err.contains("/no/such/koreograf-mount"));
+        let comma = vec![(work.display().to_string(), "/runner/work,ro".into(), false)];
+        assert!(translate_mounts(&comma, &data, host).is_err());
+        assert_eq!(probe_script(&mounts), "test -f /mnt0/wrapper.sh");
+        assert_eq!(
+            mount_check_error(""),
+            "The container daemon cannot see the job directory. The job was not started."
+        );
+        assert!(
+            mount_check_error("bind source path does not exist: /tmp/x\n")
+                .contains("bind source path does not exist")
+        );
+        let missing_shell = "exec: \"sh\": executable file not found in $PATH";
+        assert!(shell_is_missing(missing_shell));
+        assert!(shell_is_missing(
+            "crun: executable file `sh` not found in $PATH"
+        ));
+        assert!(!shell_is_missing("bind source path does not exist: /tmp/x"));
+        assert!(!shell_is_missing(
+            "crun: executable file `wrapper.sh` not found in $PATH"
+        ));
+        let _ = std::fs::remove_dir_all(data);
     }
 
     #[test]
@@ -3188,6 +3699,7 @@ exit 0
             hsts: false,
             cookie_secure: crate::config::CookieSecure::Auto,
             trusted_proxy: false,
+            data_host: None,
             ldap: None,
         })
         .expect("boot")
