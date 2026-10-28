@@ -6519,6 +6519,140 @@ async fn a_schedule_runs_the_last_miss_once_and_lists_on_its_target() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[tokio::test]
+async fn a_failed_missed_run_stays_visible() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-missed-keep-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut cfg = config(&dir);
+    cfg.local_jobs = LocalJobs::Admins;
+    let state = koreograf::boot(cfg).unwrap();
+    let app = koreograf::router(state.clone());
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+    let (status, templates, _) = call(
+        &app,
+        "GET",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{templates}");
+    let health_id = templates
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["name"] == "Healthcheck")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "username": "operator",
+            "display_name": "operator",
+            "password": "operator-pass",
+            "is_admin": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{team}/members"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"username": "operator", "role": "operator"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _, operator_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "operator", "password": "operator-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let operator_cookie = operator_cookie.expect("operator cookie");
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{health_id}/schedules"),
+        Some(&operator_cookie),
+        Some(&team),
+        Some(daily_schedule("Operator miss")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let schedule_id = created["id"].as_str().unwrap();
+    mark_missed(&state, schedule_id);
+    let (status, denied, _) = call(
+        &app,
+        "POST",
+        &format!("/api/schedules/{schedule_id}/missed"),
+        Some(&operator_cookie),
+        Some(&team),
+        Some(json!({"accept": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{denied}");
+    assert_eq!(denied["error"], "local_runs_are_limited_to_administrators");
+    let (status, listed, _) = call(
+        &app,
+        "GET",
+        &format!("/api/templates/{health_id}/schedules"),
+        Some(&operator_cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let row = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == schedule_id)
+        .expect("schedule");
+    assert_eq!(row["missed_at"], "2026-10-21T04:00:00Z");
+    let (status, jobs, _) = call(
+        &app,
+        "GET",
+        "/api/jobs",
+        Some(&operator_cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{jobs}");
+    assert!(scheduled_jobs(&jobs, &health_id).is_empty(), "{jobs}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 fn daily_schedule(name: &str) -> Value {
     json!({
         "name": name,
