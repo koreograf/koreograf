@@ -81,7 +81,7 @@ a { color: var(--accent); }
 .nav-group + .nav-group { margin-top: 14px; }
 .nav-label {
   color: #a8a29e;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.08em;
   padding: 0 10px 4px;
@@ -126,7 +126,7 @@ h2 { font-size: 18px; margin: 0 0 10px; }
 .stat strong { display: block; font-family: var(--serif); font-size: 28px; font-weight: 500; }
 
 .table { width: 100%; border-collapse: collapse; }
-.table th { text-align: left; font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.table th { text-align: left; font-size: 13px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
 .table th, .table td { padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; overflow-wrap: anywhere; }
 .table a { text-decoration: none; }
 .table a:hover { text-decoration: underline; }
@@ -135,7 +135,7 @@ h2 { font-size: 18px; margin: 0 0 10px; }
   display: inline-block;
   border-radius: 999px;
   padding: 2px 8px;
-  font-size: 12px;
+  font-size: 13px;
   background: var(--line);
 }
 .pill.pending { background: var(--warn-bg); color: var(--warn); }
@@ -143,7 +143,7 @@ h2 { font-size: 18px; margin: 0 0 10px; }
 .pill.successful { background: var(--good-bg); color: var(--good); }
 .pill.failed, .pill.canceled { background: var(--bad-bg); color: var(--bad); }
 .pill.skipped { background: #f5f5f4; color: var(--muted); }
-.tool { font-family: var(--mono); font-size: 12px; }
+.tool { font-family: var(--mono); font-size: 13px; }
 
 .btn {
   border: 1px solid var(--line);
@@ -157,6 +157,9 @@ a.btn { display: inline-block; text-decoration: none; }
 .btn:hover { border-color: #d6d3d1; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: white; }
 .btn.danger { background: white; color: var(--bad); border-color: #fecdd3; }
+.row > .btn.danger { margin-left: auto; }
+.split-actions { display: inline-flex; align-items: center; gap: 16px; }
+.card.danger-zone { border-color: #fecdd3; }
 .btn.ghost { background: transparent; }
 .btn.pill { border-radius: 999px; padding: 7px 14px; font-weight: 600; }
 .lang-switch { position: relative; }
@@ -316,7 +319,7 @@ select.fit { width: max-content; min-width: 8rem; max-width: 100%; field-sizing:
 }
 .chips input.chip-entry:focus-visible { outline: none; }
 .field span.chip-error,
-.field span.field-error { color: var(--bad); font-size: 12px; }
+.field span.field-error { color: var(--bad); font-size: 13px; }
 .chip-error:empty,
 .field-error:empty { display: none; }
 textarea.secret-mask { -webkit-text-security: disc; }
@@ -423,7 +426,7 @@ textarea { min-height: 88px; resize: vertical; }
   background: #1c1917;
   color: #e7e5e4;
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.5;
   padding: 14px 16px;
   border-radius: 12px;
@@ -455,7 +458,7 @@ pre.vars {
   background: #1c1917;
   color: #e7e5e4;
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.5;
   padding: 12px 14px;
   border-radius: 12px;
@@ -483,7 +486,7 @@ button.run-line {
   text-align: left;
   cursor: pointer;
 }
-.run-line.head { color: var(--muted); font-size: 12px; }
+.run-line.head { color: var(--muted); font-size: 13px; }
 button.run-line:hover { outline: 1px solid var(--line); }
 .run-line.running { background: var(--info-bg); }
 .run-line.successful { background: var(--good-bg); }
@@ -550,7 +553,7 @@ button.run-line:hover { outline: 1px solid var(--line); }
   border: 0;
   border-radius: 999px;
   padding: 2px 8px;
-  font-size: 11px;
+  font-size: 12px;
   cursor: pointer;
 }
 .port.success { background: var(--good-bg); color: var(--good); }
@@ -562,7 +565,7 @@ button.run-line:hover { outline: 1px solid var(--line); }
 .node-params { display: flex; flex-direction: column; gap: 10px; }
 .node-params summary { cursor: pointer; font-weight: 600; }
 .node-params textarea { min-height: 72px; }
-code, .mono { font-family: var(--mono); font-size: 12.5px; word-break: break-all; }
+code, .mono { font-family: var(--mono); font-size: 13px; word-break: break-all; }
 
 @media (max-width: 900px) {
   .shell { grid-template-columns: 1fr; }

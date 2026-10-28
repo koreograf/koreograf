@@ -253,6 +253,21 @@ function clock(value) {
   });
 }
 
+function when(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString(lang === "en" ? "en-GB" : "de-DE", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZoneName: "short",
+  });
+}
+
 function spanText(start, end, phase) {
   if (!start || phase === "pending" || phase === "skipped") return "—";
   const from = Date.parse(start);
@@ -316,6 +331,109 @@ async function api(method, path, body) {
   return data;
 }
 
+const FIELD_ALIAS = {
+  extra_variables: "extra_vars",
+  user: "username",
+  become_user: "become_username",
+  session_token: "security_token",
+  subscription: "subscription_id",
+  client: "client_id",
+  vault_password: "password",
+};
+
+const ERROR_FIELD = {
+  name_is_missing_or_too_long: "name",
+  description_is_too_long: "description",
+};
+
+let flashKey = "";
+
+function markSaved() {
+  flashKey = "saved";
+}
+
+function savedBanner() {
+  if (!flashKey) return "";
+  const key = flashKey;
+  flashKey = "";
+  return `<div class="banner good">${h(key)}</div>`;
+}
+
+function fieldRoots() {
+  const overlays = [...document.querySelectorAll(".overlay")].reverse();
+  return overlays.length ? [...overlays, document] : [document];
+}
+
+function fieldControl(name) {
+  if (!name) return null;
+  const candidates = [name, FIELD_ALIAS[name]].filter(Boolean);
+  const roots = fieldRoots();
+  for (const root of roots) {
+    for (const candidate of candidates) {
+      const found = root.querySelector(`.field [name="${CSS.escape(candidate)}"]`);
+      if (found) return found;
+    }
+  }
+  const label = t(name);
+  for (const root of roots) {
+    for (const field of root.querySelectorAll(".field")) {
+      const span = [...field.querySelectorAll("span")].find((node) => !node.classList.contains("field-error") && !node.classList.contains("chip-error"));
+      if (span && span.textContent.trim() === label) {
+        const control = field.querySelector("input, select, textarea");
+        if (control) return control;
+      }
+    }
+  }
+  return null;
+}
+
+function showFieldError(control, message) {
+  const field = control && control.closest ? control.closest(".field") : null;
+  if (!field) return false;
+  let note = field.querySelector(".field-error");
+  if (!note) {
+    note = document.createElement("span");
+    note.className = "field-error";
+    note.setAttribute("aria-live", "polite");
+    field.appendChild(note);
+  }
+  note.textContent = message;
+  control.setAttribute("aria-invalid", "true");
+  return true;
+}
+
+function clearControlError(control) {
+  if (!control || !control.closest) return;
+  const field = control.closest(".field");
+  if (!field) return;
+  const note = field.querySelector(".field-error");
+  if (note && note.id !== "entrypoint-error") note.textContent = "";
+  control.removeAttribute("aria-invalid");
+}
+
+let notedInvalid = false;
+
+document.addEventListener("submit", () => {
+  notedInvalid = false;
+}, true);
+
+document.addEventListener("invalid", (event) => {
+  const control = event.target;
+  if (!control || !control.closest || !control.closest(".field")) return;
+  const existing = control.closest(".field").querySelector(".field-error");
+  if (existing && existing.textContent.trim()) return;
+  event.preventDefault();
+  showFieldError(control, t("this_field_needs_a_valid_value"));
+  if (!notedInvalid) {
+    notedInvalid = true;
+    control.focus();
+  }
+}, true);
+
+document.addEventListener("input", (event) => {
+  clearControlError(event.target);
+}, true);
+
 function handle(error) {
   if (error && error.status === 401) {
     me = null;
@@ -324,7 +442,13 @@ function handle(error) {
   }
   if (!document.querySelector(".main")) shell(t("notice"), "");
   const main = document.querySelector(".main");
-  main.insertAdjacentHTML("afterbegin", `<div class="banner bad">${h(error.message || "error.generic", error.vars)}</div>`);
+  const message = t(error.message || "error.generic", error.vars);
+  main.insertAdjacentHTML("afterbegin", `<div class="banner bad">${esc(message)}</div>`);
+  const fieldName = (error.vars && error.vars.field) || ERROR_FIELD[error.message] || "";
+  const control = fieldControl(fieldName);
+  if (!control) return;
+  showFieldError(control, message);
+  control.focus();
 }
 
 function go(hash) {
@@ -384,6 +508,7 @@ function shell(title, body, actions) {
       </aside>
       <main class="main">
         <div class="top"><div><h1>${esc(title)}</h1></div><div class="row">${actions || ""}</div></div>
+        ${savedBanner()}
         ${body}
       </main>
     </div>`;
@@ -477,7 +602,7 @@ async function pageDashboard() {
   if (!needTeam()) return;
   const data = await api("GET", "/api/overview");
   const jobs = (data.jobs || []).map((job) =>
-    `<tr><td><a href="#/jobs/${esc(job.id)}">${esc(job.name)}</a></td><td class="tool">${esc(job.tool)}</td><td>${pill(job.status)}</td><td class="small muted">${esc(job.created_at)}</td></tr>`
+    `<tr><td><a href="#/jobs/${esc(job.id)}">${esc(job.name)}</a></td><td class="tool">${esc(job.tool)}</td><td>${pill(job.status)}</td><td class="small muted">${esc(when(job.created_at))}</td><td class="small muted">${esc(spanText(job.started_at, job.finished_at, job.status))}</td></tr>`
   );
   const deliveries = (data.deliveries || []).map((item) =>
     `<tr><td>${esc(item.hook_name)}</td><td>${pill(item.status)}</td><td>${esc(item.summary)}</td></tr>`
@@ -491,7 +616,7 @@ async function pageDashboard() {
     <div class="stack" style="margin-top:14px">
       <section class="card">
         <div class="spread"><h2>${h("recent_jobs")}</h2><a href="#/jobs">${h("all")}</a></div>
-        ${table([t("name"), t("tool"), t("status"), t("created")], jobs)}
+        ${table([t("name"), t("tool"), t("status"), t("created"), t("duration")], jobs)}
       </section>
       <section class="card">
         <div class="spread">
@@ -1058,6 +1183,7 @@ async function pageTemplateForm(id) {
       };
       if (id) await api("PUT", `/api/templates/${encodeURIComponent(id)}`, body);
       else await api("POST", "/api/templates", body);
+      markSaved();
       go("#/templates");
     } catch (error) {
       if (error && entrypointErrors.has(error.message)) {
@@ -1572,6 +1698,11 @@ function openScheduleForm(kind, target, existing, redraw) {
       else await api("POST", `/api/${kind}s/${encodeURIComponent(target)}/schedules`, body);
       close();
       await redraw();
+      const card = document.querySelector("#schedule-card");
+      if (card) {
+        card.querySelectorAll(":scope > .banner.good").forEach((node) => node.remove());
+        card.insertAdjacentHTML("afterbegin", `<div class="banner good">${h("saved")}</div>`);
+      }
     } catch (error) {
       handle(error);
     }
@@ -1597,9 +1728,9 @@ async function pageJobs() {
     const needle = document.querySelector("#job-search").value.trim().toLowerCase();
     const shown = jobs.filter((job) => !needle || [job.name, job.tool, job.status, job.trigger, statusLabel(job.status)].join(" ").toLowerCase().includes(needle));
     const filtered = shown.map((job) =>
-      `<tr><td><a href="#/jobs/${esc(job.id)}">${esc(job.name)}</a></td><td class="tool">${esc(job.tool)}</td><td>${pill(job.status)}</td><td class="small">${esc(job.trigger)}</td><td class="small muted">${esc(job.created_at)}</td><td>${jobListActions(job)}</td></tr>`
+      `<tr><td><a href="#/jobs/${esc(job.id)}">${esc(job.name)}</a></td><td class="tool">${esc(job.tool)}</td><td>${pill(job.status)}</td><td class="small">${esc(job.trigger)}</td><td class="small muted">${esc(when(job.created_at))}</td><td class="small muted">${esc(spanText(job.started_at, job.finished_at, job.status))}</td><td>${jobListActions(job)}</td></tr>`
     );
-    document.querySelector("#job-table").innerHTML = table([t("name"), t("tool"), t("status"), t("trigger"), t("created"), ""], filtered);
+    document.querySelector("#job-table").innerHTML = table([t("name"), t("tool"), t("status"), t("trigger"), t("created"), t("duration"), ""], filtered);
     document.querySelectorAll("[data-relaunch]").forEach((button) => {
       button.addEventListener("click", async () => {
         button.disabled = true;
@@ -1817,7 +1948,7 @@ async function pageJob(id) {
   const actions = jobActions(job);
   shell(job.name, `
     <div class="spread" style="margin-bottom:12px">
-      <div class="row">${pill(job.status)} <span class="tool">${esc(job.tool)}</span> <span class="small muted">${esc(job.trigger)} · ${esc(job.launched_by)}</span></div>
+      <div class="row">${pill(job.status)} <span class="tool">${esc(job.tool)}</span> <span class="small muted">${esc(job.trigger)} · ${esc(job.launched_by)} · ${esc(when(job.created_at))} · ${esc(spanText(job.started_at, job.finished_at, job.status))}</span></div>
     </div>
     <div class="spread tab-bar">
       <div class="tabs">
@@ -1993,6 +2124,7 @@ async function pageWorkflowNew() {
         description: form.description.value,
         graph: { nodes: [], edges: [] },
       });
+      markSaved();
       go(`#/workflows/${created.id}`);
     } catch (error) {
       handle(error);
@@ -2793,6 +2925,14 @@ async function pageRun(id) {
   }, 1000);
 }
 
+function hookStatusLabel(value) {
+  return {
+    firing: t("hook_status_firing"),
+    resolved: t("hook_status_resolved"),
+    any: t("hook_status_any"),
+  }[value] || value;
+}
+
 async function pageHooks() {
   if (!needTeam()) return;
   const hooks = await api("GET", "/api/hooks");
@@ -2801,7 +2941,7 @@ async function pageHooks() {
     : [];
   const origin = location.origin;
   const incoming = deliveryRows.map((item) =>
-    `<tr><td>${esc(item.hook_name)}</td><td>${pill(item.status)}</td><td>${esc(item.summary)}</td><td class="small muted">${esc(item.created_at)}</td></tr>`
+    `<tr><td>${esc(item.hook_name)}</td><td>${pill(item.status)}</td><td>${esc(item.summary)}</td><td class="small muted">${esc(when(item.created_at))}</td></tr>`
   );
   shell(t("webhooks"), `
     <section class="card" style="margin-bottom:14px">
@@ -2815,9 +2955,9 @@ async function pageHooks() {
     const rows = hooks.filter((hook) => !needle || `${hook.name} ${hook.match_alertname} ${hook.match_status}`.toLowerCase().includes(needle)).map((hook) => {
       const url = hook.token ? `${origin}/hooks/${hook.id}/${hook.token}` : "";
       return `<tr>
-        <td>${esc(hook.name)}<div class="small muted">${esc(hook.match_alertname)} · ${esc(hook.match_status)}</div></td>
+        <td>${esc(hook.name)}<div class="small muted">${esc(hook.match_alertname)} · ${esc(hookStatusLabel(hook.match_status))}</div></td>
         <td class="mono">${url ? esc(url) : h("token_is_visible_to_operators")}</td>
-        <td>${can("operator") ? `<button class="btn" type="button" data-test="${esc(hook.id)}">${h("test")}</button> <button class="btn danger" type="button" data-delete="${esc(hook.id)}">${h("delete")}</button>` : ""}</td>
+        <td>${can("operator") ? `<span class="split-actions"><button class="btn" type="button" data-test="${esc(hook.id)}">${h("test")}</button><button class="btn danger" type="button" data-delete="${esc(hook.id)}">${h("delete")}</button></span>` : ""}</td>
       </tr>`;
     });
     document.querySelector("#hook-table").innerHTML = table([t("hook"), t("address"), ""], rows);
@@ -2865,7 +3005,7 @@ async function pageHookNew() {
       <div class="field-row">
         <label class="field"><span>${h("alert_name")}</span><input class="fit" name="match_alertname" required placeholder="DiskSpaceLow"></label>
         <label class="field"><span>${h("status")}</span>
-          <select class="fit" name="match_status"><option value="firing">firing</option><option value="resolved">resolved</option><option value="any">any</option></select>
+          <select class="fit" name="match_status"><option value="firing">${h("hook_status_firing")}</option><option value="resolved">${h("hook_status_resolved")}</option><option value="any">${h("hook_status_any")}</option></select>
         </label>
       </div>
       <label class="field"><span>${h("target")}</span>
@@ -2894,6 +3034,7 @@ async function pageHookNew() {
         template_id: kind === "template" ? targetId : null,
         workflow_id: kind === "workflow" ? targetId : null,
       });
+      markSaved();
       go("#/hooks");
     } catch (error) {
       handle(error);
@@ -3002,6 +3143,7 @@ function bindEnvironmentForm(id) {
     try {
       if (id) await api("PUT", `/api/environments/${encodeURIComponent(id)}`, payload);
       else await api("POST", "/api/environments", payload);
+      markSaved();
       go("#/runtime");
     } catch (error) {
       handle(error);
@@ -3116,6 +3258,7 @@ async function pageProjectNew() {
       };
       if (form.organization_id) payload.organization_id = form.organization_id.value;
       const created = await api("POST", "/api/projects", payload);
+      markSaved();
       go(`#/projects/${created.id}`);
     } catch (error) { handle(error); }
   });
@@ -3176,6 +3319,7 @@ async function pageProject(id) {
           organization_id: form.organization_id.value,
           team_ids: teamIds,
         });
+        markSaved();
         route();
       } catch (error) { handle(error); }
     });
@@ -3365,6 +3509,7 @@ async function pageInventoryNew() {
     try {
       const sources = [...document.querySelectorAll("#source-drafts [data-kind]")].map(readSourceDraft);
       const created = await api("POST", "/api/inventories", { name: form.name.value, sources });
+      markSaved();
       go(`#/inventories/${created.id}`);
     } catch (error) { handle(error); }
   });
@@ -3463,6 +3608,7 @@ async function pageInventory(id) {
         await api("PUT", `/api/inventories/${encodeURIComponent(id)}/sources/${encodeURIComponent(form.dataset.iniSource)}`, {
           body: form.body.value,
         });
+        markSaved();
         route();
       } catch (error) { handle(error); }
     });
@@ -3476,6 +3622,7 @@ async function pageInventory(id) {
         for (const source of drafts) {
           await api("POST", `/api/inventories/${encodeURIComponent(id)}/sources`, source);
         }
+        markSaved();
         route();
       } catch (error) { handle(error); }
     });
@@ -4037,6 +4184,7 @@ async function pageCredential(id) {
         secret: body.secret,
         clear: body.clear,
       });
+      markSaved();
       go("#/credentials");
     } catch (error) { handle(error); }
   });
@@ -4074,6 +4222,7 @@ async function pageCredentialNew() {
         kind: form.kind.value,
         secret: credentialSecret(form),
       });
+      markSaved();
       go("#/credentials");
     } catch (error) { handle(error); }
   });
@@ -4114,6 +4263,7 @@ async function pageOrganizationNew() {
     const form = event.currentTarget;
     try {
       await api("POST", "/api/organizations", { name: form.name.value, description: form.description.value });
+      markSaved();
       go("#/organizations");
     } catch (error) { handle(error); }
   });
@@ -4146,6 +4296,7 @@ async function pageOrganization(id) {
           description: form.description.value,
         });
         me = await api("GET", "/api/me");
+        markSaved();
         route();
       } catch (error) { handle(error); }
     });
@@ -4209,6 +4360,7 @@ async function pageTeam() {
         if (teamForm.organization_id) payload.organization_id = teamForm.organization_id.value;
         await api("PUT", `/api/teams/${encodeURIComponent(teamId)}`, payload);
         me = await api("GET", "/api/me");
+        markSaved();
         route();
       } catch (error) { handle(error); }
     });
@@ -4265,6 +4417,7 @@ async function pageMemberNew() {
         username: form.username.value,
         role: form.role.value,
       });
+      markSaved();
       go("#/team");
     } catch (error) { handle(error); }
   });
@@ -4299,6 +4452,7 @@ async function pageTeamNew() {
       me = await api("GET", "/api/me");
       teamId = created.id;
       localStorage.setItem("koreograf.team", teamId);
+      markSaved();
       go("#/team");
     } catch (error) { handle(error); }
   });
@@ -4350,6 +4504,7 @@ async function pageAccount() {
         };
         if (form.password.value) payload.password = form.password.value;
         me = await api("PUT", "/api/me", payload);
+        markSaved();
         route();
       } catch (error) { handle(error); }
     });
@@ -4379,13 +4534,13 @@ async function pageUsers() {
         item.is_admin ? `<span class="pill">${h("administrator")}</span>` : "",
         item.disabled ? `<span class="pill failed">${h("disabled")}</span>` : "",
       ].filter(Boolean).join(" ");
-      const when = String(item.created_at || "").slice(0, 10);
+      const created = when(item.created_at);
       return `<tr>
         <td><a href="#/users/${esc(item.id)}">${esc(item.display_name)}</a> ${flags}</td>
         <td>${esc(item.username)}</td>
         <td>${esc(authSourceLabel(item.auth_source))}</td>
         <td>${esc(item.team_count)}</td>
-        <td class="small muted">${esc(when)}</td>
+        <td class="small muted">${esc(created)}</td>
       </tr>`;
     });
     document.querySelector("#user-table").innerHTML = table(
@@ -4468,6 +4623,7 @@ async function pageUser(id) {
       if (form.password && form.password.value) payload.password = form.password.value;
       await api("PUT", `/api/users/${encodeURIComponent(id)}`, payload);
       if (self) me = await api("GET", "/api/me");
+      markSaved();
       route();
     } catch (error) { handle(error); }
   });
@@ -4513,6 +4669,7 @@ async function pageUser(id) {
           username: item.username,
           role: grant.role.value,
         });
+        markSaved();
         route();
       } catch (error) { handle(error); }
     });
@@ -4543,6 +4700,7 @@ async function pageUserNew() {
         password: form.password.value,
         is_admin: form.is_admin.checked,
       });
+      markSaved();
       go(`#/users/${created.id}`);
     } catch (error) { handle(error); }
   });
@@ -4728,12 +4886,12 @@ async function pageBackup() {
       <p class="muted">${h("postgresql_is_planned_for_a_later_company_install")}</p>
       <div><button class="btn pill primary" id="backup-download" type="button">${h("download_backup")}</button></div>
     </div>
-    <form class="card form" id="backup-restore">
+    <form class="card form danger-zone" id="backup-restore">
       <h2>${h("restore_backup")}</h2>
       <p>${h("this_replaces_organizations_teams_users_projects_inventories_credentials")}</p>
       <label class="field"><span>${h("file")}</span><input name="file" type="file" accept=".zip,application/zip" required></label>
       <label class="row"><input name="confirm" type="checkbox" required> ${h("the_current_installation_will_be_replaced")}</label>
-      <button class="btn pill primary" type="submit">${h("restore_backup")}</button>
+      <button class="btn pill danger" type="submit">${h("restore_backup")}</button>
     </form>
   </div>`);
   document.querySelector("#backup-download").addEventListener("click", async () => {

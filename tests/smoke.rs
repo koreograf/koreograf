@@ -428,10 +428,17 @@ async fn the_job_log_marks_a_fatal_line_and_keeps_galaxy_as_a_warning() {
         "row.stream === \"system\" && plainLogLine(row.line).includes(\"Tag filter matched no tasks.\")"
     ));
     assert!(script.contains("tag_filter_matched_no_tasks"));
+    assert!(script.contains("function when("));
+    assert!(script.contains("timeZoneName: \"short\""));
+    assert!(script.contains("let flashKey"));
+    assert!(script.contains("this_field_needs_a_valid_value"));
+    assert!(script.contains("class=\"btn pill danger\""));
     assert!(script.contains("log-summary"));
     let (status, style, _) = call(&app, "GET", "/app.css", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let style = style.as_str().unwrap_or("");
+    assert!(style.contains(".card.danger-zone"));
+    assert!(style.contains(".table th { text-align: left; font-size: 13px;"));
     assert!(style.contains(".log div.fail"));
     assert!(style.contains(".log div.warn"));
     assert!(style.contains(".log .log-summary"));
