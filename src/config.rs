@@ -142,6 +142,9 @@ pub const OUTPUT_LINES_MAX: u64 = 100_000;
 pub struct Config {
     pub bind: String,
     pub data_dir: PathBuf,
+    /// `KOREOGRAF_DATA_HOST`. Absolute path the container daemon uses for
+    /// `data_dir`. Empty detects that path from this container's mounts.
+    pub data_host: Option<PathBuf>,
     pub web_dir: PathBuf,
     pub examples_dir: PathBuf,
     pub admin_user: String,
@@ -206,6 +209,7 @@ impl Config {
         Self {
             bind: env_or("KOREOGRAF_BIND", "0.0.0.0:8080"),
             data_dir: PathBuf::from(env_or("KOREOGRAF_DATA", "./data")),
+            data_host: absolute_env_path("KOREOGRAF_DATA_HOST"),
             web_dir: PathBuf::from(env_or("KOREOGRAF_WEB", "./web")),
             examples_dir,
             admin_user: env_or("KOREOGRAF_ADMIN_USER", "admin").to_ascii_lowercase(),
@@ -256,6 +260,20 @@ fn env_paths(key: &str) -> Vec<PathBuf> {
 
 fn env_string(key: &str) -> String {
     std::env::var(key).unwrap_or_default().trim().to_string()
+}
+
+/// An empty value means the path is detected. A relative path is ignored.
+fn absolute_env_path(key: &str) -> Option<PathBuf> {
+    let value = env_string(key);
+    if value.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(&value);
+    if path.is_absolute() {
+        return Some(path);
+    }
+    tracing::warn!("{key} must be an absolute path; the container daemon path is detected instead");
+    None
 }
 
 fn env_or(key: &str, default: &str) -> String {

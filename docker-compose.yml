@@ -13,6 +13,9 @@ services:
       KOREOGRAF_ADMIN_USER: ${KOREOGRAF_ADMIN_USER:-admin}
       KOREOGRAF_ADMIN_PASSWORD: ${KOREOGRAF_ADMIN_PASSWORD:-}
       KOREOGRAF_RUNNER: ${KOREOGRAF_RUNNER:-auto}
+      # Absolute host path of the data directory when auto-detection is wrong.
+      # Empty uses the mount the container daemon already has.
+      KOREOGRAF_DATA_HOST: ${KOREOGRAF_DATA_HOST:-}
       # admins oder all. Vorgabe admins. all nur im vertrauten Netz.
       KOREOGRAF_LOCAL_RUNNER_FOR: ${KOREOGRAF_LOCAL_RUNNER_FOR:-admins}
       KOREOGRAF_JOB_TIMEOUT_SECS: ${KOREOGRAF_JOB_TIMEOUT_SECS:-1800}

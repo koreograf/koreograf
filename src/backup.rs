@@ -343,6 +343,7 @@ mod tests {
             hsts: false,
             cookie_secure: CookieSecure::Auto,
             trusted_proxy: false,
+            data_host: None,
             ldap: None,
         }
     }

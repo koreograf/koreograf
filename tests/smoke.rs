@@ -25,6 +25,7 @@ fn config(dir: &std::path::Path) -> Config {
         hsts: false,
         cookie_secure: CookieSecure::Auto,
         trusted_proxy: false,
+        data_host: None,
         ldap: None,
     }
 }
