@@ -37,6 +37,8 @@ pub struct ContainerSpec {
     pub mounts: Vec<(String, String, bool)>,
     /// Client path. Docker and Podman read `--env-file` in this process.
     pub env_file: String,
+    /// Numeric `uid:gid` of the job directory. The image user is not used.
+    pub user: String,
     pub command: Vec<String>,
 }
 
@@ -426,6 +428,9 @@ pub fn container_argv(spec: &ContainerSpec) -> Vec<String> {
     }
     args.push("--env-file".into());
     args.push(spec.env_file.clone());
+    // The image user (awx-ee is uid 1000) cannot write a root-owned work directory.
+    args.push("--user".into());
+    args.push(spec.user.clone());
     args.push("-w".into());
     args.push("/runner/project".into());
     args.push("--entrypoint".into());
@@ -433,6 +438,24 @@ pub fn container_argv(spec: &ContainerSpec) -> Vec<String> {
     args.push(spec.image.clone());
     args.extend(spec.command.iter().cloned());
     args
+}
+
+/// Owner of the job directory. Secret files in that directory stay mode 0600
+/// and stay owned by this user, so the container has to be the same user.
+fn directory_user(path: &Path) -> Result<String, String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let meta = fs::metadata(path).map_err(|err| {
+            format!("The job directory could not be read ({err}). The job was not started.")
+        })?;
+        Ok(format!("{}:{}", meta.uid(), meta.gid()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok("0:0".into())
+    }
 }
 
 pub async fn detect_runtime() -> Option<String> {
@@ -2500,11 +2523,19 @@ async fn run_container(state: &Shared, job_id: &str, run: ContainerRun<'_>) -> R
     if layout.probe {
         probe_daemon_dirs(bin, &environment.image, job_id, &mounts).await?;
     }
+    let user = directory_user(work)?;
+    log(
+        state,
+        job_id,
+        "system",
+        &format!("The job container runs as {user}."),
+    );
     let spec = ContainerSpec {
         image: environment.image.clone(),
         name: name.clone(),
         mounts,
         env_file: work.join("container.env").display().to_string(),
+        user,
         command: vec!["/runner/work/wrapper.sh".into()],
     };
     log(
@@ -3034,9 +3065,17 @@ mod tests {
                 false,
             )],
             env_file: "/data/jobs/abc/container.env".into(),
+            user: "0:0".into(),
             command: vec!["/runner/work/wrapper.sh".into()],
         };
         let argv = container_argv(&spec);
+        let user_at = argv.iter().position(|arg| arg == "--user").expect("user");
+        let image_at = argv
+            .iter()
+            .position(|arg| arg == "quay.io/ansible/awx-ee:latest")
+            .expect("image");
+        assert!(user_at < image_at);
+        assert_eq!(argv.get(user_at + 1).map(String::as_str), Some("0:0"));
         assert!(argv.iter().any(|arg| arg.contains("/cache/collections")));
         assert!(argv.iter().any(|arg| arg == "--mount"));
         assert!(!argv.iter().any(|arg| arg == "-v"));
@@ -3062,6 +3101,25 @@ mod tests {
         assert!(argv.iter().any(|arg| {
             arg == "type=bind,source=/data/jobs/abc/project,target=/runner/project,readonly"
         }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_owner_keeps_a_secret_file_private() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let dir = std::env::temp_dir().join(format!("koreograf-owner-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let secret = dir.join("container.env");
+        write_secret(&secret, "TOKEN=value").unwrap();
+        let before = std::fs::metadata(&secret).unwrap();
+        let user = directory_user(&dir).unwrap();
+        let after = std::fs::metadata(&secret).unwrap();
+        assert_eq!(user, format!("{}:{}", before.uid(), before.gid()));
+        assert_eq!(after.permissions().mode() & 0o777, 0o600);
+        assert_eq!(after.uid(), before.uid());
+        assert_eq!(after.gid(), before.gid());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
