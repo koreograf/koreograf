@@ -5,7 +5,7 @@
 //! (`TASK [role : task]`), not from cache-copy lines in the job log.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
@@ -20,6 +20,9 @@ const LABEL_ROLE: usize = 80;
 const LABEL_TEAM: usize = 80;
 const LABEL_TEMPLATE: usize = 80;
 const LABEL_TOOL: usize = 32;
+/// The two closes of one job land before this many other jobs finish.
+/// Older ids are dropped so the set does not grow for the process lifetime.
+const CLOSED_LIMIT: usize = 1024;
 
 pub(crate) struct JobMeta<'a> {
     pub job_id: &'a str,
@@ -87,6 +90,7 @@ struct Book {
     roles: BTreeMap<(String, String, &'static str), u64>,
     open: HashMap<String, OpenJob>,
     closed: HashSet<String>,
+    closed_order: VecDeque<String>,
 }
 
 pub(crate) struct Metrics {
@@ -151,6 +155,7 @@ impl Metrics {
                 roles: BTreeMap::new(),
                 open: HashMap::new(),
                 closed: HashSet::new(),
+                closed_order: VecDeque::new(),
             }),
         }
     }
@@ -448,8 +453,22 @@ impl Metrics {
                 closed.status.clone(),
             ))
             .or_default() += 1;
-        book.closed.insert(job_id.to_string());
+        remember_closed(&mut book, job_id);
         Some(closed)
+    }
+}
+
+fn remember_closed(book: &mut Book, job_id: &str) {
+    if book.closed.contains(job_id) {
+        return;
+    }
+    let id = job_id.to_string();
+    book.closed.insert(id.clone());
+    book.closed_order.push_back(id);
+    if book.closed_order.len() > CLOSED_LIMIT {
+        if let Some(old) = book.closed_order.pop_front() {
+            book.closed.remove(&old);
+        }
     }
 }
 
@@ -1048,6 +1067,45 @@ ok: [web-1]
             text.contains(
                 "koreograf_role_results_total{playbook=\"site.yml\",role=\"web\",result=\"ok\"} 1"
             ),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn closed_ids_drop_the_oldest_job() {
+        let metrics = Metrics::new();
+        let ids: Vec<String> = (0..=CLOSED_LIMIT)
+            .map(|index| format!("job-{index}"))
+            .collect();
+        fn meta_for(id: &str) -> JobMeta<'_> {
+            JobMeta {
+                job_id: id,
+                team_id: "team-1",
+                tool: "shell",
+                playbook: "cap.sh",
+                template: "Cap",
+            }
+        }
+        for id in &ids {
+            let meta = meta_for(id);
+            metrics.close(id, "failed", Some(&meta));
+        }
+        let oldest = meta_for(&ids[0]);
+        let newest = meta_for(&ids[CLOSED_LIMIT]);
+        metrics.begin(&oldest);
+        metrics.begin(&newest);
+        metrics.close(&ids[0], "failed", Some(&oldest));
+        metrics.close(&ids[CLOSED_LIMIT], "failed", Some(&newest));
+        let text = metrics.render(&[]);
+        let finished = CLOSED_LIMIT + 2;
+        assert!(
+            text.contains(&format!(
+                "koreograf_jobs_finished_total{{tool=\"shell\",playbook=\"cap.sh\",status=\"failed\"}} {finished}"
+            )),
+            "{text}"
+        );
+        assert!(
+            text.contains("koreograf_jobs_started_total{tool=\"shell\",playbook=\"cap.sh\"} 1"),
             "{text}"
         );
     }
