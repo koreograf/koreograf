@@ -834,8 +834,6 @@ async fn one(state: &Shared, item: &Schedule, now: DateTime<Utc>, startup: bool)
     Ok(())
 }
 
-/// The user who last saved the schedule. An older row with no editor falls
-/// back to the creator, and a blank name stays the synthetic `schedule` actor.
 fn actor_may_launch(c: &rusqlite::Connection, team_id: &str, actor: &str) -> AppResult<bool> {
     let Some(user) = db::user_by_username(c, actor)? else {
         return Ok(false);
@@ -850,6 +848,8 @@ fn actor_may_launch(c: &rusqlite::Connection, team_id: &str, actor: &str) -> App
     }
 }
 
+/// The user who last saved the schedule. An older row with no editor falls
+/// back to the creator, and a blank name stays the synthetic `schedule` actor.
 fn launch_actor(item: &Schedule) -> &str {
     let name = if item.updated_by.is_empty() {
         item.created_by.as_str()
