@@ -10,7 +10,6 @@ REPO=$(CDPATH='' cd -- "$ROOT/../.." && pwd)
 COMPOSE_FILE="$ROOT/ee-socket-compose.yml"
 PROJECT=koreograf-ee-socket
 WRONG=/var/lib/koreograf-ee-socket-wrong
-PASS_FILE=$(mktemp)
 
 need() {
     for cmd in "$@"; do
@@ -39,11 +38,16 @@ cleanup() {
 
 if [ "${1:-}" = "down" ]; then
     need docker
+    shift
+    # Compose reads the file before down. The password is not used.
+    EE_SOCKET_PASSWORD=${EE_SOCKET_PASSWORD:-unused}
+    export EE_SOCKET_PASSWORD
     compose down "$@"
     exit 0
 fi
 
 need docker python3 openssl
+PASS_FILE=$(mktemp)
 openssl rand -hex 16 | tr -d '\n' > "$PASS_FILE"
 chmod 600 "$PASS_FILE"
 # shellcheck disable=SC2034
