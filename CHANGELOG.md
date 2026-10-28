@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.1.0-alpha.6](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.5...v0.1.0-alpha.6) (2026-10-28)
+
+
+### Features
+
+* add an end-to-end test harness ([#115](https://github.com/koreograf/koreograf/issues/115)) ([9a377a8](https://github.com/koreograf/koreograf/commit/9a377a82142dcc0514701c9f6916b1cd684a1a31)), closes [#27](https://github.com/koreograf/koreograf/issues/27)
+* add standard response headers ([#106](https://github.com/koreograf/koreograf/issues/106)) ([59a7e22](https://github.com/koreograf/koreograf/commit/59a7e22d4516b2f061556fe8c34ed2a943a1d103))
+* ask for launch options before a job starts ([#111](https://github.com/koreograf/koreograf/issues/111)) ([e7a2879](https://github.com/koreograf/koreograf/commit/e7a2879ff769e7b97ce8fb0ef6c1211e9291bfec)), closes [#21](https://github.com/koreograf/koreograf/issues/21)
+* expose the version via --version, image labels and the API ([#128](https://github.com/koreograf/koreograf/issues/128)) ([57c4492](https://github.com/koreograf/koreograf/commit/57c44928e88c02c873d6975d16ff345956fc5fbb)), closes [#94](https://github.com/koreograf/koreograf/issues/94)
+* polish forms, timestamps and dangerous actions ([#118](https://github.com/koreograf/koreograf/issues/118)) ([143b482](https://github.com/koreograf/koreograf/commit/143b4824d29b0caf3a01c182485fe470b3825c09)), closes [#33](https://github.com/koreograf/koreograf/issues/33)
+* relaunch a canceled job from its parameters ([#116](https://github.com/koreograf/koreograf/issues/116)) ([6d8bd73](https://github.com/koreograf/koreograf/commit/6d8bd738f35021dc0b5dd7829e6d99f28a72c347)), closes [#29](https://github.com/koreograf/koreograf/issues/29)
+* set Secure on the session cookie behind TLS ([#107](https://github.com/koreograf/koreograf/issues/107)) ([c571e9d](https://github.com/koreograf/koreograf/commit/c571e9d5ffddb124765d1375576f74d97a9eeb5a))
+* warn when an Ansible tag filter matches no tasks ([#117](https://github.com/koreograf/koreograf/issues/117)) ([d071ac2](https://github.com/koreograf/koreograf/commit/d071ac26efc2fe8475ad4615e642bf90da54f431)), closes [#31](https://github.com/koreograf/koreograf/issues/31)
+* warn when certificate checks are off and add a CA file ([#105](https://github.com/koreograf/koreograf/issues/105)) ([edd21c0](https://github.com/koreograf/koreograf/commit/edd21c0286410c0f4dd43eaba45e541d38b7f288))
+
+
+### Bug Fixes
+
+* check cleanup file names once in the demo role ([#100](https://github.com/koreograf/koreograf/issues/100)) ([c7c04a8](https://github.com/koreograf/koreograf/commit/c7c04a8c10c01c4b382537beb40bcac3cde2830a))
+* check downloads, drop root, and bind compose to localhost ([#101](https://github.com/koreograf/koreograf/issues/101)) ([790aa48](https://github.com/koreograf/koreograf/commit/790aa48e85dc7d525a2cb9bf4a4eb571c770e17e))
+* check team membership before starting a scheduled run ([#127](https://github.com/koreograf/koreograf/issues/127)) ([8000616](https://github.com/koreograf/koreograf/commit/80006168d0fb82f75d572fc2d313e070ceb63bcf)), closes [#74](https://github.com/koreograf/koreograf/issues/74)
+* count jobs that finish before execution ([#120](https://github.com/koreograf/koreograf/issues/120)) ([6fffff3](https://github.com/koreograf/koreograf/commit/6fffff3bfb1aa5fba8d62d997938470ba640611c)), closes [#47](https://github.com/koreograf/koreograf/issues/47)
+* distinguish JSON body errors ([#123](https://github.com/koreograf/koreograf/issues/123)) ([e1d2501](https://github.com/koreograf/koreograf/commit/e1d2501291583f49da10aca41171bb80ab3782cb)), closes [#52](https://github.com/koreograf/koreograf/issues/52)
+* keep a missed schedule run when starting it fails ([#125](https://github.com/koreograf/koreograf/issues/125)) ([5551a92](https://github.com/koreograf/koreograf/commit/5551a92e668ced2f5ff537e28d116c98f383c270)), closes [#71](https://github.com/koreograf/koreograf/issues/71)
+* keep opentofu state for the team and template ([#109](https://github.com/koreograf/koreograf/issues/109)) ([17d4661](https://github.com/koreograf/koreograf/commit/17d466170179de186e34b2f573fe82c207e59202)), closes [#18](https://github.com/koreograf/koreograf/issues/18)
+* keep the start and end of job output ([#110](https://github.com/koreograf/koreograf/issues/110)) ([95cab85](https://github.com/koreograf/koreograf/commit/95cab85e3de2fb0caad2a7ea223adb81c57a597e)), closes [#19](https://github.com/koreograf/koreograf/issues/19)
+* launch scheduled runs as the user who last edited the schedule ([#126](https://github.com/koreograf/koreograf/issues/126)) ([d73ae76](https://github.com/koreograf/koreograf/commit/d73ae768c519533e7890065e2f8d632bc09f2752)), closes [#73](https://github.com/koreograf/koreograf/issues/73)
+* limit description length to 1000 characters ([#108](https://github.com/koreograf/koreograf/issues/108)) ([7b5adcf](https://github.com/koreograf/koreograf/commit/7b5adcf340dbbdc875b926f6c58385706079b506))
+* log the reason when an image pull fails ([#133](https://github.com/koreograf/koreograf/issues/133)) ([4cf8792](https://github.com/koreograf/koreograf/commit/4cf87921cfcc11b00bb48a6ad7728653ccfce561)), closes [#99](https://github.com/koreograf/koreograf/issues/99)
+* mark the real failure in the job log ([#113](https://github.com/koreograf/koreograf/issues/113)) ([4f69833](https://github.com/koreograf/koreograf/commit/4f69833921c715b7d3101596f80aadb0a364170b)), closes [#23](https://github.com/koreograf/koreograf/issues/23)
+* mount execution environments from the daemon data path ([#129](https://github.com/koreograf/koreograf/issues/129)) ([106bcd1](https://github.com/koreograf/koreograf/commit/106bcd150713f76a80ba420ac4a202d17183eca9)), closes [#95](https://github.com/koreograf/koreograf/issues/95)
+* reap orphaned job processes with tini ([#119](https://github.com/koreograf/koreograf/issues/119)) ([99df0e9](https://github.com/koreograf/koreograf/commit/99df0e9787375c91223315062a0f53c6ea2b6041)), closes [#46](https://github.com/koreograf/koreograf/issues/46)
+* run execution environments as the job directory owner ([#130](https://github.com/koreograf/koreograf/issues/130)) ([6d29c98](https://github.com/koreograf/koreograf/commit/6d29c9868b7092e4e2f2c0f10a620276cbe2a383)), closes [#96](https://github.com/koreograf/koreograf/issues/96)
+* say when the username or password is wrong ([#114](https://github.com/koreograf/koreograf/issues/114)) ([c2ef369](https://github.com/koreograf/koreograf/commit/c2ef369debbba70ddfc790b119749389df1739b8)), closes [#26](https://github.com/koreograf/koreograf/issues/26)
+* show an error when the playbook path is empty ([#112](https://github.com/koreograf/koreograf/issues/112)) ([ef57492](https://github.com/koreograf/koreograf/commit/ef57492812440b26cede97f30811d4e385f15656)), closes [#22](https://github.com/koreograf/koreograf/issues/22)
+* use the directory name for LDAP accounts ([#121](https://github.com/koreograf/koreograf/issues/121)) ([9ac6b0f](https://github.com/koreograf/koreograf/commit/9ac6b0fc8e6fddba57866611ccc2057db6247e3c)), closes [#50](https://github.com/koreograf/koreograf/issues/50)
+* validate netbox addresses as IpAddr before writing ansible_host ([#124](https://github.com/koreograf/koreograf/issues/124)) ([d351ee1](https://github.com/koreograf/koreograf/commit/d351ee1e3a7ba7fa8f53a5825b61fe7340c06789)), closes [#69](https://github.com/koreograf/koreograf/issues/69)
+* warn when auto mode ignores an environment ([#131](https://github.com/koreograf/koreograf/issues/131)) ([18802f6](https://github.com/koreograf/koreograf/commit/18802f6769118f99eb7a73d3c09b636574e5b41b)), closes [#97](https://github.com/koreograf/koreograf/issues/97)
+
 ## [0.1.0-alpha.5](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.4...v0.1.0-alpha.5) (2026-10-26)
 
 
