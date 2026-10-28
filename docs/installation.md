@@ -47,7 +47,19 @@ PID 1 in the image is [tini](https://github.com/krallin/tini). It reaps processe
 
 The UI is published on `127.0.0.1` only. To listen on every interface, change the port mapping to `8080:8080`. Use a reverse proxy with TLS when other machines should open the UI.
 
-The socket is commented out in `docker-compose.yml`. Execution environments need that line. Without the socket the runner stays local, and the demo health check still runs. With the socket mounted, the runner uses the daemon path of the `koreograf-data` volume. Set `KOREOGRAF_DATA_HOST` when that path has to be chosen by hand. A path the daemon cannot see fails the job before the container starts, so the daemon does not create empty `jobs/` or `cache/` directories on the host.
+The socket line in `docker-compose.yml` is commented out. Uncomment it when a job should run in an image. Without the socket the runner stays local, and the demo health check still runs.
+
+That line mounts `/var/run/docker.sock`. The socket is root on the Docker host, and the process stays root while the socket is mounted. An owner creates an execution environment. A global environment needs an administrator. An operator can select an environment the team can see and store it on a template. A viewer cannot. Those people choose an image that the host daemon starts. The job container does not receive the socket. It does receive the job directory, which holds the decrypted credential files for that job at mode `0600`. The job can read them. They are removed when the job ends.
+
+Uncomment the socket line, then build this checkout. The image tag in `docker-compose.yml` is the last published release and can be older than these steps:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up --build -d
+```
+
+Leave `KOREOGRAF_DATA_HOST` empty. Koreograf reads the daemon path of the `koreograf-data` volume and uses that path as the mount source. A path inside this container is not a path the daemon can mount. Set `KOREOGRAF_DATA_HOST` only when the lookup is wrong. A path the daemon cannot see fails the job before a container starts, so the daemon does not create empty `jobs/` or `cache/` directories on the host.
+
+`KOREOGRAF_RUNNER=auto` uses Docker when the socket answers. `docker` fails the job instead of running it on the controller. `local` ignores the image. Mount details are in [Jobs](jobs.md#execution-environments). `tests/harness/scripts/ee-socket.sh` and `tests/harness/scripts/ee-awx.sh` run this setup. They are not part of `cargo test`, and CI does not start them.
 
 The named volume in the file is `koreograf-data`. Compose prefixes the project name, so `docker volume ls` shows `<project>_koreograf-data`. The project name is the directory name in lowercase unless `COMPOSE_PROJECT_NAME` is set. A checkout named `Koreograf` therefore uses `koreograf_koreograf-data`.
 
