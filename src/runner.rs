@@ -429,8 +429,13 @@ pub fn container_argv(spec: &ContainerSpec) -> Vec<String> {
     args.push("--env-file".into());
     args.push(spec.env_file.clone());
     // The image user (awx-ee is uid 1000) cannot write a root-owned work directory.
+    // A root process still gets no capabilities and cannot gain new ones.
     args.push("--user".into());
     args.push(spec.user.clone());
+    args.push("--security-opt".into());
+    args.push("no-new-privileges".into());
+    args.push("--cap-drop".into());
+    args.push("ALL".into());
     args.push("-w".into());
     args.push("/runner/project".into());
     args.push("--entrypoint".into());
@@ -456,6 +461,65 @@ fn directory_user(path: &Path) -> Result<String, String> {
         let _ = path;
         Ok("0:0".into())
     }
+}
+
+/// Rootless Podman and Docker map the host user to container uid 0.
+/// Passing the host uid selects a subordinate id that cannot read the job files.
+fn container_run_user(owner: &str, rootless: bool) -> String {
+    if rootless {
+        "0:0".into()
+    } else {
+        owner.to_string()
+    }
+}
+
+fn info_is_rootless(bin: &str, text: &str) -> bool {
+    let text = text.trim();
+    if bin == "podman" {
+        text.eq_ignore_ascii_case("true")
+    } else {
+        text.to_ascii_lowercase().contains("name=rootless")
+    }
+}
+
+async fn runtime_is_rootless(bin: &str) -> Result<bool, String> {
+    let format = if bin == "podman" {
+        "{{.Host.Security.Rootless}}"
+    } else {
+        "{{json .SecurityOptions}}"
+    };
+    let result = tokio::time::timeout(
+        STOP_COMMAND_TIMEOUT,
+        Command::new(bin)
+            .args(["info", "--format", format])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output(),
+    )
+    .await;
+    let output = match result {
+        Ok(Ok(output)) => output,
+        Ok(Err(err)) => {
+            return Err(format!(
+                "The container runtime did not answer ({err}). The job was not started."
+            ));
+        }
+        Err(_) => {
+            return Err("The container runtime did not answer. The job was not started.".into());
+        }
+    };
+    if !output.status.success() {
+        let detail = last_stderr_line(&String::from_utf8_lossy(&output.stderr));
+        return Err(if detail.is_empty() {
+            "The container runtime did not answer. The job was not started.".into()
+        } else {
+            format!("The container runtime did not answer ({detail}). The job was not started.")
+        });
+    }
+    Ok(info_is_rootless(
+        bin,
+        &String::from_utf8_lossy(&output.stdout),
+    ))
 }
 
 pub async fn detect_runtime() -> Option<String> {
@@ -2523,7 +2587,9 @@ async fn run_container(state: &Shared, job_id: &str, run: ContainerRun<'_>) -> R
     if layout.probe {
         probe_daemon_dirs(bin, &environment.image, job_id, &mounts).await?;
     }
-    let user = directory_user(work)?;
+    let owner = directory_user(work)?;
+    let rootless = runtime_is_rootless(bin).await?;
+    let user = container_run_user(&owner, rootless);
     log(
         state,
         job_id,
@@ -3076,6 +3142,21 @@ mod tests {
             .expect("image");
         assert!(user_at < image_at);
         assert_eq!(argv.get(user_at + 1).map(String::as_str), Some("0:0"));
+        let opt_at = argv
+            .iter()
+            .position(|arg| arg == "--security-opt")
+            .expect("security-opt");
+        assert!(opt_at < image_at);
+        assert_eq!(
+            argv.get(opt_at + 1).map(String::as_str),
+            Some("no-new-privileges")
+        );
+        let drop_at = argv
+            .iter()
+            .position(|arg| arg == "--cap-drop")
+            .expect("cap-drop");
+        assert!(drop_at < image_at);
+        assert_eq!(argv.get(drop_at + 1).map(String::as_str), Some("ALL"));
         assert!(argv.iter().any(|arg| arg.contains("/cache/collections")));
         assert!(argv.iter().any(|arg| arg == "--mount"));
         assert!(!argv.iter().any(|arg| arg == "-v"));
@@ -3120,6 +3201,39 @@ mod tests {
         assert_eq!(after.uid(), before.uid());
         assert_eq!(after.gid(), before.gid());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rootless_runtime_uses_container_root() {
+        assert!(!info_is_rootless(
+            "docker",
+            r#"["name=seccomp,profile=builtin","name=cgroupns"]"#
+        ));
+        assert!(info_is_rootless(
+            "docker",
+            r#"["name=rootless","name=seccomp,profile=builtin"]"#
+        ));
+        assert!(info_is_rootless("podman", "true\n"));
+        assert!(!info_is_rootless("podman", "false"));
+        assert_eq!(container_run_user("1000:1000", false), "1000:1000");
+        assert_eq!(container_run_user("1000:1000", true), "0:0");
+        let spec = ContainerSpec {
+            image: "quay.io/ansible/awx-ee:latest".into(),
+            name: "koreograf-rootless".into(),
+            mounts: Vec::new(),
+            env_file: "/data/jobs/abc/container.env".into(),
+            user: container_run_user("1000:1000", true),
+            command: vec!["/runner/work/wrapper.sh".into()],
+        };
+        let argv = container_argv(&spec);
+        let user_at = argv.iter().position(|arg| arg == "--user").expect("user");
+        let image_at = argv
+            .iter()
+            .position(|arg| arg == "quay.io/ansible/awx-ee:latest")
+            .expect("image");
+        assert!(user_at < image_at);
+        assert_eq!(argv.get(user_at + 1).map(String::as_str), Some("0:0"));
+        assert!(!argv.iter().any(|arg| arg == "1000:1000"));
     }
 
     #[test]
