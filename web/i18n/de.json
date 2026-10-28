@@ -440,7 +440,7 @@
   "saved": "Gespeichert.",
   "saving_replaces_the_environment_variables_an_empty_password": "Speichern ersetzt die Umgebungsvariablen. Ein leeres Passwort bleibt erhalten.",
   "schedule.after_count": "Nach {count}",
-  "schedule.by": "von {name}",
+  "schedule.by": "zuletzt geändert von {name}",
   "schedule.daily": "Täglich um {time} ({zone})",
   "schedule.day.fr": "Freitag",
   "schedule.day.mo": "Montag",

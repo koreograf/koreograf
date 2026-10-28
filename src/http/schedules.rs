@@ -167,6 +167,7 @@ pub async fn update(
     item.missed_at = None;
     item.created_by = existing.created_by;
     item.created_at = existing.created_at;
+    item.updated_by = user.username.clone();
     db::update_schedule(&db, &item)?;
     Ok(Json(schedule_json(&item)))
 }
@@ -315,6 +316,7 @@ async fn create(
         missed_at: None,
         occurrence_count: i64::from(count),
         created_by: user.username.clone(),
+        updated_by: user.username.clone(),
         created_at: now.clone(),
         updated_at: now,
     };
@@ -348,6 +350,7 @@ fn stored(
         missed_at: None,
         occurrence_count: i64::from(count),
         created_by: existing.created_by.clone(),
+        updated_by: existing.updated_by.clone(),
         created_at: existing.created_at.clone(),
         updated_at: db::now(),
     }
@@ -433,6 +436,7 @@ fn schedule_json(item: &Schedule) -> Value {
         "next_run_at": item.next_run_at,
         "missed_at": item.missed_at,
         "created_by": item.created_by,
+        "updated_by": item.updated_by,
     })
 }
 

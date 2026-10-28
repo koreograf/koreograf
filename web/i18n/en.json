@@ -440,7 +440,7 @@
   "saved": "Saved.",
   "saving_replaces_the_environment_variables_an_empty_password": "Saving replaces the environment variables. An empty password keeps the stored value.",
   "schedule.after_count": "After {count}",
-  "schedule.by": "by {name}",
+  "schedule.by": "last edited by {name}",
   "schedule.daily": "Daily at {time} ({zone})",
   "schedule.day.fr": "Friday",
   "schedule.day.mo": "Monday",

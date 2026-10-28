@@ -448,6 +448,16 @@ fn migrate(c: &Connection) -> AppResult<()> {
 CREATE INDEX IF NOT EXISTS idx_schedules_due ON schedules(enabled, next_run_at);
 CREATE INDEX IF NOT EXISTS idx_schedules_target ON schedules(target_kind, target_id);",
     )?;
+    if !column_exists(c, "schedules", "updated_by")? {
+        c.execute(
+            "ALTER TABLE schedules ADD COLUMN updated_by TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+        c.execute(
+            "UPDATE schedules SET updated_by = created_by WHERE updated_by = ''",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -2462,11 +2472,12 @@ pub struct Schedule {
     pub missed_at: Option<String>,
     pub occurrence_count: i64,
     pub created_by: String,
+    pub updated_by: String,
     pub created_at: String,
     pub updated_at: String,
 }
 
-const SCHEDULE_SELECT: &str = "id, team_id, name, target_kind, target_id, timezone, start_date, start_time, frequency, weekdays, end_kind, end_count, end_date, enabled, next_run_at, missed_at, occurrence_count, created_by, created_at, updated_at";
+const SCHEDULE_SELECT: &str = "id, team_id, name, target_kind, target_id, timezone, start_date, start_time, frequency, weekdays, end_kind, end_count, end_date, enabled, next_run_at, missed_at, occurrence_count, created_by, created_at, updated_at, updated_by";
 
 fn map_schedule(row: &rusqlite::Row<'_>) -> rusqlite::Result<Schedule> {
     Ok(Schedule {
@@ -2490,6 +2501,7 @@ fn map_schedule(row: &rusqlite::Row<'_>) -> rusqlite::Result<Schedule> {
         created_by: row.get(17)?,
         created_at: row.get(18)?,
         updated_at: row.get(19)?,
+        updated_by: row.get(20)?,
     })
 }
 
@@ -2498,8 +2510,8 @@ pub fn insert_schedule(c: &Connection, item: &Schedule) -> AppResult<()> {
         "INSERT INTO schedules (
             id, team_id, name, target_kind, target_id, timezone, start_date, start_time,
             frequency, weekdays, end_kind, end_count, end_date, enabled, next_run_at, missed_at,
-            occurrence_count, created_by, created_at, updated_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+            occurrence_count, created_by, created_at, updated_at, updated_by
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
         params![
             item.id,
             item.team_id,
@@ -2521,6 +2533,7 @@ pub fn insert_schedule(c: &Connection, item: &Schedule) -> AppResult<()> {
             item.created_by,
             item.created_at,
             item.updated_at,
+            item.updated_by,
         ],
     )?;
     Ok(())
@@ -2531,8 +2544,9 @@ pub fn update_schedule(c: &Connection, item: &Schedule) -> AppResult<()> {
         "UPDATE schedules SET
             name = ?2, timezone = ?3, start_date = ?4, start_time = ?5, frequency = ?6,
             weekdays = ?7, end_kind = ?8, end_count = ?9, end_date = ?10, enabled = ?11,
-            next_run_at = ?12, missed_at = ?13, occurrence_count = ?14, updated_at = ?15
-         WHERE id = ?1 AND team_id = ?16",
+            next_run_at = ?12, missed_at = ?13, occurrence_count = ?14, updated_at = ?15,
+            updated_by = ?16
+         WHERE id = ?1 AND team_id = ?17",
         params![
             item.id,
             item.name,
@@ -2549,6 +2563,7 @@ pub fn update_schedule(c: &Connection, item: &Schedule) -> AppResult<()> {
             item.missed_at,
             item.occurrence_count,
             item.updated_at,
+            item.updated_by,
             item.team_id,
         ],
     )?;
@@ -2596,7 +2611,7 @@ pub fn list_team_schedules(c: &Connection, team_id: &str) -> AppResult<Vec<(Sche
     );
     let mut stmt = c.prepare(&sql)?;
     let rows = stmt.query_map(params![team_id], |row| {
-        let target_name: String = row.get(20)?;
+        let target_name: String = row.get(21)?;
         Ok((map_schedule(row)?, target_name))
     })?;
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
