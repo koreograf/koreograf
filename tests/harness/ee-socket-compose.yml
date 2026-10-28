@@ -1,0 +1,26 @@
+# Socket and a named volume. tests/harness/scripts/ee-socket.sh starts this
+# file. cargo test does not, and CI does not either.
+services:
+  koreograf:
+    image: koreograf:ee-socket
+    pull_policy: build
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:18083:8080"
+    environment:
+      KOREOGRAF_BIND: 0.0.0.0:8080
+      KOREOGRAF_DATA: /var/lib/koreograf
+      KOREOGRAF_WEB: /opt/koreograf/web
+      KOREOGRAF_EXAMPLES: /opt/koreograf/examples
+      KOREOGRAF_ADMIN_USER: admin
+      KOREOGRAF_ADMIN_PASSWORD: ${EE_SOCKET_PASSWORD:?set EE_SOCKET_PASSWORD}
+      KOREOGRAF_RUNNER: docker
+      KOREOGRAF_DATA_HOST: ${KOREOGRAF_DATA_HOST:-}
+    volumes:
+      - ee-data:/var/lib/koreograf
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  ee-data:

@@ -2359,6 +2359,28 @@ fn mount_check_error(stderr: &str) -> String {
     }
 }
 
+/// The daemon reports a missing entrypoint only after it has accepted the
+/// mounts. That is not an invisible directory. Match the shell name itself,
+/// not a path that merely ends in `.sh`.
+fn shell_is_missing(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    let missing = lower.contains("not found") || lower.contains("no such file");
+    if !missing {
+        return false;
+    }
+    [
+        "exec: \"sh\"",
+        "exec: \"/bin/sh\"",
+        "exec: \"/usr/bin/sh\"",
+        "executable file `sh`",
+        "executable file \"sh\"",
+        "executable file '/bin/sh'",
+        "executable file `/bin/sh`",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
 async fn remove_probe_container(bin: &str, name: &str) {
     let _ = tokio::time::timeout(
         STOP_COMMAND_TIMEOUT,
@@ -2414,7 +2436,7 @@ async fn probe_daemon_dirs(
         Ok(Err(err)) => {
             remove_probe_container(bin, &name).await;
             return Err(format!(
-                "The container daemon cannot see the job directory ({err}). The job was not started."
+                "The mount check could not be started ({err}). The job was not started."
             ));
         }
         Err(_) => {
@@ -2425,11 +2447,15 @@ async fn probe_daemon_dirs(
             );
         }
     };
+    remove_probe_container(bin, &name).await;
     if output.status.success() {
         return Ok(());
     }
-    remove_probe_container(bin, &name).await;
-    Err(mount_check_error(&String::from_utf8_lossy(&output.stderr)))
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if shell_is_missing(&stderr) {
+        return Ok(());
+    }
+    Err(mount_check_error(&stderr))
 }
 
 async fn run_container(state: &Shared, job_id: &str, run: ContainerRun<'_>) -> Result<i32, String> {
@@ -3156,6 +3182,15 @@ mod tests {
             mount_check_error("bind source path does not exist: /tmp/x\n")
                 .contains("bind source path does not exist")
         );
+        let missing_shell = "exec: \"sh\": executable file not found in $PATH";
+        assert!(shell_is_missing(missing_shell));
+        assert!(shell_is_missing(
+            "crun: executable file `sh` not found in $PATH"
+        ));
+        assert!(!shell_is_missing("bind source path does not exist: /tmp/x"));
+        assert!(!shell_is_missing(
+            "crun: executable file `wrapper.sh` not found in $PATH"
+        ));
         let _ = std::fs::remove_dir_all(data);
     }
 
