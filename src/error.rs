@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use axum::extract::rejection::{BytesRejection, FailedToBufferBody, JsonRejection};
 use axum::extract::{FromRequest, Request};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -34,6 +35,9 @@ pub enum ApiError {
     NotFound,
     #[error("{0}")]
     BadRequest(UserMessage),
+    /// The body is larger than the route limit. The key is still a catalog key.
+    #[error("{0}")]
+    PayloadTooLarge(UserMessage),
     #[error("{0}")]
     Internal(String),
 }
@@ -69,6 +73,13 @@ impl ApiError {
                 .into_iter()
                 .map(|(name, value)| (name.into(), value.into()))
                 .collect(),
+        })
+    }
+
+    pub fn too_large(key: impl Into<String>) -> Self {
+        Self::PayloadTooLarge(UserMessage {
+            key: key.into(),
+            vars: BTreeMap::new(),
         })
     }
 }
@@ -118,6 +129,9 @@ impl IntoResponse for ApiError {
                 BTreeMap::new(),
             ),
             Self::BadRequest(message) => (StatusCode::BAD_REQUEST, message.key, message.vars),
+            Self::PayloadTooLarge(message) => {
+                (StatusCode::PAYLOAD_TOO_LARGE, message.key, message.vars)
+            }
             Self::Internal(detail) => {
                 tracing::error!(error = %detail, "internal error");
                 (
@@ -136,7 +150,11 @@ impl IntoResponse for ApiError {
     }
 }
 
-/// JSON body that rejects a missing or broken payload as a catalog error.
+/// JSON object body.
+///
+/// A missing body or the wrong content type is `json_body_required`. Broken
+/// JSON, a non-object, or a type mismatch is `json_body_invalid`. A body over
+/// the limit is `request_too_large` (413).
 pub struct ApiJson<T>(pub T);
 
 impl<T, S> FromRequest<S> for ApiJson<T>
@@ -147,9 +165,50 @@ where
     type Rejection = ApiError;
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        match Json::<T>::from_request(req, state).await {
-            Ok(Json(value)) => Ok(Self(value)),
-            Err(_) => Err(ApiError::bad("json_body_required")),
+        let value = read_json_value(req, state).await?;
+        if !value.is_object() {
+            return Err(ApiError::bad("json_body_invalid"));
         }
+        serde_json::from_value(value)
+            .map(Self)
+            .map_err(|_| ApiError::bad("json_body_invalid"))
+    }
+}
+
+/// Any JSON value. Webhook payloads may be an object, an array, or a scalar.
+pub struct ApiJsonValue(pub Value);
+
+impl<S> FromRequest<S> for ApiJsonValue
+where
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        read_json_value(req, state).await.map(Self)
+    }
+}
+
+async fn read_json_value<S>(req: Request, state: &S) -> Result<Value, ApiError>
+where
+    S: Send + Sync,
+{
+    match Json::<Value>::from_request(req, state).await {
+        Ok(Json(value)) => Ok(value),
+        Err(rejection) => Err(json_rejection(rejection)),
+    }
+}
+
+fn json_rejection(rejection: JsonRejection) -> ApiError {
+    match rejection {
+        JsonRejection::MissingJsonContentType(_) => ApiError::bad("json_body_required"),
+        JsonRejection::JsonSyntaxError(_) | JsonRejection::JsonDataError(_) => {
+            ApiError::bad("json_body_invalid")
+        }
+        JsonRejection::BytesRejection(BytesRejection::FailedToBufferBody(
+            FailedToBufferBody::LengthLimitError(_),
+        )) => ApiError::too_large("request_too_large"),
+        JsonRejection::BytesRejection(_) => ApiError::bad("json_body_invalid"),
+        _ => ApiError::bad("json_body_invalid"),
     }
 }

@@ -5105,6 +5105,308 @@ async fn a_request_without_json_returns_a_catalog_error() {
 }
 
 #[tokio::test]
+async fn json_bodies_are_rejected_by_kind_and_objects_reject_arrays() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-json-kind-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, templates, _) = call(
+        &app,
+        "GET",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{templates}");
+    let health_id = templates
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["name"] == "Healthcheck")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let launch = format!("/api/templates/{health_id}/launch");
+
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Sleeper",
+            "tool": "shell",
+            "entrypoint": "",
+            "spec": {"script": "sleep 30\necho should-not-run\n"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let sleeper_id = created["id"].as_str().unwrap();
+    let sleeper_launch = format!("/api/templates/{sleeper_id}/launch");
+
+    let (status, inventory, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Manual",
+            "sources": [{"kind": "ini", "name": "Hosts", "body": "web-1\n"}]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{inventory}");
+    let source_id = inventory["sources"][0]["id"].as_str().unwrap();
+    let source = format!(
+        "/api/inventories/{}/sources/{source_id}",
+        inventory["id"].as_str().unwrap()
+    );
+
+    let (status, workflows, _) = call(
+        &app,
+        "GET",
+        "/api/workflows",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{workflows}");
+    let workflow_id = workflows.as_array().unwrap()[0]["id"].as_str().unwrap();
+    let workflow_launch = format!("/api/workflows/{workflow_id}/launch");
+
+    let before = job_count(&app, &cookie, &team).await;
+    let invalid = (StatusCode::BAD_REQUEST, "json_body_invalid");
+    let wrong_type = json!({"inventory_id": 1}).to_string();
+    expect_json_error(
+        &app,
+        "POST",
+        &launch,
+        Some(&cookie),
+        Some(&team),
+        br#"{"limit":"#,
+        invalid,
+    )
+    .await;
+    expect_json_error(
+        &app,
+        "POST",
+        &launch,
+        Some(&cookie),
+        Some(&team),
+        wrong_type.as_bytes(),
+        invalid,
+    )
+    .await;
+    expect_json_error(
+        &app,
+        "POST",
+        &launch,
+        Some(&cookie),
+        Some(&team),
+        b"[]",
+        invalid,
+    )
+    .await;
+    expect_json_error(
+        &app,
+        "POST",
+        &launch,
+        Some(&cookie),
+        Some(&team),
+        b"null",
+        invalid,
+    )
+    .await;
+    expect_json_error(&app, "POST", "/api/login", None, None, b"{}", invalid).await;
+    expect_json_error(
+        &app,
+        "POST",
+        &workflow_launch,
+        Some(&cookie),
+        Some(&team),
+        b"[]",
+        invalid,
+    )
+    .await;
+    expect_json_error(
+        &app,
+        "PUT",
+        &source,
+        Some(&cookie),
+        Some(&team),
+        b"[]",
+        invalid,
+    )
+    .await;
+    let (status, patched, _) = call(
+        &app,
+        "PUT",
+        &source,
+        Some(&cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{patched}");
+    assert_eq!(patched["sources"][0]["name"], "Hosts");
+
+    let mut huge = vec![b' '; 2_097_152 + 64];
+    huge[..1].copy_from_slice(b"{");
+    expect_json_error(
+        &app,
+        "POST",
+        &launch,
+        Some(&cookie),
+        Some(&team),
+        &huge,
+        (StatusCode::PAYLOAD_TOO_LARGE, "request_too_large"),
+    )
+    .await;
+    let signed_out = (StatusCode::UNAUTHORIZED, "sign_in_is_required");
+    expect_json_error(&app, "POST", &launch, None, Some(&team), &huge, signed_out).await;
+    expect_json_error(&app, "POST", &launch, None, Some(&team), b"[]", signed_out).await;
+    assert_eq!(job_count(&app, &cookie, &team).await, before);
+
+    let (status, started, _) = call(
+        &app,
+        "POST",
+        &sleeper_launch,
+        Some(&cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{started}");
+    let job_id = started["id"].as_str().unwrap();
+    assert_eq!(job_count(&app, &cookie, &team).await, before + 1);
+    let relaunch = format!("/api/jobs/{job_id}/relaunch");
+    expect_json_error(
+        &app,
+        "POST",
+        &relaunch,
+        Some(&cookie),
+        Some(&team),
+        b"[]",
+        invalid,
+    )
+    .await;
+    assert_eq!(job_count(&app, &cookie, &team).await, before + 1);
+
+    let (status, canceled, _) = call(
+        &app,
+        "POST",
+        &format!("/api/jobs/{job_id}/cancel"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{canceled}");
+    assert_eq!(canceled["status"], "canceled");
+    let (status, again, _) = call(
+        &app,
+        "POST",
+        &relaunch,
+        Some(&cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{again}");
+    let again_id = again["id"].as_str().unwrap();
+    assert_ne!(again_id, job_id);
+    let (status, stopped, _) = call(
+        &app,
+        "POST",
+        &format!("/api/jobs/{again_id}/cancel"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{stopped}");
+    assert_eq!(stopped["status"], "canceled");
+
+    let (status, hooks, _) =
+        call(&app, "GET", "/api/hooks", Some(&cookie), Some(&team), None).await;
+    assert_eq!(status, StatusCode::OK, "{hooks}");
+    let hook = &hooks.as_array().unwrap()[0];
+    let (status, ignored, _) = call(
+        &app,
+        "POST",
+        &format!(
+            "/hooks/{}/{}",
+            hook["id"].as_str().unwrap(),
+            hook["token"].as_str().unwrap()
+        ),
+        None,
+        None,
+        Some(json!([])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ignored}");
+    assert_eq!(ignored["status"], "ignored");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+async fn job_count(app: &axum::Router, cookie: &str, team: &str) -> usize {
+    let (status, jobs, _) = call(app, "GET", "/api/jobs", Some(cookie), Some(team), None).await;
+    assert_eq!(status, StatusCode::OK, "{jobs}");
+    jobs.as_array().expect("job list").len()
+}
+
+async fn expect_json_error(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    cookie: Option<&str>,
+    team: Option<&str>,
+    body: &[u8],
+    expected: (StatusCode, &str),
+) {
+    let mut headers = vec![("content-type", "application/json")];
+    if let Some(team) = team {
+        headers.push(("x-team-id", team));
+    }
+    let (status, bytes, _) =
+        call_raw(app, method, uri, cookie, &headers, Some(body.to_vec())).await;
+    let text = String::from_utf8_lossy(&bytes);
+    assert_eq!(status, expected.0, "{text}");
+    let parsed: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    assert_eq!(parsed["error"], expected.1, "{text}");
+    assert!(!text.contains("Expected request"), "{text}");
+    assert!(!text.contains("Failed to parse"), "{text}");
+    assert!(!text.contains("Failed to deserialize"), "{text}");
+    assert!(!text.contains("Failed to buffer"), "{text}");
+}
+
+#[tokio::test]
 async fn a_relative_data_dir_can_run_a_local_shell_job() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -6289,8 +6591,12 @@ fn the_image_reaps_orphans_with_tini() {
 #[test]
 fn message_catalogs_match_and_cover_the_ui() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let de = load_catalog(&root.join("web/i18n/de.json"));
-    let en = load_catalog(&root.join("web/i18n/en.json"));
+    let de_path = root.join("web/i18n/de.json");
+    let en_path = root.join("web/i18n/en.json");
+    assert_catalog_sorted(&de_path);
+    assert_catalog_sorted(&en_path);
+    let de = load_catalog(&de_path);
+    let en = load_catalog(&en_path);
     assert_eq!(
         de.keys().collect::<Vec<_>>(),
         en.keys().collect::<Vec<_>>(),
@@ -6345,6 +6651,59 @@ fn message_catalogs_match_and_cover_the_ui() {
         runner.contains("konnte den remote-verweis"),
         "git still reports a missing remote ref in German"
     );
+}
+
+fn assert_catalog_sorted(path: &Path) {
+    let text = std::fs::read_to_string(path)
+        .unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
+    let keys = top_level_json_keys(&text);
+    let mut sorted = keys.clone();
+    sorted.sort();
+    assert_eq!(keys, sorted, "{} keys are not alphabetical", path.display());
+}
+
+fn top_level_json_keys(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut keys = Vec::new();
+    let mut depth = 0;
+    let mut index = 0;
+    while index < chars.len() {
+        let ch = chars[index];
+        if ch == '"' {
+            let mut key = String::new();
+            index += 1;
+            while index < chars.len() {
+                let item = chars[index];
+                if item == '\\' {
+                    index += 1;
+                    if index < chars.len() {
+                        key.push(chars[index]);
+                    }
+                } else if item == '"' {
+                    break;
+                } else {
+                    key.push(item);
+                }
+                index += 1;
+            }
+            let mut next = index + 1;
+            while chars.get(next).is_some_and(|item| item.is_whitespace()) {
+                next += 1;
+            }
+            if depth == 1 && chars.get(next) == Some(&':') {
+                keys.push(key);
+            }
+            index += 1;
+            continue;
+        }
+        if ch == '{' || ch == '[' {
+            depth += 1;
+        } else if ch == '}' || ch == ']' {
+            depth -= 1;
+        }
+        index += 1;
+    }
+    keys
 }
 
 fn load_catalog(path: &Path) -> BTreeMap<String, String> {
@@ -6581,6 +6940,7 @@ fn collect_rust_keys(dir: &Path, keys: &mut BTreeSet<String>) {
             .unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
         push_call_key(&text, "ApiError::bad(", keys);
         push_call_key(&text, "ApiError::bad_vars(", keys);
+        push_call_key(&text, "ApiError::too_large(", keys);
         push_call_key(&text, "::message(", keys);
         push_err_key(&text, keys);
     }

@@ -16,7 +16,7 @@ use crate::auth::{AuthUser, Role};
 use crate::credentials;
 use crate::crypto;
 use crate::db::{self, Hook, Template, Workflow};
-use crate::error::{ApiError, ApiJson, AppResult};
+use crate::error::{ApiError, ApiJson, ApiJsonValue, AppResult};
 use crate::jobs::{self, LaunchRequest};
 use crate::runner;
 use crate::workflow::{self, Graph};
@@ -637,7 +637,7 @@ pub async fn test_hook(
 pub async fn ingest(
     State(state): State<Shared>,
     Path((id, token)): Path<(String, String)>,
-    ApiJson(payload): ApiJson<Value>,
+    ApiJsonValue(payload): ApiJsonValue,
 ) -> AppResult<Json<Value>> {
     let hook = {
         let db = state.db()?;
