@@ -220,7 +220,7 @@ fn seed_demo(conn: &Connection, cfg: &Config) -> AppResult<()> {
             project_id: &project_id,
             inventory_id: None,
             name: "Infrastruktur-Plan",
-            description: "OpenTofu plan mit persistentem Plugin-Cache.",
+            description: "OpenTofu plan with a persistent plugin cache.",
             tool: "opentofu",
             entrypoint: "tofu",
             extra_vars: "{}",
