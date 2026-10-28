@@ -1,0 +1,30 @@
+# OpenLDAP for the group-search check. ldap-groups.sh publishes loopback
+# port 1389 and does not start Koreograf or NetBox. cargo test ignores it.
+name: koreograf-ldap-groups
+
+volumes:
+  data:
+  config:
+
+services:
+  ldap:
+    image: osixia/openldap:1.5.0
+    environment:
+      LDAP_ORGANISATION: Koreograf Lab
+      LDAP_DOMAIN: example.com
+      LDAP_ADMIN_PASSWORD: ${LDAP_ADMIN_PASSWORD}
+      LDAP_TLS: "false"
+      LDAP_RFC2307BIS_SCHEMA: "false"
+    ports:
+      - "127.0.0.1:1389:389"
+    volumes:
+      - data:/var/lib/ldap
+      - config:/etc/ldap/slapd.d
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - ldapsearch -x -H ldap://127.0.0.1:389 -b dc=example,dc=com -D cn=admin,dc=example,dc=com -w "$$LDAP_ADMIN_PASSWORD" -s base dn >/dev/null
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s

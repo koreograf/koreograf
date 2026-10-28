@@ -89,6 +89,8 @@ tests/harness/scripts/down.sh
 
 `down.sh -v` removes the volumes. The next `up.sh` creates the directory entries and the devices again. Without `-v`, a second start keeps the data and the seed scripts leave existing entries in place.
 
+`tests/harness/scripts/ldap-groups.sh` is a smaller check for the LDAP group search. It is not part of `cargo test`, and CI does not start it. The script needs the tools above plus Cargo. It starts only OpenLDAP, on `127.0.0.1:1389`, and runs this checkout with `cargo run`. Only the service account can read `ou=groups`. The lab user is a `groupOfNames` member, and the team `Plattform` stores that group's DN. Sign-in returns the team. The script then sends sign-in through a proxy on `127.0.0.1:1390` that drops the service re-bind. Sign-in still succeeds, the team is no longer listed, and the warning in the log does not contain the password. `tests/harness/scripts/ldap-groups.sh down` stops that OpenLDAP. Add `-v` to remove its volumes. The full harness above is unchanged.
+
 The UI is at `http://127.0.0.1:18080`. The admin password is the file `tests/harness/.secrets/admin-password`. NetBox is at `http://127.0.0.1:18081` when you want to look at the devices.
 
 The demo project asks Galaxy for `ansible.posix` 1.6.2. The role itself uses `ansible.builtin`. A Galaxy failure is logged and the play still runs.
