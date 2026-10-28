@@ -1651,8 +1651,8 @@ function failureKind(text) {
   return "";
 }
 
-function tagFilterNote(text) {
-  return plainLogLine(text).includes("Tag filter matched no tasks.");
+function tagFilterNote(row) {
+  return row.stream === "system" && plainLogLine(row.line).includes("Tag filter matched no tasks.");
 }
 
 function showTagFilterBanner() {
@@ -1667,7 +1667,7 @@ function showTagFilterBanner() {
 
 function classifyLogLine(log, row) {
   const text = plainLogLine(row.line);
-  if (tagFilterNote(text)) return "warn";
+  if (tagFilterNote(row)) return "warn";
   const galaxy = galaxyPhase(log, text);
   const failure = failureKind(text);
   if (galaxy === "warn") return "warn";
@@ -1711,7 +1711,7 @@ function appendLog(row) {
   if (!log) return;
   const line = document.createElement("div");
   const kind = classifyLogLine(log, row);
-  if (tagFilterNote(row.line)) showTagFilterBanner();
+  if (tagFilterNote(row)) showTagFilterBanner();
   if (kind) line.className = kind;
   line.textContent = row.line;
   log.appendChild(line);

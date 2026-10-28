@@ -424,7 +424,9 @@ async fn the_job_log_marks_a_fatal_line_and_keeps_galaxy_as_a_warning() {
     assert!(script.contains("Role install failed. The existing cache is used anyway."));
     assert!(script.contains("ansible-galaxy collection install"));
     assert!(script.contains("first_failure"));
-    assert!(script.contains("Tag filter matched no tasks."));
+    assert!(script.contains(
+        "row.stream === \"system\" && plainLogLine(row.line).includes(\"Tag filter matched no tasks.\")"
+    ));
     assert!(script.contains("tag_filter_matched_no_tasks"));
     assert!(script.contains("log-summary"));
     let (status, style, _) = call(&app, "GET", "/app.css", None, None, None).await;
