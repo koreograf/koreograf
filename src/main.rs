@@ -4,6 +4,10 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    if koreograf::version_requested(std::env::args()) {
+        println!("{}", koreograf::version());
+        return Ok(());
+    }
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("koreograf=info,tower_http=info"));
     let json = std::env::var("KOREOGRAF_LOG_FORMAT")

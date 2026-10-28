@@ -54,6 +54,22 @@ pub struct AppState {
 
 pub type Shared = Arc<AppState>;
 
+/// Version from `Cargo.toml` at compile time.
+pub fn version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+/// True when argv asks for [`version`]. The first value is the program name.
+pub fn version_requested<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter()
+        .skip(1)
+        .any(|arg| arg.as_ref() == "--version")
+}
+
 impl AppState {
     pub fn db(&self) -> Result<std::sync::MutexGuard<'_, Connection>, ApiError> {
         self.conn
@@ -128,4 +144,24 @@ pub async fn serve(cfg: Config) -> anyhow::Result<()> {
 /// Axum router, including the API and the browser UI.
 pub fn router(state: Shared) -> axum::Router {
     http::router(state)
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::{version, version_requested};
+
+    #[test]
+    fn the_version_flag_is_the_long_option_after_the_program_name() {
+        assert!(version_requested(["koreograf", "--version"]));
+        assert!(version_requested([
+            "koreograf",
+            "--bind",
+            "127.0.0.1:9",
+            "--version"
+        ]));
+        assert!(!version_requested(["koreograf"]));
+        assert!(!version_requested(["koreograf", "--help"]));
+        assert!(!version_requested(["koreograf", "--versioned"]));
+        assert_eq!(version(), env!("CARGO_PKG_VERSION"));
+    }
 }
