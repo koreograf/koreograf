@@ -101,6 +101,17 @@ pub fn check_ansible_spec(spec: &Value) -> Result<(), String> {
     Ok(())
 }
 
+const TAG_FILTER_WARNING: &str =
+    "Tag filter matched no tasks. Ansible exited 0, so this job stays successful.";
+
+fn tag_filter_is_set(spec: &Value) -> bool {
+    ["tags", "skip_tags"].into_iter().any(|key| {
+        spec.get(key)
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.trim().is_empty())
+    })
+}
+
 pub fn ansible_env(spec: &Value) -> Result<Vec<(String, String)>, String> {
     check_ansible_spec(spec)?;
     let mut env = Vec::new();
@@ -961,6 +972,13 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
             "system",
             "Cache grew. The next run uses these artifacts.",
         );
+    }
+    if exit == 0
+        && template.tool == "ansible"
+        && tag_filter_is_set(&spec)
+        && state.metrics.tag_filter_matched_nothing(job_id)
+    {
+        log(state, job_id, "system", TAG_FILTER_WARNING);
     }
     finish(state, job_id, exit == 0);
     Ok(())
@@ -2582,6 +2600,16 @@ mod tests {
         assert!(!valid_image(""));
         assert!(!valid_image("image with space"));
         assert!(!valid_image("bad$(image)"));
+    }
+
+    #[test]
+    fn a_blank_tag_list_is_not_a_filter() {
+        assert!(!tag_filter_is_set(&serde_json::json!({})));
+        assert!(!tag_filter_is_set(
+            &serde_json::json!({"tags": "  ", "skip_tags": ""})
+        ));
+        assert!(tag_filter_is_set(&serde_json::json!({"tags": "users"})));
+        assert!(tag_filter_is_set(&serde_json::json!({"skip_tags": "slow"})));
     }
 
     #[test]

@@ -1651,8 +1651,23 @@ function failureKind(text) {
   return "";
 }
 
+function tagFilterNote(row) {
+  return row.stream === "system" && plainLogLine(row.line).includes("Tag filter matched no tasks.");
+}
+
+function showTagFilterBanner() {
+  if (document.querySelector("#tag-filter-banner")) return;
+  const anchor = document.querySelector(".tab-bar");
+  if (!anchor) return;
+  anchor.insertAdjacentHTML(
+    "beforebegin",
+    `<p class="banner warn" id="tag-filter-banner">${h("tag_filter_matched_no_tasks")}</p>`,
+  );
+}
+
 function classifyLogLine(log, row) {
   const text = plainLogLine(row.line);
+  if (tagFilterNote(row)) return "warn";
   const galaxy = galaxyPhase(log, text);
   const failure = failureKind(text);
   if (galaxy === "warn") return "warn";
@@ -1696,6 +1711,7 @@ function appendLog(row) {
   if (!log) return;
   const line = document.createElement("div");
   const kind = classifyLogLine(log, row);
+  if (tagFilterNote(row)) showTagFilterBanner();
   if (kind) line.className = kind;
   line.textContent = row.line;
   log.appendChild(line);

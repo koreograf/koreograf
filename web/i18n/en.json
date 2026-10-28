@@ -478,6 +478,7 @@
   "sync_failed": "Sync failed.",
   "sync_the_git_project_first": "Sync the Git project first.",
   "synced": "Synced",
+  "tag_filter_matched_no_tasks": "The tag filter matched no tasks. Ansible exited 0, so this job stays successful.",
   "tags": "Tags",
   "target": "Target",
   "team": "Team",

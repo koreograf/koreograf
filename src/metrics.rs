@@ -104,6 +104,9 @@ struct PlayObserver {
     failed: u64,
     unreachable: u64,
     skipped: u64,
+    saw_play: bool,
+    saw_host: bool,
+    saw_work: bool,
 }
 
 impl Metrics {
@@ -138,6 +141,18 @@ impl Metrics {
             return;
         };
         emit(job_id, events);
+    }
+
+    /// A tag filter reached hosts and never ran a task other than Gathering Facts.
+    pub(crate) fn tag_filter_matched_nothing(&self, job_id: &str) -> bool {
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|book| {
+                let open = book.open.get(job_id)?;
+                (open.tool == "ansible").then_some(open.observer.matched_nothing())
+            })
+            .unwrap_or(false)
     }
 
     pub(crate) fn close(&self, job_id: &str, status: &str) {
@@ -488,9 +503,16 @@ impl PlayObserver {
             return Vec::new();
         }
         if line.starts_with("PLAY ") {
+            self.saw_play = true;
             return self.end_role().into_iter().map(Step::Done).collect();
         }
+        if host_result(line).is_some() || play_recap_host(line) {
+            self.saw_host = true;
+        }
         if let Some(task) = task_name(line) {
+            if task != "Gathering Facts" {
+                self.saw_work = true;
+            }
             let mut steps = Vec::new();
             let next = role_of_task(&task);
             if self.role.as_deref() != next.as_deref() {
@@ -522,6 +544,10 @@ impl PlayObserver {
         self.end_role()
     }
 
+    fn matched_nothing(&self) -> bool {
+        self.saw_play && self.saw_host && !self.saw_work
+    }
+
     fn end_role(&mut self) -> Option<RoleSummary> {
         let role = self.role.take()?;
         let summary = RoleSummary {
@@ -545,6 +571,14 @@ impl PlayObserver {
             Some(summary)
         }
     }
+}
+
+fn play_recap_host(line: &str) -> bool {
+    let Some(marker) = line.find(" : ok=").or_else(|| line.find(": ok=")) else {
+        return false;
+    };
+    let host = line[..marker].trim();
+    !host.is_empty() && !host.contains(' ') && line.contains("changed=")
 }
 
 fn task_name(line: &str) -> Option<String> {
@@ -749,6 +783,73 @@ ok: [web-1]
         assert!(!text.contains("Gathering Facts"));
         assert!(!text.contains("s3cret"));
         assert!(!text.contains("Role from cache"));
+    }
+
+    fn watch(lines: &[&str]) -> bool {
+        let metrics = Metrics::new();
+        metrics.begin(&meta("ansible", "site.yml"));
+        for line in lines {
+            metrics.observe("job-1", line);
+        }
+        metrics.tag_filter_matched_nothing("job-1")
+    }
+
+    #[test]
+    fn a_tag_filter_that_only_gathers_facts_matches_nothing() {
+        assert!(watch(&[
+            "PLAY [all] ***",
+            "TASK [Gathering Facts] ***",
+            "ok: [web-1]",
+            "PLAY RECAP ***",
+            "web-1 : ok=1 changed=0 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0",
+        ]));
+        assert!(watch(&[
+            "PLAY [all] ***",
+            "\u{1b}[0;32mTASK [Gathering Facts] ***\u{1b}[0m",
+            "ok: [web-1]",
+            "PLAY RECAP ***",
+            "web-1 : ok=0 changed=0 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0",
+        ]));
+        assert!(watch(&[
+            "PLAY [all] ***",
+            "PLAY RECAP ***",
+            "web-1 : ok=0 changed=0 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0",
+        ]));
+    }
+
+    #[test]
+    fn a_matching_tag_is_not_an_empty_filter() {
+        assert!(!watch(&[
+            "PLAY [all] ***",
+            "TASK [Gathering Facts] ***",
+            "ok: [web-1]",
+            "TASK [users : create] ***",
+            "ok: [web-1]",
+            "PLAY RECAP ***",
+            "web-1 : ok=2 changed=0 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0",
+        ]));
+        assert!(!watch(&[
+            "PLAY [all] ***",
+            "TASK [Gathering Facts] ***",
+            "ok: [web-1]",
+            "\u{1b}[0;32mTASK [users : create] ***\u{1b}[0m",
+            "changed: [web-1]",
+        ]));
+        assert!(!watch(&[
+            "PLAY [all] ***",
+            "RUNNING HANDLER [users : restart] ***",
+            "changed: [web-1]",
+        ]));
+        assert!(!watch(&[
+            "PLAY [all] ***",
+            "skipping: no hosts matched",
+            "PLAY RECAP ***",
+        ]));
+        let metrics = Metrics::new();
+        metrics.begin(&meta("shell", "health.sh"));
+        metrics.observe("job-1", "PLAY [all] ***");
+        metrics.observe("job-1", "ok: [web-1]");
+        assert!(!metrics.tag_filter_matched_nothing("job-1"));
     }
 
     #[test]

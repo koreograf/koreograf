@@ -478,6 +478,7 @@
   "sync_failed": "Sync fehlgeschlagen.",
   "sync_the_git_project_first": "Git-Projekt zuerst synchronisieren.",
   "synced": "Synchron",
+  "tag_filter_matched_no_tasks": "Der Tag-Filter hat keine Aufgabe getroffen. Ansible hat mit Code 0 beendet, der Auftrag bleibt erfolgreich.",
   "tags": "Tags",
   "target": "Ziel",
   "team": "Team",
