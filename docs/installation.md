@@ -34,7 +34,7 @@ docker compose exec koreograf cat /var/lib/koreograf/initial-admin-password
 docker compose exec koreograf rm /var/lib/koreograf/initial-admin-password
 ```
 
-Compose pulls `ghcr.io/koreograf/koreograf:0.1.0-alpha.5`. <!-- x-release-please-version -->
+Compose pulls `ghcr.io/koreograf/koreograf:0.1.0-alpha.6`. <!-- x-release-please-version -->
 It does not compile. Build this checkout without replacing that published tag:
 
 ```bash
@@ -82,8 +82,8 @@ Use `/srv/projects/my-project` as `source` with `source_type` `path`. The exampl
 helm upgrade --install koreograf deploy/helm/koreograf
 ```
 
-The chart version, `appVersion`, and `image.tag` are `0.1.0-alpha.5`. <!-- x-release-please-version -->
-The chart pulls `ghcr.io/koreograf/koreograf:0.1.0-alpha.5`, the same image Compose uses. <!-- x-release-please-version -->
+The chart version, `appVersion`, and `image.tag` are `0.1.0-alpha.6`. <!-- x-release-please-version -->
+The chart pulls `ghcr.io/koreograf/koreograf:0.1.0-alpha.6`, the same image Compose uses. <!-- x-release-please-version -->
 It is `linux/amd64`. On another architecture, build the image and set `image.repository` and `image.tag` to that build.
 
 By default the pod runs as uid and gid 10001, with `fsGroup` 10001, `runAsNonRoot`, a dropped capability set, and the runtime default seccomp profile. `fsGroup` is what makes an existing volume readable. A volume driver that ignores `fsGroup` leaves root-owned files, and this pod cannot change them because it does not start as root. Set `runner.dockerSocket.enabled` to run as uid 0 without the capability drop. A non-empty `podSecurityContext` or `securityContext` replaces that default completely. The chart does not set a container command, so tini stays PID 1 for uid 10001 as well. Kubernetes has no Compose `init: true`. A pod `command` replaces tini and has to start an init.
