@@ -98,6 +98,22 @@ fn default_pull() -> String {
     "if_not_present".into()
 }
 
+pub async fn runner_status(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    user: AuthUser,
+) -> AppResult<Json<Value>> {
+    let team = team_header(&headers)?;
+    gate(&state, &user, &team, Role::Viewer)?;
+    // The probe awaits. Load settings only after it returns.
+    let runtime = runner::detect_runtime().await;
+    let effective = crate::settings::load(&state)?;
+    Ok(Json(json!({
+        "runner_mode": effective.runner.as_str(),
+        "runtime": runtime,
+    })))
+}
+
 pub async fn overview(
     State(state): State<Shared>,
     headers: HeaderMap,
