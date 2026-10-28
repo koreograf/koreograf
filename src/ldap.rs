@@ -325,24 +325,31 @@ pub async fn authenticate(
     if groups.is_empty() && !cfg.group_attr.eq_ignore_ascii_case("memberOf") {
         groups = attr_values(&entry, "memberOf");
     }
+    let (account, from_directory) = directory_username(&entry, &cfg.username_attr, username);
     let display = first_attr(&entry, "displayName")
         .or_else(|| first_attr(&entry, "cn"))
-        .unwrap_or_else(|| username.to_string());
+        .unwrap_or_else(|| account.clone());
 
     ldap.simple_bind(&user_dn, password)
         .await
         .map_err(|e| format!("LDAP bind failed: {e}"))?
         .success()
         .map_err(|_| "ldap_rejected_the_password".to_string())?;
+    if !from_directory {
+        tracing::warn!(
+            attribute = %cfg.username_attr,
+            "LDAP username attribute is missing, so the entered login is the account name"
+        );
+    }
 
     // The user bind only checks the password. Group entries are often
     // readable by the service account alone, so search as that account.
     if groups.is_empty() {
-        groups = groups_as_service(&mut ldap, cfg, &user_dn, username).await;
+        groups = groups_as_service(&mut ldap, cfg, &user_dn, &account).await;
     }
     let _ = ldap.unbind().await;
     Ok(LdapIdentity {
-        username: username.to_ascii_lowercase(),
+        username: account,
         display_name: display,
         email: first_attr(&entry, "mail"),
         groups,
@@ -372,6 +379,17 @@ fn attr_values(entry: &SearchEntry, name: &str) -> Vec<String> {
 
 fn first_attr(entry: &SearchEntry, name: &str) -> Option<String> {
     attr_values(entry, name).into_iter().next()
+}
+
+/// Account name from the directory. The bool is false when the attribute is missing.
+fn directory_username(entry: &SearchEntry, attr: &str, entered: &str) -> (String, bool) {
+    let found = first_attr(entry, attr)
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty());
+    match found {
+        Some(value) => (value, true),
+        None => (entered.trim().to_ascii_lowercase(), false),
+    }
 }
 
 async fn groups_as_service(
@@ -540,6 +558,9 @@ mod tests {
     #[test]
     fn group_search_includes_unique_members() {
         let filters = group_search_filters("cn=alice,ou=people,dc=example,dc=com", "alice");
+        assert!(filters
+            .iter()
+            .any(|filter| { filter == "(&(objectClass=posixGroup)(memberUid=alice))" }));
         assert!(filters.iter().any(|filter| {
             filter == "(&(objectClass=groupOfUniqueNames)(uniqueMember=cn=alice,ou=people,dc=example,dc=com))"
         }));
@@ -548,6 +569,42 @@ mod tests {
         assert!(hostile
             .iter()
             .any(|filter| { filter.contains(r"uniqueMember=cn=a\29\28uid=\2a,ou=people") }));
+    }
+
+    #[test]
+    fn the_directory_username_attribute_overrides_the_entered_login() {
+        let mail = search_entry(&[("uid", "Alice"), ("mail", "alice@example.com")]);
+        assert_eq!(
+            directory_username(&mail, "uid", "alice@example.com"),
+            ("alice".into(), true)
+        );
+        let ad = search_entry(&[("sAMAccountName", "Alice")]);
+        assert_eq!(
+            directory_username(&ad, "sAMAccountName", "Alice"),
+            ("alice".into(), true)
+        );
+        let missing = search_entry(&[("mail", "alice@example.com")]);
+        assert_eq!(
+            directory_username(&missing, "uid", " Alice@Example.com "),
+            ("alice@example.com".into(), false)
+        );
+        let blank = search_entry(&[("uid", "  ")]);
+        assert_eq!(
+            directory_username(&blank, "uid", "alice"),
+            ("alice".into(), false)
+        );
+    }
+
+    fn search_entry(attrs: &[(&str, &str)]) -> SearchEntry {
+        let mut map = std::collections::HashMap::new();
+        for (key, value) in attrs {
+            map.insert((*key).to_string(), vec![(*value).to_string()]);
+        }
+        SearchEntry {
+            dn: "uid=alice,ou=people,dc=example,dc=com".into(),
+            attrs: map,
+            bin_attrs: std::collections::HashMap::new(),
+        }
     }
 
     #[test]
