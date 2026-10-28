@@ -6862,10 +6862,11 @@ fn the_image_labels_name_the_version_and_the_source() {
     let dockerfile = std::fs::read_to_string(root.join("Dockerfile")).expect("Dockerfile");
     assert!(dockerfile.contains("org.opencontainers.image.version=\"${VERSION}\""));
     assert!(dockerfile.contains("org.opencontainers.image.source=\"${SOURCE}\""));
+    let version = env!("CARGO_PKG_VERSION");
     assert!(dockerfile.contains("# x-release-please-start-version"));
-    assert!(dockerfile.contains("ARG VERSION=0.1.0-alpha.5\n"));
+    assert!(dockerfile.contains(&format!("ARG VERSION={version}\n")));
     assert!(dockerfile.contains("# x-release-please-end"));
-    assert!(!dockerfile.contains("ARG VERSION=0.1.0-alpha.5 #"));
+    assert!(!dockerfile.contains(&format!("ARG VERSION={version} #")));
     let release =
         std::fs::read_to_string(root.join(".github/workflows/release.yml")).expect("release.yml");
     assert!(release.contains("VERSION=${{ steps.tags.outputs.version }}"));
