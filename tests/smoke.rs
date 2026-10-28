@@ -5287,6 +5287,179 @@ async fn cancel_stops_the_local_process_group() {
 }
 
 #[tokio::test]
+async fn jobs_that_end_before_execution_are_still_counted() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-finished-early-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap();
+
+    let missing = format!("file:///tmp/koreograf-missing-{nanos}");
+    let (status, project, _) = call(
+        &app,
+        "POST",
+        "/api/projects",
+        Some(&cookie),
+        Some(team),
+        Some(json!({"name": "Unsynced", "source_type": "git", "source": missing})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{project}");
+    let project_id = project["id"].as_str().unwrap();
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(team),
+        Some(json!({
+            "name": "Not synced",
+            "tool": "ansible",
+            "project_id": project_id,
+            "entrypoint": "site.yml",
+            "update_on_launch": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().unwrap();
+    let failed = launch_and_wait(&app, &cookie, team, template_id).await;
+    assert_eq!(failed["status"], "failed", "{}", failed["events"]);
+    assert!(has_line(&failed, "system", "Sync the Git project first."));
+    let metrics = metrics_text(&app).await;
+    assert!(
+        metrics.contains(
+            "koreograf_jobs_finished_total{tool=\"ansible\",playbook=\"site.yml\",status=\"failed\"} 1"
+        ),
+        "{metrics}"
+    );
+    assert!(
+        !metrics.contains("koreograf_jobs_started_total{tool=\"ansible\",playbook=\"site.yml\""),
+        "{metrics}"
+    );
+
+    let (status, sleeper, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(team),
+        Some(json!({
+            "name": "Pending sleeper",
+            "tool": "shell",
+            "entrypoint": "",
+            "spec": {"script": "sleep 30\necho should-not-run\n"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{sleeper}");
+    let sleeper_id = sleeper["id"].as_str().unwrap();
+    let (status, job, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{sleeper_id}/launch"),
+        Some(&cookie),
+        Some(team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+    let job_id = job["id"].as_str().unwrap();
+    let (status, canceled, _) = call(
+        &app,
+        "POST",
+        &format!("/api/jobs/{job_id}/cancel"),
+        Some(&cookie),
+        Some(team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{canceled}");
+    assert_eq!(canceled["status"], "canceled");
+
+    let mut metrics = String::new();
+    for _ in 0..20 {
+        metrics = metrics_text(&app).await;
+        if finished_total(&metrics, "canceled") >= 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(finished_total(&metrics, "canceled"), 1, "{metrics}");
+
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let (status, body, _) = call(
+        &app,
+        "GET",
+        &format!("/api/jobs/{job_id}"),
+        Some(&cookie),
+        Some(team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], "canceled");
+    let events = body["events"].to_string();
+    assert!(!events.contains("should-not-run"), "{events}");
+    if let Some(pid) = body["events"].as_array().and_then(|events| {
+        events.iter().find_map(|event| {
+            event["line"]
+                .as_str()
+                .and_then(|line| line.strip_prefix("Process group "))
+                .and_then(|line| line.strip_suffix('.'))
+                .map(str::to_string)
+        })
+    }) {
+        let proc = std::path::PathBuf::from(format!("/proc/{pid}"));
+        for _ in 0..40 {
+            if !proc.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(!proc.exists(), "process {pid} is still running");
+    }
+    let metrics = metrics_text(&app).await;
+    assert_eq!(finished_total(&metrics, "canceled"), 1, "{metrics}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn finished_total(metrics: &str, status: &str) -> u64 {
+    let needle = format!("status=\"{status}\"");
+    metrics
+        .lines()
+        .filter(|line| line.starts_with("koreograf_jobs_finished_total{") && line.contains(&needle))
+        .map(|line| {
+            line.rsplit(' ')
+                .next()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(0)
+        })
+        .sum()
+}
+
+async fn metrics_text(app: &axum::Router) -> String {
+    let (status, body, _) = call(app, "GET", "/metrics", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    body.as_str().unwrap_or("").to_string()
+}
+
+#[tokio::test]
 async fn cancel_kills_a_child_that_ignores_term() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

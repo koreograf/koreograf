@@ -595,14 +595,26 @@ pub async fn sync_project(state: &Shared, project: &db::Project) -> AppResult<St
 }
 
 pub fn cancel(state: &Shared, job_id: &str) -> AppResult<()> {
-    {
+    let unstarted = {
         let db = state.db()?;
         let job = db::job(&db, job_id)?.ok_or(ApiError::NotFound)?;
         if matches!(job.status.as_str(), "successful" | "failed" | "canceled") {
             return Ok(());
         }
-        db::finish_job(&db, job_id, "canceled")?;
+        let changed = db::finish_job(&db, job_id, "canceled")?;
         db::insert_event(&db, job_id, "system", "Cancel requested.")?;
+        changed.then(|| crate::metrics::job_labels(&job))
+    };
+    if let Some(labels) = unstarted {
+        let meta = crate::metrics::JobMeta {
+            job_id,
+            team_id: &labels.team_id,
+            tool: &labels.tool,
+            playbook: &labels.playbook,
+            template: &labels.template,
+        };
+        // A running observation stays open so the runner can close it once.
+        state.metrics.finish_unstarted(&meta, "canceled");
     }
     // After the database lock. The runner reads this set instead of the job row.
     if let Ok(mut canceled) = state.canceled.lock() {
@@ -1237,6 +1249,67 @@ mod tests {
             let params = db::json_object(&job.parameters);
             assert_eq!(params["spec"]["limit"], "web-1");
             assert_eq!(params["spec"]["tags"], "heal");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cancel_before_execution_counts_the_job_once() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-cancel-pending-{nanos}"));
+        let state = crate::boot(config(&dir)).expect("boot");
+        let (template_id, team_id) = {
+            let db = state.db().expect("db");
+            db.query_row(
+                "SELECT id, team_id FROM templates WHERE name = 'Healthcheck'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .expect("template")
+        };
+        let job_id = launch(
+            &state,
+            LaunchRequest {
+                team_id,
+                template_id,
+                extra_vars: json!({}),
+                launched_by: "admin".into(),
+                trigger: "manual".into(),
+                workflow_job_id: None,
+                workflow_node_id: None,
+                parameters_override: None,
+                overrides: LaunchOverrides::default(),
+            },
+        )
+        .expect("launch");
+        cancel(&state, &job_id).expect("cancel");
+        let text = state.metrics.render(&[]);
+        assert!(
+            text.contains(
+                "koreograf_jobs_finished_total{tool=\"shell\",playbook=\"health.sh\",status=\"canceled\"} 1"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("koreograf_jobs_started_total{"), "{text}");
+        for _ in 0..4 {
+            tokio::task::yield_now().await;
+        }
+        let text = state.metrics.render(&[]);
+        assert!(
+            text.contains(
+                "koreograf_jobs_finished_total{tool=\"shell\",playbook=\"health.sh\",status=\"canceled\"} 1"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("} 2"), "{text}");
+        assert!(!text.contains("koreograf_jobs_started_total{"), "{text}");
+        {
+            let db = state.db().expect("db");
+            let job = db::job(&db, &job_id).expect("read").expect("job");
+            assert_eq!(job.status, "canceled");
         }
         let _ = std::fs::remove_dir_all(dir);
     }
