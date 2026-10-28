@@ -54,8 +54,8 @@ services:
       - koreograf-data:/var/lib/koreograf
       # Execution Environments brauchen den Docker-Socket.
       # Der Socket ist gleichwertig mit root auf dem Host.
-      # Das veröffentlichte Image kann älter sein als dieses Checkout.
-      # Dafür docker-compose.build.yml verwenden.
+      # The published image can be older than this checkout.
+      # Use docker-compose.build.yml for that build.
       # - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
