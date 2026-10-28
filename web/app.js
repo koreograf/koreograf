@@ -1465,6 +1465,7 @@ function scheduleHaystack(item) {
     item.timezone,
     item.start_time,
     item.created_by,
+    item.updated_by,
     scheduleRepeat(item),
     scheduleEnd(item),
     scheduleSentence(item),
@@ -1535,7 +1536,8 @@ function scheduleTableRows(item, showTarget, span) {
   const edit = can("operator") ? `
     <button class="btn compact" type="button" data-schedule-edit="${esc(item.id)}">${h("schedule_edit")}</button>
     <button class="btn compact danger" type="button" data-schedule-delete="${esc(item.id)}">${h("delete")}</button>` : "";
-  const by = item.created_by ? `<div class="small muted">${h("schedule.by", { name: item.created_by })}</div>` : "";
+  const editor = item.updated_by || item.created_by;
+  const by = editor ? `<div class="small muted">${h("schedule.by", { name: editor })}</div>` : "";
   const alert = item.missed_at ? `
     <tr class="schedule-alert">
       <td colspan="${span}">

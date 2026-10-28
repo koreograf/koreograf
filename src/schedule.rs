@@ -794,12 +794,7 @@ async fn one(state: &Shared, item: &Schedule, now: DateTime<Utc>, startup: bool)
             db::note_miss(&db, &item.id, Some(&format_utc(at)))?;
         }
         Action::Fire(at) => {
-            let actor = if item.created_by.is_empty() {
-                "schedule"
-            } else {
-                item.created_by.as_str()
-            };
-            let started = start(state, item, actor);
+            let started = start(state, item, launch_actor(item));
             if let Err(err) = &started {
                 tracing::warn!(schedule = %item.id, error = %err, "schedule did not start");
             }
@@ -811,6 +806,21 @@ async fn one(state: &Shared, item: &Schedule, now: DateTime<Utc>, startup: bool)
         }
     }
     Ok(())
+}
+
+/// The user who last saved the schedule. An older row with no editor falls
+/// back to the creator, and a blank name stays the synthetic `schedule` actor.
+fn launch_actor(item: &Schedule) -> &str {
+    let name = if item.updated_by.is_empty() {
+        item.created_by.as_str()
+    } else {
+        item.updated_by.as_str()
+    };
+    if name.is_empty() {
+        "schedule"
+    } else {
+        name
+    }
 }
 
 pub(crate) fn start(state: &Shared, item: &Schedule, actor: &str) -> AppResult<()> {
@@ -1158,6 +1168,7 @@ mod tests {
                     missed_at: None,
                     occurrence_count: 0,
                     created_by: "operator".into(),
+                    updated_by: "operator".into(),
                     created_at: now.clone(),
                     updated_at: now,
                 },
@@ -1192,7 +1203,7 @@ mod tests {
             assert!(missed.is_some(), "a refused run is kept as a miss");
             db.execute(
                 "UPDATE schedules
-                 SET occurrence_count = 0, missed_at = NULL, created_by = 'admin'
+                 SET occurrence_count = 0, missed_at = NULL, updated_by = 'admin'
                  WHERE id = 'operator-schedule'",
                 [],
             )
@@ -1216,6 +1227,14 @@ mod tests {
             )
             .expect("admin job");
         assert_eq!(launched, "admin");
+        let creator: String = db
+            .query_row(
+                "SELECT created_by FROM schedules WHERE id = 'operator-schedule'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("creator");
+        assert_eq!(creator, "operator");
         let _ = std::fs::remove_dir_all(dir);
     }
 
