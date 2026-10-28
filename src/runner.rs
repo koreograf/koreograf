@@ -23,6 +23,8 @@ const DEFAULT_INVENTORY: &str = "[all]\nlocalhost ansible_connection=local\n";
 const STOP_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 /// Bytes of pull stderr kept for the failure line. The tail holds the reason.
 const PULL_STDERR_TAIL: usize = 8 * 1024;
+/// Read errors tolerated before the pipe is closed. One error is not EOF.
+const PULL_STDERR_READ_ERRORS: u32 = 8;
 
 #[derive(Clone, Debug)]
 pub struct RunningProc {
@@ -2721,15 +2723,27 @@ fn pull_failure(image: &str, stderr: &str) -> String {
 async fn read_stderr_tail(mut reader: impl AsyncRead + Unpin, limit: usize) -> Vec<u8> {
     let mut chunk = [0u8; 4096];
     let mut kept = Vec::new();
+    let mut errors = 0u32;
     loop {
         match reader.read(&mut chunk).await {
-            Ok(0) | Err(_) => break,
+            Ok(0) => break,
             Ok(n) => {
+                errors = 0;
                 kept.extend_from_slice(&chunk[..n]);
                 if kept.len() > limit {
                     let drop_n = kept.len() - limit;
                     kept = kept.split_off(drop_n);
                 }
+            }
+            Err(_) => {
+                // Not EOF. Keep reading so the reason stays and the pull
+                // cannot block on a full pipe. Repeated errors drop the
+                // reader, which closes the pipe instead of spinning.
+                errors += 1;
+                if errors >= PULL_STDERR_READ_ERRORS {
+                    break;
+                }
+                tokio::task::yield_now().await;
             }
         }
     }
@@ -2845,16 +2859,58 @@ fn assignment_separator(rest: &str) -> Option<usize> {
     if sep == b'=' || (sep == b':' && quoted) {
         body = &body[1..];
         n += 1;
-    } else {
-        return None;
+        let ws = body.len() - body.trim_start_matches([' ', '\t']).len();
+        body = &body[ws..];
+        n += ws;
+        if body.starts_with(['"', '\'']) {
+            n += 1;
+        }
+        return Some(n);
     }
+    if sep == b':' {
+        return scheme_separator(body, n);
+    }
+    None
+}
+
+/// Unquoted `Authorization: Bearer <token>` or `Basic`. `body` starts at the colon.
+fn scheme_separator(body: &str, mut n: usize) -> Option<usize> {
+    n += 1;
+    let mut body = &body[1..];
     let ws = body.len() - body.trim_start_matches([' ', '\t']).len();
     body = &body[ws..];
     n += ws;
-    if body.starts_with(['"', '\'']) {
-        n += 1;
+    let scheme = scheme_len(body)?;
+    let mut after = &body[scheme..];
+    if after
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        return None;
+    }
+    let ws = after.len() - after.trim_start_matches([' ', '\t']).len();
+    if ws == 0 {
+        return None;
+    }
+    after = &after[ws..];
+    n += scheme + ws;
+    if assignment_value_len(after) == 0 {
+        return None;
     }
     Some(n)
+}
+
+fn scheme_len(body: &str) -> Option<usize> {
+    for scheme in ["bearer", "basic"] {
+        if body.len() >= scheme.len()
+            && body.is_char_boundary(scheme.len())
+            && body[..scheme.len()].eq_ignore_ascii_case(scheme)
+        {
+            return Some(scheme.len());
+        }
+    }
+    None
 }
 
 fn assignment_value_len(rest: &str) -> usize {
@@ -3607,6 +3663,17 @@ mod tests {
         assert!(json.contains("\"password\":\"[redacted]\""), "{json}");
         assert!(!json.contains("s3cret-token"), "{json}");
 
+        let bearer = pull_failure("app:missing", "Error: Authorization: Bearer s3cret-token\n");
+        assert!(
+            bearer.contains("Authorization: Bearer [redacted]"),
+            "{bearer}"
+        );
+        assert!(bearer.contains("Error:"), "{bearer}");
+        assert!(!bearer.contains("s3cret-token"), "{bearer}");
+        let basic = pull_failure("app:missing", "Error: authorization: basic dXNlcjpwYXNz\n");
+        assert!(basic.contains("authorization: basic [redacted]"), "{basic}");
+        assert!(!basic.contains("dXNlcjpwYXNz"), "{basic}");
+
         let prose = pull_failure(
             "app:latest",
             "toomanyrequests: You have reached your pull rate limit. password: not a secret field\n",
@@ -3665,6 +3732,62 @@ exit 1
         assert!(err.contains("[redacted]"), "{err}");
         assert!(!err.contains("s3cret-token"), "{err}");
         assert!(ok.is_ok(), "{ok:?}");
+    }
+
+    struct StderrAfterError {
+        errors: u32,
+        data: Vec<u8>,
+        pos: usize,
+    }
+
+    impl AsyncRead for StderrAfterError {
+        fn poll_read(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            let this = self.get_mut();
+            if this.errors > 0 {
+                this.errors -= 1;
+                return std::task::Poll::Ready(Err(std::io::Error::other("again")));
+            }
+            if this.pos >= this.data.len() {
+                return std::task::Poll::Ready(Ok(()));
+            }
+            let n = buf.remaining().min(this.data.len() - this.pos);
+            buf.put_slice(&this.data[this.pos..this.pos + n]);
+            this.pos += n;
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn pull_stderr_keeps_the_reason_after_a_read_error() {
+        let reader = StderrAfterError {
+            errors: 1,
+            data: b"noise\nError: manifest unknown\n".to_vec(),
+            pos: 0,
+        };
+        let tail = read_stderr_tail(reader, PULL_STDERR_TAIL).await;
+        let text = String::from_utf8_lossy(&tail);
+        assert!(text.contains("manifest unknown"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn pull_stderr_stops_after_repeated_read_errors() {
+        let reader = StderrAfterError {
+            errors: 100,
+            data: b"never\n".to_vec(),
+            pos: 0,
+        };
+        let started = std::time::Instant::now();
+        let tail = tokio::time::timeout(
+            Duration::from_secs(2),
+            read_stderr_tail(reader, PULL_STDERR_TAIL),
+        )
+        .await;
+        assert!(tail.is_ok(), "repeated read errors stalled");
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[test]
