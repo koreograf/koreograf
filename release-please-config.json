@@ -28,6 +28,7 @@
           "jsonpath": "$.appVersion"
         },
         "docker-compose.yml",
+        "Dockerfile",
         "deploy/helm/koreograf/values.yaml",
         "README.md",
         "docs/installation.md"

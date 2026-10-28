@@ -73,6 +73,9 @@ jobs:
           tags: |
             ghcr.io/koreograf/koreograf:${{ steps.tags.outputs.version }}
             ghcr.io/koreograf/koreograf:${{ steps.tags.outputs.tag }}
+          build-args: |
+            VERSION=${{ steps.tags.outputs.version }}
+            SOURCE=https://github.com/koreograf/koreograf
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Install cosign

@@ -12,7 +12,9 @@ use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
+use axum::Json;
 use axum::Router;
+use serde_json::{json, Value};
 use tower_http::set_header::response::SetMultipleResponseHeadersLayer;
 use tower_http::trace::TraceLayer;
 
@@ -27,6 +29,7 @@ use crate::Shared;
 
 pub fn router(state: Shared) -> Router {
     let api = Router::new()
+        .route("/version", get(version))
         .route("/login", post(session::login))
         .route("/logout", post(session::logout))
         .route("/me", get(session::me).put(session::update_me))
@@ -218,6 +221,10 @@ fn response_headers(hsts: bool) -> SetMultipleResponseHeadersLayer<Response> {
             .into(),
         (header::STRICT_TRANSPORT_SECURITY, hsts).into(),
     ])
+}
+
+async fn version() -> Json<Value> {
+    Json(json!({ "version": crate::version() }))
 }
 
 async fn health() -> &'static str {

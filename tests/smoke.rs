@@ -6857,6 +6857,39 @@ fn the_image_reaps_orphans_with_tini() {
 }
 
 #[test]
+fn the_image_labels_name_the_version_and_the_source() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dockerfile = std::fs::read_to_string(root.join("Dockerfile")).expect("Dockerfile");
+    assert!(dockerfile.contains("org.opencontainers.image.version=\"${VERSION}\""));
+    assert!(dockerfile.contains("org.opencontainers.image.source=\"${SOURCE}\""));
+    let version = env!("CARGO_PKG_VERSION");
+    assert!(dockerfile.contains("# x-release-please-start-version"));
+    assert!(dockerfile.contains(&format!("ARG VERSION={version}\n")));
+    assert!(dockerfile.contains("# x-release-please-end"));
+    assert!(!dockerfile.contains(&format!("ARG VERSION={version} #")));
+    let release =
+        std::fs::read_to_string(root.join(".github/workflows/release.yml")).expect("release.yml");
+    assert!(release.contains("VERSION=${{ steps.tags.outputs.version }}"));
+    assert!(release.contains("SOURCE=https://github.com/koreograf/koreograf"));
+}
+
+#[tokio::test]
+async fn version_is_available_without_signing_in() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-version-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+    let (status, body, _) = call(&app, "GET", "/api/version", None, None, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn message_catalogs_match_and_cover_the_ui() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let de_path = root.join("web/i18n/de.json");
