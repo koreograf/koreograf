@@ -185,7 +185,7 @@ Shell: `entrypoint` or `spec.script`. The script is written as `inline.sh`.
 | GET, POST | `/api/users` |
 | GET, PUT, DELETE | `/api/users/{id}` |
 | GET, PUT | `/api/me` |
-| GET | `/api/overview`, `/api/teams` |
+| GET | `/api/overview`, `/api/runner`, `/api/teams` |
 | POST | `/api/teams` |
 | PUT | `/api/teams/{id}` |
 | GET, POST | `/api/teams/{id}/members` |

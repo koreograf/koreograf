@@ -44,6 +44,7 @@ pub fn router(state: Shared) -> Router {
                 .delete(session::delete_user),
         )
         .route("/overview", get(catalog::overview))
+        .route("/runner", get(catalog::runner_status))
         .route(
             "/teams",
             get(catalog::list_teams).post(catalog::create_team),

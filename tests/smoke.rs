@@ -4453,6 +4453,7 @@ async fn admin_settings_hide_secrets_and_apply_without_restart() {
             || overview["runtime"] == "podman",
         "{overview}"
     );
+    assert_same_runner(&app, &cookie, &team, &overview).await;
 
     let (status, kept, _) = call(
         &app,
@@ -4564,6 +4565,7 @@ async fn admin_settings_hide_secrets_and_apply_without_restart() {
             || overview["runtime"] == "podman",
         "{overview}"
     );
+    assert_same_runner(&app, &cookie, &team, &overview).await;
 
     let (status, reset, _) = call(
         &app,
@@ -6912,6 +6914,8 @@ fn auto_mode_names_a_missing_runtime() {
     assert!(script.contains("id=\"environment-runtime-warning\""));
     assert!(script.contains("this_execution_environment_is_ignored_until_docker_or"));
     assert!(script.contains("no_container_runtime"));
+    assert!(script.contains("api(\"GET\", \"/api/runner\")"));
+    assert_environment_warning_cases(&script);
     let en = std::fs::read_to_string(root.join("web/i18n/en.json")).expect("en");
     let de = std::fs::read_to_string(root.join("web/i18n/de.json")).expect("de");
     assert!(
@@ -6922,6 +6926,81 @@ fn auto_mode_names_a_missing_runtime() {
     assert!(de.contains("Im automatischen Modus"));
     let docs = std::fs::read_to_string(root.join("docs/configuration.md")).expect("docs");
     assert!(docs.contains("mount the Docker socket"));
+    assert!(docs.contains("stops after ten seconds"));
+    assert!(docs.contains("GET /api/runner"));
+}
+
+fn environment_runtime_warning_source(script: &str) -> String {
+    let start = script
+        .find("function environmentRuntimeWarning")
+        .expect("warning function");
+    let mut depth = 0;
+    let mut seen = false;
+    for (offset, ch) in script[start..].char_indices() {
+        if ch == '{' {
+            depth += 1;
+            seen = true;
+        } else if ch == '}' {
+            depth -= 1;
+            if seen && depth == 0 {
+                return script[start..start + offset + 1].to_string();
+            }
+        }
+    }
+    panic!("warning function has no end");
+}
+
+fn assert_environment_warning_cases(script: &str) {
+    let function = environment_runtime_warning_source(script);
+    let probe = format!(
+        r#"{function}
+const cases = [
+  ["auto", null, "ee", "this_execution_environment_is_ignored_until_docker_or"],
+  ["auto", "", "ee", "this_execution_environment_is_ignored_until_docker_or"],
+  ["auto", "docker", "ee", ""],
+  ["auto", "podman", "ee", ""],
+  ["auto", null, "", ""],
+  ["docker", null, "ee", "an_execution_environment_is_set_but_neither_docker"],
+  ["docker", "docker", "ee", ""],
+  ["local", null, "ee", ""],
+  ["", null, "ee", "this_execution_environment_is_ignored_until_docker_or"],
+  [null, null, "ee", "this_execution_environment_is_ignored_until_docker_or"]
+];
+for (const [mode, runtime, environmentId, want] of cases) {{
+  const got = environmentRuntimeWarning(mode, runtime, environmentId);
+  if (got !== want) {{
+    console.error(JSON.stringify({{mode, runtime, environmentId, want, got}}));
+    process.exit(1);
+  }}
+}}
+"#
+    );
+    let path = std::env::temp_dir().join(format!(
+        "koreograf-runtime-warning-{}.js",
+        std::process::id()
+    ));
+    std::fs::write(&path, probe).expect("probe");
+    let output = std::process::Command::new("node")
+        .arg(&path)
+        .output()
+        .expect("node");
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        output.status.success(),
+        "warning cases failed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+async fn assert_same_runner(app: &axum::Router, cookie: &str, team: &str, overview: &Value) {
+    let (status, denied, _) = call(app, "GET", "/api/runner", None, Some(team), None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{denied}");
+    let (status, runner, _) = call(app, "GET", "/api/runner", Some(cookie), Some(team), None).await;
+    assert_eq!(status, StatusCode::OK, "{runner}");
+    assert_eq!(runner["runner_mode"], overview["runner_mode"]);
+    assert_eq!(runner["runtime"], overview["runtime"]);
+    assert_eq!(runner.as_object().map(|item| item.len()), Some(2));
 }
 
 #[test]

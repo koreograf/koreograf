@@ -522,17 +522,30 @@ async fn runtime_is_rootless(bin: &str) -> Result<bool, String> {
     ))
 }
 
+async fn command_ok(bin: &str, args: &[&str], limit: Duration) -> bool {
+    let mut child = match Command::new(bin)
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return false,
+    };
+    match tokio::time::timeout(limit, child.wait()).await {
+        Ok(Ok(status)) => status.success(),
+        Ok(Err(_)) => false,
+        Err(_) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            false
+        }
+    }
+}
+
 pub async fn detect_runtime() -> Option<String> {
     for bin in ["docker", "podman"] {
-        let ok = Command::new(bin)
-            .arg("version")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await
-            .map(|status| status.success())
-            .unwrap_or(false);
-        if ok {
+        if command_ok(bin, &["version"], STOP_COMMAND_TIMEOUT).await {
             return Some(bin.to_string());
         }
     }
@@ -3026,6 +3039,14 @@ mod tests {
     fn auto_without_a_runtime_names_the_remedy() {
         assert!(AUTO_WITHOUT_RUNTIME.contains("Mount the Docker socket"));
         assert!(AUTO_WITHOUT_RUNTIME.contains("set the runner mode to docker to fail instead"));
+    }
+
+    #[tokio::test]
+    async fn a_runtime_probe_stops_when_the_command_hangs() {
+        let started = std::time::Instant::now();
+        let ok = command_ok("sleep", &["30"], Duration::from_millis(200)).await;
+        assert!(!ok);
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[tokio::test]

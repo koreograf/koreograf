@@ -1005,15 +1005,23 @@ async function pageTemplates() {
   draw();
 }
 
+function environmentRuntimeWarning(mode, runtime, environmentId) {
+  if (!environmentId || runtime) return "";
+  const selected = mode || "auto";
+  if (selected === "auto") return "this_execution_environment_is_ignored_until_docker_or";
+  if (selected === "docker") return "an_execution_environment_is_set_but_neither_docker";
+  return "";
+}
+
 async function pageTemplateForm(id) {
   if (!needTeam()) return;
-  const [projects, inventories, credentials, environments, templates, overview] = await Promise.all([
+  const [projects, inventories, credentials, environments, templates, runner] = await Promise.all([
     api("GET", "/api/projects"),
     api("GET", "/api/inventories"),
     api("GET", "/api/credentials"),
     api("GET", "/api/environments"),
     api("GET", "/api/templates"),
-    api("GET", "/api/overview"),
+    api("GET", "/api/runner"),
   ]);
   const existing = id ? templates.find((item) => item.id === id) : null;
   if (id && !existing) {
@@ -1119,15 +1127,13 @@ async function pageTemplateForm(id) {
   const showEnvironmentWarning = () => {
     const warning = document.querySelector("#environment-runtime-warning");
     if (!warning) return;
-    const chosen = Boolean(form.environment_id.value);
-    const missing = !overview.runtime;
-    const mode = overview.runner_mode || "auto";
-    const ignored = chosen && missing && mode === "auto";
-    const blocked = chosen && missing && mode === "docker";
-    warning.hidden = !(ignored || blocked);
-    warning.textContent = ignored
-      ? t("this_execution_environment_is_ignored_until_docker_or")
-      : t("an_execution_environment_is_set_but_neither_docker");
+    const key = environmentRuntimeWarning(
+      runner.runner_mode,
+      runner.runtime,
+      form.environment_id.value,
+    );
+    warning.hidden = !key;
+    if (key) warning.textContent = t(key);
   };
   form.environment_id.addEventListener("change", showEnvironmentWarning);
   showEnvironmentWarning();
