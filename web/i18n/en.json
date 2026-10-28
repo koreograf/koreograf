@@ -479,6 +479,7 @@
   "schedule_has_no_occurrence": "This schedule has no upcoming run.",
   "schedule_missed_state": "Missed",
   "schedule_needs_a_known_time_zone": "The time zone is unknown.",
+  "schedule_needs_a_new_owner": "The last editor cannot start runs for this team. Save the schedule as someone who can, or pause it.",
   "schedule_needs_a_weekday": "Pick at least one weekday.",
   "schedule_no_upcoming": "No further run",
   "schedule_paused": "Paused",

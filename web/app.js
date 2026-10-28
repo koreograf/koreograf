@@ -1538,6 +1538,12 @@ function scheduleTableRows(item, showTarget, span) {
     <button class="btn compact danger" type="button" data-schedule-delete="${esc(item.id)}">${h("delete")}</button>` : "";
   const editor = item.updated_by || item.created_by;
   const by = editor ? `<div class="small muted">${h("schedule.by", { name: editor })}</div>` : "";
+  const owner = item.launch_block === "schedule_needs_a_new_owner" ? `
+    <tr class="schedule-alert">
+      <td colspan="${span}">
+        <div class="schedule-miss"><span>${h("schedule_needs_a_new_owner")}</span></div>
+      </td>
+    </tr>` : "";
   const alert = item.missed_at ? `
     <tr class="schedule-alert">
       <td colspan="${span}">
@@ -1556,7 +1562,7 @@ function scheduleTableRows(item, showTarget, span) {
     <td>${esc(scheduleEnd(item))}</td>
     <td class="tight">${scheduleSwitch(item)}</td>
     <td class="actions">${edit}</td>
-  </tr>${alert}`;
+  </tr>${owner}${alert}`;
 }
 
 function scheduleSwitch(item) {
