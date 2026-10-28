@@ -152,7 +152,7 @@ impl IntoResponse for ApiError {
 
 /// JSON object body.
 ///
-/// A missing body or the wrong content type is `json_body_required`. Broken
+/// A missing content type is `json_body_required`. An empty buffer, broken
 /// JSON, a non-object, or a type mismatch is `json_body_invalid`. A body over
 /// the limit is `request_too_large` (413).
 pub struct ApiJson<T>(pub T);

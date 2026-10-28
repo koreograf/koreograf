@@ -5218,6 +5218,16 @@ async fn json_bodies_are_rejected_by_kind_and_objects_reject_arrays() {
         &launch,
         Some(&cookie),
         Some(&team),
+        b"",
+        invalid,
+    )
+    .await;
+    expect_json_error(
+        &app,
+        "POST",
+        &launch,
+        Some(&cookie),
+        Some(&team),
         wrong_type.as_bytes(),
         invalid,
     )
