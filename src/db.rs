@@ -458,6 +458,9 @@ CREATE INDEX IF NOT EXISTS idx_schedules_target ON schedules(target_kind, target
             [],
         )?;
     }
+    if !column_exists(c, "schedules", "launch_block")? {
+        c.execute("ALTER TABLE schedules ADD COLUMN launch_block TEXT", [])?;
+    }
     Ok(())
 }
 
@@ -2475,9 +2478,10 @@ pub struct Schedule {
     pub updated_by: String,
     pub created_at: String,
     pub updated_at: String,
+    pub launch_block: Option<String>,
 }
 
-const SCHEDULE_SELECT: &str = "id, team_id, name, target_kind, target_id, timezone, start_date, start_time, frequency, weekdays, end_kind, end_count, end_date, enabled, next_run_at, missed_at, occurrence_count, created_by, created_at, updated_at, updated_by";
+const SCHEDULE_SELECT: &str = "id, team_id, name, target_kind, target_id, timezone, start_date, start_time, frequency, weekdays, end_kind, end_count, end_date, enabled, next_run_at, missed_at, occurrence_count, created_by, created_at, updated_at, updated_by, launch_block";
 
 fn map_schedule(row: &rusqlite::Row<'_>) -> rusqlite::Result<Schedule> {
     Ok(Schedule {
@@ -2502,6 +2506,7 @@ fn map_schedule(row: &rusqlite::Row<'_>) -> rusqlite::Result<Schedule> {
         created_at: row.get(18)?,
         updated_at: row.get(19)?,
         updated_by: row.get(20)?,
+        launch_block: row.get(21)?,
     })
 }
 
@@ -2510,8 +2515,8 @@ pub fn insert_schedule(c: &Connection, item: &Schedule) -> AppResult<()> {
         "INSERT INTO schedules (
             id, team_id, name, target_kind, target_id, timezone, start_date, start_time,
             frequency, weekdays, end_kind, end_count, end_date, enabled, next_run_at, missed_at,
-            occurrence_count, created_by, created_at, updated_at, updated_by
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
+            occurrence_count, created_by, created_at, updated_at, updated_by, launch_block
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
         params![
             item.id,
             item.team_id,
@@ -2534,6 +2539,7 @@ pub fn insert_schedule(c: &Connection, item: &Schedule) -> AppResult<()> {
             item.created_at,
             item.updated_at,
             item.updated_by,
+            item.launch_block,
         ],
     )?;
     Ok(())
@@ -2545,8 +2551,8 @@ pub fn update_schedule(c: &Connection, item: &Schedule) -> AppResult<()> {
             name = ?2, timezone = ?3, start_date = ?4, start_time = ?5, frequency = ?6,
             weekdays = ?7, end_kind = ?8, end_count = ?9, end_date = ?10, enabled = ?11,
             next_run_at = ?12, missed_at = ?13, occurrence_count = ?14, updated_at = ?15,
-            updated_by = ?16
-         WHERE id = ?1 AND team_id = ?17",
+            updated_by = ?16, launch_block = ?17
+         WHERE id = ?1 AND team_id = ?18",
         params![
             item.id,
             item.name,
@@ -2564,6 +2570,7 @@ pub fn update_schedule(c: &Connection, item: &Schedule) -> AppResult<()> {
             item.occurrence_count,
             item.updated_at,
             item.updated_by,
+            item.launch_block,
             item.team_id,
         ],
     )?;
@@ -2611,7 +2618,7 @@ pub fn list_team_schedules(c: &Connection, team_id: &str) -> AppResult<Vec<(Sche
     );
     let mut stmt = c.prepare(&sql)?;
     let rows = stmt.query_map(params![team_id], |row| {
-        let target_name: String = row.get(21)?;
+        let target_name: String = row.get(22)?;
         Ok((map_schedule(row)?, target_name))
     })?;
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -2656,6 +2663,14 @@ pub fn advance_schedule(
     c.execute(
         "UPDATE schedules SET next_run_at = ?2, occurrence_count = ?3, updated_at = ?4 WHERE id = ?1",
         params![id, next_run_at, occurrence_count, now()],
+    )?;
+    Ok(())
+}
+
+pub fn set_launch_block(c: &Connection, id: &str, reason: Option<&str>) -> AppResult<()> {
+    c.execute(
+        "UPDATE schedules SET launch_block = ?2, updated_at = ?3 WHERE id = ?1",
+        params![id, reason, now()],
     )?;
     Ok(())
 }

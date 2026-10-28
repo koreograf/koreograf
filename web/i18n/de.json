@@ -479,6 +479,7 @@
   "schedule_has_no_occurrence": "Dieser Zeitplan hat keinen weiteren Lauf.",
   "schedule_missed_state": "Ausgefallen",
   "schedule_needs_a_known_time_zone": "Die Zeitzone ist unbekannt.",
+  "schedule_needs_a_new_owner": "Wer den Zeitplan zuletzt geändert hat, kann für dieses Team keine Läufe starten. Speichern Sie ihn erneut als jemand mit dieser Berechtigung, oder pausieren Sie ihn.",
   "schedule_needs_a_weekday": "Bitte mindestens einen Wochentag wählen.",
   "schedule_no_upcoming": "Kein weiterer Lauf",
   "schedule_paused": "Pausiert",

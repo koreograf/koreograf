@@ -794,14 +794,40 @@ async fn one(state: &Shared, item: &Schedule, now: DateTime<Utc>, startup: bool)
             db::note_miss(&db, &item.id, Some(&format_utc(at)))?;
         }
         Action::Fire(at) => {
-            let started = start(state, item, launch_actor(item));
+            let actor = launch_actor(item);
+            let allowed = {
+                let db = state.db()?;
+                actor_may_launch(&db, &item.team_id, actor)?
+            };
+            if !allowed {
+                tracing::warn!(
+                    schedule = %item.id,
+                    user = actor,
+                    "scheduled run skipped because that user cannot start runs for this team"
+                );
+            }
+            let started = if allowed {
+                start(state, item, actor)
+            } else {
+                Err(ApiError::bad("schedule_needs_a_new_owner"))
+            };
             if let Err(err) = &started {
-                tracing::warn!(schedule = %item.id, error = %err, "schedule did not start");
+                if allowed {
+                    tracing::warn!(schedule = %item.id, error = %err, "schedule did not start");
+                }
             }
             let db = state.db()?;
             db::advance_schedule(&db, &item.id, next.as_deref(), count)?;
             if started.is_err() {
                 db::note_miss(&db, &item.id, Some(&format_utc(at)))?;
+            }
+            let block = if allowed {
+                None
+            } else {
+                Some("schedule_needs_a_new_owner")
+            };
+            if item.launch_block.as_deref() != block {
+                db::set_launch_block(&db, &item.id, block)?;
             }
         }
     }
@@ -810,6 +836,20 @@ async fn one(state: &Shared, item: &Schedule, now: DateTime<Utc>, startup: bool)
 
 /// The user who last saved the schedule. An older row with no editor falls
 /// back to the creator, and a blank name stays the synthetic `schedule` actor.
+fn actor_may_launch(c: &rusqlite::Connection, team_id: &str, actor: &str) -> AppResult<bool> {
+    let Some(user) = db::user_by_username(c, actor)? else {
+        return Ok(false);
+    };
+    if user.disabled {
+        return Ok(false);
+    }
+    match crate::auth::authorize(c, &user.into(), team_id, crate::auth::Role::Operator) {
+        Ok(()) => Ok(true),
+        Err(ApiError::Forbidden) => Ok(false),
+        Err(err) => Err(err),
+    }
+}
+
 fn launch_actor(item: &Schedule) -> &str {
     let name = if item.updated_by.is_empty() {
         item.created_by.as_str()
@@ -1171,6 +1211,7 @@ mod tests {
                     updated_by: "operator".into(),
                     created_at: now.clone(),
                     updated_at: now,
+                    launch_block: None,
                 },
             )
             .expect("schedule");
@@ -1235,6 +1276,184 @@ mod tests {
             )
             .expect("creator");
         assert_eq!(creator, "operator");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_removed_member_does_not_start_the_next_run() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-schedule-member-{nanos}"));
+        let mut cfg = admins_config(&dir);
+        cfg.local_jobs = crate::config::LocalJobs::All;
+        let state = crate::boot(cfg).expect("boot");
+        let team_id: String = {
+            let db = state.db().expect("db");
+            db.query_row("SELECT id FROM teams LIMIT 1", [], |row| row.get(0))
+                .expect("team")
+        };
+        let yesterday = Utc::now()
+            .date_naive()
+            .pred_opt()
+            .expect("yesterday")
+            .format("%Y-%m-%d")
+            .to_string();
+        let template_id = {
+            let db = state.db().expect("db");
+            db::insert_user(
+                &db,
+                "operator-user",
+                "operator",
+                "Operator",
+                None,
+                "local",
+                false,
+            )
+            .expect("operator");
+            db::grant_manual_membership(&db, &team_id, "operator-user", "operator")
+                .expect("member");
+            db::delete_membership(&db, &team_id, "operator-user").expect("remove");
+            let id = "member-shell".to_string();
+            db::insert_template(
+                &db,
+                &db::Template {
+                    id: id.clone(),
+                    team_id: team_id.clone(),
+                    name: "Member shell".into(),
+                    description: String::new(),
+                    tool: "shell".into(),
+                    project_id: None,
+                    inventory_id: None,
+                    credential_id: None,
+                    environment_id: None,
+                    entrypoint: String::new(),
+                    extra_vars: "{}".into(),
+                    spec: json!({"script": ":"}).to_string(),
+                    created_at: db::now(),
+                    update_on_launch: false,
+                    admin_saved: true,
+                    prompt_on_launch: false,
+                },
+            )
+            .expect("template");
+            let now = db::now();
+            db::insert_schedule(
+                &db,
+                &db::Schedule {
+                    id: "member-schedule".into(),
+                    team_id: team_id.clone(),
+                    name: "Member clock".into(),
+                    target_kind: "template".into(),
+                    target_id: id.clone(),
+                    timezone: "UTC".into(),
+                    start_date: yesterday,
+                    start_time: "00:00".into(),
+                    frequency: "once".into(),
+                    weekdays: String::new(),
+                    end_kind: "never".into(),
+                    end_count: None,
+                    end_date: None,
+                    enabled: true,
+                    next_run_at: Some("2000-01-01T00:00:00Z".into()),
+                    missed_at: None,
+                    occurrence_count: 0,
+                    created_by: "operator".into(),
+                    updated_by: "operator".into(),
+                    created_at: now.clone(),
+                    updated_at: now,
+                    launch_block: None,
+                },
+            )
+            .expect("schedule");
+            id
+        };
+        let load = || {
+            let db = state.db().expect("db");
+            db::schedule(&db, "member-schedule")
+                .expect("read")
+                .expect("schedule")
+        };
+        one(&state, &load(), Utc::now(), false)
+            .await
+            .expect("removed");
+        {
+            let db = state.db().expect("db");
+            let jobs: i64 = db
+                .query_row(
+                    "SELECT COUNT(*) FROM jobs WHERE template_id = ?1",
+                    [&template_id],
+                    |row| row.get(0),
+                )
+                .expect("jobs");
+            assert_eq!(jobs, 0);
+            let missed: Option<String> = db
+                .query_row(
+                    "SELECT missed_at FROM schedules WHERE id = 'member-schedule'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("miss");
+            assert!(missed.is_some(), "a refused run is kept as a miss");
+            let reason: Option<String> = db
+                .query_row(
+                    "SELECT launch_block FROM schedules WHERE id = 'member-schedule'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("reason");
+            assert_eq!(reason.as_deref(), Some("schedule_needs_a_new_owner"));
+            db::grant_manual_membership(&db, &team_id, "operator-user", "viewer").expect("viewer");
+            db.execute(
+                "UPDATE schedules
+                 SET occurrence_count = 0, missed_at = NULL
+                 WHERE id = 'member-schedule'",
+                [],
+            )
+            .expect("reset viewer");
+        }
+        one(&state, &load(), Utc::now(), false)
+            .await
+            .expect("viewer");
+        {
+            let db = state.db().expect("db");
+            let jobs: i64 = db
+                .query_row(
+                    "SELECT COUNT(*) FROM jobs WHERE template_id = ?1",
+                    [&template_id],
+                    |row| row.get(0),
+                )
+                .expect("jobs");
+            assert_eq!(jobs, 0, "a viewer still cannot start the scheduled run");
+            db.execute(
+                "UPDATE schedules
+                 SET occurrence_count = 0, missed_at = NULL, updated_by = 'admin'
+                 WHERE id = 'member-schedule'",
+                [],
+            )
+            .expect("reassign");
+        }
+        one(&state, &load(), Utc::now(), false)
+            .await
+            .expect("admin step");
+        let db = state.db().expect("db");
+        let launched: String = db
+            .query_row(
+                "SELECT launched_by FROM jobs WHERE template_id = ?1",
+                [&template_id],
+                |row| row.get(0),
+            )
+            .expect("admin job");
+        assert_eq!(launched, "admin");
+        let reason: Option<String> = db
+            .query_row(
+                "SELECT launch_block FROM schedules WHERE id = 'member-schedule'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("cleared");
+        assert_eq!(reason, None);
         let _ = std::fs::remove_dir_all(dir);
     }
 
