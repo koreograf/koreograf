@@ -849,12 +849,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
             );
         }
         (true, None, Some(_)) => {
-            log(
-                state,
-                job_id,
-                "system",
-                "No container runtime is reachable. The run stays on the controller.",
-            );
+            log(state, job_id, "system", AUTO_WITHOUT_RUNTIME);
             None
         }
         _ => {
@@ -1075,6 +1070,8 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
     finish(state, job_id, exit == 0);
     Ok(())
 }
+
+const AUTO_WITHOUT_RUNTIME: &str = "No container runtime is reachable. The run stays on the controller. Mount the Docker socket, or set the runner mode to docker to fail instead.";
 
 fn should_container(mode: RunnerMode, has_environment: bool) -> bool {
     has_environment && mode != RunnerMode::Local
@@ -3024,6 +3021,12 @@ fn close_observation(state: &Shared, job_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_without_a_runtime_names_the_remedy() {
+        assert!(AUTO_WITHOUT_RUNTIME.contains("Mount the Docker socket"));
+        assert!(AUTO_WITHOUT_RUNTIME.contains("set the runner mode to docker to fail instead"));
+    }
 
     #[tokio::test]
     async fn a_saved_checkout_can_run_without_a_pull() {

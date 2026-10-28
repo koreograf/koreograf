@@ -611,7 +611,7 @@ async function pageDashboard() {
     <div class="grid-3">
       <article class="card stat"><span class="small muted">${h("dependency_cache")}</span><strong>${esc(bytes(data.cache_bytes))}</strong><p class="small muted">${h("collections_roles_and_opentofu_providers_stay_between_runs")}</p></article>
       <article class="card stat"><span class="small muted">${h("workflow")}</span><strong>${data.workflow_id ? `<a href="#/workflows/${esc(data.workflow_id)}">${esc(data.workflow_name)}</a>` : "—"}</strong><p class="small muted">${h("success_edges_and_failure_edges_start_the_next")}</p></article>
-      <article class="card stat"><span class="small muted">${h("webhook")}</span><strong>${data.hook_id ? esc(data.hook_name) : "—"}</strong><p class="small muted">${data.ldap ? h("ldap_is_configured") : h("local_accounts")} ${h("runner")}: ${esc(data.runner_mode)}${data.runtime ? `, ${esc(data.runtime)}` : ""}.</p></article>
+      <article class="card stat"><span class="small muted">${h("webhook")}</span><strong>${data.hook_id ? esc(data.hook_name) : "—"}</strong><p class="small muted">${data.ldap ? h("ldap_is_configured") : h("local_accounts")} ${h("runner")}: ${esc(data.runner_mode)}, ${data.runtime ? esc(data.runtime) : h("no_container_runtime")}.</p></article>
     </div>
     <div class="stack" style="margin-top:14px">
       <section class="card">
@@ -1007,12 +1007,13 @@ async function pageTemplates() {
 
 async function pageTemplateForm(id) {
   if (!needTeam()) return;
-  const [projects, inventories, credentials, environments, templates] = await Promise.all([
+  const [projects, inventories, credentials, environments, templates, overview] = await Promise.all([
     api("GET", "/api/projects"),
     api("GET", "/api/inventories"),
     api("GET", "/api/credentials"),
     api("GET", "/api/environments"),
     api("GET", "/api/templates"),
+    api("GET", "/api/overview"),
   ]);
   const existing = id ? templates.find((item) => item.id === id) : null;
   if (id && !existing) {
@@ -1054,6 +1055,7 @@ async function pageTemplateForm(id) {
           <label class="field" id="inventory-field"${item.tool === "ansible" ? "" : " hidden"}><span>${h("inventory")}</span><select name="inventory_id">${selectOptions(inventories, item.inventory_id, true, (row) => row.name)}</select></label>
           <label class="field"><span>${h("execution_environment")}</span><select name="environment_id">${selectOptions(environments, item.environment_id, true, (row) => `${row.name} (${scopeLabel(row)})`)}</select></label>
         </div>
+        <p class="banner warn" id="environment-runtime-warning" hidden></p>
         ${templateCredentialFields(credentials, selectedCredentialIds(item))}
         <label class="field" id="playbook-field" hidden><span>${h("playbook_from_the_project")}</span><select name="playbook"><option value="">${h("other_path")}</option></select></label>
         <p class="small muted" id="entrypoint-note"></p>
@@ -1114,6 +1116,21 @@ async function pageTemplateForm(id) {
     </form>
     ${id ? `<section class="card" id="schedule-card" data-kind="template" data-target="${esc(id)}"></section>` : ""}`);
   const form = document.querySelector("#template-form");
+  const showEnvironmentWarning = () => {
+    const warning = document.querySelector("#environment-runtime-warning");
+    if (!warning) return;
+    const chosen = Boolean(form.environment_id.value);
+    const missing = !overview.runtime;
+    const mode = overview.runner_mode || "auto";
+    const ignored = chosen && missing && mode === "auto";
+    const blocked = chosen && missing && mode === "docker";
+    warning.hidden = !(ignored || blocked);
+    warning.textContent = ignored
+      ? t("this_execution_environment_is_ignored_until_docker_or")
+      : t("an_execution_environment_is_set_but_neither_docker");
+  };
+  form.environment_id.addEventListener("change", showEnvironmentWarning);
+  showEnvironmentWarning();
   bindChips(form);
   bindVaultPicker(form, credentials, selectedCredentialIds(item));
   const entrypointErrors = new Set([

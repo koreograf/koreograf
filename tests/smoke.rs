@@ -4447,6 +4447,12 @@ async fn admin_settings_hide_secrets_and_apply_without_restart() {
     assert_eq!(status, StatusCode::OK, "{overview}");
     assert_eq!(overview["ldap"], true);
     assert_eq!(overview["runner_mode"], "docker");
+    assert!(
+        overview["runtime"].is_null()
+            || overview["runtime"] == "docker"
+            || overview["runtime"] == "podman",
+        "{overview}"
+    );
 
     let (status, kept, _) = call(
         &app,
@@ -4552,6 +4558,12 @@ async fn admin_settings_hide_secrets_and_apply_without_restart() {
     assert_eq!(status, StatusCode::OK, "{overview}");
     assert_eq!(overview["ldap"], false);
     assert_eq!(overview["runner_mode"], "auto");
+    assert!(
+        overview["runtime"].is_null()
+            || overview["runtime"] == "docker"
+            || overview["runtime"] == "podman",
+        "{overview}"
+    );
 
     let (status, reset, _) = call(
         &app,
@@ -6888,6 +6900,28 @@ async fn version_is_available_without_signing_in() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn auto_mode_names_a_missing_runtime() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let runner = std::fs::read_to_string(root.join("src/runner.rs")).expect("runner.rs");
+    assert!(runner
+        .contains("Mount the Docker socket, or set the runner mode to docker to fail instead."));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    assert!(script.contains("id=\"environment-runtime-warning\""));
+    assert!(script.contains("this_execution_environment_is_ignored_until_docker_or"));
+    assert!(script.contains("no_container_runtime"));
+    let en = std::fs::read_to_string(root.join("web/i18n/en.json")).expect("en");
+    let de = std::fs::read_to_string(root.join("web/i18n/de.json")).expect("de");
+    assert!(
+        en.contains("Mount the Docker socket, or set the runner mode to docker to fail instead.")
+    );
+    assert!(en.contains("In automatic mode a set image is also ignored"));
+    assert!(de.contains("Docker-Socket"));
+    assert!(de.contains("Im automatischen Modus"));
+    let docs = std::fs::read_to_string(root.join("docs/configuration.md")).expect("docs");
+    assert!(docs.contains("mount the Docker socket"));
 }
 
 #[test]
