@@ -59,7 +59,7 @@ Rust 1.89 is the minimum in `Cargo.toml`. This repository pins 1.96.0 in `rust-t
 cargo run
 ```
 
-The UI is at `http://127.0.0.1:8080`. Without `KOREOGRAF_ADMIN_PASSWORD`, the first start writes the password to `data/initial-admin-password` and logs that path. Delete the file after reading it. The process does not remove it.
+The process listens on `0.0.0.0:8080` by default, so the UI answers on every interface; set `KOREOGRAF_BIND=127.0.0.1:8080` to restrict it to localhost. Without `KOREOGRAF_ADMIN_PASSWORD`, the first start writes the password to `data/initial-admin-password` and logs that path. Delete the file after reading it. The process does not remove it.
 
 ### Helm
 

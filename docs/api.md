@@ -82,7 +82,7 @@ On a machine without Compose, read `data/initial-admin-password` instead of `doc
 
 ## Request bodies
 
-Names are at most 120 bytes. Empty optional strings are omitted.
+Names are at most 120 characters. Empty optional strings are omitted.
 
 ### Projects
 

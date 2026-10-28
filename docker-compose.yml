@@ -16,22 +16,22 @@ services:
       # Absolute host path of the data directory when auto-detection is wrong.
       # Empty uses the mount the container daemon already has.
       KOREOGRAF_DATA_HOST: ${KOREOGRAF_DATA_HOST:-}
-      # admins oder all. Vorgabe admins. all nur im vertrauten Netz.
+      # admins or all. Default admins. all only in a trusted network.
       KOREOGRAF_LOCAL_RUNNER_FOR: ${KOREOGRAF_LOCAL_RUNNER_FOR:-admins}
       KOREOGRAF_JOB_TIMEOUT_SECS: ${KOREOGRAF_JOB_TIMEOUT_SECS:-1800}
       KOREOGRAF_JOB_OUTPUT_LINES: ${KOREOGRAF_JOB_OUTPUT_LINES:-8000}
       KOREOGRAF_SECRET_KEY: ${KOREOGRAF_SECRET_KEY:-}
-      # Logformat und Datenbank-URL gelten beim Prozessstart und kommen aus .env.
+      # Log format and database URL apply at process start and come from .env.
       KOREOGRAF_LOG_FORMAT: ${KOREOGRAF_LOG_FORMAT:-}
       KOREOGRAF_HSTS: ${KOREOGRAF_HSTS:-false}
-      # true, false oder auto. auto setzt Secure nur hinter einem vertrauten Proxy.
+      # true, false or auto. auto sets Secure only behind a trusted proxy.
       KOREOGRAF_COOKIE_SECURE: ${KOREOGRAF_COOKIE_SECURE:-auto}
       KOREOGRAF_TRUSTED_PROXY: ${KOREOGRAF_TRUSTED_PROXY:-false}
       KOREOGRAF_DATABASE_URL: ${KOREOGRAF_DATABASE_URL:-}
       # Directory, proxy, runner, time limit, and output line limit apply until the first save
       # under Settings. After that, the database replaces these variables.
-      # Ein Proxy-Name wird nur gesetzt, wenn .env oder die Shell ihn setzen.
-      # Eine leere Zeichenkette würde den großgeschriebenen Proxy für git abschalten.
+      # A proxy name is set only when .env or the shell sets it.
+      # An empty string would disable the uppercase proxy for git.
       HTTP_PROXY:
       HTTPS_PROXY:
       NO_PROXY:
@@ -52,8 +52,8 @@ services:
       KOREOGRAF_LDAP_CA_FILE: ${KOREOGRAF_LDAP_CA_FILE:-}
     volumes:
       - koreograf-data:/var/lib/koreograf
-      # Execution Environments brauchen den Docker-Socket.
-      # Der Socket ist gleichwertig mit root auf dem Host.
+      # Execution environments need the Docker socket.
+      # The socket is equivalent to root on the host.
       # The published image can be older than this checkout.
       # Use docker-compose.build.yml for that build.
       # - /var/run/docker.sock:/var/run/docker.sock

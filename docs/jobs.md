@@ -68,6 +68,8 @@ Secrets are stored with AES-GCM. The list API returns the name and the kind, nev
 
 With Compose, mount the directory read-only and list its parent in `KOREOGRAF_PROJECT_ROOTS`. The stock `docker-compose.yml` does not forward that variable, so both lines have to be added. The [Installation](installation.md#docker-compose) page shows the fragment. Create the project with `source` set to the container path, for example `/srv/projects/my-project`.
 
+The process runs as uid 10001 since #101. A bind-mounted directory, and any `file://` git repository inside it, must be owned by uid 10001 or readable for it; otherwise git aborts with `dubious ownership`. Own it with `chown -R 10001:10001 /srv/projects/my-project`. `git config --global --add safe.directory /srv/projects/my-project` is the alternative if the maintainers prefer it.
+
 The Helm chart has no extra-volume value. Add a volume, a volume mount, and `KOREOGRAF_PROJECT_ROOTS` on the deployment. The examples directory in the image is always an allowed root, which is why the seeded Demo project runs without an extra mount.
 
 An administrator can save a path outside the allowed roots. At run time the canonical directory still has to sit under one of those roots, so that saved path does not start until the directory is listed. `/`, `/etc`, `/proc`, `/sys`, `/dev`, `/run`, `/boot`, `/root`, `/var/run`, and the data directory are rejected for everyone. An operator can save a path only when it is already under an allowed root.
@@ -83,7 +85,7 @@ A public git project needs no mount. `revision` is optional. An empty revision f
 }
 ```
 
-Allowed git addresses are `http(s)`, `ssh`, `git@`, and `file`. A `file://` URL is accepted for an empty host or `localhost` and then follows the same root rules as a path project. The project Sync button does not use an `scm` credential. That credential applies to git commands inside a job.
+Allowed git addresses are `http(s)`, `ssh`, `git@`, and `file`. A `file://` URL is accepted for an empty host or `localhost` and then follows the same root rules as a path project. The repository must be owned by or readable for uid 10001 as well, or git reports `dubious ownership`; see [Path projects](#path-projects). The project Sync button does not use an `scm` credential. That credential applies to git commands inside a job.
 
 A template updates its git project on every launch. Turn **Update the project on launch** off to run the checkout from the last sync, including when the remote cannot be reached. A revision pinned on the project stays as it is on disk until the next sync. In the German UI the checkbox is **Projekt vor dem Start aktualisieren**. The project still needs one successful sync. The Sync button on the project page is unchanged.
 
