@@ -22,3 +22,5 @@ For Ansible, `playbook` is the playbook path. For shell and OpenTofu it is the e
 | `koreograf_cache_collections` | gauge | `team_id`, `team` |
 | `koreograf_cache_roles` | gauge | `team_id`, `team` |
 | `koreograf_cache_bytes` | gauge | `team_id`, `team`, `kind` (`collections`, `roles`, `tofu`) |
+
+`koreograf_jobs_started_total` increases when execution begins, after preparation. `koreograf_jobs_finished_total` increases once for every job that reaches `successful`, `failed`, or `canceled`. That includes a job canceled while it is still pending and a job that fails during preparation, so finished can be larger than started. The `playbook` label is the template entry path. An empty path is `-`.

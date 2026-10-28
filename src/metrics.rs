@@ -5,7 +5,7 @@
 //! (`TASK [role : task]`), not from cache-copy lines in the job log.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
@@ -27,6 +27,38 @@ pub(crate) struct JobMeta<'a> {
     pub tool: &'a str,
     pub playbook: &'a str,
     pub template: &'a str,
+}
+
+pub(crate) struct JobLabels {
+    pub tool: String,
+    pub playbook: String,
+    pub team_id: String,
+    pub template: String,
+}
+
+/// Tool, entry path, team, and template stored on the job.
+pub(crate) fn job_labels(job: &db::Job) -> JobLabels {
+    let params = db::json_object(&job.parameters);
+    let tool = params
+        .get("tool")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(job.tool.as_str());
+    let playbook = params
+        .get("entrypoint")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let template = params
+        .get("template_name")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(job.name.as_str());
+    JobLabels {
+        tool: tool.to_string(),
+        playbook: playbook.to_string(),
+        team_id: job.team_id.clone(),
+        template: template.to_string(),
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -54,6 +86,7 @@ struct Book {
     finished: BTreeMap<(String, String, String), u64>,
     roles: BTreeMap<(String, String, &'static str), u64>,
     open: HashMap<String, OpenJob>,
+    closed: HashSet<String>,
 }
 
 pub(crate) struct Metrics {
@@ -117,6 +150,7 @@ impl Metrics {
                 finished: BTreeMap::new(),
                 roles: BTreeMap::new(),
                 open: HashMap::new(),
+                closed: HashSet::new(),
             }),
         }
     }
@@ -155,8 +189,8 @@ impl Metrics {
             .unwrap_or(false)
     }
 
-    pub(crate) fn close(&self, job_id: &str, status: &str) {
-        let Some(closed) = self.record_close(job_id, status) else {
+    pub(crate) fn close(&self, job_id: &str, status: &str, fallback: Option<&JobMeta<'_>>) {
+        let Some(closed) = self.record_close(job_id, status, false, fallback) else {
             return;
         };
         if let Some(summary) = closed.summary {
@@ -165,6 +199,24 @@ impl Metrics {
         tracing::info!(
             target: "koreograf::job",
             job_id,
+            team_id = %closed.team_id,
+            tool = %closed.tool,
+            playbook = %closed.playbook,
+            template = %closed.template,
+            status = %closed.status,
+            duration_ms = closed.duration_ms,
+            "job finished"
+        );
+    }
+
+    /// Counts a terminal job that never reached `begin`. A later `close` is a no-op.
+    pub(crate) fn finish_unstarted(&self, meta: &JobMeta<'_>, status: &str) {
+        let Some(closed) = self.record_close(meta.job_id, status, true, Some(meta)) else {
+            return;
+        };
+        tracing::info!(
+            target: "koreograf::job",
+            job_id = meta.job_id,
             team_id = %closed.team_id,
             tool = %closed.tool,
             playbook = %closed.playbook,
@@ -285,7 +337,7 @@ impl Metrics {
 
     fn record_begin(&self, meta: &JobMeta<'_>) -> Option<OpenJob> {
         let mut book = self.inner.lock().ok()?;
-        if book.open.contains_key(meta.job_id) {
+        if book.open.contains_key(meta.job_id) || book.closed.contains(meta.job_id) {
             return None;
         }
         let open = OpenJob {
@@ -335,25 +387,69 @@ impl Metrics {
         Some(events)
     }
 
-    fn record_close(&self, job_id: &str, status: &str) -> Option<ClosedJob> {
+    fn record_close(
+        &self,
+        job_id: &str,
+        status: &str,
+        only_unstarted: bool,
+        fallback: Option<&JobMeta<'_>>,
+    ) -> Option<ClosedJob> {
         let mut book = self.inner.lock().ok()?;
-        let mut open = book.open.remove(job_id)?;
+        if book.closed.contains(job_id) {
+            return None;
+        }
         let status = terminal_status(status).to_string();
+        let closed = if let Some(mut open) = book.open.remove(job_id) {
+            if only_unstarted {
+                book.open.insert(job_id.to_string(), open);
+                return None;
+            }
+            let summary = open.observer.finish();
+            let duration_ms = u64::try_from(open.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            ClosedJob {
+                tool: open.tool,
+                playbook: open.playbook,
+                team_id: open.team_id,
+                template: open.template,
+                status,
+                duration_ms,
+                summary,
+            }
+        } else {
+            let (tool, playbook, team_id, template) = match fallback {
+                Some(meta) => (
+                    sanitize_label(meta.tool, LABEL_TOOL),
+                    sanitize_label(meta.playbook, LABEL_PLAYBOOK),
+                    sanitize_label(meta.team_id, LABEL_TEAM),
+                    sanitize_label(meta.template, LABEL_TEMPLATE),
+                ),
+                None => (
+                    "-".to_string(),
+                    "-".to_string(),
+                    "-".to_string(),
+                    "-".to_string(),
+                ),
+            };
+            ClosedJob {
+                tool,
+                playbook,
+                team_id,
+                template,
+                status,
+                duration_ms: 0,
+                summary: None,
+            }
+        };
         *book
             .finished
-            .entry((open.tool.clone(), open.playbook.clone(), status.clone()))
+            .entry((
+                closed.tool.clone(),
+                closed.playbook.clone(),
+                closed.status.clone(),
+            ))
             .or_default() += 1;
-        let summary = open.observer.finish();
-        let duration_ms = u64::try_from(open.started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        Some(ClosedJob {
-            tool: open.tool,
-            playbook: open.playbook,
-            team_id: open.team_id,
-            template: open.template,
-            status,
-            duration_ms,
-            summary,
-        })
+        book.closed.insert(job_id.to_string());
+        Some(closed)
     }
 }
 
@@ -753,8 +849,8 @@ ok: [web-1]
             "job-1",
             "\u{1b}[0;31mfatal: [web-9]: FAILED! => {\"password\":\"s3cret\"}\u{1b}[0m",
         );
-        metrics.close("job-1", "failed");
-        metrics.close("job-1", "failed");
+        metrics.close("job-1", "failed", None);
+        metrics.close("job-1", "failed", None);
         let text = metrics.render(&[]);
         assert!(
             text.contains("koreograf_jobs_started_total{tool=\"ansible\",playbook=\"site.yml\"} 1")
@@ -861,7 +957,7 @@ ok: [web-1]
             "job-1",
             "fatal: [web-1]: FAILED! => {\"password\":\"s3cret\"}",
         );
-        metrics.close("job-1", "successful");
+        metrics.close("job-1", "successful", None);
         let text = metrics.render(&[]);
         assert!(text.contains(
             "koreograf_jobs_finished_total{tool=\"shell\",playbook=\"health.sh\",status=\"successful\"} 1"
@@ -874,10 +970,86 @@ ok: [web-1]
     fn labels_are_escaped_and_unknown_status_is_failed() {
         let metrics = Metrics::new();
         metrics.begin(&meta("ansible", "a\"b\\c\n.yml"));
-        metrics.close("job-1", "running");
+        metrics.close("job-1", "running", None);
         let text = metrics.render(&[]);
         assert!(text.contains("playbook=\"a\\\"b\\\\c .yml\""), "{text}");
         assert!(text.contains("status=\"failed\""), "{text}");
+    }
+
+    #[test]
+    fn a_job_that_never_started_is_still_finished() {
+        let metrics = Metrics::new();
+        let empty = meta("shell", "");
+        metrics.close("job-1", "canceled", Some(&empty));
+        metrics.close("job-1", "canceled", Some(&empty));
+        metrics.begin(&empty);
+        let failed = JobMeta {
+            job_id: "job-2",
+            team_id: "team-1",
+            tool: "ansible",
+            playbook: "site.yml",
+            template: "Heal",
+        };
+        metrics.close("job-2", "failed", Some(&failed));
+        let pending = JobMeta {
+            job_id: "job-3",
+            team_id: "team-1",
+            tool: "shell",
+            playbook: "health.sh",
+            template: "Heal",
+        };
+        metrics.finish_unstarted(&pending, "canceled");
+        metrics.close("job-3", "canceled", Some(&pending));
+        let text = metrics.render(&[]);
+        assert!(!text.contains("koreograf_jobs_started_total{"), "{text}");
+        assert!(
+            text.contains(
+                "koreograf_jobs_finished_total{tool=\"shell\",playbook=\"-\",status=\"canceled\"} 1"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "koreograf_jobs_finished_total{tool=\"ansible\",playbook=\"site.yml\",status=\"failed\"} 1"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "koreograf_jobs_finished_total{tool=\"shell\",playbook=\"health.sh\",status=\"canceled\"} 1"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("} 2"), "{text}");
+    }
+
+    #[test]
+    fn an_unstarted_finish_keeps_a_running_observation() {
+        let metrics = Metrics::new();
+        let running = meta("ansible", "site.yml");
+        metrics.begin(&running);
+        metrics.observe("job-1", "PLAY [web] ***");
+        metrics.observe("job-1", "TASK [web : install nginx] ***");
+        metrics.observe("job-1", "ok: [web-1]");
+        metrics.finish_unstarted(&running, "canceled");
+        metrics.close("job-1", "canceled", None);
+        let text = metrics.render(&[]);
+        assert!(
+            text.contains("koreograf_jobs_started_total{tool=\"ansible\",playbook=\"site.yml\"} 1"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "koreograf_jobs_finished_total{tool=\"ansible\",playbook=\"site.yml\",status=\"canceled\"} 1"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "koreograf_role_results_total{playbook=\"site.yml\",role=\"web\",result=\"ok\"} 1"
+            ),
+            "{text}"
+        );
     }
 
     #[test]

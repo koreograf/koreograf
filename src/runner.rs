@@ -625,6 +625,8 @@ pub async fn execute(state: Shared, job_id: String) {
             if let Ok(mut canceled) = state.canceled.lock() {
                 canceled.remove(&job_id);
             }
+            // Cancel can win before this task marks the job running.
+            close_observation(&state, &job_id);
         }
         return;
     }
@@ -2540,13 +2542,22 @@ fn finish(state: &Shared, job_id: &str, success: bool) {
 }
 
 fn close_observation(state: &Shared, job_id: &str) {
-    let status = state
+    let loaded = state
         .db()
         .ok()
-        .and_then(|db| db::job(&db, job_id).ok().flatten())
-        .map(|job| job.status)
-        .unwrap_or_else(|| "failed".into());
-    state.metrics.close(job_id, &status);
+        .and_then(|db| db::job(&db, job_id).ok().flatten());
+    let (status, labels) = match loaded {
+        Some(job) => (job.status.clone(), Some(metrics::job_labels(&job))),
+        None => ("failed".to_string(), None),
+    };
+    let meta = labels.as_ref().map(|item| JobMeta {
+        job_id,
+        team_id: &item.team_id,
+        tool: &item.tool,
+        playbook: &item.playbook,
+        template: &item.template,
+    });
+    state.metrics.close(job_id, &status, meta.as_ref());
 }
 
 #[cfg(test)]
