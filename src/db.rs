@@ -2654,14 +2654,41 @@ pub fn note_miss(c: &Connection, id: &str, missed_at: Option<&str>) -> AppResult
 }
 
 /// Clears a missed run only when one is still recorded. One of two concurrent
-/// accepts wins; the other sees no row and must not start a job.
-pub fn claim_missed(c: &Connection, id: &str, team_id: &str) -> AppResult<bool> {
-    let n = c.execute(
+/// accepts wins; the other sees no row and must not start a job. The returned
+/// timestamp is what a failed start puts back.
+pub fn claim_missed(c: &mut Connection, id: &str, team_id: &str) -> AppResult<Option<String>> {
+    let tx = c.transaction()?;
+    let missed_at = match tx.query_row(
+        "SELECT missed_at FROM schedules
+         WHERE id = ?1 AND team_id = ?2 AND missed_at IS NOT NULL",
+        params![id, team_id],
+        |row| row.get(0),
+    ) {
+        Ok(value) => value,
+        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    let changed = tx.execute(
         "UPDATE schedules SET missed_at = NULL, updated_at = ?3
          WHERE id = ?1 AND team_id = ?2 AND missed_at IS NOT NULL",
         params![id, team_id, now()],
     )?;
-    Ok(n == 1)
+    tx.commit()?;
+    if changed == 1 {
+        Ok(Some(missed_at))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Puts a claimed miss back when the start did not run. A newer miss stays.
+pub fn restore_missed(c: &Connection, id: &str, team_id: &str, missed_at: &str) -> AppResult<()> {
+    c.execute(
+        "UPDATE schedules SET missed_at = ?3, updated_at = ?4
+         WHERE id = ?1 AND team_id = ?2 AND missed_at IS NULL",
+        params![id, team_id, missed_at, now()],
+    )?;
+    Ok(())
 }
 
 pub fn set_schedule_enabled(

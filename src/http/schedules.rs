@@ -234,16 +234,26 @@ pub async fn answer_missed(
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let item = {
-        let db = state.db()?;
+    let (item, missed_at) = {
+        let mut db = state.db()?;
         let item = load(&db, &id, &team)?;
-        if !db::claim_missed(&db, &id, &team)? {
+        let Some(missed_at) = db::claim_missed(&mut db, &id, &team)? else {
             return Err(ApiError::bad("schedule_has_no_missed_run"));
-        }
-        item
+        };
+        (item, missed_at)
     };
     if body.accept {
-        schedule::start(&state, &item, &user.username)?;
+        if let Err(err) = schedule::start(&state, &item, &user.username) {
+            let db = state.db()?;
+            if let Err(restore) = db::restore_missed(&db, &id, &team, &missed_at) {
+                tracing::error!(
+                    schedule = %id,
+                    error = %restore,
+                    "could not restore the missed schedule run"
+                );
+            }
+            return Err(err);
+        }
     }
     let db = state.db()?;
     let item = load(&db, &id, &team)?;
