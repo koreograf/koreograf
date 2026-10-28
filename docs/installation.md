@@ -41,6 +41,8 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up --build -d
 
 The local image is tagged `koreograf:local`. buildx is only for publishing a multi-architecture image. Ansible, the Docker client, and OpenTofu in the published image are the versions from the Dockerfile at that tag. The process starts as root, gives `/var/lib/koreograf` and every file already in it to uid 10001, and then drops to that user. An older volume keeps `secret.key` mode `0600` owned by root; without that hand-over the new process cannot read it. A mounted `/var/run/docker.sock` stays root, because that socket is root on the host.
 
+PID 1 in the image is [tini](https://github.com/krallin/tini). It reaps processes a job leaves behind, including an SSH control master, and it forwards stop signals to Koreograf. `cargo run` and a service manager already reap those processes, so they do not need tini. A custom image command, Compose `entrypoint`, or Helm `command` replaces tini. Keep an init in that command, for example `tini -- /usr/local/bin/entrypoint.sh`.
+
 The UI is published on `127.0.0.1` only. To listen on every interface, change the port mapping to `8080:8080`. Use a reverse proxy with TLS when other machines should open the UI.
 
 The socket is commented out in `docker-compose.yml`. Execution environments need that line. Without the socket the runner stays local, and the demo health check still runs.
@@ -70,7 +72,7 @@ The chart version, `appVersion`, and `image.tag` are `0.1.0-alpha.5`. <!-- x-rel
 The chart pulls `ghcr.io/koreograf/koreograf:0.1.0-alpha.5`, the same image Compose uses. <!-- x-release-please-version -->
 It is `linux/amd64`. On another architecture, build the image and set `image.repository` and `image.tag` to that build.
 
-By default the pod runs as uid and gid 10001, with `fsGroup` 10001, `runAsNonRoot`, a dropped capability set, and the runtime default seccomp profile. `fsGroup` is what makes an existing volume readable. A volume driver that ignores `fsGroup` leaves root-owned files, and this pod cannot change them because it does not start as root. Set `runner.dockerSocket.enabled` to run as uid 0 without the capability drop. A non-empty `podSecurityContext` or `securityContext` replaces that default completely.
+By default the pod runs as uid and gid 10001, with `fsGroup` 10001, `runAsNonRoot`, a dropped capability set, and the runtime default seccomp profile. `fsGroup` is what makes an existing volume readable. A volume driver that ignores `fsGroup` leaves root-owned files, and this pod cannot change them because it does not start as root. Set `runner.dockerSocket.enabled` to run as uid 0 without the capability drop. A non-empty `podSecurityContext` or `securityContext` replaces that default completely. The chart does not set a container command, so tini stays PID 1 for uid 10001 as well. Kubernetes has no Compose `init: true`. A pod `command` replaces tini and has to start an init.
 
 Set `existingSecret` to a Secret managed outside this chart. The chart then skips its own Secret. The Deployment reads `existingSecretKeys.adminPassword` and `existingSecretKeys.secretKey`. When `ldap.url` is set it also reads `existingSecretKeys.ldapBindPassword`. Those keys have to exist in the Secret. The defaults are `admin-password`, `secret-key`, and `ldap-bind-password`.
 

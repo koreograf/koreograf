@@ -1,4 +1,5 @@
 # Multi-stage image for the Koreograf prototype.
+# tini is PID 1. It reaps orphaned job processes and forwards stop signals.
 # The entrypoint starts as root so it can hand the data directory to uid 10001,
 # then drops privileges. A mounted docker.sock stays root: that socket is
 # root-equivalent on the host, and the Debian docker client needs to open it.
@@ -25,6 +26,7 @@ RUN apt-get update \
         git \
         openssh-client \
         python3 \
+        tini \
         unzip \
     && python3 -c 'import hashlib, os, urllib.request; version=os.environ["TOFU_VERSION"]; arch=os.environ["TARGETARCH"]; sums={"amd64": os.environ["TOFU_SHA256_AMD64"], "arm64": os.environ["TOFU_SHA256_ARM64"]}; expected=sums.get(arch); \
 url=f"https://github.com/opentofu/opentofu/releases/download/v{version}/tofu_{version}_linux_{arch}.zip"; \
@@ -55,5 +57,5 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 \
     CMD ["python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"]
 # hadolint ignore=DL3002 # The entrypoint drops to uid 10001 unless docker.sock is mounted.
 USER 0
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
 CMD ["koreograf"]
