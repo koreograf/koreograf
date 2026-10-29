@@ -14,7 +14,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::Json;
 use axum::Router;
-use serde_json::{json, Value};
+use serde_json::Value;
 use tower_http::set_header::response::SetMultipleResponseHeadersLayer;
 use tower_http::trace::TraceLayer;
 
@@ -225,7 +225,7 @@ fn response_headers(hsts: bool) -> SetMultipleResponseHeadersLayer<Response> {
 }
 
 async fn version() -> Json<Value> {
-    Json(json!({ "version": crate::version() }))
+    Json(crate::version_payload())
 }
 
 async fn health() -> &'static str {
