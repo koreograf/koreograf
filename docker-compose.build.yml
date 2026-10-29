@@ -4,4 +4,9 @@ services:
   koreograf:
     image: koreograf:local
     pull_policy: build
-    build: .
+    build:
+      context: .
+      # Stamp this checkout when the caller knows its commit.
+      args:
+        GIT_SHA: ${KOREOGRAF_GIT_SHA:-}
+        BUILT_AT: ${KOREOGRAF_BUILT_AT:-}

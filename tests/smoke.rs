@@ -6877,6 +6877,9 @@ fn the_image_labels_name_the_version_and_the_source() {
     let dockerfile = std::fs::read_to_string(root.join("Dockerfile")).expect("Dockerfile");
     assert!(dockerfile.contains("org.opencontainers.image.version=\"${VERSION}\""));
     assert!(dockerfile.contains("org.opencontainers.image.source=\"${SOURCE}\""));
+    assert!(dockerfile.contains("org.opencontainers.image.revision=\"${GIT_SHA}\""));
+    assert!(dockerfile.contains("KOREOGRAF_GIT_SHA=${GIT_SHA}"));
+    assert!(dockerfile.contains("KOREOGRAF_BUILT_AT=${BUILT_AT}"));
     let version = env!("CARGO_PKG_VERSION");
     assert!(dockerfile.contains("# x-release-please-start-version"));
     assert!(dockerfile.contains(&format!("ARG VERSION={version}\n")));
@@ -6886,6 +6889,8 @@ fn the_image_labels_name_the_version_and_the_source() {
         std::fs::read_to_string(root.join(".github/workflows/release.yml")).expect("release.yml");
     assert!(release.contains("VERSION=${{ steps.tags.outputs.version }}"));
     assert!(release.contains("SOURCE=https://github.com/koreograf/koreograf"));
+    assert!(release.contains("GIT_SHA=${{ steps.build-info.outputs.sha }}"));
+    assert!(release.contains("BUILT_AT=${{ steps.build-info.outputs.date }}"));
 }
 
 #[tokio::test]

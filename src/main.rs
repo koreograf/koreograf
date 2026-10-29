@@ -5,7 +5,7 @@ use tracing_subscriber::EnvFilter;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     if koreograf::version_requested(std::env::args()) {
-        println!("{}", koreograf::version());
+        println!("{}", koreograf::version_line());
         return Ok(());
     }
     let filter = EnvFilter::try_from_default_env()

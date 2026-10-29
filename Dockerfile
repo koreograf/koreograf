@@ -48,15 +48,22 @@ COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 ARG VERSION=0.1.0-alpha.6
 # x-release-please-end
 ARG SOURCE=https://github.com/koreograf/koreograf
+# The build passes the short commit SHA and the build date. Both stay empty
+# when they are not passed, so a build without a checkout still works.
+ARG GIT_SHA
+ARG BUILT_AT
 LABEL org.opencontainers.image.version="${VERSION}" \
-    org.opencontainers.image.source="${SOURCE}"
+    org.opencontainers.image.source="${SOURCE}" \
+    org.opencontainers.image.revision="${GIT_SHA}"
 RUN chmod 755 /usr/local/bin/entrypoint.sh \
     && mkdir -p /var/lib/koreograf \
     && chown 10001:10001 /var/lib/koreograf
 ENV KOREOGRAF_BIND=0.0.0.0:8080 \
     KOREOGRAF_DATA=/var/lib/koreograf \
     KOREOGRAF_WEB=/opt/koreograf/web \
-    KOREOGRAF_EXAMPLES=/opt/koreograf/examples
+    KOREOGRAF_EXAMPLES=/opt/koreograf/examples \
+    KOREOGRAF_GIT_SHA=${GIT_SHA} \
+    KOREOGRAF_BUILT_AT=${BUILT_AT}
 WORKDIR /var/lib/koreograf
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 \

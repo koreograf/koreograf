@@ -61,6 +61,11 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Record build information
+        id: build-info
+        run: |
+          echo "sha=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%F)" >> "$GITHUB_OUTPUT"
       - name: Build and push
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -76,6 +81,8 @@ jobs:
           build-args: |
             VERSION=${{ steps.tags.outputs.version }}
             SOURCE=https://github.com/koreograf/koreograf
+            GIT_SHA=${{ steps.build-info.outputs.sha }}
+            BUILT_AT=${{ steps.build-info.outputs.date }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Install cosign
