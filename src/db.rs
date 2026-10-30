@@ -1609,6 +1609,29 @@ pub fn refresh_inventory_summary(c: &Connection, inventory_id: &str) -> AppResul
     Ok(())
 }
 
+fn json_references_credential(c: &Connection, id: &str) -> AppResult<bool> {
+    let mut stmt =
+        c.prepare("SELECT graph FROM workflows UNION ALL SELECT parameters FROM jobs")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    for row in rows {
+        match serde_json::from_str::<Value>(&row?) {
+            Ok(value) if json_contains_string(&value, id) => return Ok(true),
+            Ok(_) => {}
+            Err(_) => return Ok(true),
+        }
+    }
+    Ok(false)
+}
+
+fn json_contains_string(value: &Value, needle: &str) -> bool {
+    match value {
+        Value::String(text) => text == needle,
+        Value::Array(items) => items.iter().any(|item| json_contains_string(item, needle)),
+        Value::Object(map) => map.values().any(|item| json_contains_string(item, needle)),
+        _ => false,
+    }
+}
+
 pub fn delete_inventory(c: &mut Connection, id: &str, team_id: &str) -> AppResult<()> {
     let tx = c.transaction()?;
     let mut stmt = tx.prepare(
@@ -1627,6 +1650,9 @@ pub fn delete_inventory(c: &mut Connection, id: &str, team_id: &str) -> AppResul
         return Err(ApiError::NotFound);
     }
     for credential_id in credential_ids {
+        if json_references_credential(&tx, &credential_id)? {
+            continue;
+        }
         tx.execute(
             "DELETE FROM credentials
              WHERE id = ?1 AND team_id = ?2 AND auto = 1
