@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS credentials (
   kind TEXT NOT NULL,
   secret_blob TEXT NOT NULL,
   created_at TEXT NOT NULL,
+  auto INTEGER NOT NULL DEFAULT 0,
   UNIQUE (team_id, name)
 );
 CREATE TABLE IF NOT EXISTS environments (
@@ -331,6 +332,12 @@ fn migrate(c: &Connection) -> AppResult<()> {
     }
     if !column_exists(c, "inventories", "credential_id")? {
         c.execute("ALTER TABLE inventories ADD COLUMN credential_id TEXT", [])?;
+    }
+    if !column_exists(c, "credentials", "auto")? {
+        c.execute(
+            "ALTER TABLE credentials ADD COLUMN auto INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
     }
     c.execute(
         "INSERT INTO inventory_sources (
@@ -577,6 +584,7 @@ pub struct Credential {
     pub kind: String,
     pub secret_blob: String,
     pub created_at: String,
+    pub auto: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1601,28 +1609,50 @@ pub fn refresh_inventory_summary(c: &Connection, inventory_id: &str) -> AppResul
     Ok(())
 }
 
-pub fn delete_inventory(c: &Connection, id: &str, team_id: &str) -> AppResult<()> {
-    let n = c.execute(
+pub fn delete_inventory(c: &mut Connection, id: &str, team_id: &str) -> AppResult<()> {
+    let tx = c.transaction()?;
+    let mut stmt = tx.prepare(
+        "SELECT credential_id FROM inventory_sources
+         WHERE inventory_id = ?1 AND credential_id IS NOT NULL",
+    )?;
+    let credential_ids = stmt
+        .query_map(params![id], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(stmt);
+    let n = tx.execute(
         "DELETE FROM inventories WHERE id = ?1 AND team_id = ?2",
         params![id, team_id],
     )?;
     if n == 0 {
         return Err(ApiError::NotFound);
     }
+    for credential_id in credential_ids {
+        tx.execute(
+            "DELETE FROM credentials
+             WHERE id = ?1 AND team_id = ?2 AND auto = 1
+               AND NOT EXISTS (SELECT 1 FROM inventory_sources s WHERE s.credential_id = ?1)
+               AND NOT EXISTS (SELECT 1 FROM inventories i WHERE i.credential_id = ?1)
+               AND NOT EXISTS (SELECT 1 FROM templates t WHERE t.credential_id = ?1)
+               AND NOT EXISTS (SELECT 1 FROM template_credentials tc WHERE tc.credential_id = ?1)",
+            params![credential_id, team_id],
+        )?;
+    }
+    tx.commit()?;
     Ok(())
 }
 
 pub fn insert_credential(c: &Connection, item: &Credential) -> AppResult<()> {
     c.execute(
-        "INSERT INTO credentials (id, team_id, name, kind, secret_blob, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO credentials (id, team_id, name, kind, secret_blob, created_at, auto)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             item.id,
             item.team_id,
             item.name,
             item.kind,
             item.secret_blob,
-            item.created_at
+            item.created_at,
+            item.auto
         ],
     )?;
     Ok(())
@@ -1630,7 +1660,7 @@ pub fn insert_credential(c: &Connection, item: &Credential) -> AppResult<()> {
 
 pub fn list_credentials(c: &Connection, team_id: &str) -> AppResult<Vec<Credential>> {
     let mut stmt = c.prepare(
-        "SELECT id, team_id, name, kind, '' AS secret_blob, created_at
+        "SELECT id, team_id, name, kind, '' AS secret_blob, created_at, auto
          FROM credentials WHERE team_id = ?1 ORDER BY name",
     )?;
     let rows = stmt.query_map([team_id], map_credential)?;
@@ -1639,7 +1669,8 @@ pub fn list_credentials(c: &Connection, team_id: &str) -> AppResult<Vec<Credenti
 
 pub fn credential(c: &Connection, id: &str) -> AppResult<Option<Credential>> {
     c.query_row(
-        "SELECT id, team_id, name, kind, secret_blob, created_at FROM credentials WHERE id = ?1",
+        "SELECT id, team_id, name, kind, secret_blob, created_at, auto
+         FROM credentials WHERE id = ?1",
         [id],
         map_credential,
     )
@@ -1655,6 +1686,7 @@ fn map_credential(row: &rusqlite::Row<'_>) -> rusqlite::Result<Credential> {
         kind: row.get(3)?,
         secret_blob: row.get(4)?,
         created_at: row.get(5)?,
+        auto: row.get::<_, i64>(6)? != 0,
     })
 }
 

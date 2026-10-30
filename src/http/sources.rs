@@ -205,6 +205,7 @@ pub async fn create_netbox(
             kind: "netbox".into(),
             secret_blob: blob,
             created_at: db::now(),
+            auto: true,
         },
     )?;
     db::insert_inventory(&tx, &item)?;
@@ -613,6 +614,7 @@ fn store_source(
                 kind: "netbox".into(),
                 secret_blob: blob.clone(),
                 created_at: created_at.to_string(),
+                auto: true,
             },
         )?;
         Some(id)

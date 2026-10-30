@@ -1969,6 +1969,122 @@ async fn nb_devices(
 }
 
 #[tokio::test]
+async fn deleting_an_inventory_removes_its_auto_netbox_credential() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-netbox-cred-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, manual, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Unrelated NetBox Token",
+            "kind": "netbox",
+            "secret": {"token": "keep-me"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{manual}");
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let mock = axum::Router::new().route("/api/dcim/devices/", axum::routing::get(nb_devices));
+    tokio::spawn(async move {
+        axum::serve(listener, mock).await.unwrap();
+    });
+
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/inventories/netbox",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Prod NB",
+            "api_endpoint": format!("http://{addr}"),
+            "token": "secret-token",
+            "query_filters": ["status=active"],
+            "virtual_machines": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let netbox_id = created["id"].as_str().unwrap();
+
+    let (status, listed, _) = call(
+        &app,
+        "GET",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let names = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"Prod NB Token"), "{names:?}");
+    assert!(names.contains(&"Unrelated NetBox Token"), "{names:?}");
+
+    let (status, deleted, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/inventories/{netbox_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{deleted}");
+
+    let (status, listed, _) = call(
+        &app,
+        "GET",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let names = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(!names.contains(&"Prod NB Token"), "{names:?}");
+    assert!(names.contains(&"Unrelated NetBox Token"), "{names:?}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn inventory_sources_and_ansible_check_options() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

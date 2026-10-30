@@ -638,8 +638,8 @@ pub async fn delete_inventory(
 ) -> AppResult<axum::response::Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let db = state.db()?;
-    db::delete_inventory(&db, &id, &team)?;
+    let mut db = state.db()?;
+    db::delete_inventory(&mut db, &id, &team)?;
     Ok(no_content())
 }
 
@@ -688,6 +688,7 @@ pub async fn create_credential(
         kind: body.kind,
         secret_blob: blob,
         created_at: db::now(),
+        auto: false,
     };
     let db = state.db()?;
     db::insert_credential(&db, &item)?;
