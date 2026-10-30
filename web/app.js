@@ -1013,6 +1013,12 @@ function environmentRuntimeWarning(mode, runtime, environmentId) {
   return "";
 }
 
+function playbookChoice(books, entrypoint) {
+  if (books.includes(entrypoint)) return entrypoint;
+  if (!entrypoint && books.length) return books[0];
+  return "";
+}
+
 async function pageTemplateForm(id) {
   if (!needTeam()) return;
   const [projects, inventories, credentials, environments, templates, runner] = await Promise.all([
@@ -1036,9 +1042,10 @@ async function pageTemplateForm(id) {
   const verbosity = Number(spec.verbosity) || 0;
   shell(id ? t("edit_template") : t("new_template"), `
     <form class="card form" id="template-form">
+      <p class="small muted">${h("fields_marked_with_a_star_are_required")}</p>
       <div class="form-section">
         <h2>${h("general")}</h2>
-        <label class="field"><span>${h("name")}</span><input name="name" required value="${esc(item.name)}"></label>
+        <label class="field required"><span>${h("name")}</span><input name="name" required value="${esc(item.name)}"></label>
         <label class="field"><span>${h("description")}</span><input name="description" maxlength="1000" value="${esc(item.description)}"></label>
         <label class="field check"><span>${h("prompt_on_launch")}</span><input name="prompt_on_launch" type="checkbox"${item.prompt_on_launch ? " checked" : ""}></label>
         <p class="small muted">${h("the_launch_dialog_starts_from_the_template")}</p>
@@ -1146,10 +1153,7 @@ async function pageTemplateForm(id) {
     "the_entry_path_must_be_relative_and_must",
   ]);
   const chosenEntrypoint = () => {
-    const picked = form.tool.value === "ansible" && form.playbook.value
-      ? form.playbook.value
-      : form.entrypoint.value;
-    return picked.trim();
+    return form.entrypoint.value.trim();
   };
   const showEntrypointError = (key, vars) => {
     const node = document.querySelector("#entrypoint-error");
@@ -1230,19 +1234,12 @@ async function pageTemplateForm(id) {
       const contents = await api("GET", `/api/projects/${encodeURIComponent(form.project_id.value)}/contents`);
       const books = contents.playbooks || [];
       const known = books.map((path) => `<option value="${esc(path)}">${esc(path)}</option>`).join("");
-      const extra = current && !books.includes(current)
-        ? `<option value="${esc(current)}">${esc(current)}</option>`
-        : "";
-      select.innerHTML = `${known}${extra}<option value="">${h("other_path")}</option>`;
-      if (current && (books.includes(current) || extra)) {
-        select.value = current;
-      } else if (books.length) {
-        select.value = books[0];
+      select.innerHTML = `${known}<option value="">${h("other_path")}</option>`;
+      if (!current && books.length) {
         form.entrypoint.value = books[0];
         clearEntrypointError();
-      } else {
-        select.value = "";
       }
+      select.value = playbookChoice(books, current);
       if (!books.length) {
         note.textContent = t("no_playbooks_found_sync_the_git_project_first");
       }
@@ -1269,6 +1266,7 @@ async function pageTemplateForm(id) {
       form.entrypoint.placeholder = t("for_example_scripts_run_sh");
     }
     form.entrypoint.setAttribute("aria-required", tool === "shell" ? "false" : "true");
+    document.querySelector("#entrypoint-field").classList.toggle("required", tool !== "shell");
   };
   form.tool.addEventListener("change", () => {
     clearEntrypointError();
@@ -1292,7 +1290,13 @@ async function pageTemplateForm(id) {
       clearEntrypointError();
     }
   });
-  form.entrypoint.addEventListener("input", () => clearEntrypointError());
+  form.entrypoint.addEventListener("input", () => {
+    clearEntrypointError();
+    const value = form.entrypoint.value.trim();
+    if (form.tool.value === "ansible" && form.project_id.value) {
+      form.playbook.value = [...form.playbook.options].some((option) => option.value === value) ? value : "";
+    }
+  });
   form.script.addEventListener("input", () => {
     if (form.tool.value === "shell") clearEntrypointError();
   });

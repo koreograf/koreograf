@@ -190,6 +190,7 @@
   "field.part_invalid": "{field} '{part}' is invalid.",
   "field.text": "{field} must be text.",
   "field.too_long": "{field} is too long.",
+  "fields_marked_with_a_star_are_required": "Fields marked with * are required.",
   "file": "File",
   "file_is_missing_from_the_project": "File is missing from the project.",
   "files_is_not_executed_here_add_netbox_as": "{files} is not executed here. Add NetBox as its own source.",

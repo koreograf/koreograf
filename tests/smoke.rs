@@ -6935,10 +6935,23 @@ fn auto_mode_names_a_missing_runtime() {
     assert!(docs.contains("GET /api/runner"));
 }
 
-fn environment_runtime_warning_source(script: &str) -> String {
+#[test]
+fn template_form_saves_the_visible_playbook_path() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    assert!(script.contains("fields_marked_with_a_star_are_required"));
+    assert!(script.contains("class=\"field required\""));
+    assert!(script.contains("classList.toggle(\"required\", tool !== \"shell\")"));
+    let css = std::fs::read_to_string(root.join("web/app.css")).expect("app.css");
+    assert!(css.contains(".field.required"));
+    assert_chosen_entrypoint_cases(&script);
+    assert_playbook_choice_cases(&script);
+}
+
+fn extract_braced_function(script: &str, needle: &str) -> String {
     let start = script
-        .find("function environmentRuntimeWarning")
-        .expect("warning function");
+        .find(needle)
+        .unwrap_or_else(|| panic!("missing {needle} in the UI script"));
     let mut depth = 0;
     let mut seen = false;
     for (offset, ch) in script[start..].char_indices() {
@@ -6952,11 +6965,11 @@ fn environment_runtime_warning_source(script: &str) -> String {
             }
         }
     }
-    panic!("warning function has no end");
+    panic!("function after {needle} has no end");
 }
 
 fn assert_environment_warning_cases(script: &str) {
-    let function = environment_runtime_warning_source(script);
+    let function = extract_braced_function(script, "function environmentRuntimeWarning");
     let probe = format!(
         r#"{function}
 const cases = [
@@ -6980,10 +6993,11 @@ for (const [mode, runtime, environmentId, want] of cases) {{
 }}
 "#
     );
-    let path = std::env::temp_dir().join(format!(
-        "koreograf-runtime-warning-{}.js",
-        std::process::id()
-    ));
+    run_node_probe("runtime-warning", &probe);
+}
+
+fn run_node_probe(name: &str, probe: &str) {
+    let path = std::env::temp_dir().join(format!("koreograf-{name}.js"));
     std::fs::write(&path, probe).expect("probe");
     let output = std::process::Command::new("node")
         .arg(&path)
@@ -6992,10 +7006,57 @@ for (const [mode, runtime, environmentId, want] of cases) {{
     let _ = std::fs::remove_file(&path);
     assert!(
         output.status.success(),
-        "warning cases failed: {}{}",
+        "probe {name} failed: {}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn assert_chosen_entrypoint_cases(script: &str) {
+    let function = extract_braced_function(script, "const chosenEntrypoint = () =>");
+    let probe = format!(
+        r#"{function}
+let form;
+const cases = [
+  ["ansible", "baseline.yml", "other/path.yml", "other/path.yml"],
+  ["ansible", "", "", ""],
+  ["opentofu", "ignored", "modules/", "modules/"],
+  ["shell", "", " scripts/run.sh ", "scripts/run.sh"]
+];
+for (const [tool, playbook, entrypoint, want] of cases) {{
+  form = {{ tool: {{ value: tool }}, playbook: {{ value: playbook }}, entrypoint: {{ value: entrypoint }} }};
+  const got = chosenEntrypoint();
+  if (got !== want) {{
+    console.error(JSON.stringify({{tool, playbook, entrypoint, want, got}}));
+    process.exit(1);
+  }}
+}}
+"#
+    );
+    run_node_probe("chosen-entrypoint", &probe);
+}
+
+fn assert_playbook_choice_cases(script: &str) {
+    let function = extract_braced_function(script, "function playbookChoice");
+    let probe = format!(
+        r#"{function}
+const cases = [
+  [["a.yml", "b.yml"], "b.yml", "b.yml"],
+  [["a.yml", "b.yml"], "", "a.yml"],
+  [["a.yml"], "custom/path.yml", ""],
+  [[], "", ""],
+  [[], "x.yml", ""]
+];
+for (const [books, entrypoint, want] of cases) {{
+  const got = playbookChoice(books, entrypoint);
+  if (got !== want) {{
+    console.error(JSON.stringify({{books, entrypoint, want, got}}));
+    process.exit(1);
+  }}
+}}
+"#
+    );
+    run_node_probe("playbook-choice", &probe);
 }
 
 async fn assert_same_runner(app: &axum::Router, cookie: &str, team: &str, overview: &Value) {
