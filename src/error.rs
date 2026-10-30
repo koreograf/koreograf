@@ -37,6 +37,8 @@ pub enum ApiError {
     NotFound,
     #[error("{0}")]
     BadRequest(UserMessage),
+    #[error("{0}")]
+    Conflict(UserMessage),
     /// The body is larger than the route limit. The key is still a catalog key.
     #[error("{0}")]
     PayloadTooLarge(UserMessage),
@@ -70,6 +72,19 @@ impl ApiError {
         vars: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
     ) -> Self {
         Self::BadRequest(UserMessage {
+            key: key.into(),
+            vars: vars
+                .into_iter()
+                .map(|(name, value)| (name.into(), value.into()))
+                .collect(),
+        })
+    }
+
+    pub fn conflict_vars(
+        key: impl Into<String>,
+        vars: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    ) -> Self {
+        Self::Conflict(UserMessage {
             key: key.into(),
             vars: vars
                 .into_iter()
@@ -136,6 +151,7 @@ impl IntoResponse for ApiError {
                 BTreeMap::new(),
             ),
             Self::BadRequest(message) => (StatusCode::BAD_REQUEST, message.key, message.vars),
+            Self::Conflict(message) => (StatusCode::CONFLICT, message.key, message.vars),
             Self::PayloadTooLarge(message) => {
                 (StatusCode::PAYLOAD_TOO_LARGE, message.key, message.vars)
             }

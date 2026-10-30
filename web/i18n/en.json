@@ -238,6 +238,7 @@
   "inventory": "Inventory",
   "inventory_2": "+ Inventory",
   "inventory_file": "Inventory file",
+  "inventory_is_in_use": "This inventory is still used by: {names}.",
   "inventory_is_missing": "Inventory is missing.",
   "job_has_no_template": "Job has no template.",
   "job_is_missing": "Job is missing.",

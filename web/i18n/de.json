@@ -238,6 +238,7 @@
   "inventory": "Inventar",
   "inventory_2": "+ Inventar",
   "inventory_file": "Inventardatei",
+  "inventory_is_in_use": "Dieses Inventar wird noch verwendet von: {names}.",
   "inventory_is_missing": "Inventar fehlt.",
   "job_has_no_template": "Auftrag ohne Vorlage.",
   "job_is_missing": "Auftrag fehlt.",
