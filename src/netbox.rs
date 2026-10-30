@@ -118,6 +118,7 @@ pub async fn fetch_ini(
         &source.ca_file,
     );
     let mut builder = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(8))
         .timeout(Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::none());
     match crate::tls::reqwest_roots(&source.ca_file) {
@@ -886,6 +887,27 @@ mod tests {
         let proxy = crate::settings::ProxySettings::inherit();
         let error = fetch_ini(&source, "token", &proxy).await.unwrap_err();
         assert_eq!(error, "the_ca_file_cannot_be_read");
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_netbox_gives_up_before_the_total_timeout() {
+        let source = NetboxSource {
+            api_endpoint: "http://192.0.2.1:8080".into(),
+            validate_certs: true,
+            ca_file: String::new(),
+            group_by: Vec::new(),
+            query: Vec::new(),
+            virtual_machines: false,
+        };
+        let proxy = crate::settings::ProxySettings::inherit();
+        let started = std::time::Instant::now();
+        let error = fetch_ini(&source, "token", &proxy).await.unwrap_err();
+        assert!(error.contains("netbox_is_not_reachable"), "{error}");
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "elapsed {:?}",
+            started.elapsed()
+        );
     }
 
     async fn devices(headers: HeaderMap, request: Request) -> axum::response::Response {

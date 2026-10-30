@@ -280,7 +280,7 @@ pub async fn authenticate(
         Ok(settings) => settings,
         Err(error) => {
             tracing::warn!(url = %cfg.url, %error, "LDAP TLS setup failed");
-            return Err(error);
+            return Err(format!("ldap tls setup: {error}"));
         }
     };
     let (conn, mut ldap) = LdapConnAsync::with_settings(settings, &cfg.url)

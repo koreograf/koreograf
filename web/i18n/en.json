@@ -138,6 +138,7 @@
   "diff": "Diff",
   "diff_is_yes_or_no": "Diff is yes or no.",
   "directory": "Directory",
+  "directory_is_unreachable": "The directory is unreachable.",
   "disable_account": "Disable account.",
   "disabled": "Disabled",
   "discard_the_saved_settings_and_use_the_environment": "Discard the saved settings and use the environment variables from startup again?",

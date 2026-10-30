@@ -29,6 +29,8 @@ pub enum ApiError {
     /// A rejected sign-in. The key stays the same for every cause.
     #[error("sign-in failed")]
     SignInFailed,
+    #[error("the directory is unreachable")]
+    DirectoryUnavailable,
     #[error("forbidden")]
     Forbidden,
     #[error("not found")]
@@ -116,6 +118,11 @@ impl IntoResponse for ApiError {
             Self::SignInFailed => (
                 StatusCode::UNAUTHORIZED,
                 "invalid_username_or_password".to_string(),
+                BTreeMap::new(),
+            ),
+            Self::DirectoryUnavailable => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "directory_is_unreachable".to_string(),
                 BTreeMap::new(),
             ),
             Self::Forbidden => (

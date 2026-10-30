@@ -76,6 +76,9 @@ pub async fn login(
                     hint = ldap_failure_hint(&err),
                     "LDAP sign-in failed"
                 );
+                if directory_unreachable(&err) {
+                    return Err(ApiError::DirectoryUnavailable);
+                }
             }
         }
     }
@@ -445,6 +448,19 @@ fn normalize_email(value: &str) -> AppResult<Option<String>> {
     Ok(Some(value.to_string()))
 }
 
+fn directory_unreachable(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    [
+        "ldap connection:",
+        "ldap tls setup:",
+        "service bind:",
+        "user search:",
+        "ldap bind failed:",
+    ]
+    .iter()
+    .any(|prefix| lower.starts_with(prefix))
+}
+
 fn ldap_failure_hint(error: &str) -> &'static str {
     let lower = error.to_ascii_lowercase();
     if lower.contains("timed out") || lower.contains("timeout") {
@@ -469,7 +485,7 @@ fn normalize(username: &str) -> AppResult<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ldap_failure_hint, normalize_email, profile_email};
+    use super::{directory_unreachable, ldap_failure_hint, normalize_email, profile_email};
 
     #[test]
     fn ldap_failure_hint_splits_timeout_from_a_rejected_bind() {
@@ -485,6 +501,25 @@ mod tests {
             ldap_failure_hint("the_user_was_not_found_uniquely"),
             "reject"
         );
+    }
+
+    #[test]
+    fn directory_unreachable_covers_transport_failures_but_not_rejections() {
+        assert!(directory_unreachable("LDAP connection: connection refused"));
+        assert!(directory_unreachable("ldap tls setup: invalid CA file"));
+        assert!(directory_unreachable("service bind: timed out"));
+        assert!(directory_unreachable("user search: connection reset"));
+        assert!(directory_unreachable("LDAP bind failed: timed out"));
+        assert!(!directory_unreachable(
+            "service bind rejected: invalid credentials"
+        ));
+        assert!(!directory_unreachable(
+            "user search rejected: insufficient access rights"
+        ));
+        assert!(!directory_unreachable("ldap_rejected_the_password"));
+        assert!(!directory_unreachable("the_user_was_not_found_uniquely"));
+        assert!(!directory_unreachable("empty_password"));
+        assert!(!directory_unreachable("ldap_is_not_fully_configured"));
     }
 
     #[test]
@@ -565,6 +600,103 @@ mod tests {
         assert!(user.is_admin);
         assert_eq!(user.display_name, "Administrator");
         assert!(user.email.is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn boot_with_directory(url: String) -> (crate::Shared, std::path::PathBuf) {
+        use crate::config::{Config, CookieSecure, LdapConfig, LocalJobs, RunnerMode};
+        use std::path::PathBuf;
+
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-ldap-outage-{nanos}"));
+        let state = crate::boot(Config {
+            bind: "127.0.0.1:0".into(),
+            data_dir: dir.clone(),
+            web_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web"),
+            examples_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples"),
+            admin_user: "admin".into(),
+            admin_password: Some("test-admin-pass".into()),
+            runner: RunnerMode::Local,
+            job_timeout_secs: 60,
+            job_output_lines: 8_000,
+            local_jobs: LocalJobs::All,
+            project_roots: Vec::new(),
+            hsts: false,
+            cookie_secure: CookieSecure::Auto,
+            trusted_proxy: false,
+            data_host: None,
+            ldap: Some(LdapConfig {
+                url,
+                mode: "ldap".into(),
+                bind_dn: "cn=reader,dc=example,dc=com".into(),
+                bind_password: "secret".into(),
+                user_base: "ou=people,dc=example,dc=com".into(),
+                user_filter: "(uid={username})".into(),
+                username_attr: "uid".into(),
+                group_attr: "memberOf".into(),
+                group_base: String::new(),
+                starttls: false,
+                tls_insecure: false,
+                ca_file: String::new(),
+            }),
+        })
+        .expect("boot");
+        (state, dir)
+    }
+
+    async fn closed_directory_url() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        format!("ldap://{addr}")
+    }
+
+    #[tokio::test]
+    async fn ldap_outage_reports_the_directory_as_unreachable() {
+        use axum::extract::State;
+        use axum::http::{HeaderMap, StatusCode};
+        use axum::response::IntoResponse;
+        use http_body_util::BodyExt;
+
+        let (state, dir) = boot_with_directory(closed_directory_url().await);
+        let error = super::login(
+            State(state),
+            HeaderMap::new(),
+            super::ApiJson(super::LoginBody {
+                username: "ada".into(),
+                password: "secret".into(),
+            }),
+        )
+        .await
+        .expect_err("sign-in must fail while the directory is down");
+        let response = error.into_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("directory_is_unreachable"), "{text}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn local_sign_in_still_works_while_the_directory_is_down() {
+        use axum::extract::State;
+        use axum::http::{HeaderMap, StatusCode};
+
+        let (state, dir) = boot_with_directory(closed_directory_url().await);
+        let response = super::login(
+            State(state),
+            HeaderMap::new(),
+            super::ApiJson(super::LoginBody {
+                username: "admin".into(),
+                password: "test-admin-pass".into(),
+            }),
+        )
+        .await
+        .expect("local sign-in");
+        assert_eq!(response.status(), StatusCode::OK);
         let _ = std::fs::remove_dir_all(dir);
     }
 }
