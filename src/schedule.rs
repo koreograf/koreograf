@@ -393,8 +393,7 @@ fn daily_guess(rule: &Rule, not_before: DateTime<Utc>) -> Result<u32, &'static s
         .signed_duration_since(rule.start_date)
         .num_days()
         .max(0);
-    let gaps = i64::try_from(gap_dates(rule, rule.start_date, local).len()).unwrap_or(0);
-    let guess = u32::try_from(calendar.saturating_sub(gaps)).unwrap_or(u32::MAX);
+    let guess = u32::try_from(calendar).unwrap_or(u32::MAX);
     Ok(guess.saturating_sub(1))
 }
 
@@ -404,14 +403,7 @@ fn weekly_guess(rule: &Rule, not_before: DateTime<Utc>) -> Result<u32, &'static 
         return Ok(0);
     }
     let before = count_selected(rule.start_date, local, &rule.weekdays);
-    let gaps = i64::try_from(
-        gap_dates(rule, rule.start_date, local)
-            .into_iter()
-            .filter(|day| rule.weekdays.contains(&day.weekday()))
-            .count(),
-    )
-    .unwrap_or(0);
-    let guess = u32::try_from(before.saturating_sub(gaps)).unwrap_or(u32::MAX);
+    let guess = u32::try_from(before).unwrap_or(u32::MAX);
     Ok(guess.saturating_sub(1))
 }
 
@@ -498,41 +490,25 @@ fn last_existing(rule: &Rule, from: u32) -> Result<u32, &'static str> {
 }
 
 fn nth_daily(rule: &Rule, index: u32) -> Result<Option<DateTime<Utc>>, &'static str> {
-    let mut offset = i64::from(index);
-    for _ in 0..6 {
+    for offset in (i64::from(index)..).take(6) {
         let Some(date) = rule.start_date.checked_add_signed(Duration::days(offset)) else {
             return Err("schedule_has_no_occurrence");
         };
-        let gaps = i64::try_from(gaps_through(rule, date)).unwrap_or(i64::MAX);
-        let next = i64::from(index).saturating_add(gaps);
-        if next == offset {
-            let Some(at) = resolve(rule, date, rule.start_time) else {
-                return Err("schedule_has_no_occurrence");
-            };
+        if let Some(at) = resolve(rule, date, rule.start_time) {
             return Ok(kept(rule, index, at));
         }
-        offset = next;
     }
     Err("schedule_has_no_occurrence")
 }
 
 fn nth_weekly(rule: &Rule, index: u32) -> Result<Option<DateTime<Utc>>, &'static str> {
-    let mut raw = index;
-    for _ in 0..6 {
+    for raw in (index..).take(6) {
         let Some(date) = weekly_date(rule.start_date, &rule.weekdays, raw) else {
             return Err("schedule_has_no_occurrence");
         };
-        let gaps = selected_gaps_through(rule, date);
-        let Some(next) = index.checked_add(gaps) else {
-            return Err("schedule_has_no_occurrence");
-        };
-        if next == raw {
-            let Some(at) = resolve(rule, date, rule.start_time) else {
-                return Err("schedule_has_no_occurrence");
-            };
+        if let Some(at) = resolve(rule, date, rule.start_time) {
             return Ok(kept(rule, index, at));
         }
-        raw = next;
     }
     Err("schedule_has_no_occurrence")
 }
@@ -581,114 +557,6 @@ fn count_selected(start: NaiveDate, end: NaiveDate, days: &[Weekday]) -> i64 {
         }
     }
     count
-}
-
-fn gaps_through(rule: &Rule, date: NaiveDate) -> usize {
-    let Some(until) = date.checked_add_signed(Duration::days(1)) else {
-        return gap_dates(rule, rule.start_date, date).len();
-    };
-    gap_dates(rule, rule.start_date, until).len()
-}
-
-fn selected_gaps_through(rule: &Rule, date: NaiveDate) -> u32 {
-    let Some(until) = date.checked_add_signed(Duration::days(1)) else {
-        return 0;
-    };
-    u32::try_from(
-        gap_dates(rule, rule.start_date, until)
-            .into_iter()
-            .filter(|day| rule.weekdays.contains(&day.weekday()))
-            .count(),
-    )
-    .unwrap_or(u32::MAX)
-}
-
-/// Local days in `[from, until)` whose clock time does not exist.
-/// Only months whose noon offset changes are scanned.
-fn gap_dates(rule: &Rule, from: NaiveDate, until: NaiveDate) -> Vec<NaiveDate> {
-    if until <= from {
-        return Vec::new();
-    }
-    let mut found = Vec::new();
-    let mut year = from.year();
-    let last_year = until.year();
-    while year <= last_year {
-        gaps_in_year(rule, year, from, until, &mut found);
-        if year == i32::MAX {
-            break;
-        }
-        year += 1;
-    }
-    found
-}
-
-fn gaps_in_year(
-    rule: &Rule,
-    year: i32,
-    from: NaiveDate,
-    until: NaiveDate,
-    found: &mut Vec<NaiveDate>,
-) {
-    for month in 1..=12 {
-        let Some(first) = NaiveDate::from_ymd_opt(year, month, 1) else {
-            continue;
-        };
-        let next = if month == 12 {
-            NaiveDate::from_ymd_opt(year.saturating_add(1), 1, 1)
-        } else {
-            NaiveDate::from_ymd_opt(year, month + 1, 1)
-        };
-        let Some(next) = next else {
-            continue;
-        };
-        if next <= from || first >= until {
-            continue;
-        }
-        let left = noon_offset(rule.timezone, first);
-        let right = noon_offset(rule.timezone, next);
-        let changed = match (left, right) {
-            (Some(before), Some(after)) => before != after,
-            _ => true,
-        };
-        if !changed {
-            continue;
-        }
-        let mut day = first;
-        while day < next {
-            note_gap(rule, day, from, until, found);
-            let Some(following) = day.checked_add_signed(Duration::days(1)) else {
-                break;
-            };
-            day = following;
-        }
-        note_gap(rule, next, from, until, found);
-    }
-}
-
-fn note_gap(
-    rule: &Rule,
-    day: NaiveDate,
-    from: NaiveDate,
-    until: NaiveDate,
-    found: &mut Vec<NaiveDate>,
-) {
-    if day >= from
-        && day < until
-        && resolve(rule, day, rule.start_time).is_none()
-        && !found.contains(&day)
-    {
-        found.push(day);
-    }
-}
-
-fn noon_offset(timezone: Tz, date: NaiveDate) -> Option<i32> {
-    let noon = NaiveTime::from_hms_opt(12, 0, 0)?;
-    match timezone.offset_from_local_datetime(&date.and_time(noon)) {
-        chrono::LocalResult::Single(offset) | chrono::LocalResult::Ambiguous(offset, _) => {
-            Some(offset.fix().local_minus_utc())
-        }
-        chrono::LocalResult::None => None,
-    }
 }
 
 fn scan_months(rule: &Rule, index: u32) -> Result<Option<DateTime<Utc>>, &'static str> {
