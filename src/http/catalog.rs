@@ -639,6 +639,14 @@ pub async fn delete_inventory(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let mut db = state.db()?;
+    let mut names = db::templates_using_inventory(&db, &id, &team)?;
+    names.extend(db::workflows_using_inventory(&db, &id, &team)?);
+    if !names.is_empty() {
+        return Err(ApiError::conflict_vars(
+            "inventory_is_in_use",
+            [("names", names.join(", "))],
+        ));
+    }
     db::delete_inventory(&mut db, &id, &team)?;
     Ok(no_content())
 }

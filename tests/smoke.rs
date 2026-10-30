@@ -2085,6 +2085,116 @@ async fn deleting_an_inventory_removes_its_auto_netbox_credential() {
 }
 
 #[tokio::test]
+async fn deleting_a_used_inventory_is_refused_with_the_template_names() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-inv-in-use-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, inventory, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Prod", "body": "[web]\nweb-1\n"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{inventory}");
+    let inventory_id = inventory["id"].as_str().unwrap();
+
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Ping",
+            "tool": "ansible",
+            "entrypoint": "ping.yml",
+            "inventory_id": inventory_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().unwrap();
+
+    let (status, refused, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/inventories/{inventory_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["error"], "inventory_is_in_use");
+    assert!(
+        refused["vars"]["names"].as_str().unwrap().contains("Ping"),
+        "{refused}"
+    );
+
+    let (status, still_there, _) = call(
+        &app,
+        "GET",
+        &format!("/api/inventories/{inventory_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{still_there}");
+
+    let (status, detached, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/templates/{template_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Ping",
+            "tool": "ansible",
+            "entrypoint": "ping.yml",
+            "inventory_id": ""
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{detached}");
+
+    let (status, deleted, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/inventories/{inventory_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{deleted}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn deleting_an_inventory_removes_auto_credentials_from_sources() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

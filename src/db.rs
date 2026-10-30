@@ -1634,6 +1634,48 @@ fn json_contains_string(value: &Value, needle: &str) -> bool {
     }
 }
 
+pub fn templates_using_inventory(
+    c: &Connection,
+    inventory_id: &str,
+    team_id: &str,
+) -> AppResult<Vec<String>> {
+    let mut stmt = c.prepare(
+        "SELECT name FROM templates
+          WHERE inventory_id = ?1 AND team_id = ?2
+          ORDER BY name",
+    )?;
+    let rows = stmt.query_map(params![inventory_id, team_id], |row| {
+        row.get::<_, String>(0)
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+pub fn workflows_using_inventory(
+    c: &Connection,
+    inventory_id: &str,
+    team_id: &str,
+) -> AppResult<Vec<String>> {
+    let mut stmt = c.prepare("SELECT name, graph FROM workflows WHERE team_id = ?1")?;
+    let rows = stmt.query_map([team_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut names = Vec::new();
+    for row in rows {
+        let (name, graph) = row?;
+        let referenced = match serde_json::from_str::<crate::workflow::Graph>(&graph) {
+            Ok(graph) => graph
+                .nodes
+                .iter()
+                .any(|node| node.overrides.inventory_id.as_deref() == Some(inventory_id)),
+            Err(_) => true,
+        };
+        if referenced {
+            names.push(name);
+        }
+    }
+    Ok(names)
+}
+
 pub fn delete_inventory(c: &mut Connection, id: &str, team_id: &str) -> AppResult<()> {
     let tx = c.transaction()?;
     let mut stmt = tx.prepare(
