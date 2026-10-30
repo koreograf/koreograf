@@ -6997,7 +6997,7 @@ for (const [mode, runtime, environmentId, want] of cases) {{
 }
 
 fn run_node_probe(name: &str, probe: &str) {
-    let path = std::env::temp_dir().join(format!("koreograf-{name}.js"));
+    let path = std::env::temp_dir().join(format!("koreograf-{}-{}.js", name, std::process::id()));
     std::fs::write(&path, probe).expect("probe");
     let output = std::process::Command::new("node")
         .arg(&path)
