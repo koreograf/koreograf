@@ -2,14 +2,17 @@
 //!
 //! A schedule stores a clock time and a time zone. The next run is the next
 //! moment that clock time exists. A time that falls in a daylight-saving gap
-//! is skipped. A repeated local time, when the clocks go back, is used once,
-//! at the earlier offset. Hourly schedules step by one hour of absolute time.
+//! runs shifted forward by the width of the gap, so 02:30 becomes 03:30 when
+//! clocks jump from 02:00 to 03:00. A repeated local time, when the clocks go
+//! back, is used once, at the earlier offset. Hourly schedules step by one
+//! hour of absolute time.
 //! Daily and weekly schedules step by the calendar, not by walking each day.
 
 use std::time::Duration as StdDuration;
 
 use chrono::{
-    DateTime, Datelike, Duration, Months, NaiveDate, NaiveTime, Offset, TimeZone, Utc, Weekday,
+    DateTime, Datelike, Duration, Months, NaiveDate, NaiveDateTime, NaiveTime, Offset, TimeZone,
+    Utc, Weekday,
 };
 use chrono_tz::Tz;
 use serde_json::json;
@@ -735,8 +738,24 @@ fn resolve(rule: &Rule, date: NaiveDate, time: NaiveTime) -> Option<DateTime<Utc
         chrono::LocalResult::Single(at) | chrono::LocalResult::Ambiguous(at, _) => {
             Some(at.with_timezone(&Utc))
         }
-        chrono::LocalResult::None => None,
+        chrono::LocalResult::None => shifted(rule, local),
     }
+}
+
+fn shifted(rule: &Rule, local: NaiveDateTime) -> Option<DateTime<Utc>> {
+    for probe in 1..=168u32 {
+        let earlier = local.checked_sub_signed(Duration::hours(i64::from(probe)))?;
+        match rule.timezone.offset_from_local_datetime(&earlier) {
+            chrono::LocalResult::Single(offset) | chrono::LocalResult::Ambiguous(offset, _) => {
+                return Some(
+                    Utc.from_utc_datetime(&local)
+                        - Duration::seconds(i64::from(offset.fix().local_minus_utc())),
+                );
+            }
+            chrono::LocalResult::None => {}
+        }
+    }
+    None
 }
 
 fn parse_time(text: &str) -> Result<NaiveTime, &'static str> {
@@ -986,18 +1005,19 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_local_time_is_skipped_and_a_repeated_one_runs_once() {
+    fn a_missing_local_time_shifts_forward_and_a_repeated_one_runs_once() {
         let rule = sample("daily", "2026-03-28", "02:30", &[], "never");
         let first = nth(&rule, 0).unwrap().unwrap();
+        assert_eq!(
+            first.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            "2026-03-28T01:30:00Z"
+        );
         let second = nth(&rule, 1).unwrap().unwrap();
         assert_eq!(
-            first.with_timezone(&berlin()).date_naive().to_string(),
-            "2026-03-28"
+            second.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            "2026-03-29T01:30:00Z"
         );
-        assert_eq!(
-            second.with_timezone(&berlin()).date_naive().to_string(),
-            "2026-03-30"
-        );
+        assert_eq!(local_hour(second), (3, 30));
 
         let back = sample("daily", "2026-10-25", "02:30", &[], "never");
         let at = nth(&back, 0).unwrap().unwrap();
@@ -1006,6 +1026,45 @@ mod tests {
             "2026-10-25T00:30:00Z"
         );
         assert_eq!(local_hour(at), (2, 30));
+    }
+
+    #[test]
+    fn gap_days_shift_forward_and_overlap_days_run_once() {
+        let rule = sample("daily", "2027-03-28", "02:30", &[], "never");
+        let at = nth(&rule, 0).unwrap().unwrap();
+        assert_eq!(
+            at.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            "2027-03-28T01:30:00Z"
+        );
+        assert_eq!(local_hour(at), (3, 30));
+
+        let back = sample("daily", "2027-10-31", "02:30", &[], "never");
+        let at = nth(&back, 0).unwrap().unwrap();
+        assert_eq!(
+            at.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            "2027-10-31T00:30:00Z"
+        );
+        assert_eq!(local_hour(at), (2, 30));
+
+        let rule = sample("daily", "2027-03-27", "02:30", &[], "never");
+        let not_before = DateTime::parse_from_rfc3339("2027-03-27T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let out = preview(&rule, not_before, 3).unwrap();
+        assert_eq!(out.len(), 3);
+        assert_eq!(
+            out[0].format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            "2027-03-27T01:30:00Z"
+        );
+        assert_eq!(
+            out[1].format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            "2027-03-28T01:30:00Z"
+        );
+        assert_eq!(local_hour(out[1]), (3, 30));
+        assert_eq!(
+            out[2].format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            "2027-03-29T00:30:00Z"
+        );
     }
 
     #[test]
