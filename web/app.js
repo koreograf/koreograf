@@ -847,6 +847,37 @@ function templateOptionLine(item) {
   return item.entrypoint || t("script");
 }
 
+function makeModal(overlay, close) {
+  const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const dismiss = () => {
+    close();
+    if (opener && document.contains(opener)) opener.focus();
+  };
+  const card = overlay.querySelector(".overlay-card");
+  const focusables = () => [...card.querySelectorAll("input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], button:not([disabled])")].filter((node) => node.offsetParent !== null);
+  const initial = focusables().find((node) => node.matches("input, select, textarea")) || focusables()[0];
+  if (initial) initial.focus();
+  overlay.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      dismiss();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const items = focusables();
+    if (!items.length) return;
+    const active = document.activeElement;
+    const outside = !overlay.contains(active);
+    if (event.shiftKey && (outside || active === items[0])) {
+      event.preventDefault();
+      items[items.length - 1].focus();
+    } else if (!event.shiftKey && (outside || active === items[items.length - 1])) {
+      event.preventDefault();
+      items[0].focus();
+    }
+  });
+  return dismiss;
+}
+
 async function openLaunchPrompt(item) {
   const previous = document.querySelector("#launch-prompt");
   if (previous) previous.remove();
@@ -903,7 +934,7 @@ async function openLaunchPrompt(item) {
   const form = document.querySelector("#launch-prompt-form");
   bindChips(form);
   bindVaultPicker(form, credentials, selectedCredentialIds(item));
-  const close = () => overlay.remove();
+  const close = makeModal(overlay, () => overlay.remove());
   document.querySelector("#launch-prompt-close").addEventListener("click", close);
   document.querySelector("#launch-prompt-cancel").addEventListener("click", close);
   overlay.addEventListener("click", (event) => {
@@ -1686,13 +1717,10 @@ function openScheduleForm(kind, target, existing, redraw) {
   document.body.appendChild(host.firstElementChild);
   const overlay = document.querySelector("#schedule-form");
   const form = document.querySelector("#schedule-fields");
-  const close = () => overlay.remove();
+  const close = makeModal(overlay, () => overlay.remove());
   overlay.querySelector("#schedule-close").addEventListener("click", close);
   overlay.addEventListener("click", (event) => {
     if (event.target === overlay) close();
-  });
-  overlay.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") close();
   });
   const showParts = () => {
     const weekly = form.frequency.value === "weekly";
@@ -1754,7 +1782,6 @@ function openScheduleForm(kind, target, existing, redraw) {
       handle(error);
     }
   });
-  form.name.focus();
 }
 
 async function pageSchedules() {
@@ -2871,10 +2898,11 @@ async function pageRun(id) {
           </div>
         </div>`);
       overlay = document.querySelector("#node-output");
+      const close = makeModal(overlay, closeOutput);
       overlay.addEventListener("click", (event) => {
-        if (event.target === overlay) closeOutput();
+        if (event.target === overlay) close();
       });
-      document.querySelector("#overlay-close").addEventListener("click", closeOutput);
+      document.querySelector("#overlay-close").addEventListener("click", close);
     }
     document.querySelector("#overlay-title").textContent = node.name;
     document.querySelector("#overlay-meta").innerHTML = overlayMeta(phase);
@@ -3760,10 +3788,6 @@ function renderVaultPills(box, credentials, ids) {
 function closeVaultPicker() {
   const overlay = document.querySelector("#vault-picker");
   if (overlay) overlay.remove();
-  if (closeVaultPicker.onKey) {
-    document.removeEventListener("keydown", closeVaultPicker.onKey);
-    closeVaultPicker.onKey = null;
-  }
 }
 
 function openVaultPicker(credentials, selected, onApply) {
@@ -3797,17 +3821,13 @@ function openVaultPicker(credentials, selected, onApply) {
       </div>
     </div>`);
   const overlay = document.querySelector("#vault-picker");
-  const dismiss = () => closeVaultPicker();
+  const dismiss = makeModal(overlay, closeVaultPicker);
   overlay.addEventListener("click", (event) => {
     if (event.target === overlay) dismiss();
   });
   document.querySelector("#vault-picker-close").addEventListener("click", dismiss);
   const cancel = document.querySelector("#vault-cancel");
   if (cancel) cancel.addEventListener("click", dismiss);
-  closeVaultPicker.onKey = (event) => {
-    if (event.key === "Escape") dismiss();
-  };
-  document.addEventListener("keydown", closeVaultPicker.onKey);
   document.querySelectorAll(".vault-choice").forEach((label) => {
     const input = label.querySelector("input");
     input.addEventListener("change", () => label.classList.toggle("selected", input.checked));
@@ -3821,7 +3841,6 @@ function openVaultPicker(credentials, selected, onApply) {
         label.hidden = query !== "" && !name.includes(query);
       });
     });
-    if (typeof search.focus === "function") search.focus();
   }
   const apply = document.querySelector("#vault-apply");
   if (!apply) return;
@@ -3832,7 +3851,7 @@ function openVaultPicker(credentials, selected, onApply) {
     const kept = selected.filter((id) => checked.includes(id));
     const added = checked.filter((id) => !selected.includes(id));
     onApply([...kept, ...added]);
-    closeVaultPicker();
+    dismiss();
   });
 }
 
