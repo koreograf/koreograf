@@ -5847,6 +5847,114 @@ async fn a_hook_delivery_is_rejected_when_local_runs_are_admin_only() {
     );
     let finished = wait_for_job(&app, &cookie, &team, tested["job_id"].as_str().unwrap()).await;
     assert_eq!(finished["status"], "successful", "{}", finished["events"]);
+
+    let (status, workflow, _) = call(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "LocalRunsWorkflowProbe",
+            "description": "",
+            "graph": {
+                "nodes": [
+                    {"id": "check", "template_id": health_id, "name": "Healthcheck"}
+                ],
+                "edges": []
+            }
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{workflow}");
+    let workflow_id = workflow["id"].as_str().unwrap();
+
+    let (status, wf_hook, _) = call(
+        &app,
+        "POST",
+        "/api/hooks",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "LocalRunsWorkflowProbe",
+            "match_alertname": "DiskSpaceLow",
+            "workflow_id": workflow_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{wf_hook}");
+    let wf_hook_id = wf_hook["id"].as_str().unwrap();
+    let wf_token = wf_hook["token"].as_str().unwrap();
+
+    let (status, denied_wf, _) = call(
+        &app,
+        "POST",
+        &format!("/hooks/{wf_hook_id}/{wf_token}"),
+        None,
+        None,
+        Some(json!({
+            "status": "firing",
+            "alerts": [{
+                "status": "firing",
+                "labels": {"alertname": "DiskSpaceLow", "instance": "web-1"}
+            }]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{denied_wf}");
+    assert_eq!(
+        denied_wf["error"],
+        "local_runs_are_limited_to_administrators"
+    );
+
+    let (status, wf_deliveries, _) = call(
+        &app,
+        "GET",
+        &format!("/api/hooks/{wf_hook_id}/deliveries"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{wf_deliveries}");
+    let wf_rejected = wf_deliveries
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["hook_id"] == wf_hook_id)
+        .unwrap();
+    assert_eq!(wf_rejected["status"], "rejected");
+    assert!(
+        wf_rejected["summary"]
+            .as_str()
+            .unwrap()
+            .contains("KOREOGRAF_LOCAL_RUNNER_FOR=all"),
+        "{}",
+        wf_rejected["summary"]
+    );
+
+    let (status, tested_wf, _) = call(
+        &app,
+        "POST",
+        &format!("/api/hooks/{wf_hook_id}/test"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{tested_wf}");
+    assert_eq!(
+        tested_wf["summary"],
+        "Test, run as admin: 1 alert(s) started, first DiskSpaceLow."
+    );
+    let wf_finished = wait_for_workflow(
+        &app,
+        &cookie,
+        &team,
+        tested_wf["workflow_job_id"].as_str().unwrap(),
+    )
+    .await;
+    assert_eq!(wf_finished["status"], "successful", "{}", wf_finished);
     let _ = std::fs::remove_dir_all(&dir);
 
     let dir = std::env::temp_dir().join(format!("koreograf-hook-local-all-{nanos}"));
@@ -5923,6 +6031,70 @@ async fn a_hook_delivery_is_rejected_when_local_runs_are_admin_only() {
     assert_eq!(accepted["status"], "accepted");
     let finished = wait_for_job(&app, &cookie, &team, accepted["job_id"].as_str().unwrap()).await;
     assert_eq!(finished["status"], "successful", "{}", finished["events"]);
+
+    let (status, workflow, _) = call(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "LocalRunsWorkflowProbe",
+            "description": "",
+            "graph": {
+                "nodes": [
+                    {"id": "check", "template_id": health_id, "name": "Healthcheck"}
+                ],
+                "edges": []
+            }
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{workflow}");
+    let workflow_id = workflow["id"].as_str().unwrap();
+
+    let (status, wf_hook, _) = call(
+        &app,
+        "POST",
+        "/api/hooks",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "LocalRunsWorkflowProbe",
+            "match_alertname": "DiskSpaceLow",
+            "workflow_id": workflow_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{wf_hook}");
+    let wf_hook_id = wf_hook["id"].as_str().unwrap();
+    let wf_token = wf_hook["token"].as_str().unwrap();
+
+    let (status, accepted_wf, _) = call(
+        &app,
+        "POST",
+        &format!("/hooks/{wf_hook_id}/{wf_token}"),
+        None,
+        None,
+        Some(json!({
+            "status": "firing",
+            "alerts": [{
+                "status": "firing",
+                "labels": {"alertname": "DiskSpaceLow", "instance": "web-1"}
+            }]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{accepted_wf}");
+    assert_eq!(accepted_wf["status"], "accepted");
+    let wf_finished = wait_for_workflow(
+        &app,
+        &cookie,
+        &team,
+        accepted_wf["workflow_job_id"].as_str().unwrap(),
+    )
+    .await;
+    assert_eq!(wf_finished["status"], "successful", "{}", wf_finished);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -7850,6 +8022,29 @@ async fn wait_for_job(app: &axum::Router, cookie: &str, team: &str, job_id: &str
         }
     }
     panic!("job {job_id} did not finish");
+}
+
+async fn wait_for_workflow(app: &axum::Router, cookie: &str, team: &str, run_id: &str) -> Value {
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let (status, body, _) = call(
+            app,
+            "GET",
+            &format!("/api/workflow-jobs/{run_id}"),
+            Some(cookie),
+            Some(team),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        if matches!(
+            body["status"].as_str(),
+            Some("successful" | "failed" | "canceled")
+        ) {
+            return body;
+        }
+    }
+    panic!("workflow run {run_id} did not finish");
 }
 
 #[test]

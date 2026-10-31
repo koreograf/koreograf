@@ -47,27 +47,25 @@ pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
         }
         let parameters = parameters_for_launch(state, &db, &template, &req)?;
         let parsed = db::json_object(&parameters);
-        if refuses_local_launch(
-            state.cfg.local_jobs,
-            settings.runner,
-            parameter_has_environment(&template, &parsed),
-        ) {
+        {
             let workflow_id = workflow_definition_id(&db, req.workflow_job_id.as_deref())?;
-            let matches = crate::auth::command_matches_template(&template, &parsed);
             let requires_workflow = req
                 .workflow_job_id
                 .as_deref()
-                .is_some_and(|item| !item.is_empty())
-                || !matches;
-            let effective = template_with_saved_targets(&template, &parsed);
-            let allowed = crate::auth::launcher_is_admin(&db, &req.launched_by)?
-                && crate::auth::content_saved_by_admin(
-                    &db,
-                    &effective,
-                    workflow_id.as_deref(),
-                    requires_workflow,
-                )?;
-            if !allowed {
+                .is_some_and(|item| !item.is_empty());
+            if local_launch_refused(
+                refuses_local_launch(
+                    state.cfg.local_jobs,
+                    settings.runner,
+                    parameter_has_environment(&template, &parsed),
+                ),
+                &db,
+                &template,
+                &parsed,
+                &req.launched_by,
+                workflow_id.as_deref(),
+                requires_workflow,
+            )? {
                 return Err(ApiError::bad("local_runs_are_limited_to_administrators"));
             }
         }
@@ -122,6 +120,28 @@ pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
 
 fn refuses_local_launch(local_jobs: LocalJobs, runner: RunnerMode, has_environment: bool) -> bool {
     local_jobs == LocalJobs::Admins && (!has_environment || runner == RunnerMode::Local)
+}
+
+/// True when the local-run restriction refuses this launch. Hooks use it to
+/// reject a delivery before any run starts, with the same rules as [`launch`].
+fn local_launch_refused(
+    refused_by_policy: bool,
+    db: &rusqlite::Connection,
+    template: &db::Template,
+    parameters: &Value,
+    launched_by: &str,
+    workflow_id: Option<&str>,
+    requires_workflow: bool,
+) -> AppResult<bool> {
+    if !refused_by_policy {
+        return Ok(false);
+    }
+    let matches = crate::auth::command_matches_template(template, parameters);
+    let requires_workflow = requires_workflow || !matches;
+    let effective = template_with_saved_targets(template, parameters);
+    let allowed = crate::auth::launcher_is_admin(db, launched_by)?
+        && crate::auth::content_saved_by_admin(db, &effective, workflow_id, requires_workflow)?;
+    Ok(!allowed)
 }
 
 pub fn relaunch(
@@ -868,6 +888,65 @@ pub struct Dispatch {
     pub workflow_job_id: Option<String>,
 }
 
+/// True when a call to this workflow-targeted hook would be refused by the
+/// local-run restriction. Every node is checked the way [`launch`] checks a job
+/// so the delivery can be rejected before `launch_workflow` starts a run. A
+/// graph that [`launch_workflow`] would reject on its own (missing workflow,
+/// invalid graph, missing or foreign template, bad parameters) is left to it.
+fn workflow_hook_refuses_local_run(
+    state: &Shared,
+    team_id: &str,
+    workflow_id: &str,
+    launched_by: &str,
+    extra: &Value,
+) -> AppResult<bool> {
+    if state.cfg.local_jobs != LocalJobs::Admins {
+        return Ok(false);
+    }
+    let settings = crate::settings::load(state)?;
+    let db = state.db()?;
+    let item = match db::workflow(&db, workflow_id)? {
+        Some(item) => item,
+        None => return Ok(false),
+    };
+    if item.team_id != team_id {
+        return Ok(false);
+    }
+    let graph: workflow::Graph = match serde_json::from_str(&item.graph) {
+        Ok(graph) => graph,
+        Err(_) => return Ok(false),
+    };
+    for node in &graph.nodes {
+        let Some(template) = db::template(&db, &node.template_id)? else {
+            continue;
+        };
+        if template.team_id != team_id {
+            continue;
+        }
+        let parameters = match parameters_for_node(&db, &template, node, extra) {
+            Ok(parameters) => parameters,
+            Err(_) => continue,
+        };
+        let parsed = db::json_object(&parameters);
+        if local_launch_refused(
+            refuses_local_launch(
+                state.cfg.local_jobs,
+                settings.runner,
+                parameter_has_environment(&template, &parsed),
+            ),
+            &db,
+            &template,
+            &parsed,
+            launched_by,
+            Some(workflow_id),
+            true,
+        )? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 pub fn accept_hook(
     state: &Shared,
     hook: &Hook,
@@ -947,9 +1026,39 @@ pub fn accept_hook(
     };
     let mut first_job = None;
     let mut first_workflow = None;
+    let mut local_run_checked = false;
     for event in &matched {
         let extra = runner::merge_vars(&hook_vars, &hooks::event_vars(event));
         if let Some(workflow_id) = &hook.workflow_id {
+            if !local_run_checked {
+                local_run_checked = true;
+                if workflow_hook_refuses_local_run(
+                    state,
+                    &hook.team_id,
+                    workflow_id,
+                    &launched_by,
+                    &extra,
+                )? {
+                    let summary = format!(
+                        "{marker}Local runs are limited to administrators. Set KOREOGRAF_LOCAL_RUNNER_FOR=all on a trusted network or attach an execution environment with the Docker socket."
+                    );
+                    let id = Uuid::new_v4().to_string();
+                    let db = state.db()?;
+                    db::insert_delivery(
+                        &db,
+                        db::NewDelivery {
+                            id: &id,
+                            hook_id: &hook.id,
+                            status: "rejected",
+                            summary: &summary,
+                            payload: &payload_text,
+                            job_id: None,
+                            workflow_job_id: None,
+                        },
+                    )?;
+                    return Err(ApiError::bad("local_runs_are_limited_to_administrators"));
+                }
+            }
             let id = launch_workflow(
                 state,
                 &hook.team_id,
