@@ -458,6 +458,7 @@ function handle(error) {
   const main = document.querySelector(".main");
   const message = t(error.message || "error.generic", error.vars);
   clearErrorBanners();
+  main.querySelectorAll(":scope > .banner.good").forEach((node) => node.remove());
   (topmostCard() || main).insertAdjacentHTML("afterbegin", `<div class="banner bad">${esc(message)}</div>`);
   const fieldName = (error.vars && error.vars.field) || ERROR_FIELD[error.message] || "";
   const control = fieldControl(fieldName);
