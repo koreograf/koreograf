@@ -34,6 +34,13 @@ impl LocalJobs {
             Self::Admins
         }
     }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Admins => "admins",
+            Self::All => "all",
+        }
+    }
 }
 
 impl RunnerMode {

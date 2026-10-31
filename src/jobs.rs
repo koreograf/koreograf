@@ -882,7 +882,12 @@ pub fn accept_hook(
         .collect();
     let payload_text = serde_json::to_string(payload).unwrap_or_else(|_| "{}".into());
     let payload_text = truncate(&payload_text, 16_000);
+    let marker = actor
+        .filter(|name| !name.is_empty())
+        .map(|name| format!("Test, run as {name}: "))
+        .unwrap_or_default();
     if !hook.enabled {
+        let summary = format!("{marker}Hook is disabled.");
         let id = Uuid::new_v4().to_string();
         let db = state.db()?;
         db::insert_delivery(
@@ -891,7 +896,7 @@ pub fn accept_hook(
                 id: &id,
                 hook_id: &hook.id,
                 status: "ignored",
-                summary: "Hook is disabled.",
+                summary: &summary,
                 payload: &payload_text,
                 job_id: None,
                 workflow_job_id: None,
@@ -899,7 +904,7 @@ pub fn accept_hook(
         )?;
         return Ok(Dispatch {
             status: "ignored".into(),
-            summary: "Hook is disabled.".into(),
+            summary,
             job_id: None,
             workflow_job_id: None,
         });
@@ -914,6 +919,7 @@ pub fn accept_hook(
                 hook.match_alertname, hook.match_status
             )
         };
+        let summary = format!("{marker}{summary}");
         let db = state.db()?;
         db::insert_delivery(
             &db,
@@ -956,7 +962,7 @@ pub fn accept_hook(
                 first_workflow = Some(id);
             }
         } else if let Some(template_id) = &hook.template_id {
-            let id = launch(
+            let id = match launch(
                 state,
                 LaunchRequest {
                     team_id: hook.team_id.clone(),
@@ -969,7 +975,32 @@ pub fn accept_hook(
                     parameters_override: None,
                     overrides: LaunchOverrides::default(),
                 },
-            )?;
+            ) {
+                Ok(id) => id,
+                Err(ApiError::BadRequest(message))
+                    if message.key == "local_runs_are_limited_to_administrators" =>
+                {
+                    let summary = format!(
+                        "{marker}Local runs are limited to administrators. Set KOREOGRAF_LOCAL_RUNNER_FOR=all on a trusted network or attach an execution environment with the Docker socket."
+                    );
+                    let id = Uuid::new_v4().to_string();
+                    let db = state.db()?;
+                    db::insert_delivery(
+                        &db,
+                        db::NewDelivery {
+                            id: &id,
+                            hook_id: &hook.id,
+                            status: "rejected",
+                            summary: &summary,
+                            payload: &payload_text,
+                            job_id: None,
+                            workflow_job_id: None,
+                        },
+                    )?;
+                    return Err(ApiError::bad("local_runs_are_limited_to_administrators"));
+                }
+                Err(error) => return Err(error),
+            };
             if first_job.is_none() {
                 first_job = Some(id);
             }
@@ -978,7 +1009,7 @@ pub fn accept_hook(
         }
     }
     let summary = format!(
-        "{} alert(s) started, first {}.",
+        "{marker}{} alert(s) started, first {}.",
         matched.len(),
         matched[0].alertname
     );

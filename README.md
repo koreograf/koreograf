@@ -103,6 +103,8 @@ The demo project asks Galaxy for `ansible.posix` 1.6.2. The role itself uses `an
 
 Sign in, select the team `Plattform`, and press `Test alert`. The workflow runs the files in [examples/demo](examples/demo). The steps are in [Workflows and webhooks](docs/workflows-webhooks.md#demo).
 
+An external call to the webhook URL is rejected on a default install because local runs are limited to administrators. On a trusted network, set `KOREOGRAF_LOCAL_RUNNER_FOR=all`, or attach an execution environment with the Docker socket ([Configuration](docs/configuration.md#environment-variables)).
+
 ## OpenTofu state
 
 `plan` reads the saved state and does not change resources. `apply` keeps that state for one team and one template at `data/cache/<team>/tofu-state/<template>/terraform.tfstate`. The next apply of the same template sees the resources from the last run. The plugin cache stays at `data/cache/<team>/tofu`, and `TF_DATA_DIR` stays in the job directory. Another team has a different directory. The state file is local to this controller and is not in the backup zip. Use a remote backend when the state has to survive a new data directory or be used from more than one machine. `apply` writes a warning when the module has no remote backend. Details are in [Jobs](docs/jobs.md#what-the-cache-changes).

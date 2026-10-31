@@ -110,6 +110,7 @@ pub async fn runner_status(
     let effective = crate::settings::load(&state)?;
     Ok(Json(json!({
         "runner_mode": effective.runner.as_str(),
+        "local_jobs": state.cfg.local_jobs.as_str(),
         "runtime": runtime,
     })))
 }
