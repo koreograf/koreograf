@@ -347,6 +347,7 @@ const FIELD_ALIAS = {
 const ERROR_FIELD = {
   name_is_missing_or_too_long: "name",
   description_is_too_long: "description",
+  limit_contains_an_invalid_character: "limit",
 };
 
 let flashKey = "";
@@ -437,6 +438,16 @@ document.addEventListener("input", (event) => {
   clearControlError(event.target);
 }, true);
 
+function clearErrorBanners() {
+  document.querySelectorAll(".banner.bad").forEach((node) => node.remove());
+}
+
+function topmostCard() {
+  const overlays = [...document.querySelectorAll(".overlay")];
+  const overlay = overlays[overlays.length - 1];
+  return overlay ? overlay.querySelector(".overlay-card") : null;
+}
+
 function handle(error) {
   if (error && error.status === 401) {
     me = null;
@@ -446,7 +457,8 @@ function handle(error) {
   if (!document.querySelector(".main")) shell(t("notice"), "");
   const main = document.querySelector(".main");
   const message = t(error.message || "error.generic", error.vars);
-  main.insertAdjacentHTML("afterbegin", `<div class="banner bad">${esc(message)}</div>`);
+  clearErrorBanners();
+  (topmostCard() || main).insertAdjacentHTML("afterbegin", `<div class="banner bad">${esc(message)}</div>`);
   const fieldName = (error.vars && error.vars.field) || ERROR_FIELD[error.message] || "";
   const control = fieldControl(fieldName);
   if (!control) return;
