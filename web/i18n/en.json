@@ -533,6 +533,7 @@
   "skip_certificate_checks_only_on_a_network_you": "Skip certificate checks. Only on a network you trust.",
   "skip_missed": "Do not run",
   "skip_tags": "Skip tags",
+  "skip_to_content": "Skip to content",
   "skipped": "Skipped",
   "source": "Source",
   "source_2": "Source",

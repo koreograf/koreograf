@@ -69,6 +69,8 @@ function setLang(next) {
   document.documentElement.lang = lang;
   if (!me) renderLogin("");
   else route();
+  const button = document.querySelector("[data-lang-button]");
+  if (button) button.focus();
 }
 
 function flagMarkup(country) {
@@ -497,6 +499,7 @@ function shell(title, body, actions) {
   }).join("");
   app.innerHTML = `
     <div class="shell">
+      <a class="skip-link" href="#main">${h("skip_to_content")}</a>
       <aside class="side">
         <div class="brand-lockup"><span class="mark" aria-hidden="true"></span><p class="word">Koreograf</p></div>
         <label class="field"><span class="small">${h("organization_team")}</span><select id="team-select">${options || `<option value="">${h("no_team")}</option>`}</select></label>
@@ -507,7 +510,7 @@ function shell(title, body, actions) {
           <button class="btn ghost" id="logout" type="button">${h("sign_out")}</button>
         </div>
       </aside>
-      <main class="main">
+      <main class="main" id="main" tabindex="-1">
         <div class="top"><div><h1>${esc(title)}</h1></div><div class="row">${actions || ""}</div></div>
         ${savedBanner()}
         ${body}
@@ -576,6 +579,10 @@ function renderLogin(message, tone, vars, username) {
       </form>
     </div>`;
   bindLangSwitch();
+  const initial = username
+    ? document.querySelector("#login-form [name=password]")
+    : document.querySelector("#login-form [name=username]");
+  if (initial) initial.focus();
   document.querySelector("#login-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
