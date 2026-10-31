@@ -1153,6 +1153,139 @@ async fn prompt_on_launch_overrides_the_job_and_keeps_the_template() {
 }
 
 #[tokio::test]
+async fn ansible_launch_requires_an_inventory() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-inventory-required-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let cfg = config(&dir);
+    let state = koreograf::boot(cfg).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Needs inventory",
+            "tool": "ansible",
+            "entrypoint": "site.yml"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().unwrap();
+
+    let (status, rejected, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+    assert_eq!(rejected["error"], "inventory_is_required");
+
+    let (status, inventory, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Required hosts", "body": "[web]\nweb-1\n"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{inventory}");
+    let inventory_id = inventory["id"].as_str().unwrap();
+
+    let (status, updated, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/templates/{template_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Needs inventory",
+            "tool": "ansible",
+            "entrypoint": "site.yml",
+            "inventory_id": inventory_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+
+    let (status, launched, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{launched}");
+    let job_id = launched["id"].as_str().unwrap();
+    assert_eq!(launched["parameters"]["inventory_id"], inventory_id);
+    let _ = call(
+        &app,
+        "POST",
+        &format!("/api/jobs/{job_id}/cancel"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+
+    let (status, shell, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "No inventory shell",
+            "tool": "shell",
+            "entrypoint": "",
+            "spec": {"script": "true"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{shell}");
+    let shell_id = shell["id"].as_str().unwrap();
+    let (status, shell_launched, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{shell_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{shell_launched}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn oversized_job_output_keeps_the_recap_in_the_download() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -6191,6 +6324,17 @@ async fn jobs_that_end_before_execution_are_still_counted() {
     .await;
     assert_eq!(status, StatusCode::CREATED, "{project}");
     let project_id = project["id"].as_str().unwrap();
+    let (status, inventory, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(team),
+        Some(json!({"name": "Unsynced hosts", "body": "[all]\nlocalhost\n"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{inventory}");
+    let inventory_id = inventory["id"].as_str().unwrap();
     let (status, template, _) = call(
         &app,
         "POST",
@@ -6201,6 +6345,7 @@ async fn jobs_that_end_before_execution_are_still_counted() {
             "name": "Not synced",
             "tool": "ansible",
             "project_id": project_id,
+            "inventory_id": inventory_id,
             "entrypoint": "site.yml",
             "update_on_launch": false
         })),

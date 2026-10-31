@@ -240,6 +240,7 @@
   "inventory_file": "Inventardatei",
   "inventory_is_in_use": "Dieses Inventar wird noch verwendet von: {names}.",
   "inventory_is_missing": "Inventar fehlt.",
+  "inventory_is_required": "Ein Ansible-Auftrag braucht ein Inventar. Verbinde eines, bevor du startest.",
   "job_has_no_template": "Auftrag ohne Vorlage.",
   "job_is_missing": "Auftrag fehlt.",
   "job_template_is_missing": "Auftragsvorlage fehlt.",

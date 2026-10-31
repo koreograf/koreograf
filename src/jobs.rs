@@ -83,6 +83,15 @@ pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
             .filter(|text| runner::known_tool(text))
             .unwrap_or(&template.tool)
             .to_string();
+        if tool == "ansible" {
+            let has_inventory = parsed
+                .get("inventory_id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| !id.trim().is_empty());
+            if !has_inventory {
+                return Err(ApiError::bad("inventory_is_required"));
+            }
+        }
         let job = Job {
             id: id.clone(),
             team_id: req.team_id,
@@ -1073,6 +1082,10 @@ mod tests {
             )
             .expect("template")
         };
+        let inventory_id = {
+            let db = state.db().expect("db");
+            insert_inventory(&db, &team_id, false)
+        };
         {
             let db = state.db().expect("db");
             db::insert_job(
@@ -1095,6 +1108,7 @@ mod tests {
                     parameters: json!({
                         "template_name": "Self-Heal",
                         "tool": "ansible",
+                        "inventory_id": inventory_id,
                         "entrypoint": "missing.yml",
                         "extra_vars": {"alertname": "manual"},
                         "spec": {"tags": "heal"}
@@ -1156,9 +1170,14 @@ mod tests {
             )
             .expect("template")
         };
+        let inventory_id = {
+            let db = state.db().expect("db");
+            insert_inventory(&db, &team_id, false)
+        };
         let parameters = json!({
             "template_name": "Self-Heal",
             "tool": "ansible",
+            "inventory_id": inventory_id,
             "entrypoint": "site.yml",
             "extra_vars": {"alertname": "canceled"},
             "spec": {"tags": "heal"}
