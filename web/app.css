@@ -66,6 +66,18 @@ a { color: var(--accent); }
 .lede { color: var(--muted); margin: 0 0 18px; }
 
 .shell { display: grid; grid-template-columns: 232px 1fr; min-height: 100vh; }
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 30;
+  padding: 8px 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
+.skip-link:focus { left: 12px; top: 12px; }
 .side {
   background: var(--side);
   color: var(--side-text);
