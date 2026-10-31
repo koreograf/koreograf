@@ -82,7 +82,7 @@ pub fn find_ini_error(body: &str) -> Option<usize> {
         if !listing_hosts {
             continue;
         }
-        let mut parts = line.split_whitespace();
+        let mut parts = host_line_tokens(line).into_iter();
         let Some(name) = parts.next() else {
             continue;
         };
@@ -126,7 +126,7 @@ fn parse_ini(body: &str) -> Vec<InventoryHost> {
         if !listing_hosts {
             continue;
         }
-        let mut parts = line.split_whitespace();
+        let mut parts = host_line_tokens(line).into_iter();
         let Some(name) = parts.next() else {
             continue;
         };
@@ -155,6 +155,15 @@ fn parse_ini(body: &str) -> Vec<InventoryHost> {
         }
     }
     hosts
+}
+
+/// Tokens of an INI host line. Quoted values keep their spaces; a line with
+/// unbalanced quotes falls back to plain whitespace splitting.
+fn host_line_tokens(line: &str) -> Vec<String> {
+    match shlex::split(line) {
+        Some(tokens) => tokens,
+        None => line.split_whitespace().map(str::to_string).collect(),
+    }
 }
 
 fn strip_comment(line: &str) -> &str {
@@ -312,6 +321,15 @@ web-1 ansible_connection=local
         assert!(hosts
             .iter()
             .all(|host| host.name != "web" && host.name != "db"));
+
+        let hosts = parse_hosts("[web]\nweb-1 ansible_ssh_common_args=\"-o ProxyCommand =x\"\n");
+        assert_eq!(
+            hosts[0]
+                .vars
+                .get("ansible_ssh_common_args")
+                .map(String::as_str),
+            Some("-o ProxyCommand =x")
+        );
     }
 
     #[test]
@@ -395,6 +413,10 @@ db
         );
         assert_eq!(
             find_ini_error("all:\n  hosts:\n    web-1:\n      ansible_host: 10.0.0.8\n"),
+            None
+        );
+        assert_eq!(
+            find_ini_error("[web]\nweb-1 ansible_ssh_common_args=\"-o ProxyCommand =x\"\n"),
             None
         );
     }
