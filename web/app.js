@@ -347,6 +347,7 @@ const FIELD_ALIAS = {
 const ERROR_FIELD = {
   name_is_missing_or_too_long: "name",
   description_is_too_long: "description",
+  limit_contains_an_invalid_character: "limit",
 };
 
 let flashKey = "";
@@ -437,6 +438,16 @@ document.addEventListener("input", (event) => {
   clearControlError(event.target);
 }, true);
 
+function clearErrorBanners() {
+  document.querySelectorAll(".banner.bad").forEach((node) => node.remove());
+}
+
+function topmostCard() {
+  const overlays = [...document.querySelectorAll(".overlay")];
+  const overlay = overlays[overlays.length - 1];
+  return overlay ? overlay.querySelector(".overlay-card") : null;
+}
+
 function handle(error) {
   if (error && error.status === 401) {
     me = null;
@@ -446,7 +457,9 @@ function handle(error) {
   if (!document.querySelector(".main")) shell(t("notice"), "");
   const main = document.querySelector(".main");
   const message = t(error.message || "error.generic", error.vars);
-  main.insertAdjacentHTML("afterbegin", `<div class="banner bad">${esc(message)}</div>`);
+  clearErrorBanners();
+  main.querySelectorAll(":scope > .banner.good").forEach((node) => node.remove());
+  (topmostCard() || main).insertAdjacentHTML("afterbegin", `<div class="banner bad">${esc(message)}</div>`);
   const fieldName = (error.vars && error.vars.field) || ERROR_FIELD[error.message] || "";
   const control = fieldControl(fieldName);
   if (!control) return;
@@ -3414,7 +3427,14 @@ async function pageProject(id) {
 }
 
 function sourceKindLabel(kind) {
-  return { ini: "INI", project: t("project"), netbox: t("netbox"), mixed: t("several") }[kind] || kind || "INI";
+  return { ini: t("manual"), project: t("project"), netbox: t("netbox"), mixed: t("several") }[kind] || kind || t("manual");
+}
+
+function sourceTitle(source) {
+  const name = (source.name || "").trim();
+  const fallback = { ini: "manual", project: "project", netbox: "netbox" }[source.kind];
+  if (!name || name === fallback) return sourceKindLabel(source.kind);
+  return name;
 }
 
 function sourceSummary(item) {
@@ -3440,7 +3460,7 @@ function mountSourceDraft(container, projects, kind, preset) {
   card.dataset.kind = kind;
   card.style.marginTop = "10px";
   const projectOptions = projects.map((item) => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join("");
-  const title = kind === "ini" ? t("manual") : kind === "project" ? t("project") : "netbox";
+  const title = kind === "ini" ? t("manual") : kind === "project" ? t("project") : t("netbox");
   let fields = "";
   if (kind === "ini") {
     fields = `<label class="field"><span>${h("ini_or_yaml")}</span><textarea name="body" required>${esc(data.body || "[all]\nlocalhost ansible_connection=local")}</textarea></label>`;
@@ -3606,8 +3626,9 @@ async function pageInventory(id) {
   const sourceCards = (item.sources || []).map((source) => `
     <section class="card" style="margin-top:10px">
       <div class="spread">
-        <div><strong>${esc(source.name)}</strong>${certificateBadge(certificateCheckOff(source))} <span class="small muted">${esc(sourceKindLabel(source.kind))} · ${esc(sourceSummary(source))}</span></div>
+        <div><strong>${esc(sourceTitle(source))}</strong>${certificateBadge(certificateCheckOff(source))} <span class="small muted">${esc(sourceKindLabel(source.kind))} · ${esc(sourceSummary(source))}</span></div>
         <div class="row">
+          ${can("operator") && source.kind !== "ini" ? `<span class="small muted" data-source-status="${esc(source.id)}" aria-live="polite"></span>` : ""}
           ${can("operator") && source.kind !== "ini" ? `<button class="btn" type="button" data-sync-source="${esc(source.id)}">${h("refresh")}</button>` : ""}
           ${can("operator") ? `<button class="btn danger" type="button" data-drop-source="${esc(source.id)}">${h("remove")}</button>` : ""}
         </div>
@@ -3659,12 +3680,20 @@ async function pageInventory(id) {
   }
   document.querySelectorAll("[data-sync-source]").forEach((button) => {
     button.addEventListener("click", async () => {
+      const status = document.querySelector(`[data-source-status="${button.dataset.syncSource}"]`);
       button.disabled = true;
+      button.textContent = t("refreshing");
+      if (status) status.textContent = t("refreshing");
       try {
-        await api("POST", `/api/inventories/${encodeURIComponent(id)}/sources/${encodeURIComponent(button.dataset.syncSource)}/sync`);
-        route();
+        const item = await api("POST", `/api/inventories/${encodeURIComponent(id)}/sources/${encodeURIComponent(button.dataset.syncSource)}/sync`);
+        await route();
+        const fresh = document.querySelector(`[data-source-status="${button.dataset.syncSource}"]`);
+        const synced = (item.sources || []).find((row) => row.id === button.dataset.syncSource);
+        if (fresh) fresh.textContent = t("updated_hosts", { count: synced ? synced.host_count : 0 });
       } catch (error) {
         button.disabled = false;
+        button.textContent = t("refresh");
+        if (status) status.textContent = t(error.message || "error.generic", error.vars);
         handle(error);
       }
     });
