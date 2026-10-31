@@ -45,7 +45,7 @@ COPY web /opt/koreograf/web
 COPY examples /opt/koreograf/examples
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 # x-release-please-start-version
-ARG VERSION=0.1.0-alpha.6
+ARG VERSION=0.1.0-alpha.7
 # x-release-please-end
 ARG SOURCE=https://github.com/koreograf/koreograf
 # The build passes the short commit SHA and the build date. Both stay empty
