@@ -14,7 +14,10 @@ use crate::jobs;
 use crate::runner;
 use crate::Shared;
 
-use super::{blank, created, gate, no_content, require_description, require_name, team_header};
+use super::{
+    blank, check_static_ini, created, gate, no_content, require_description, require_name,
+    team_header,
+};
 
 #[derive(Deserialize)]
 pub struct TeamBody {
@@ -536,6 +539,7 @@ pub async fn update_inventory(
             }
         }
     }
+    check_static_ini(&body.body)?;
     db::update_inventory(&db, &id, &team, &name, &existing.body)?;
     if !body.body.trim().is_empty() {
         if let Some(source) = sources.first() {
@@ -563,6 +567,7 @@ pub async fn create_inventory(
         return super::sources::create_with_sources(state, team, name, body.sources, user.is_admin)
             .await;
     }
+    check_static_ini(&body.body)?;
     let item = Inventory {
         id: Uuid::new_v4().to_string(),
         team_id: team,

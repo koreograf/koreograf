@@ -13,6 +13,10 @@ use crate::error::{ApiError, AppResult};
 
 const PBKDF2_ITERS: u32 = 120_000;
 
+/// Shown when KOREOGRAF_SECRET_KEY is set but not a valid key. The value
+/// itself never appears in the message.
+const INVALID_ENV_KEY: &str = "KOREOGRAF_SECRET_KEY is set but is not a valid key. It must be exactly 64 hex characters. Leave it empty to use data/secret.key.";
+
 pub struct Cipher {
     key: [u8; 32],
 }
@@ -62,15 +66,31 @@ pub(crate) fn install_key(data_dir: &Path, raw: &[u8]) -> AppResult<Cipher> {
 }
 
 pub fn load_cipher(data_dir: &Path) -> AppResult<Cipher> {
+    let env = std::env::var("KOREOGRAF_SECRET_KEY").ok();
+    load_cipher_with(data_dir, env.as_deref())
+}
+
+/// `load_cipher` with the value of `KOREOGRAF_SECRET_KEY` passed in. A set
+/// value that is not a valid key fails instead of falling back to another
+/// key, so data never lands under a key the operator did not choose. An
+/// empty value still means unset.
+fn load_cipher_with(data_dir: &Path, env_key: Option<&str>) -> AppResult<Cipher> {
     fs::create_dir_all(data_dir).map_err(|e| ApiError::Internal(e.to_string()))?;
     let path = data_dir.join("secret.key");
+    let env = env_key.map(str::trim).filter(|value| !value.is_empty());
+    if let Some(env) = &env {
+        if decode_key(env.as_bytes()).is_err() {
+            return Err(ApiError::Internal(INVALID_ENV_KEY.to_string()));
+        }
+    }
     if let Ok(raw) = fs::read(&path) {
         if let Ok(key) = decode_key(&raw) {
             return Ok(Cipher { key });
         }
     }
-    if let Ok(env) = std::env::var("KOREOGRAF_SECRET_KEY") {
-        if let Ok(key) = decode_key(env.trim().as_bytes()) {
+    if let Some(env) = &env {
+        // Validated above, so this cannot fail.
+        if let Ok(key) = decode_key(env.as_bytes()) {
             write_key(&path, &key)?;
             return Ok(Cipher { key });
         }
@@ -173,7 +193,21 @@ pub fn tokens_equal(left: &str, right: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
+
+    const VALID_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn scratch(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-crypto-{tag}-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 
     #[test]
     fn password_roundtrip() {
@@ -189,5 +223,69 @@ mod tests {
         let packed = cipher.encrypt("ssh-key").unwrap();
         assert_eq!(cipher.decrypt(&packed).unwrap(), "ssh-key");
         assert!(cipher.decrypt("AAAA").is_err());
+    }
+
+    #[test]
+    fn invalid_env_key_fails_startup_without_leaking_the_value() {
+        let dir = scratch("invalid-env");
+        let values = vec![
+            String::from("not a key"),
+            String::from("0123456789abcdef"),
+            "f".repeat(63),
+            "z".repeat(64),
+        ];
+        for value in &values {
+            let err = load_cipher_with(&dir, Some(value.as_str()))
+                .err()
+                .expect("a set but invalid key must fail");
+            let text = err.to_string();
+            assert!(
+                text.contains("KOREOGRAF_SECRET_KEY"),
+                "names the variable: {text}"
+            );
+            assert!(
+                text.contains("64 hex characters"),
+                "states the requirement: {text}"
+            );
+            assert!(!text.contains(value.as_str()), "leaks the key: {text}");
+            assert!(
+                !dir.join("secret.key").exists(),
+                "no fallback key may be written"
+            );
+        }
+    }
+
+    #[test]
+    fn valid_env_key_is_still_used() {
+        let dir = scratch("valid-env");
+        let cipher = load_cipher_with(&dir, Some(VALID_KEY)).expect("a valid key must work");
+        let packed = cipher.encrypt("ssh-key").unwrap();
+        // The next start without the variable reads the same key from disk.
+        let on_disk = load_cipher_with(&dir, None).expect("the on-disk key must load");
+        assert_eq!(on_disk.decrypt(&packed).unwrap(), "ssh-key");
+    }
+
+    #[test]
+    fn unset_or_empty_env_falls_back_to_the_disk_key() {
+        let known = [9u8; 32];
+        for empty in [None::<&str>, Some(""), Some("   ")] {
+            let dir = scratch("disk-key");
+            write_key(&dir.join("secret.key"), &known).unwrap();
+            let cipher = load_cipher_with(&dir, empty).expect("the on-disk key must load");
+            let packed = cipher.encrypt("ssh-key").unwrap();
+            assert_eq!(Cipher { key: known }.decrypt(&packed).unwrap(), "ssh-key");
+        }
+    }
+
+    #[test]
+    fn fresh_start_creates_the_disk_key() {
+        let dir = scratch("fresh");
+        let cipher = load_cipher_with(&dir, None).expect("a fresh start must generate a key");
+        let packed = cipher.encrypt("ssh-key").unwrap();
+        assert_eq!(cipher.decrypt(&packed).unwrap(), "ssh-key");
+        let raw = std::fs::read(dir.join("secret.key")).unwrap();
+        let text = String::from_utf8(raw).unwrap();
+        assert_eq!(text.len(), 64);
+        assert!(hex::decode(&text).is_ok());
     }
 }

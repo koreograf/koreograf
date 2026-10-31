@@ -19,6 +19,7 @@ admin:
   password: ""
 
 # 64 Hex-Zeichen. Leer: der Pod erzeugt data/secret.key im Volume.
+# Ein ungültiger, nicht leerer Wert beendet den Start, auch wenn data/secret.key existiert.
 secretKey: ""
 
 # true nur hinter HTTPS. Auf plain HTTP bleibt Strict-Transport-Security aus.
