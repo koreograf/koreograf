@@ -234,6 +234,7 @@ function statusLabel(status) {
     skipped: t("skipped"),
     accepted: t("accepted"),
     ignored: t("ignored"),
+    rejected: t("rejected"),
   }[status] || status;
 }
 
@@ -3079,10 +3080,11 @@ async function pageHookNew() {
 
 async function pageRuntime() {
   if (!needTeam()) return;
-  const [cache, plugins, environments] = await Promise.all([
+  const [cache, plugins, environments, runner] = await Promise.all([
     api("GET", "/api/cache"),
     api("GET", "/api/plugins"),
     api("GET", "/api/environments"),
+    api("GET", "/api/runner"),
   ]);
   const collectionRows = (cache.collections || []).map((item) => `<tr><td>${esc(item.name)}</td><td>${esc(item.version)}</td></tr>`);
   const roleRows = (cache.roles || []).map((item) => `<tr><td>${esc(item.name)}</td><td>${esc(item.version)}</td></tr>`);
@@ -3097,6 +3099,7 @@ async function pageRuntime() {
       <article class="card stat"><span class="small muted">${h("collections")}</span><strong>${esc(bytes(cache.collections_bytes))}</strong></article>
       <article class="card stat"><span class="small muted">${h("roles")}</span><strong>${esc(bytes(cache.roles_bytes))}</strong></article>
       <article class="card stat"><span class="small muted">${h("opentofu")}</span><strong>${esc(bytes(cache.tofu_bytes))}</strong></article>
+      <article class="card stat"><span class="small muted">${h("local_jobs")}</span><strong>${esc(runner.local_jobs)}</strong></article>
     </div>
     <p class="small muted" style="margin-top:0">${esc(t(cache.note || ""))}</p>
     <section class="card" style="margin-bottom:14px"><h2>${h("tools")}</h2>${table([t("id"), t("description")], pluginRows)}</section>
