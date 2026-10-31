@@ -3427,7 +3427,14 @@ async function pageProject(id) {
 }
 
 function sourceKindLabel(kind) {
-  return { ini: "INI", project: t("project"), netbox: t("netbox"), mixed: t("several") }[kind] || kind || "INI";
+  return { ini: t("manual"), project: t("project"), netbox: t("netbox"), mixed: t("several") }[kind] || kind || t("manual");
+}
+
+function sourceTitle(source) {
+  const name = (source.name || "").trim();
+  const fallback = { ini: "manual", project: "project", netbox: "netbox" }[source.kind];
+  if (!name || name === fallback) return sourceKindLabel(source.kind);
+  return name;
 }
 
 function sourceSummary(item) {
@@ -3453,7 +3460,7 @@ function mountSourceDraft(container, projects, kind, preset) {
   card.dataset.kind = kind;
   card.style.marginTop = "10px";
   const projectOptions = projects.map((item) => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join("");
-  const title = kind === "ini" ? t("manual") : kind === "project" ? t("project") : "netbox";
+  const title = kind === "ini" ? t("manual") : kind === "project" ? t("project") : t("netbox");
   let fields = "";
   if (kind === "ini") {
     fields = `<label class="field"><span>${h("ini_or_yaml")}</span><textarea name="body" required>${esc(data.body || "[all]\nlocalhost ansible_connection=local")}</textarea></label>`;
@@ -3619,7 +3626,7 @@ async function pageInventory(id) {
   const sourceCards = (item.sources || []).map((source) => `
     <section class="card" style="margin-top:10px">
       <div class="spread">
-        <div><strong>${esc(source.name)}</strong>${certificateBadge(certificateCheckOff(source))} <span class="small muted">${esc(sourceKindLabel(source.kind))} · ${esc(sourceSummary(source))}</span></div>
+        <div><strong>${esc(sourceTitle(source))}</strong>${certificateBadge(certificateCheckOff(source))} <span class="small muted">${esc(sourceKindLabel(source.kind))} · ${esc(sourceSummary(source))}</span></div>
         <div class="row">
           ${can("operator") && source.kind !== "ini" ? `<span class="small muted" data-source-status="${esc(source.id)}" aria-live="polite"></span>` : ""}
           ${can("operator") && source.kind !== "ini" ? `<button class="btn" type="button" data-sync-source="${esc(source.id)}">${h("refresh")}</button>` : ""}
