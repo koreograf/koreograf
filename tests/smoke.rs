@@ -5280,6 +5280,41 @@ async fn admin_settings_hide_secrets_and_apply_without_restart() {
     assert!(saved["ldap"].get("bind_password").is_none());
     assert!(saved["proxy"].get("password").is_none());
 
+    let (status, partial, _) = call(
+        &app,
+        "PUT",
+        "/api/settings",
+        Some(&cookie),
+        None,
+        Some(json!({"job_timeout_secs": 60})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{partial}");
+    assert_eq!(partial["error"], "the_settings_body_is_incomplete");
+    assert_eq!(partial["vars"]["fields"], "ldap, proxy, runner");
+
+    let (status, bad_runner, _) = call(
+        &app,
+        "PUT",
+        "/api/settings",
+        Some(&cookie),
+        None,
+        Some(json!({
+            "ldap": {
+                "url": "",
+                "mode": "ldap"
+            },
+            "proxy": {
+                "url": ""
+            },
+            "runner": "bogus",
+            "job_timeout_secs": 60
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{bad_runner}");
+    assert_eq!(bad_runner["error"], "the_runner_mode_is_invalid");
+
     let (status, overview, _) = call(
         &app,
         "GET",

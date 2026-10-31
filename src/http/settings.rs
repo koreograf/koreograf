@@ -12,14 +12,10 @@ use crate::Shared;
 pub(super) struct SettingsBody {
     #[serde(default)]
     reset: bool,
-    #[serde(default)]
-    ldap: LdapBody,
-    #[serde(default)]
-    proxy: ProxyBody,
-    #[serde(default)]
-    runner: String,
-    #[serde(default)]
-    job_timeout_secs: u64,
+    ldap: Option<LdapBody>,
+    proxy: Option<ProxyBody>,
+    runner: Option<String>,
+    job_timeout_secs: Option<u64>,
     #[serde(default)]
     job_output_lines: u64,
     #[serde(default)]
@@ -77,33 +73,62 @@ pub async fn put_settings(
     ApiJson(body): ApiJson<SettingsBody>,
 ) -> AppResult<Json<Value>> {
     admin(&user)?;
+    if !body.reset {
+        check_complete(&body)?;
+    }
+    let ldap = body.ldap.unwrap_or_default();
+    let proxy = body.proxy.unwrap_or_default();
     let clear_ldap_password = body.clear.iter().any(|item| item == "ldap_bind_password");
     let clear_proxy_password = body.clear.iter().any(|item| item == "proxy_password");
     let write = SettingsWrite {
-        ldap_url: body.ldap.url,
-        ldap_mode: body.ldap.mode,
-        ldap_bind_dn: body.ldap.bind_dn,
-        ldap_bind_password: body.ldap.bind_password,
-        ldap_user_base: body.ldap.user_base,
-        ldap_user_filter: body.ldap.user_filter,
-        ldap_username_attr: body.ldap.username_attr,
-        ldap_group_attr: body.ldap.group_attr,
-        ldap_group_base: body.ldap.group_base,
-        ldap_starttls: body.ldap.starttls,
-        ldap_tls_insecure: body.ldap.tls_insecure,
-        ldap_ca_file: body.ldap.ca_file,
-        proxy_url: body.proxy.url,
-        proxy_username: body.proxy.username,
-        proxy_password: body.proxy.password,
-        proxy_no_proxy: body.proxy.no_proxy,
-        runner: body.runner,
-        job_timeout_secs: body.job_timeout_secs,
+        ldap_url: ldap.url,
+        ldap_mode: ldap.mode,
+        ldap_bind_dn: ldap.bind_dn,
+        ldap_bind_password: ldap.bind_password,
+        ldap_user_base: ldap.user_base,
+        ldap_user_filter: ldap.user_filter,
+        ldap_username_attr: ldap.username_attr,
+        ldap_group_attr: ldap.group_attr,
+        ldap_group_base: ldap.group_base,
+        ldap_starttls: ldap.starttls,
+        ldap_tls_insecure: ldap.tls_insecure,
+        ldap_ca_file: ldap.ca_file,
+        proxy_url: proxy.url,
+        proxy_username: proxy.username,
+        proxy_password: proxy.password,
+        proxy_no_proxy: proxy.no_proxy,
+        runner: body.runner.unwrap_or_default(),
+        job_timeout_secs: body.job_timeout_secs.unwrap_or_default(),
         job_output_lines: body.job_output_lines,
         clear_ldap_password,
         clear_proxy_password,
         reset: body.reset,
     };
     Ok(Json(settings::save(&state, &write)?))
+}
+
+fn check_complete(body: &SettingsBody) -> AppResult<()> {
+    let mut missing = Vec::new();
+    if body.ldap.is_none() {
+        missing.push("ldap");
+    }
+    if body.proxy.is_none() {
+        missing.push("proxy");
+    }
+    if body.runner.as_deref().unwrap_or("").trim().is_empty() {
+        missing.push("runner");
+    }
+    if body.job_timeout_secs.is_none() {
+        missing.push("job_timeout_secs");
+    }
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(ApiError::bad_vars(
+            "the_settings_body_is_incomplete",
+            [("fields", missing.join(", "))],
+        ))
+    }
 }
 
 fn admin(user: &AuthUser) -> AppResult<()> {

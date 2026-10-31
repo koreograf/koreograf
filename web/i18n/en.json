@@ -663,6 +663,7 @@
   "the_service_account_is_missing": "The service account is missing.",
   "the_service_account_is_not_a_json_object": "The service account is not a JSON object.",
   "the_session_ended_locally": "The session ended locally.",
+  "the_settings_body_is_incomplete": "The settings body is incomplete. Missing fields: {fields}.",
   "the_tag_part_is_invalid_letters_digits_and": "The tag “{part}” is invalid. Letters, digits, and _ . : - are allowed.",
   "the_tags_are_too_long": "The tags are too long.",
   "the_template_belongs_to_another_team": "The template belongs to another team.",
