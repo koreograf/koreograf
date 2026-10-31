@@ -3621,6 +3621,7 @@ async function pageInventory(id) {
       <div class="spread">
         <div><strong>${esc(source.name)}</strong>${certificateBadge(certificateCheckOff(source))} <span class="small muted">${esc(sourceKindLabel(source.kind))} · ${esc(sourceSummary(source))}</span></div>
         <div class="row">
+          ${can("operator") && source.kind !== "ini" ? `<span class="small muted" data-source-status="${esc(source.id)}" aria-live="polite"></span>` : ""}
           ${can("operator") && source.kind !== "ini" ? `<button class="btn" type="button" data-sync-source="${esc(source.id)}">${h("refresh")}</button>` : ""}
           ${can("operator") ? `<button class="btn danger" type="button" data-drop-source="${esc(source.id)}">${h("remove")}</button>` : ""}
         </div>
@@ -3672,12 +3673,20 @@ async function pageInventory(id) {
   }
   document.querySelectorAll("[data-sync-source]").forEach((button) => {
     button.addEventListener("click", async () => {
+      const status = document.querySelector(`[data-source-status="${button.dataset.syncSource}"]`);
       button.disabled = true;
+      button.textContent = t("refreshing");
+      if (status) status.textContent = t("refreshing");
       try {
-        await api("POST", `/api/inventories/${encodeURIComponent(id)}/sources/${encodeURIComponent(button.dataset.syncSource)}/sync`);
-        route();
+        const item = await api("POST", `/api/inventories/${encodeURIComponent(id)}/sources/${encodeURIComponent(button.dataset.syncSource)}/sync`);
+        await route();
+        const fresh = document.querySelector(`[data-source-status="${button.dataset.syncSource}"]`);
+        const synced = (item.sources || []).find((row) => row.id === button.dataset.syncSource);
+        if (fresh) fresh.textContent = t("updated_hosts", { count: synced ? synced.host_count : 0 });
       } catch (error) {
         button.disabled = false;
+        button.textContent = t("refresh");
+        if (status) status.textContent = t(error.message || "error.generic", error.vars);
         handle(error);
       }
     });
