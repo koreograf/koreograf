@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.1.0-alpha.7](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.6...v0.1.0-alpha.7) (2026-10-31)
+
+
+### Features
+
+* include the git commit in the reported version ([#166](https://github.com/koreograf/koreograf/issues/166)) ([237b613](https://github.com/koreograf/koreograf/commit/237b613f91a36a529ac4a2a634825344f05b104d))
+
+
+### Bug Fixes
+
+* add skip link, sign-in autofocus and restore language focus ([#180](https://github.com/koreograf/koreograf/issues/180)) ([2ce068d](https://github.com/koreograf/koreograf/commit/2ce068d57631daad190eda699b60eda064eb3b97))
+* delete auto-created netbox credentials with their inventory ([d271def](https://github.com/koreograf/koreograf/commit/d271defdc6736ab30bba6c53f04a07406882ccb4))
+* explain how webhook calls can start jobs on a default install ([02bbf89](https://github.com/koreograf/koreograf/commit/02bbf893b8537f22e90d3176e27e41869b5d3b53))
+* guard auto credential cleanup against json references ([51b3e6e](https://github.com/koreograf/koreograf/commit/51b3e6ede6176e9171acc24771bd1c10b337f85c))
+* let pages shrink on narrow windows without horizontal scroll ([#183](https://github.com/koreograf/koreograf/issues/183)) ([534baa2](https://github.com/koreograf/koreograf/commit/534baa29ebf3d30bdf571931e8bafc30a116ed56))
+* make overlay dialogs keyboard-modal with focus trap ([#181](https://github.com/koreograf/koreograf/issues/181)) ([bc382f0](https://github.com/koreograf/koreograf/commit/bc382f096ca72a88531a02e85cf185225f23ae13))
+* refuse to delete an inventory that templates still use ([81c6256](https://github.com/koreograf/koreograf/commit/81c6256134484f9061264599fc49a676bd6abe75))
+* reject launching an ansible template without an inventory ([e715520](https://github.com/koreograf/koreograf/commit/e715520103cf674b937c9c5dcebbae9ceb7be67f))
+* reject workflow hook deliveries when local runs are admin-only ([d9da27b](https://github.com/koreograf/koreograf/commit/d9da27bbfea3b79cbcb109460e0d97b22acd1ae5))
+* report LDAP outages as 503 and cap NetBox connect timeout ([ba3b6c0](https://github.com/koreograf/koreograf/commit/ba3b6c01a7f2c384e1d2303ce63cb121004cc991))
+* save the playbook path shown in the template form ([dfc3535](https://github.com/koreograf/koreograf/commit/dfc35357999c8ebd26b134b8f49029def248998e)), closes [#147](https://github.com/koreograf/koreograf/issues/147)
+* scope reference scan to team and cover guard with a test ([ef58d2a](https://github.com/koreograf/koreograf/commit/ef58d2ace2c687ba05120a86060f3b69a9a3c377))
+* shift schedule runs out of daylight saving gaps ([ca5e53d](https://github.com/koreograf/koreograf/commit/ca5e53d3e29f02bc6cce48bd32d77ff2561f7a03))
+* show errors next to their field and stop banner stacking ([#182](https://github.com/koreograf/koreograf/issues/182)) ([90f9af5](https://github.com/koreograf/koreograf/commit/90f9af50dde12ca8d38b3e3b92887a88c567a072))
+
 ## [0.1.0-alpha.6](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.5...v0.1.0-alpha.6) (2026-10-28)
 
 
