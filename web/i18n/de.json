@@ -238,6 +238,7 @@
   "inventory": "Inventar",
   "inventory_2": "+ Inventar",
   "inventory_file": "Inventardatei",
+  "inventory_ini_is_invalid": "Das INI-Inventar hat einen Syntaxfehler auf Zeile {line}.",
   "inventory_is_in_use": "Dieses Inventar wird noch verwendet von: {names}.",
   "inventory_is_missing": "Inventar fehlt.",
   "inventory_is_required": "Ein Ansible-Auftrag braucht ein Inventar. Verbinde eines, bevor du startest.",

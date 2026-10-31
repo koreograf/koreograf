@@ -536,6 +536,7 @@ pub async fn update_inventory(
             }
         }
     }
+    check_static_ini(&body.body)?;
     db::update_inventory(&db, &id, &team, &name, &existing.body)?;
     if !body.body.trim().is_empty() {
         if let Some(source) = sources.first() {
@@ -548,6 +549,17 @@ pub async fn update_inventory(
     db::set_inventory_admin_saved(&db, &id, user.is_admin)?;
     let item = db::inventory(&db, &id)?.ok_or(ApiError::NotFound)?;
     Ok(Json(inventory_json(&db, &item)?))
+}
+
+/// A static INI body with a broken line is rejected before it is stored.
+fn check_static_ini(body: &str) -> AppResult<()> {
+    if let Some(line) = crate::inventory::find_ini_error(body) {
+        return Err(ApiError::bad_vars(
+            "inventory_ini_is_invalid",
+            [("line", line.to_string())],
+        ));
+    }
+    Ok(())
 }
 
 pub async fn create_inventory(
@@ -563,6 +575,7 @@ pub async fn create_inventory(
         return super::sources::create_with_sources(state, team, name, body.sources, user.is_admin)
             .await;
     }
+    check_static_ini(&body.body)?;
     let item = Inventory {
         id: Uuid::new_v4().to_string(),
         team_id: team,

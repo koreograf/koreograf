@@ -45,6 +45,61 @@ pub fn parse_hosts(body: &str) -> Vec<InventoryHost> {
     parse_ini(body)
 }
 
+/// Find the first line of a static INI inventory that Ansible cannot read.
+///
+/// Returns the 1-based line number. Plugin files and YAML inventories are
+/// not INI, so they have no line to report.
+pub fn find_ini_error(body: &str) -> Option<usize> {
+    if is_plugin_file(body) || is_yaml_inventory(body) {
+        return None;
+    }
+    let mut listing_hosts = true;
+    for (index, raw) in body.lines().enumerate() {
+        let line = strip_comment(raw).trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with('[') {
+            let Some(inner) = line
+                .strip_prefix('[')
+                .and_then(|rest| rest.strip_suffix(']'))
+            else {
+                return Some(index + 1);
+            };
+            let (name, hosts_follow) = if let Some(name) = inner.strip_suffix(":vars") {
+                (name, false)
+            } else if let Some(name) = inner.strip_suffix(":children") {
+                (name, false)
+            } else {
+                (inner, true)
+            };
+            if name.trim().is_empty() {
+                return Some(index + 1);
+            }
+            listing_hosts = hosts_follow;
+            continue;
+        }
+        if !listing_hosts {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let Some(name) = parts.next() else {
+            continue;
+        };
+        if name.contains('=') {
+            return Some(index + 1);
+        }
+        for part in parts {
+            if let Some((key, _)) = part.split_once('=') {
+                if key.is_empty() {
+                    return Some(index + 1);
+                }
+            }
+        }
+    }
+    None
+}
+
 fn parse_ini(body: &str) -> Vec<InventoryHost> {
     let mut hosts: Vec<InventoryHost> = Vec::new();
     let mut group = "ungrouped".to_string();
@@ -302,5 +357,45 @@ all:
             Some("10.0.0.8")
         );
         assert!(hosts.iter().any(|host| host.name == "db-1"));
+    }
+
+    #[test]
+    fn rejects_broken_ini_lines_with_their_line_number() {
+        assert_eq!(find_ini_error("[all\nh1 ansible_host=\n[[["), Some(1));
+        assert_eq!(find_ini_error("[web]\nweb-1\n[db\ndb-1\n"), Some(3));
+        assert_eq!(find_ini_error("[web]\nansible_host=10.0.0.5\n"), Some(2));
+        assert_eq!(find_ini_error("[web]\nweb-1 =\n"), Some(2));
+        assert_eq!(find_ini_error("[]\n"), Some(1));
+    }
+
+    #[test]
+    fn accepts_valid_ini_and_non_ini_bodies() {
+        let body = "\
+# demo
+[web]
+web-1 ansible_host=10.0.0.5
+web-2
+
+[db]
+db-1 ansible_user=ops
+
+[web:vars]
+ansible_port=22
+
+[app:children]
+web
+db
+";
+        assert_eq!(find_ini_error(body), None);
+        assert_eq!(find_ini_error(""), None);
+        assert_eq!(find_ini_error("# only a comment\n"), None);
+        assert_eq!(
+            find_ini_error("plugin: netbox.netbox.nb_inventory\napi_endpoint: https://nb\n"),
+            None
+        );
+        assert_eq!(
+            find_ini_error("all:\n  hosts:\n    web-1:\n      ansible_host: 10.0.0.8\n"),
+            None
+        );
     }
 }
