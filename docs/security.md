@@ -8,6 +8,6 @@ Path projects and `file://` clones cannot use the data directory or a system dir
 
 LDAP sign-in does not take over a local account that already uses the same username. A team bound to a group DN matches that directory entry. A CN binding matches the CN under the search base.
 
-If an operator who should not have been trusted could start local jobs, create new credentials and retire the old ones. `secret.key` decrypts every stored secret, and a backup zip from that period contains the same key.
+If an operator who should not have been trusted could start local jobs, create new credentials and retire the old ones, `secret.key` decrypts every stored secret, and a backup zip from that period contains the same key.
 
 How to report a vulnerability is in [SECURITY.md](../SECURITY.md).
