@@ -22,6 +22,8 @@ let source = null;
 let pollTimer = null;
 let generation = 0;
 let runKey = null;
+let navOpen = false;
+let navKey = null;
 document.documentElement.lang = lang;
 
 
@@ -305,6 +307,10 @@ function closeLive() {
     document.removeEventListener("keydown", runKey);
     runKey = null;
   }
+  if (navKey) {
+    document.removeEventListener("keydown", navKey);
+    navKey = null;
+  }
 }
 
 async function api(method, path, body) {
@@ -510,9 +516,11 @@ function shell(title, body, actions) {
     const label = team.organization_name ? `${team.organization_name} · ${team.name}` : team.name;
     return `<option value="${esc(team.id)}"${team.id === teamId ? " selected" : ""}>${esc(label)}</option>`;
   }).join("");
+  navOpen = false;
   app.innerHTML = `
     <div class="shell">
       <a class="skip-link" href="#main">${h("skip_to_content")}</a>
+      <div class="scrim" id="nav-scrim"></div>
       <aside class="side">
         <div class="brand-lockup"><span class="mark" aria-hidden="true"></span><p class="word">Koreograf</p></div>
         <label class="field"><span class="small">${h("organization_team")}</span><select id="team-select">${options || `<option value="">${h("no_team")}</option>`}</select></label>
@@ -524,7 +532,7 @@ function shell(title, body, actions) {
         </div>
       </aside>
       <main class="main" id="main" tabindex="-1">
-        <div class="top"><div><h1>${esc(title)}</h1></div><div class="row">${actions || ""}</div></div>
+        <div class="top"><div><button class="btn ghost nav-toggle" id="nav-toggle" type="button" aria-label="${h("menu")}" aria-expanded="false"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M3 5.5h14M3 10h14M3 14.5h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button><h1>${esc(title)}</h1></div><div class="row">${actions || ""}</div></div>
         ${savedBanner()}
         ${body}
       </main>
@@ -545,6 +553,19 @@ function shell(title, body, actions) {
     me = null;
     go("#/login");
   });
+  const navToggle = document.querySelector("#nav-toggle");
+  const sidePanel = document.querySelector(".side");
+  const navScrim = document.querySelector("#nav-scrim");
+  const setNavOpen = (open) => {
+    navOpen = open;
+    navToggle.setAttribute("aria-expanded", String(open));
+    sidePanel.classList.toggle("open", open);
+    navScrim.classList.toggle("open", open);
+  };
+  navToggle.addEventListener("click", () => setNavOpen(!navOpen));
+  navScrim.addEventListener("click", () => setNavOpen(false));
+  navKey = (event) => { if (event.key === "Escape") setNavOpen(false); };
+  document.addEventListener("keydown", navKey);
 }
 
 function needTeam() {
@@ -557,7 +578,7 @@ function table(headers, rows) {
   const body = rows.length
     ? rows.join("")
     : `<tr><td class="muted" colspan="${headers.length}">${h("nothing_here")}</td></tr>`;
-  return `<table class="table"><thead><tr>${headers.map((item) => `<th>${esc(item)}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table>`;
+  return `<div class="table-wrap"><table class="table"><thead><tr>${headers.map((item) => `<th>${esc(item)}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 function jsonObject(text, label) {
