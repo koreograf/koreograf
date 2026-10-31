@@ -1286,6 +1286,110 @@ async fn ansible_launch_requires_an_inventory() {
 }
 
 #[tokio::test]
+async fn a_workflow_node_without_an_inventory_fails_before_launching() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-wf-inventory-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let cfg = config(&dir);
+    let state = koreograf::boot(cfg).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Workflow needs inventory",
+            "tool": "ansible",
+            "entrypoint": "site.yml"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().unwrap();
+
+    let (status, workflow, _) = call(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Needs inventory run",
+            "description": "",
+            "graph": {
+                "nodes": [
+                    {"id": "one", "template_id": template_id, "name": "one"}
+                ],
+                "edges": []
+            }
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{workflow}");
+    let workflow_id = workflow["id"].as_str().unwrap();
+
+    let (status, run, _) = call(
+        &app,
+        "POST",
+        &format!("/api/workflows/{workflow_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"extra_vars": {}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{run}");
+    let run_id = run["id"].as_str().unwrap();
+
+    let mut finished = None;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let (status, body, _) = call(
+            &app,
+            "GET",
+            &format!("/api/workflow-jobs/{run_id}"),
+            Some(&cookie),
+            Some(&team),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        if matches!(
+            body["status"].as_str(),
+            Some("successful" | "failed" | "canceled")
+        ) {
+            finished = Some(body);
+            break;
+        }
+    }
+    let finished = finished.expect("workflow run did not finish");
+    assert_eq!(finished["status"], "failed", "{finished}");
+    let node = &finished["nodes"][0];
+    assert_eq!(node["phase"], "failed", "{finished}");
+    assert!(node["job_id"].is_null(), "{finished}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn oversized_job_output_keeps_the_recap_in_the_download() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
