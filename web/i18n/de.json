@@ -633,6 +633,7 @@
   "the_manual_source_is_empty": "Die manuelle Quelle ist leer.",
   "the_membership_comes_from_ldap_or_active_directory": "Die Mitgliedschaft kommt aus LDAP oder Active Directory.",
   "the_mode_and_the_time_limit_apply_to": "Der Modus und das Zeitlimit gelten für den nächsten Auftrag.",
+  "the_name_has_invalid_characters": "Der Name enthält ungültige Zeichen.",
   "the_netbox_address_must_be_http_or_https": "NetBox-Adresse muss http oder https sein.",
   "the_netbox_credential_is_damaged": "NetBox-Zugang ist beschädigt.",
   "the_netbox_response_has_no_results": "NetBox-Antwort hat keine results.",

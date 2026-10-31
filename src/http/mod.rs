@@ -330,6 +330,9 @@ pub fn require_name(name: &str) -> AppResult<String> {
     if name.is_empty() || name.chars().count() > 120 {
         return Err(ApiError::bad("name_is_missing_or_too_long"));
     }
+    if name.chars().any(char::is_control) {
+        return Err(ApiError::bad("the_name_has_invalid_characters"));
+    }
     Ok(name.to_string())
 }
 
@@ -418,5 +421,22 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("description_is_too_long"));
+    }
+
+    #[test]
+    fn names_reject_control_characters() {
+        assert!(require_name("plain name").is_ok());
+        assert!(require_name("a\0name")
+            .unwrap_err()
+            .to_string()
+            .contains("the_name_has_invalid_characters"));
+        assert!(require_name("a\u{7}name")
+            .unwrap_err()
+            .to_string()
+            .contains("the_name_has_invalid_characters"));
+        assert!(require_name("")
+            .unwrap_err()
+            .to_string()
+            .contains("name_is_missing_or_too_long"));
     }
 }
