@@ -16,7 +16,7 @@ use crate::scan;
 use crate::Shared;
 
 use super::catalog::inventory_json;
-use super::{blank, created, gate, require_name, team_header};
+use super::{blank, check_static_ini, created, gate, require_name, team_header};
 
 #[derive(Deserialize)]
 pub(super) struct SourceInput {
@@ -509,6 +509,7 @@ pub async fn update_source(
         db::rename_inventory_source(&db, &source_id, &require_name(&body.name)?)?;
     }
     if !body.body.trim().is_empty() {
+        check_static_ini(&body.body)?;
         db::set_inventory_source_body(&db, &source_id, &body.body)?;
         db::refresh_inventory_summary(&db, &inventory_id)?;
     }
@@ -647,6 +648,7 @@ async fn resolve_source(
             if input.body.trim().is_empty() {
                 return Err(ApiError::bad("the_manual_source_is_empty"));
             }
+            check_static_ini(&input.body)?;
             Ok(ResolvedSource {
                 name: source_label(&input.name, "manual")?,
                 kind: "ini".into(),

@@ -2617,6 +2617,87 @@ async fn a_broken_ini_inventory_is_rejected_with_the_line_number() {
 }
 
 #[tokio::test]
+async fn broken_ini_bodies_are_rejected_on_the_source_endpoints() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-bad-ini-sources-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let broken = "[all\nh1 ansible_host=\n[[[";
+
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Broken sources", "sources": [{"kind": "ini", "body": broken}]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{created}");
+    assert_eq!(created["error"], "inventory_ini_is_invalid");
+    assert_eq!(created["vars"]["line"], "1");
+
+    let (status, good, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Good sources", "sources": [{"kind": "ini", "body": "[web]\nweb-1 ansible_host=10.0.0.5\n"}]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{good}");
+    let inventory_id = good["id"].as_str().unwrap();
+    let source_id = good["sources"][0]["id"].as_str().unwrap();
+
+    let (status, added, _) = call(
+        &app,
+        "POST",
+        &format!("/api/inventories/{inventory_id}/sources"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"kind": "ini", "body": broken})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{added}");
+    assert_eq!(added["error"], "inventory_ini_is_invalid");
+    assert_eq!(added["vars"]["line"], "1");
+
+    let (status, updated, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/inventories/{inventory_id}/sources/{source_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"body": broken})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{updated}");
+    assert_eq!(updated["error"], "inventory_ini_is_invalid");
+    assert_eq!(updated["vars"]["line"], "1");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn deleting_an_inventory_keeps_auto_credentials_referenced_in_workflows() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

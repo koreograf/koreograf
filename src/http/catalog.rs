@@ -14,7 +14,10 @@ use crate::jobs;
 use crate::runner;
 use crate::Shared;
 
-use super::{blank, created, gate, no_content, require_description, require_name, team_header};
+use super::{
+    blank, check_static_ini, created, gate, no_content, require_description, require_name,
+    team_header,
+};
 
 #[derive(Deserialize)]
 pub struct TeamBody {
@@ -549,17 +552,6 @@ pub async fn update_inventory(
     db::set_inventory_admin_saved(&db, &id, user.is_admin)?;
     let item = db::inventory(&db, &id)?.ok_or(ApiError::NotFound)?;
     Ok(Json(inventory_json(&db, &item)?))
-}
-
-/// A static INI body with a broken line is rejected before it is stored.
-fn check_static_ini(body: &str) -> AppResult<()> {
-    if let Some(line) = crate::inventory::find_ini_error(body) {
-        return Err(ApiError::bad_vars(
-            "inventory_ini_is_invalid",
-            [("line", line.to_string())],
-        ));
-    }
-    Ok(())
 }
 
 pub async fn create_inventory(

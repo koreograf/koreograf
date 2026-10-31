@@ -336,6 +336,17 @@ pub fn require_name(name: &str) -> AppResult<String> {
     Ok(name.to_string())
 }
 
+/// A static INI body with a broken line is rejected before it is stored.
+pub fn check_static_ini(body: &str) -> AppResult<()> {
+    if let Some(line) = crate::inventory::find_ini_error(body) {
+        return Err(ApiError::bad_vars(
+            "inventory_ini_is_invalid",
+            [("line", line.to_string())],
+        ));
+    }
+    Ok(())
+}
+
 pub fn require_description(description: &str) -> AppResult<String> {
     let description = description.trim();
     if description.chars().count() > 1000 {
