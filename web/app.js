@@ -63,12 +63,12 @@ function h(text, vars) {
   return esc(t(text, vars));
 }
 
-function setLang(next) {
+async function setLang(next) {
   lang = languageId(next);
   localStorage.setItem("koreograf.lang", lang);
   document.documentElement.lang = lang;
   if (!me) renderLogin("");
-  else route();
+  else await route();
   const button = document.querySelector("[data-lang-button]");
   if (button) button.focus();
 }
@@ -523,6 +523,10 @@ function shell(title, body, actions) {
     route();
   });
   bindLangSwitch();
+  document.querySelector(".skip-link").addEventListener("click", (event) => {
+    event.preventDefault();
+    document.getElementById("main").focus();
+  });
   document.querySelector("#logout").addEventListener("click", async () => {
     try { await api("POST", "/api/logout"); } catch { /* session ended locally */ }
     me = null;
