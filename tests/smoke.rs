@@ -2202,6 +2202,185 @@ async fn organizations_inventories_and_git_sync() {
 }
 
 #[tokio::test]
+async fn a_project_can_be_edited_and_syncs_a_new_revision() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-edit-{nanos}"));
+    let origin = std::env::temp_dir().join(format!("koreograf-edit-origin-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(&origin).unwrap();
+    let mut cfg = config(&dir);
+    cfg.project_roots.push(origin.clone());
+    let state = koreograf::boot(cfg).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    git(&origin, &["init", "-b", "main"]);
+    git(&origin, &["config", "user.email", "test@example.com"]);
+    git(&origin, &["config", "user.name", "Koreograf Test"]);
+    std::fs::write(origin.join("main.txt"), "main\n").unwrap();
+    git(&origin, &["add", "main.txt"]);
+    git(&origin, &["commit", "-m", "main"]);
+    git(&origin, &["checkout", "-b", "dev"]);
+    std::fs::write(origin.join("dev.txt"), "dev\n").unwrap();
+    git(&origin, &["add", "dev.txt"]);
+    git(&origin, &["commit", "-m", "dev"]);
+    git(&origin, &["checkout", "main"]);
+    let url = format!("file://{}", origin.display());
+
+    let (status, project, _) = call(
+        &app,
+        "POST",
+        "/api/projects",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Editable",
+            "source_type": "git",
+            "source": url,
+            "revision": "main"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{project}");
+    let project_id = project["id"].as_str().unwrap();
+    let (status, synced, _) = call(
+        &app,
+        "POST",
+        &format!("/api/projects/{project_id}/sync"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{synced}");
+    let checkout = std::path::PathBuf::from(synced["path"].as_str().unwrap());
+    assert!(checkout.join("main.txt").exists());
+
+    let (status, updated, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/projects/{project_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Renamed", "revision": "dev"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["name"], "Renamed");
+    assert_eq!(updated["revision"], "dev");
+    assert_eq!(updated["sync"]["ok"], true);
+    assert_eq!(updated["last_sync_status"], "success");
+    assert!(!updated["last_sync_at"].as_str().unwrap().is_empty());
+    assert!(!updated["last_sync_commit"].as_str().unwrap().is_empty());
+    assert!(checkout.join("dev.txt").exists());
+
+    let (status, stored, _) = call(
+        &app,
+        "GET",
+        &format!("/api/projects/{project_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{stored}");
+    assert_eq!(stored["name"], "Renamed");
+    assert_eq!(stored["revision"], "dev");
+
+    let (status, invalid, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/projects/{project_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"source": "ftp://example.com/repo.git"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{invalid}");
+    assert_eq!(invalid["error"], "the_git_address_must_be_http_s_ssh");
+    let (status, created_invalid, _) = call(
+        &app,
+        "POST",
+        "/api/projects",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Broken",
+            "source_type": "git",
+            "source": "ftp://example.com/repo.git"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{created_invalid}");
+    assert_eq!(created_invalid["error"], invalid["error"]);
+
+    let (status, _viewer, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "username": "viewer",
+            "display_name": "viewer",
+            "password": "viewer-pass",
+            "is_admin": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{team}/members"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"username": "viewer", "role": "viewer"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, viewer_me, viewer_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "viewer", "password": "viewer-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{viewer_me}");
+    let viewer_cookie = viewer_cookie.expect("viewer cookie");
+    let (status, denied, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/projects/{project_id}"),
+        Some(&viewer_cookie),
+        Some(&team),
+        Some(json!({"name": "Nope"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+
+    let _ = std::fs::remove_dir_all(&origin);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn playbooks_project_inventory_and_netbox() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -7449,7 +7628,7 @@ async fn unknown_fields_are_rejected_on_write_endpoints() {
 
     let assignment = json!({"organization_id": organization, "team_ids": []});
     let mut rejected = assignment.clone();
-    rejected["name"] = json!("ignored");
+    rejected["credential_id"] = json!("ignored");
     expect_unknown_field(
         &app,
         "PUT",
@@ -7457,7 +7636,7 @@ async fn unknown_fields_are_rejected_on_write_endpoints() {
         Some(&cookie),
         Some(&team),
         &rejected,
-        "name",
+        "credential_id",
     )
     .await;
     let (status, assigned, _) = call(

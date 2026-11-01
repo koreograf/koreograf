@@ -95,7 +95,7 @@ Names are at most 120 characters. Empty optional strings are omitted.
 | `organization_id` | no | Defaults to the organization of `X-Team-Id` |
 | `team_ids` | no | Empty gives the project to every team in the organization |
 
-`PUT /api/projects/{id}` sets `organization_id` and `team_ids`. Path projects are described in [Jobs](jobs.md#path-projects).
+`PUT /api/projects/{id}` accepts `name`, `source_type`, `source`, `revision`, `organization_id`, and `team_ids`. An omitted field keeps its value. The name, source type, source, and revision use the same validation as `POST`. Only an administrator can move a project to another organization. When `source_type`, `source`, or `revision` changes, the old checkout is discarded and a git project is synced again. That response is the project plus `sync`: `{"ok": true, "path": "..."}` or `{"ok": false, "error": "...", "vars": {...}}`. A failed sync keeps the new values and answers 200; the error is in `sync`. Path projects are described in [Jobs](jobs.md#path-projects).
 
 ### Inventories
 

@@ -610,21 +610,42 @@ fn capture_parameters(
     .to_string()
 }
 
+pub fn discard_project_checkout(state: &Shared, project: &db::Project) {
+    let dest = state.cfg.data_dir.join("checkouts").join(&project.id);
+    let _ = std::fs::remove_dir_all(dest);
+}
+
 pub async fn sync_project(state: &Shared, project: &db::Project) -> AppResult<String> {
     if project.source_type != "git" {
         return Ok(project.source.clone());
     }
     let proxy = crate::settings::load(state)?.proxy;
-    let path = runner::materialize_project(
+    let result = runner::materialize_project(
         project,
         &state.cfg.data_dir,
         &proxy,
         true,
         &state.cfg.project_roots,
     )
-    .await
-    .map_err(ApiError::bad)?;
-    Ok(path.display().to_string())
+    .await;
+    match result {
+        Ok(path) => {
+            let commit = runner::head_commit(&path).await;
+            let db = state.db()?;
+            db::set_project_sync_success(
+                &db,
+                &project.id,
+                &db::now(),
+                commit.as_deref().unwrap_or(""),
+            )?;
+            Ok(path.display().to_string())
+        }
+        Err(err) => {
+            let db = state.db()?;
+            db::set_project_sync_failed(&db, &project.id)?;
+            Err(ApiError::bad(err))
+        }
+    }
 }
 
 pub fn cancel(state: &Shared, job_id: &str) -> AppResult<()> {

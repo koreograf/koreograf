@@ -112,6 +112,9 @@ fn seed_demo(conn: &Connection, cfg: &Config) -> AppResult<()> {
             revision: String::new(),
             created_at: db::now(),
             team_ids: Vec::new(),
+            last_sync_at: String::new(),
+            last_sync_commit: String::new(),
+            last_sync_status: String::new(),
             admin_saved: true,
         },
     )?;
