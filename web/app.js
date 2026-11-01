@@ -2374,14 +2374,20 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
   }
 
   function nodeCaption(node) {
-    const join = node.convergence === "all" ? t("all_predecessors_2") : t("one_predecessor");
+    const count = new Set(graph.edges.filter((edge) => edge.to === node.id).map((edge) => edge.from)).size;
+    let join = "";
+    if (count >= 2) {
+      join = node.convergence === "all"
+        ? t("all_of_n_predecessors", { count })
+        : t("any_of_n_predecessors", { count });
+    }
     const inventoryId = node.overrides && Object.prototype.hasOwnProperty.call(node.overrides, "inventory_id")
       ? node.overrides.inventory_id
       : undefined;
     if (inventoryId === undefined) return join;
-    if (!inventoryId) return `${join} · ${t("no_inventory")}`;
+    if (!inventoryId) return [join, t("no_inventory")].filter(Boolean).join(" · ");
     const inventory = lists.inventories.find((item) => item.id === inventoryId);
-    return inventory ? `${join} · ${inventory.name}` : join;
+    return inventory ? [join, inventory.name].filter(Boolean).join(" · ") : join;
   }
 
   function paintCaption(node) {
@@ -2464,8 +2470,8 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
       const selectedClass = selected === node.id ? " selected" : "";
       const runClass = readonly ? " run-node" : "";
       const armed = link && link.from === node.id ? link.when : "";
-      const ports = editable ? `<div class="ports"><button type="button" class="port success${armed === "success" ? " armed" : ""}" data-port="success">${h("success")}</button><button type="button" class="port failure${armed === "failure" ? " armed" : ""}" data-port="failure">${h("error.generic")}</button></div>` : "";
-      return `<div class="wf-node${selectedClass}${phaseClass}${runClass}" data-id="${esc(node.id)}" style="left:${Number(node.x) || 0}px;top:${Number(node.y) || 0}px"><strong>${esc(node.name)}</strong><span class="small muted">${esc(nodeCaption(node))}</span>${ports}</div>`;
+      const ports = editable ? `<div class="ports"><button type="button" class="port success${armed === "success" ? " armed" : ""}" data-port="success" aria-label="${h("connect_on_success", { name: node.name })}">${h("success")}</button><button type="button" class="port failure${armed === "failure" ? " armed" : ""}" data-port="failure" aria-label="${h("connect_on_failure", { name: node.name })}">${h("error.generic")}</button><button type="button" class="port always${armed === "always" ? " armed" : ""}" data-port="always" aria-label="${h("connect_on_always", { name: node.name })}">${h("always")}</button></div>` : "";
+      return `<div class="wf-node${selectedClass}${phaseClass}${runClass}" data-id="${esc(node.id)}" style="left:${Number(node.x) || 0}px;top:${Number(node.y) || 0}px" tabindex="0" role="group" aria-label="${esc(node.name)}"><strong>${esc(node.name)}</strong><span class="small muted">${esc(nodeCaption(node))}</span>${ports}</div>`;
     }).join("");
     nodes.querySelectorAll(".wf-node").forEach((element) => {
       const node = graph.nodes.find((item) => item.id === element.dataset.id);
@@ -2514,15 +2520,48 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
         drawEdges();
       });
       element.addEventListener("pointerup", () => { drag = null; });
+      element.addEventListener("keydown", (event) => {
+        if (event.target !== element) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          if (readonly) {
+            if (onNode) onNode(node, phases[node.id] || null);
+            return;
+          }
+          if (!flushNode()) return;
+          selected = node.id;
+          selectedEdge = null;
+          renderInspector();
+          nodes.querySelectorAll(".wf-node").forEach((item) => item.classList.toggle("selected", item.dataset.id === selected));
+          return;
+        }
+        if (!editable) return;
+        const step = event.shiftKey ? 40 : 10;
+        const delta = {
+          ArrowLeft: [-step, 0],
+          ArrowRight: [step, 0],
+          ArrowUp: [0, -step],
+          ArrowDown: [0, step],
+        }[event.key];
+        if (!delta) return;
+        event.preventDefault();
+        node.x = Math.max(0, (Number(node.x) || 0) + delta[0]);
+        node.y = Math.max(0, (Number(node.y) || 0) + delta[1]);
+        element.style.left = `${node.x}px`;
+        element.style.top = `${node.y}px`;
+        drawEdges();
+      });
       element.querySelectorAll(".port").forEach((port) => {
         port.addEventListener("pointerdown", (event) => event.stopPropagation());
         port.addEventListener("click", (event) => {
           event.stopPropagation();
           link = { from: node.id, when: port.dataset.port };
           nodes.querySelectorAll(".port").forEach((item) => item.classList.toggle("armed", item === port));
-          document.querySelector("#wf-hint").textContent = port.dataset.port === "failure"
-            ? t("failure_edge_click_the_target_node")
-            : t("success_edge_click_the_target_node");
+          document.querySelector("#wf-hint").textContent = t({
+            success: "success_edge_click_the_target_node",
+            failure: "failure_edge_click_the_target_node",
+            always: "always_edge_click_the_target_node",
+          }[port.dataset.port]);
         });
       });
     });
@@ -2556,9 +2595,39 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
   function addNodeControls() {
     return `<div class="inspector-block">
       <h2>${h("nodes")}</h2>
-      <label class="field"><span>${h("template")}</span><select class="fit" id="add-template">${selectOptions(templates, "", false, (row) => `${row.name} · ${row.tool}`)}</select></label>
+      <label class="field"><span>${h("template_for_new_node")}</span><select class="fit" id="add-template">${selectOptions(templates, "", false, (row) => `${row.name} · ${row.tool}`)}</select></label>
       <button class="btn pill" id="add-node" type="button">${h("add_node")}</button>
     </div>`;
+  }
+
+  function freeNodePosition() {
+    const width = 200;
+    const height = 150;
+    const box = (node) => {
+      const element = nodes.querySelector(`[data-id="${CSS.escape(node.id)}"]`);
+      return {
+        x: Number(node.x) || 0,
+        y: Number(node.y) || 0,
+        width: element ? element.offsetWidth : width,
+        height: element ? element.offsetHeight : height,
+      };
+    };
+    const overlaps = (x, y) => graph.nodes.some((node) => {
+      const item = box(node);
+      return x < item.x + item.width && x + width > item.x && y < item.y + item.height && y + height > item.y;
+    });
+    const anchor = graph.nodes.find((node) => node.id === selected);
+    let x = 40;
+    let y = 40;
+    if (anchor) {
+      const item = box(anchor);
+      x = item.x;
+      y = item.y + item.height + 20;
+    } else if (graph.nodes.length) {
+      x = Math.max(...graph.nodes.map((node) => (Number(node.x) || 0) + width)) + 40;
+    }
+    while (overlaps(x, y)) y += height;
+    return { x, y };
   }
 
   function bindAddNode(host) {
@@ -2571,14 +2640,14 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
         if (hint) hint.textContent = t("create_a_template_or_a_workflow_first");
         return;
       }
-      const index = graph.nodes.length;
       const id = `n${Math.random().toString(16).slice(2, 10)}`;
+      const spot = freeNodePosition();
       graph.nodes.push({
         id,
         template_id: template.id,
         name: template.name,
-        x: 40 + (index % 3) * 240,
-        y: 40 + Math.floor(index / 3) * 140,
+        x: spot.x,
+        y: spot.y,
         convergence: "any",
       });
       selected = id;
@@ -2586,6 +2655,8 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
       link = null;
       renderNodes();
       renderInspector();
+      const created = nodes.querySelector(`[data-id="${CSS.escape(id)}"]`);
+      if (created) created.focus();
     });
   }
 
@@ -2711,7 +2782,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
         graph.edges.splice(selectedEdge, 1);
         selectedEdge = null;
         renderInspector();
-        drawEdges();
+        renderNodes();
       });
       return;
     }

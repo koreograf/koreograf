@@ -561,7 +561,7 @@ button.run-line:hover { outline: 1px solid var(--line); }
 .wf-node.phase-running { box-shadow: inset 3px 0 0 var(--info); }
 .wf-node.phase-skipped { opacity: 0.55; }
 .wf-node strong { display: block; }
-.ports { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+.ports { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-top: 8px; }
 .port {
   border: 0;
   border-radius: 999px;
@@ -571,6 +571,7 @@ button.run-line:hover { outline: 1px solid var(--line); }
 }
 .port.success { background: var(--good-bg); color: var(--good); }
 .port.failure { background: var(--bad-bg); color: var(--bad); }
+.port.always { background: var(--line); color: var(--ink); }
 .inspector { display: flex; flex-direction: column; gap: 12px; }
 .inspector-block { display: flex; flex-direction: column; gap: 10px; }
 .inspector-block + .inspector-block { border-top: 1px solid var(--line); padding-top: 12px; }
