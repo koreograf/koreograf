@@ -112,33 +112,7 @@ pub async fn fetch_ini(
             ));
         }
     }
-    crate::tls::warn_netbox(
-        &source.api_endpoint,
-        !source.validate_certs,
-        &source.ca_file,
-    );
-    let mut builder = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(8))
-        .timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::none());
-    match crate::tls::reqwest_roots(&source.ca_file) {
-        Ok(Some(certs)) => {
-            for cert in certs {
-                builder = builder.add_root_certificate(cert);
-            }
-        }
-        Ok(None) => {
-            builder = builder.danger_accept_invalid_certs(!source.validate_certs);
-        }
-        Err(error) => {
-            tracing::warn!(endpoint = %source.api_endpoint, %error, "NetBox TLS setup failed");
-            return Err(error);
-        }
-    }
-    let client = proxy
-        .apply_reqwest(builder)?
-        .build()
-        .map_err(|err| err.to_string())?;
+    let client = client(source, proxy)?;
     let mut hosts = Vec::new();
     let devices = PageQuery {
         client: &client,
@@ -159,6 +133,60 @@ pub async fn fetch_ini(
         collect(&machines, &mut hosts).await?;
     }
     Ok(render_ini(&hosts))
+}
+
+pub async fn test_connection(
+    source: &NetboxSource,
+    token: &str,
+    proxy: &crate::settings::ProxySettings,
+) -> Result<String, String> {
+    if !valid_endpoint(&source.api_endpoint) {
+        return Err("the_netbox_address_must_be_http_or_https".into());
+    }
+    if !valid_token(token) {
+        return Err("the_netbox_token_is_invalid".into());
+    }
+    crate::tls::warn_netbox(
+        &source.api_endpoint,
+        !source.validate_certs,
+        &source.ca_file,
+    );
+    let client = client(source, proxy)?;
+    let url = format!("{}/api/status/", source.api_endpoint.trim_end_matches('/'));
+    let body = get_json(&client, &url, token).await?;
+    Ok(body
+        .get("netbox-version")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string())
+}
+
+fn client(
+    source: &NetboxSource,
+    proxy: &crate::settings::ProxySettings,
+) -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(8))
+        .timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none());
+    match crate::tls::reqwest_roots(&source.ca_file) {
+        Ok(Some(certs)) => {
+            for cert in certs {
+                builder = builder.add_root_certificate(cert);
+            }
+        }
+        Ok(None) => {
+            builder = builder.danger_accept_invalid_certs(!source.validate_certs);
+        }
+        Err(error) => {
+            tracing::warn!(endpoint = %source.api_endpoint, %error, "NetBox TLS setup failed");
+            return Err(error);
+        }
+    }
+    proxy
+        .apply_reqwest(builder)?
+        .build()
+        .map_err(|err| err.to_string())
 }
 
 fn known_group(key: &str) -> bool {
@@ -480,13 +508,21 @@ async fn get_json(client: &reqwest::Client, url: &str, token: &str) -> Result<Va
     })?;
     if !status.is_success() {
         let snippet: String = text.chars().take(240).collect();
-        let code = status.as_u16().to_string();
-        return Err(crate::error::message(
-            "netbox.bad_status",
-            &[("status", &code), ("snippet", &snippet)],
-        ));
+        return Err(status_error(status, &snippet));
     }
     serde_json::from_str(&text).map_err(|_| "the_netbox_response_is_not_json".to_string())
+}
+
+fn status_error(status: reqwest::StatusCode, snippet: &str) -> String {
+    let code = status.as_u16().to_string();
+    match status.as_u16() {
+        401 | 403 => crate::error::message("netbox.token_rejected", &[("status", &code)]),
+        404 => crate::error::message("netbox.address_not_found", &[("status", &code)]),
+        _ => crate::error::message(
+            "netbox.bad_status",
+            &[("status", &code), ("snippet", snippet)],
+        ),
+    }
 }
 
 fn scalar(text: &str, key: &str) -> Option<String> {
@@ -844,6 +880,28 @@ mod tests {
         let host = host_from_json(&device, false, &["tags".into()]).unwrap();
         assert_eq!(host.name, "web-1");
         assert!(host.groups.is_empty(), "{:?}", host.groups);
+    }
+
+    #[test]
+    fn maps_netbox_http_statuses_to_clear_messages() {
+        let forbidden = status_error(reqwest::StatusCode::FORBIDDEN, "denied");
+        assert!(
+            forbidden.starts_with("netbox.token_rejected"),
+            "{forbidden}"
+        );
+        assert!(forbidden.contains("\"status\":\"403\""), "{forbidden}");
+        let unauthorized = status_error(reqwest::StatusCode::UNAUTHORIZED, "");
+        assert!(
+            unauthorized.starts_with("netbox.token_rejected"),
+            "{unauthorized}"
+        );
+        let missing = status_error(reqwest::StatusCode::NOT_FOUND, "");
+        assert!(missing.starts_with("netbox.address_not_found"), "{missing}");
+        assert!(missing.contains("\"status\":\"404\""), "{missing}");
+        let other = status_error(reqwest::StatusCode::INTERNAL_SERVER_ERROR, "boom");
+        assert!(other.starts_with("netbox.bad_status"), "{other}");
+        assert!(other.contains("\"status\":\"500\""), "{other}");
+        assert!(other.contains("boom"), "{other}");
     }
 
     #[tokio::test]

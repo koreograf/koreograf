@@ -3509,7 +3509,8 @@ function mountSourceDraft(container, projects, kind, preset) {
       <label class="field check"><span>${h("verify_certificate")}</span><input name="validate_certs" type="checkbox"${data.validate_certs === false ? "" : " checked"}></label>
       <label class="field"><span>${h("private_ca_file")}</span><input name="ca_file" value="${esc(data.ca_file || "")}" placeholder="/etc/ssl/certs/internal-ca.pem" autocomplete="off" spellcheck="false"></label>
       <p class="small muted">${h("an_absolute_pem_path_empty_uses_the_system_cas")}</p>
-      <label class="field check"><span>${h("virtual_machines")}</span><input name="virtual_machines" type="checkbox"${data.virtual_machines === false ? "" : " checked"}></label>`;
+      <label class="field check"><span>${h("virtual_machines")}</span><input name="virtual_machines" type="checkbox"${data.virtual_machines === false ? "" : " checked"}></label>
+      <div class="row"><button class="btn" type="button" data-netbox-test>${h("test_connection")}</button><span class="small muted" data-netbox-test-status aria-live="polite"></span></div>`;
   }
   card.innerHTML = `<div class="spread"><h2>${esc(title)}</h2><button class="btn ghost" type="button" data-remove-draft>${h("remove")}</button></div>
     <div class="form">${fields}
@@ -3517,6 +3518,30 @@ function mountSourceDraft(container, projects, kind, preset) {
     </div>`;
   container.appendChild(card);
   card.querySelector("[data-remove-draft]").addEventListener("click", () => card.remove());
+  if (kind === "netbox") {
+    const test = card.querySelector("[data-netbox-test]");
+    const status = card.querySelector("[data-netbox-test-status]");
+    test.addEventListener("click", async () => {
+      const draft = readSourceDraft(card);
+      test.disabled = true;
+      status.textContent = t("testing");
+      try {
+        const result = await api("POST", "/api/inventories/netbox/test", {
+          api_endpoint: draft.api_endpoint,
+          token: draft.token,
+          validate_certs: draft.validate_certs,
+          ca_file: draft.ca_file,
+        });
+        status.textContent = result.version
+          ? t("netbox.test_ok", { version: result.version })
+          : t("netbox.test_ok_no_version");
+      } catch (error) {
+        status.textContent = t(error.message || "error.generic", error.vars);
+      } finally {
+        test.disabled = false;
+      }
+    });
+  }
   if (kind === "project") {
     const select = card.querySelector("[name=project_id]");
     const files = card.querySelector("[name=path]");

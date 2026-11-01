@@ -2156,7 +2156,7 @@ async fn playbooks_project_inventory_and_netbox() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
-    assert_eq!(bad["error"], "netbox.bad_status");
+    assert_eq!(bad["error"], "netbox.token_rejected");
     assert_eq!(bad["vars"]["status"], "403", "{bad}");
     let (status, listed, _) = call(
         &app,
@@ -2203,6 +2203,166 @@ async fn nb_devices(
         }]
     }))
     .into_response()
+}
+
+#[tokio::test]
+async fn netbox_test_connection_reports_the_version_or_a_mapped_error() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-netbox-test-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let mock = axum::Router::new().route("/api/status/", axum::routing::get(nb_status));
+    tokio::spawn(async move {
+        axum::serve(listener, mock).await.unwrap();
+    });
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, ok, _) = call(
+        &app,
+        "POST",
+        "/api/inventories/netbox/test",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "api_endpoint": format!("http://{addr}"),
+            "token": "secret-token"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ok}");
+    assert_eq!(ok["version"], "4.2.1", "{ok}");
+
+    let (status, denied, _) = call(
+        &app,
+        "POST",
+        "/api/inventories/netbox/test",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "api_endpoint": format!("http://{addr}"),
+            "token": "wrong-token"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{denied}");
+    assert_eq!(denied["error"], "netbox.token_rejected", "{denied}");
+    assert_eq!(denied["vars"]["status"], "403", "{denied}");
+
+    let (status, missing, _) = call(
+        &app,
+        "POST",
+        "/api/inventories/netbox/test",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "api_endpoint": format!("http://{addr}/wrong"),
+            "token": "secret-token"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{missing}");
+    assert_eq!(missing["error"], "netbox.address_not_found", "{missing}");
+    assert_eq!(missing["vars"]["status"], "404", "{missing}");
+
+    let (status, unreachable, _) = call(
+        &app,
+        "POST",
+        "/api/inventories/netbox/test",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "api_endpoint": "http://127.0.0.1:9",
+            "token": "secret-token"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{unreachable}");
+    assert_eq!(
+        unreachable["error"], "netbox_is_not_reachable_err",
+        "{unreachable}"
+    );
+
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        None,
+        Some(json!({
+            "username": "watcher",
+            "password": "watcher-pass",
+            "display_name": "Watcher"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{team}/members"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"username": "watcher", "role": "viewer"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _, viewer_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "watcher", "password": "watcher-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let viewer_cookie = viewer_cookie.expect("viewer cookie");
+    let (status, forbidden, _) = call(
+        &app,
+        "POST",
+        "/api/inventories/netbox/test",
+        Some(&viewer_cookie),
+        Some(&team),
+        Some(json!({
+            "api_endpoint": format!("http://{addr}"),
+            "token": "secret-token"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{forbidden}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+async fn nb_status(headers: axum::http::HeaderMap) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        != Some("Token secret-token")
+    {
+        return (StatusCode::FORBIDDEN, "no").into_response();
+    }
+    axum::Json(json!({"netbox-version": "4.2.1", "plugins": {}})).into_response()
 }
 
 #[tokio::test]
