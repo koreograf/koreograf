@@ -56,7 +56,7 @@ function t(key, vars) {
     Object.entries(vars).forEach(([name, value]) => {
       const raw = String(value ?? "");
       const text = name === "field" || name === "label" ? lookup(lang, raw) : raw;
-      out = out.replaceAll(`{${name}}`, text);
+      out = out.replaceAll(`{${name}}`, () => text);
     });
   }
   return out;
@@ -1852,6 +1852,9 @@ async function pageJobs() {
     document.querySelector("#job-table").innerHTML = table([t("name"), t("tool"), t("status"), t("trigger"), t("created"), t("duration"), ""], filtered);
     document.querySelectorAll("[data-relaunch]").forEach((button) => {
       button.addEventListener("click", async () => {
+        const job = jobs.find((item) => item.id === button.dataset.relaunch);
+        if (!job) return;
+        if (!confirm(relaunchPrompt(job, button.dataset.failed === "1"))) return;
         button.disabled = true;
         try {
           const copy = await api("POST", `/api/jobs/${encodeURIComponent(button.dataset.relaunch)}/relaunch`, {
@@ -2039,6 +2042,12 @@ function jobParameters(job) {
   <pre class="vars">${esc(JSON.stringify(params.extra_vars || {}, null, 2))}</pre>`;
 }
 
+function relaunchPrompt(job, onlyFailed) {
+  const spec = (job.parameters && job.parameters.spec) || {};
+  const limit = spec.limit ? String(spec.limit) : t("all_hosts");
+  return t(onlyFailed ? "relaunch_this_job_on_failed_hosts" : "relaunch_this_job", { name: job.name, limit });
+}
+
 function jobListActions(job) {
   if (!can("operator") || (job.status !== "failed" && job.status !== "canceled")) return "";
   const hosts = Array.isArray(job.failed_hosts) ? job.failed_hosts : [];
@@ -2085,6 +2094,7 @@ async function pageJob(id) {
   (job.events || []).forEach(appendLog);
   const relaunchButtons = () => document.querySelectorAll("[data-action=relaunch], [data-action=relaunch-failed]");
   const startAgain = async (onlyFailed) => {
+    if (!confirm(relaunchPrompt(job, onlyFailed))) return;
     relaunchButtons().forEach((button) => {
       button.disabled = true;
     });
@@ -2737,6 +2747,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
       });
     });
     host.querySelector("#node-delete").addEventListener("click", () => {
+      if (!confirm(t("delete_this_node", { name: node.name }))) return;
       flushNode = () => true;
       graph.nodes = graph.nodes.filter((item) => item.id !== node.id);
       graph.edges = graph.edges.filter((edge) => edge.from !== node.id && edge.to !== node.id);
