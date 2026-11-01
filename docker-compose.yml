@@ -54,6 +54,9 @@ services:
       - koreograf-data:/var/lib/koreograf
       # Execution environments need the Docker socket.
       # The socket is equivalent to root on the host.
+      # The job container uses the daemon's default bridge unless the
+      # environment sets network, for example koreograf_default or
+      # container:koreograf-koreograf-1.
       # The published image can be older than this checkout.
       # Use docker-compose.build.yml for that build.
       # - /var/run/docker.sock:/var/run/docker.sock

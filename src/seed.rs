@@ -156,6 +156,7 @@ fn seed_demo(conn: &Connection, cfg: &Config) -> AppResult<()> {
             name: "AWX-EE".into(),
             image: "quay.io/ansible/awx-ee:latest".into(),
             pull_policy: "if_not_present".into(),
+            network: String::new(),
             description: "Same idea as an AWX execution environment. The Galaxy cache stays mounted on the host and is not cleared after a run.".into(),
             created_at: db::now(),
             scope: "team".into(),
