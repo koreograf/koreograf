@@ -1950,26 +1950,32 @@ function markRecap(line) {
   }
 }
 
-function pinFailure(log, text, kind) {
-  if (kind !== "fail" || log.querySelector(".log-summary")) return;
-  const bar = document.createElement("div");
-  bar.className = "log-summary";
+function pinFailure(text, kind) {
+  const summary = document.querySelector("#log-summary");
+  if (kind !== "fail" || !summary || !summary.hidden) return;
   const shown = text.length > 240 ? `${text.slice(0, 239)}...` : text;
-  bar.textContent = `${t("first_failure")}: ${shown}`;
-  log.prepend(bar);
+  summary.textContent = `${t("first_failure")}: ${shown}`;
+  summary.hidden = false;
 }
 
 function appendLog(row) {
   const log = document.querySelector("#log");
   if (!log) return;
   const line = document.createElement("div");
+  if (row.stream === "gap") {
+    line.className = "system";
+    line.textContent = t("log_gap", { count: Number(row.line) || 0 });
+    log.appendChild(line);
+    log.scrollTop = log.scrollHeight;
+    return;
+  }
   const kind = classifyLogLine(log, row);
   if (tagFilterNote(row)) showTagFilterBanner();
   if (kind) line.className = kind;
   line.textContent = row.line;
   log.appendChild(line);
   if (kind === "fail") markRecap(line);
-  pinFailure(log, plainLogLine(row.line), kind);
+  pinFailure(plainLogLine(row.line), kind);
   log.scrollTop = log.scrollHeight;
 }
 
@@ -2076,7 +2082,7 @@ async function pageJob(id) {
   const actions = jobActions(job);
   shell(job.name, `
     <div class="spread" style="margin-bottom:12px">
-      <div class="row">${pill(job.status)} <span class="tool">${esc(job.tool)}</span> <span class="small muted">${esc(job.trigger)} · ${esc(job.launched_by)} · ${esc(when(job.created_at))} · ${esc(spanText(job.started_at, job.finished_at, job.status))}</span></div>
+      <div class="row">${pill(job.status)} <span class="tool">${esc(job.tool)}</span> <span class="small muted">${esc(job.trigger)} · ${esc(job.launched_by)} · ${esc(when(job.created_at))} · <span id="job-duration">${esc(spanText(job.started_at, job.finished_at, job.status))}</span></span></div>
     </div>
     <div class="spread tab-bar">
       <div class="tabs">
@@ -2086,9 +2092,10 @@ async function pageJob(id) {
       <div class="row">
         ${actions}
         <button class="btn" type="button" id="download-output">${h("download_output")}</button>
+        ${job.output_capped ? `<span class="small muted" id="output-capped">${h("output_download_is_incomplete")}</span>` : ""}
       </div>
     </div>
-    <div id="panel-output"><div class="log" id="log"></div></div>
+    <div id="panel-output"><div class="log-summary" id="log-summary" hidden></div><div class="log" id="log"></div></div>
     <div id="panel-parameters" hidden>${jobParameters(job)}</div>`);
   const badge = document.querySelector(".pill");
   (job.events || []).forEach(appendLog);
@@ -2176,6 +2183,17 @@ async function pageJob(id) {
     }
   });
   if (!running || live !== generation) return;
+  const duration = document.querySelector("#job-duration");
+  let durationEnd = job.finished_at;
+  let durationStatus = job.status;
+  const tickDuration = () => {
+    if (live !== generation) {
+      clearInterval(durationTimer);
+      return;
+    }
+    if (duration) duration.textContent = spanText(job.started_at, durationEnd, durationStatus);
+  };
+  const durationTimer = setInterval(tickDuration, 1000);
   const last = (job.events || []).reduce((max, event) => Math.max(max, event.id), 0);
   source = new EventSource(`/api/jobs/${encodeURIComponent(id)}/events?after=${last}`);
   source.addEventListener("log", (event) => {
@@ -2189,6 +2207,10 @@ async function pageJob(id) {
       badge.className = `pill ${payload.status}`;
       badge.textContent = statusLabel(payload.status);
     }
+    clearInterval(durationTimer);
+    durationStatus = payload.status;
+    durationEnd = payload.finished_at || new Date().toISOString();
+    if (duration) duration.textContent = spanText(job.started_at, durationEnd, durationStatus);
     document.querySelectorAll("[data-action=cancel]").forEach((button) => button.remove());
     source.close();
     source = null;

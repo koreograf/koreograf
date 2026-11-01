@@ -442,7 +442,7 @@ async fn the_job_log_marks_a_fatal_line_and_keeps_galaxy_as_a_warning() {
     assert!(style.contains(".table th { text-align: left; font-size: 13px;"));
     assert!(style.contains(".log div.fail"));
     assert!(style.contains(".log div.warn"));
-    assert!(style.contains(".log .log-summary"));
+    assert!(style.contains(".log-summary"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

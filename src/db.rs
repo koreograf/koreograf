@@ -2210,6 +2210,29 @@ pub fn events_after(
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
 }
 
+pub fn events_count_between(
+    c: &Connection,
+    job_id: &str,
+    after: i64,
+    before: i64,
+) -> AppResult<i64> {
+    c.query_row(
+        "SELECT COUNT(*) FROM job_events WHERE job_id = ?1 AND id > ?2 AND id < ?3",
+        params![job_id, after, before],
+        |row| row.get(0),
+    )
+    .map_err(Into::into)
+}
+
+pub fn events_bytes(c: &Connection, job_id: &str) -> AppResult<i64> {
+    c.query_row(
+        "SELECT COALESCE(SUM(LENGTH(CAST(line AS BLOB)) + 1), 0) FROM job_events WHERE job_id = ?1",
+        params![job_id],
+        |row| row.get(0),
+    )
+    .map_err(Into::into)
+}
+
 pub fn events_last(c: &Connection, job_id: &str, limit: i64) -> AppResult<Vec<JobEvent>> {
     let mut stmt = c.prepare(
         "SELECT id, ts, stream, line FROM job_events
