@@ -667,6 +667,8 @@
   "the_netbox_token_belongs_to_another_team": "NetBox-Token gehört zu einem anderen Team.",
   "the_netbox_token_is_invalid": "NetBox-Token ist ungültig.",
   "the_netbox_token_is_missing": "NetBox-Token fehlt.",
+  "the_network_is_passed_to_the_container_run_an_empty": "Das Netzwerk wird an den Container-Lauf übergeben. Leer nutzt den Standard des Daemons. container:<name> tritt dem Netzwerk dieses Containers bei.",
+  "the_network_name_is_invalid": "Netzwerkname ist ungültig.",
   "the_output_line_limit_must_be_between_100_and": "Das Zeilenlimit muss zwischen 100 und 100000 liegen.",
   "the_password_comes_from_ldap_or_active_directory": "Das Passwort kommt aus LDAP oder Active Directory.",
   "the_placeholder_is_not_a_password": "Das Platzhalterzeichen ist kein Passwort.",

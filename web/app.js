@@ -3363,6 +3363,8 @@ function environmentForm(item) {
   return `<form class="card form" id="env-form">
     <label class="field"><span>${h("name")}</span><input name="name" required value="${item ? esc(item.name) : ""}"></label>
     <label class="field"><span>${h("image")}</span><input name="image" required value="${item ? esc(item.image) : ""}" placeholder="quay.io/ansible/awx-ee:latest"></label>
+    <label class="field"><span>${h("network")}</span><input name="network" value="${item ? esc(item.network || "") : ""}" placeholder="container:koreograf-koreograf-1"></label>
+    <p class="small muted">${h("the_network_is_passed_to_the_container_run_an_empty")}</p>
     <div class="field-row">
       <label class="field"><span>${h("pull")}</span><select class="fit" name="pull_policy">${option("if_not_present")}${option("always")}${option("never")}</select></label>
       <label class="field"><span>${h("applies_to")}</span><select class="fit" name="scope">${environmentScopeOptions(scope)}</select></label>
@@ -3381,6 +3383,7 @@ function bindEnvironmentForm(id) {
       name: form.name.value,
       image: form.image.value,
       pull_policy: form.pull_policy.value,
+      network: form.network.value,
       description: form.description.value,
       scope: form.scope.value,
     };

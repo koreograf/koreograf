@@ -43,6 +43,8 @@ pub struct ContainerSpec {
     pub env_file: String,
     /// Numeric `uid:gid` of the job directory. The image user is not used.
     pub user: String,
+    /// Docker or Podman `--network` value. Empty uses the daemon default.
+    pub network: String,
     pub command: Vec<String>,
 }
 
@@ -440,6 +442,10 @@ pub fn container_argv(spec: &ContainerSpec) -> Vec<String> {
     args.push("no-new-privileges".into());
     args.push("--cap-drop".into());
     args.push("ALL".into());
+    if !spec.network.is_empty() {
+        args.push("--network".into());
+        args.push(spec.network.clone());
+    }
     args.push("-w".into());
     args.push("/runner/project".into());
     args.push("--entrypoint".into());
@@ -1473,7 +1479,23 @@ fn load_environment(state: &Shared, template: &Template) -> Result<Option<Enviro
     if !valid_image(&environment.image) {
         return Err("the_image_name_is_invalid".into());
     }
+    if !valid_network(&environment.network) {
+        return Err("the_network_name_is_invalid".into());
+    }
     Ok(Some(environment))
+}
+
+pub fn valid_network(network: &str) -> bool {
+    if network.is_empty() {
+        return true;
+    }
+    let name = network.strip_prefix("container:").unwrap_or(network);
+    !name.is_empty()
+        && name.len() < 200
+        && !name.starts_with('-')
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || "_.-".contains(ch))
 }
 
 pub fn valid_image(image: &str) -> bool {
@@ -2616,6 +2638,7 @@ async fn run_container(state: &Shared, job_id: &str, run: ContainerRun<'_>) -> R
         mounts,
         env_file: work.join("container.env").display().to_string(),
         user,
+        network: environment.network.clone(),
         command: vec!["/runner/work/wrapper.sh".into()],
     };
     log(
@@ -3374,6 +3397,7 @@ mod tests {
             )],
             env_file: "/data/jobs/abc/container.env".into(),
             user: "0:0".into(),
+            network: String::new(),
             command: vec!["/runner/work/wrapper.sh".into()],
         };
         let argv = container_argv(&spec);
@@ -3424,6 +3448,52 @@ mod tests {
         assert!(argv.iter().any(|arg| {
             arg == "type=bind,source=/data/jobs/abc/project,target=/runner/project,readonly"
         }));
+        assert!(!argv.iter().any(|arg| arg == "--network"));
+    }
+
+    #[test]
+    fn container_argv_passes_the_configured_network() {
+        let spec = ContainerSpec {
+            image: "quay.io/ansible/awx-ee:latest".into(),
+            name: "koreograf-abc".into(),
+            mounts: Vec::new(),
+            env_file: "/data/jobs/abc/container.env".into(),
+            user: "0:0".into(),
+            network: String::new(),
+            command: vec!["/runner/work/wrapper.sh".into()],
+        };
+        assert!(!container_argv(&spec).iter().any(|arg| arg == "--network"));
+        let spec = ContainerSpec {
+            network: "container:koreograf-koreograf-1".into(),
+            ..spec
+        };
+        let argv = container_argv(&spec);
+        let at = argv
+            .iter()
+            .position(|arg| arg == "--network")
+            .expect("network");
+        assert_eq!(
+            argv.get(at + 1).map(String::as_str),
+            Some("container:koreograf-koreograf-1")
+        );
+        let image_at = argv
+            .iter()
+            .position(|arg| arg == "quay.io/ansible/awx-ee:latest")
+            .expect("image");
+        assert!(at < image_at);
+    }
+
+    #[test]
+    fn network_names_reject_option_injection() {
+        assert!(valid_network(""));
+        assert!(valid_network("bridge"));
+        assert!(valid_network("koreograf_default"));
+        assert!(valid_network("container:koreograf-koreograf-1"));
+        assert!(!valid_network("--net=host"));
+        assert!(!valid_network("-bridge"));
+        assert!(!valid_network("host --privileged"));
+        assert!(!valid_network("net;rm"));
+        assert!(!valid_network("container:"));
     }
 
     #[cfg(unix)]
@@ -3465,6 +3535,7 @@ mod tests {
             mounts: Vec::new(),
             env_file: "/data/jobs/abc/container.env".into(),
             user: container_run_user("1000:1000", true),
+            network: String::new(),
             command: vec!["/runner/work/wrapper.sh".into()],
         };
         let argv = container_argv(&spec);

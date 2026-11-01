@@ -4626,6 +4626,7 @@ async fn owner_can_edit_an_execution_environment() {
             "name": "EE neu",
             "image": image,
             "pull_policy": "always",
+            "network": "koreograf_default",
             "description": "angepasst"
         })),
     )
@@ -4634,6 +4635,7 @@ async fn owner_can_edit_an_execution_environment() {
     assert_eq!(updated["name"], "EE neu");
     assert_eq!(updated["image"], image);
     assert_eq!(updated["pull_policy"], "always");
+    assert_eq!(updated["network"], "koreograf_default");
     assert_eq!(updated["scope"], "team");
     assert_eq!(updated["team_id"].as_str(), Some(team.as_str()));
     assert!(updated["organization_id"].is_null());
@@ -4648,6 +4650,7 @@ async fn owner_can_edit_an_execution_environment() {
     .await;
     assert_eq!(status, StatusCode::OK, "{again}");
     assert_eq!(again["description"], "angepasst");
+    assert_eq!(again["network"], "koreograf_default");
     let (status, rejected, _) = call(
         &app,
         "PUT",
@@ -4663,6 +4666,22 @@ async fn owner_can_edit_an_execution_environment() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
     assert_eq!(rejected["error"], "the_image_name_is_invalid");
+    let (status, rejected, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/environments/{id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "EE neu",
+            "image": image,
+            "pull_policy": "always",
+            "network": "--net=host"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+    assert_eq!(rejected["error"], "the_network_name_is_invalid");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

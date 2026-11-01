@@ -667,6 +667,8 @@
   "the_netbox_token_belongs_to_another_team": "The NetBox token belongs to another team.",
   "the_netbox_token_is_invalid": "The NetBox token is invalid.",
   "the_netbox_token_is_missing": "The NetBox token is missing.",
+  "the_network_is_passed_to_the_container_run_an_empty": "The network is passed to the container run. Empty uses the daemon default. container:<name> joins the network of that container.",
+  "the_network_name_is_invalid": "The network name is invalid.",
   "the_output_line_limit_must_be_between_100_and": "The output line limit must be between 100 and 100000.",
   "the_password_comes_from_ldap_or_active_directory": "The password comes from LDAP or Active Directory.",
   "the_placeholder_is_not_a_password": "The placeholder is not a password.",

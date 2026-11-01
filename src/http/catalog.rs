@@ -92,6 +92,8 @@ pub struct EnvironmentBody {
     #[serde(default = "default_pull")]
     pull_policy: String,
     #[serde(default)]
+    network: String,
+    #[serde(default)]
     description: String,
     #[serde(default)]
     scope: Option<String>,
@@ -848,7 +850,9 @@ fn visible_environment(db: &Connection, id: &str, team: &db::Team) -> AppResult<
     Ok(item)
 }
 
-fn environment_fields(body: &EnvironmentBody) -> AppResult<(String, String, String, String)> {
+fn environment_fields(
+    body: &EnvironmentBody,
+) -> AppResult<(String, String, String, String, String)> {
     if !matches!(
         body.pull_policy.as_str(),
         "if_not_present" | "always" | "never"
@@ -859,10 +863,15 @@ fn environment_fields(body: &EnvironmentBody) -> AppResult<(String, String, Stri
     if !runner::valid_image(image) {
         return Err(ApiError::bad("the_image_name_is_invalid"));
     }
+    let network = body.network.trim();
+    if !runner::valid_network(network) {
+        return Err(ApiError::bad("the_network_name_is_invalid"));
+    }
     Ok((
         require_name(&body.name)?,
         image.to_string(),
         body.pull_policy.clone(),
+        network.to_string(),
         require_description(&body.description)?,
     ))
 }
@@ -875,7 +884,7 @@ pub async fn create_environment(
 ) -> AppResult<axum::response::Response> {
     let team_id = team_header(&headers)?;
     gate(&state, &user, &team_id, Role::Owner)?;
-    let (name, image, pull_policy, description) = environment_fields(&body)?;
+    let (name, image, pull_policy, network, description) = environment_fields(&body)?;
     let scope = environment_scope(body.scope.as_deref(), "team")?;
     if !may_manage_environment(&user, &scope) {
         return Err(ApiError::Forbidden);
@@ -889,6 +898,7 @@ pub async fn create_environment(
         name,
         image,
         pull_policy,
+        network,
         description,
         created_at: db::now(),
         scope: String::new(),
@@ -924,7 +934,7 @@ pub async fn update_environment(
 ) -> AppResult<Json<Value>> {
     let team_id = team_header(&headers)?;
     gate(&state, &user, &team_id, Role::Owner)?;
-    let (name, image, pull_policy, description) = environment_fields(&body)?;
+    let (name, image, pull_policy, network, description) = environment_fields(&body)?;
     let db = state.db()?;
     let team = db::team_by_id(&db, &team_id)?.ok_or(ApiError::NotFound)?;
     let mut item = visible_environment(&db, &id, &team)?;
@@ -935,6 +945,7 @@ pub async fn update_environment(
     item.name = name;
     item.image = image;
     item.pull_policy = pull_policy;
+    item.network = network;
     item.description = description;
     apply_environment_scope(&mut item, &scope, &team)?;
     db::update_environment(&db, &item)?;

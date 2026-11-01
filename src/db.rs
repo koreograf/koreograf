@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS environments (
   name TEXT NOT NULL,
   image TEXT NOT NULL,
   pull_policy TEXT NOT NULL,
+  network TEXT NOT NULL DEFAULT '',
   description TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
 );
@@ -392,6 +393,12 @@ fn migrate(c: &Connection) -> AppResult<()> {
             [],
         )?;
     }
+    if !column_exists(c, "environments", "network")? {
+        c.execute(
+            "ALTER TABLE environments ADD COLUMN network TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+    }
     if !column_exists(c, "templates", "update_on_launch")? {
         c.execute(
             "ALTER TABLE templates ADD COLUMN update_on_launch INTEGER NOT NULL DEFAULT 1",
@@ -595,6 +602,7 @@ pub struct Environment {
     pub name: String,
     pub image: String,
     pub pull_policy: String,
+    pub network: String,
     pub description: String,
     pub created_at: String,
     pub scope: String,
@@ -1785,8 +1793,8 @@ pub fn delete_credential(c: &Connection, id: &str, team_id: &str) -> AppResult<(
 pub fn insert_environment(c: &Connection, item: &Environment) -> AppResult<()> {
     c.execute(
         "INSERT INTO environments (
-            id, team_id, organization_id, name, image, pull_policy, description, created_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            id, team_id, organization_id, name, image, pull_policy, network, description, created_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             item.id,
             item.team_id,
@@ -1794,6 +1802,7 @@ pub fn insert_environment(c: &Connection, item: &Environment) -> AppResult<()> {
             item.name,
             item.image,
             item.pull_policy,
+            item.network,
             item.description,
             item.created_at
         ],
@@ -1803,7 +1812,7 @@ pub fn insert_environment(c: &Connection, item: &Environment) -> AppResult<()> {
 
 const ENVIRONMENT_SELECT: &str = "\
 SELECT e.id, e.team_id, e.organization_id, e.name, e.image, e.pull_policy, \
-       e.description, e.created_at, COALESCE(o.name, ''), COALESCE(t.name, '') \
+       e.network, e.description, e.created_at, COALESCE(o.name, ''), COALESCE(t.name, '') \
 FROM environments e \
 LEFT JOIN organizations o ON o.id = e.organization_id \
 LEFT JOIN teams t ON t.id = e.team_id";
@@ -1854,8 +1863,8 @@ pub fn environment_visible(item: &Environment, team: &Team) -> bool {
 fn map_environment(row: &rusqlite::Row<'_>) -> rusqlite::Result<Environment> {
     let team_id = optional_id(row.get(1)?);
     let organization_id = optional_id(row.get(2)?);
-    let organization_name: String = row.get(8)?;
-    let team_name: String = row.get(9)?;
+    let organization_name: String = row.get(9)?;
+    let team_name: String = row.get(10)?;
     let scope = if team_id.is_some() {
         "team"
     } else if organization_id.is_some() {
@@ -1870,8 +1879,9 @@ fn map_environment(row: &rusqlite::Row<'_>) -> rusqlite::Result<Environment> {
         name: row.get(3)?,
         image: row.get(4)?,
         pull_policy: row.get(5)?,
-        description: row.get(6)?,
-        created_at: row.get(7)?,
+        network: row.get(6)?,
+        description: row.get(7)?,
+        created_at: row.get(8)?,
         scope: scope.to_string(),
         organization_name: if scope == "organization" {
             organization_name
@@ -1900,7 +1910,7 @@ fn optional_id(value: Option<String>) -> Option<String> {
 pub fn update_environment(c: &Connection, item: &Environment) -> AppResult<()> {
     let n = c.execute(
         "UPDATE environments
-         SET team_id=?2, organization_id=?3, name=?4, image=?5, pull_policy=?6, description=?7
+         SET team_id=?2, organization_id=?3, name=?4, image=?5, pull_policy=?6, network=?7, description=?8
          WHERE id=?1",
         params![
             item.id,
@@ -1909,6 +1919,7 @@ pub fn update_environment(c: &Connection, item: &Environment) -> AppResult<()> {
             item.name,
             item.image,
             item.pull_policy,
+            item.network,
             item.description
         ],
     )?;
@@ -3065,6 +3076,7 @@ mod tests {
             name: name.to_string(),
             image: "quay.io/example/ee:1".into(),
             pull_policy: "if_not_present".into(),
+            network: String::new(),
             description: String::new(),
             created_at: now(),
             scope: String::new(),
@@ -3169,6 +3181,7 @@ mod tests {
         assert_eq!(item.scope, "team");
         assert_eq!(item.team_id.as_deref(), Some("team-a"));
         assert!(item.organization_id.is_none());
+        assert_eq!(item.network, "");
         drop(conn);
         let _ = std::fs::remove_dir_all(&dir);
     }
