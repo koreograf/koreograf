@@ -111,11 +111,11 @@ An external call to the webhook URL is rejected on a default install because loc
 
 ## Job output
 
-Each of stdout and stderr keeps the first three quarters of a line limit and the last quarter. The default limit is 8000 lines, so a long job keeps the first 6000 and the last 2000. A system line between those parts says how many lines were left out. Lines after a cancel are still discarded.
+Each of stdout and stderr keeps the first three quarters of a line limit and the last quarter. The default limit is 8000 lines, so a long job keeps the first 6000 and the last 2000. A marker line between those parts says how many lines were left out. Lines after a cancel are still discarded.
 
 `KOREOGRAF_JOB_OUTPUT_LINES` sets the limit. Values outside 100 to 100000 are clamped. An administrator can change the same limit under Settings. The next job uses the new value. The tail lines wait in memory until the stream ends, and that buffer stays within 8 MiB per stream.
 
-`GET /api/jobs/{id}/output` downloads the kept log. The file stops at 8 MiB and then ends with `… output truncated.` The job page shows that log. When more than 2000 lines are stored, the page shows the start and the end and says that the middle of the view was left out.
+`GET /api/jobs/{id}/output` downloads the kept log. The file stops at 8 MiB and then ends with `… output truncated.` The job page shows that log. When more than 2000 lines are stored, the page shows the start and the end plus a translated marker with the number of lines left out in the middle. The job page says when the download is capped.
 
 Play recap lines and `fatal:` lines are read from the whole stream, including lines that are not kept, so failed hosts still follow the real end of the play.
 

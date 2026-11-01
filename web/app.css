@@ -451,15 +451,15 @@ textarea { min-height: 88px; resize: vertical; }
 .log div.stderr { color: #fda4af; }
 .log div.warn { color: #fbbf24; }
 .log div.fail { color: #fb7185; font-weight: 700; }
-.log .log-summary {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  margin: -14px -16px 8px;
-  padding: 8px 16px;
+.log-summary {
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border: 1px solid #fb7185;
+  border-radius: 10px;
   background: #292524;
   color: #fecdd3;
-  border-bottom: 1px solid #fb7185;
+  font-family: var(--mono);
+  font-size: 13px;
 }
 .tabs { display: flex; gap: 8px; margin: 0; }
 .tab-bar { flex-wrap: wrap; margin: 0 0 12px; }

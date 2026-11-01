@@ -242,7 +242,9 @@ pub async fn get_job(
     let job = db::job(&db, &id)?.ok_or(ApiError::NotFound)?;
     crate::auth::authorize(&db, &user, &job.team_id, Role::Viewer)?;
     let events = events_for_page(&db, &id)?;
-    Ok(Json(job_json(&job, Some(&events))))
+    let mut value = job_json(&job, Some(&events));
+    value["output_capped"] = json!(db::events_bytes(&db, &id)? > OUTPUT_LIMIT as i64);
+    Ok(Json(value))
 }
 
 const PAGE_EVENTS: i64 = 2_000;
@@ -268,12 +270,15 @@ fn events_for_page(db: &rusqlite::Connection, job_id: &str) -> AppResult<Vec<db:
         (None, Some(_)) => false,
     };
     if !contiguous {
+        let omitted = tail
+            .first()
+            .map(|event| event.id - last_id - 1)
+            .unwrap_or(0);
         shown.push(db::JobEvent {
             id: 0,
             ts: String::new(),
-            stream: "system".into(),
-            line: "Earlier lines are omitted from this view. Download the output for the kept log."
-                .into(),
+            stream: "gap".into(),
+            line: omitted.to_string(),
         });
     }
     shown.extend(tail);
@@ -415,12 +420,12 @@ pub async fn job_events(
             let snapshot = {
                 let Ok(db) = state.db() else { break };
                 let events = db::events_after(&db, &id, last, 200).unwrap_or_default();
-                let status = db::job(&db, &id)
+                let (status, finished_at) = db::job(&db, &id)
                     .ok()
                     .flatten()
-                    .map(|job| job.status)
-                    .unwrap_or_else(|| "failed".into());
-                (events, status)
+                    .map(|job| (job.status, job.finished_at))
+                    .unwrap_or_else(|| ("failed".into(), None));
+                (events, status, finished_at)
             };
             let count = snapshot.0.len();
             for event in snapshot.0 {
@@ -435,7 +440,7 @@ pub async fn job_events(
             }
             let terminal = matches!(snapshot.1.as_str(), "successful" | "failed" | "canceled");
             if terminal && count < 200 {
-                yield Ok(Event::default().event("end").data(json!({"status": snapshot.1}).to_string()));
+                yield Ok(Event::default().event("end").data(json!({"status": snapshot.1, "finished_at": snapshot.2}).to_string()));
                 break;
             }
             if count == 200 {
@@ -1059,12 +1064,15 @@ mod tests {
         }
         let db = state.db().unwrap();
         let events = events_for_page(&db, "job").unwrap();
+        let gaps: Vec<_> = events
+            .iter()
+            .filter(|event| event.stream == "gap")
+            .collect();
+        assert_eq!(gaps.len(), 1);
+        assert_eq!(gaps[0].line, "500");
         let lines: Vec<_> = events.iter().map(|event| event.line.as_str()).collect();
         assert_eq!(lines[0], "line-1");
         assert_eq!(lines[1_499], "line-1500");
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("omitted from this view")));
         assert_eq!(*lines.last().unwrap(), "line-2500");
         assert!(!lines.contains(&"line-1600"));
         assert!(lines.contains(&"line-2001"));
