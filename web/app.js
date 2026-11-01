@@ -24,6 +24,7 @@ let generation = 0;
 let runKey = null;
 let navOpen = false;
 let navKey = null;
+let navToken = null;
 document.documentElement.lang = lang;
 
 
@@ -185,6 +186,13 @@ function roleOf() {
   return team ? team.role : "viewer";
 }
 
+// Prefer the first local team over an LDAP-mapped team, which often has no content, then fall back to the first team.
+function preferredTeam() {
+  const teams = me.teams || [];
+  const local = teams.find((team) => !team.ldap_group);
+  return (local || teams[0] || {}).id || "";
+}
+
 function rank(role) {
   return { viewer: 1, operator: 2, owner: 3 }[role] || 0;
 }
@@ -317,6 +325,7 @@ async function api(method, path, body) {
   const headers = {};
   if (teamId) headers["X-Team-Id"] = teamId;
   const init = { method, headers, credentials: "same-origin" };
+  if (method === "GET" && navToken) init.signal = navToken.signal;
   if (body !== undefined) {
     headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(body);
@@ -455,6 +464,7 @@ function topmostCard() {
 }
 
 function handle(error) {
+  if (error && error.name === "AbortError") return;
   if (error && error.status === 401) {
     me = null;
     renderLogin("session.expired");
@@ -633,7 +643,7 @@ function renderLogin(message, tone, vars, username) {
         password: form.password.value,
       });
       const known = (me.teams || []).some((team) => team.id === teamId);
-      if (!known) teamId = (me.teams[0] && me.teams[0].id) || "";
+      if (!known) teamId = preferredTeam();
       localStorage.setItem("koreograf.team", teamId);
       go("#/");
     } catch (error) {
@@ -3496,10 +3506,10 @@ function mountSourceDraft(container, projects, kind, preset) {
       <label class="field"><span>${h("token")}</span><input name="token" type="password" required autocomplete="off"></label>
       <label class="field"><span>${h("group_by")}</span><input name="group_by" value="${esc(groupBy)}" placeholder="sites, device_roles"></label>
       <label class="field"><span>${h("filters_one_key_value_per_line")}</span><textarea name="query">${esc(filters)}</textarea></label>
-      <label class="field"><span>${h("verify_certificate")}</span><input name="validate_certs" type="checkbox"${data.validate_certs === false ? "" : " checked"}></label>
+      <label class="field check"><span>${h("verify_certificate")}</span><input name="validate_certs" type="checkbox"${data.validate_certs === false ? "" : " checked"}></label>
       <label class="field"><span>${h("private_ca_file")}</span><input name="ca_file" value="${esc(data.ca_file || "")}" placeholder="/etc/ssl/certs/internal-ca.pem" autocomplete="off" spellcheck="false"></label>
       <p class="small muted">${h("an_absolute_pem_path_empty_uses_the_system_cas")}</p>
-      <label class="field"><span>${h("virtual_machines")}</span><input name="virtual_machines" type="checkbox"${data.virtual_machines === false ? "" : " checked"}></label>`;
+      <label class="field check"><span>${h("virtual_machines")}</span><input name="virtual_machines" type="checkbox"${data.virtual_machines === false ? "" : " checked"}></label>`;
   }
   card.innerHTML = `<div class="spread"><h2>${esc(title)}</h2><button class="btn ghost" type="button" data-remove-draft>${h("remove")}</button></div>
     <div class="form">${fields}
@@ -5078,7 +5088,10 @@ async function pageBackup() {
 
 async function route() {
   closeLive();
+  if (navToken) navToken.abort();
   const hash = location.hash || "#/";
+  const token = new AbortController();
+  navToken = token;
   if (!me) {
     if (hash !== "#/login") location.hash = "#/login";
     renderLogin("");
@@ -5130,6 +5143,7 @@ async function route() {
     else if (parts[0] === "team") await pageTeam();
     else shell(t("page"), `<div class="card">${h("this_page_does_not_exist")}</div>`);
   } catch (error) {
+    if (token !== navToken) return;
     handle(error);
   }
 }
@@ -5148,7 +5162,7 @@ async function boot() {
     me = await api("GET", "/api/me");
     const known = (me.teams || []).some((team) => team.id === teamId);
     if (!known) {
-      teamId = (me.teams[0] && me.teams[0].id) || "";
+      teamId = preferredTeam();
       localStorage.setItem("koreograf.team", teamId);
     }
   } catch {
