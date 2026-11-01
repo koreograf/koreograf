@@ -858,7 +858,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
         None
     };
     let environment = if template.environment_id.is_some() {
-        load_environment(state, &template)?
+        load_environment(state, &template, &job.launched_by)?
     } else {
         None
     };
@@ -1462,7 +1462,11 @@ fn inventory_extension(body: &str) -> &'static str {
     }
 }
 
-fn load_environment(state: &Shared, template: &Template) -> Result<Option<Environment>, String> {
+fn load_environment(
+    state: &Shared,
+    template: &Template,
+    launched_by: &str,
+) -> Result<Option<Environment>, String> {
     let Some(id) = &template.environment_id else {
         return Ok(None);
     };
@@ -1482,7 +1486,17 @@ fn load_environment(state: &Shared, template: &Template) -> Result<Option<Enviro
     if !valid_network(&environment.network) {
         return Err("the_network_name_is_invalid".into());
     }
+    if state.cfg.local_jobs == LocalJobs::Admins && privileged_network(&environment.network) {
+        let admin = crate::auth::launcher_is_admin(&db, launched_by).map_err(|e| e.to_string())?;
+        if !admin {
+            return Err("The execution environment network needs an administrator.".into());
+        }
+    }
     Ok(Some(environment))
+}
+
+pub fn privileged_network(network: &str) -> bool {
+    network == "host" || network.starts_with("container:")
 }
 
 pub fn valid_network(network: &str) -> bool {

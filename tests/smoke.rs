@@ -4830,6 +4830,54 @@ async fn environment_scopes_follow_the_selected_team() {
     assert!(private_env["organization_id"].is_null());
     let private_id = private_env["id"].as_str().unwrap().to_string();
 
+    for network in ["host", "container:koreograf-koreograf-1"] {
+        let (status, denied_network, _) = call(
+            &app,
+            "POST",
+            "/api/environments",
+            Some(&ada_cookie),
+            Some(&team),
+            Some(json!({
+                "name": "Privilegiert",
+                "image": "quay.io/example/private:1",
+                "network": network
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{denied_network}");
+        assert_eq!(denied_network["error"], "you_are_not_allowed_to_do_this");
+    }
+    let (status, denied_update, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/environments/{private_id}"),
+        Some(&ada_cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Privat",
+            "image": "quay.io/example/private:1",
+            "network": "host"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied_update}");
+    assert_eq!(denied_update["error"], "you_are_not_allowed_to_do_this");
+    let (status, admin_network, _) = call(
+        &app,
+        "POST",
+        "/api/environments",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Hostnetz",
+            "image": "quay.io/example/host:1",
+            "network": "host"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{admin_network}");
+    assert_eq!(admin_network["network"], "host");
+
     let (status, org_env, _) = call(
         &app,
         "POST",
@@ -5118,6 +5166,118 @@ async fn environment_scopes_follow_the_selected_team() {
     .await;
     assert_eq!(status, StatusCode::CREATED, "{allowed}");
     assert_eq!(allowed["environment_id"], org_env_id);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn a_privileged_environment_network_is_refused_for_a_non_admin_launch() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-env-network-admin-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut cfg = config(&dir);
+    cfg.local_jobs = LocalJobs::Admins;
+    cfg.runner = RunnerMode::Docker;
+    let state = koreograf::boot(cfg).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, _user, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "username": "owner",
+            "display_name": "Owner",
+            "password": "owner-pass",
+            "is_admin": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, joined, _) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{team}/members"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"username": "owner", "role": "owner"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{joined}");
+    let (status, owner_me, owner_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "owner", "password": "owner-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{owner_me}");
+    let owner_cookie = owner_cookie.expect("owner cookie");
+
+    let (status, environment, _) = call(
+        &app,
+        "POST",
+        "/api/environments",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Hostnetz",
+            "image": "quay.io/example/host:1",
+            "network": "host"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{environment}");
+    let environment_id = environment["id"].as_str().unwrap();
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Mit Hostnetz",
+            "tool": "shell",
+            "entrypoint": "",
+            "environment_id": environment_id,
+            "spec": {"script": "true"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().unwrap();
+
+    let job = launch_and_wait(&app, &owner_cookie, &team, template_id).await;
+    assert_eq!(job["status"], "failed", "{}", job["events"]);
+    assert!(
+        has_line(
+            &job,
+            "system",
+            "The execution environment network needs an administrator."
+        ),
+        "{}",
+        job["events"]
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

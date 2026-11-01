@@ -851,6 +851,7 @@ fn visible_environment(db: &Connection, id: &str, team: &db::Team) -> AppResult<
 }
 
 fn environment_fields(
+    user: &AuthUser,
     body: &EnvironmentBody,
 ) -> AppResult<(String, String, String, String, String)> {
     if !matches!(
@@ -866,6 +867,9 @@ fn environment_fields(
     let network = body.network.trim();
     if !runner::valid_network(network) {
         return Err(ApiError::bad("the_network_name_is_invalid"));
+    }
+    if runner::privileged_network(network) && !user.is_admin {
+        return Err(ApiError::Forbidden);
     }
     Ok((
         require_name(&body.name)?,
@@ -884,7 +888,7 @@ pub async fn create_environment(
 ) -> AppResult<axum::response::Response> {
     let team_id = team_header(&headers)?;
     gate(&state, &user, &team_id, Role::Owner)?;
-    let (name, image, pull_policy, network, description) = environment_fields(&body)?;
+    let (name, image, pull_policy, network, description) = environment_fields(&user, &body)?;
     let scope = environment_scope(body.scope.as_deref(), "team")?;
     if !may_manage_environment(&user, &scope) {
         return Err(ApiError::Forbidden);
@@ -934,7 +938,7 @@ pub async fn update_environment(
 ) -> AppResult<Json<Value>> {
     let team_id = team_header(&headers)?;
     gate(&state, &user, &team_id, Role::Owner)?;
-    let (name, image, pull_policy, network, description) = environment_fields(&body)?;
+    let (name, image, pull_policy, network, description) = environment_fields(&user, &body)?;
     let db = state.db()?;
     let team = db::team_by_id(&db, &team_id)?.ok_or(ApiError::NotFound)?;
     let mut item = visible_environment(&db, &id, &team)?;
