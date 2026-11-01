@@ -21,6 +21,7 @@ pub struct LaunchOverrides {
     pub credential_ids: Option<Vec<String>>,
     /// Ansible fields merged onto the template spec.
     pub spec: Option<Value>,
+    pub launch_with_options: bool,
 }
 
 pub struct LaunchRequest {
@@ -438,7 +439,7 @@ fn parameters_for_launch(
     if !asked {
         return Ok(capture_parameters(db, template, &req.extra_vars, None));
     }
-    if !template.prompt_on_launch {
+    if !template.prompt_on_launch && !req.overrides.launch_with_options {
         return Err(ApiError::bad("prompt_on_launch_is_off"));
     }
     let mut effective = template.clone();
@@ -478,6 +479,9 @@ fn parameters_for_launch(
             return Err(ApiError::bad("parameters_are_invalid"));
         };
         map.insert("spec".into(), merged);
+    }
+    if let Some(map) = params.as_object_mut() {
+        map.insert("launch_with_options".into(), Value::Bool(true));
     }
     Ok(params.to_string())
 }

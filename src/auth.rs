@@ -193,10 +193,15 @@ pub(crate) fn command_matches_template(
     if saved_target(params, "project_id") != template.project_id {
         return false;
     }
-    if !template.prompt_on_launch && saved_target(params, "inventory_id") != template.inventory_id {
+    let prompted = template.prompt_on_launch
+        || params
+            .get("launch_with_options")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true);
+    if !prompted && saved_target(params, "inventory_id") != template.inventory_id {
         return false;
     }
-    specs_match(&template.spec, params, template.prompt_on_launch)
+    specs_match(&template.spec, params, prompted)
 }
 
 fn saved_target(params: &serde_json::Value, key: &str) -> Option<String> {

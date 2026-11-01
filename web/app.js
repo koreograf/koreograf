@@ -922,7 +922,7 @@ function makeModal(overlay, close) {
   return dismiss;
 }
 
-async function openLaunchPrompt(item) {
+async function openLaunchPrompt(item, launchWithOptions = false) {
   const previous = document.querySelector("#launch-prompt");
   if (previous) previous.remove();
   const spec = item.spec || {};
@@ -961,7 +961,7 @@ async function openLaunchPrompt(item) {
           <h2 id="launch-prompt-title">${h("launch")}</h2>
           <button class="btn" type="button" id="launch-prompt-close">${h("close")}</button>
         </div>
-        <p class="small muted">${h("the_launch_dialog_starts_from_the_template")}</p>
+        <p class="small muted">${h(launchWithOptions ? "launch_with_options_help" : "the_launch_dialog_starts_from_the_template")}</p>
         <form class="form" id="launch-prompt-form">
           ${inventory}
           ${templateCredentialFields(credentials, selectedCredentialIds(item))}
@@ -995,6 +995,7 @@ async function openLaunchPrompt(item) {
           ...[...form.querySelectorAll("#vault-pills [data-vault-id]")].map((node) => node.dataset.vaultId),
         ],
       };
+      if (launchWithOptions) body.launch_with_options = true;
       if (ansible) {
         body.inventory_id = form.inventory_id.value;
         const level = Number(form.verbosity.value);
@@ -1051,7 +1052,7 @@ async function pageTemplates() {
         <td class="tool">${esc(item.tool)}</td>
         <td class="mono">${esc(item.entrypoint || "—")}</td>
         <td class="small">${esc(templateOptionLine(item))}</td>
-        <td>${can("operator") ? `<button class="btn primary" type="button" data-launch="${esc(item.id)}">${h("launch")}</button>` : ""}</td>
+        <td>${can("operator") ? `<div class="row"><button class="btn primary" type="button" data-launch="${esc(item.id)}">${h("launch")}</button>${item.tool === "ansible" && !item.prompt_on_launch ? `<button class="btn" type="button" data-launch-options="${esc(item.id)}">${h("launch_with_options")}</button>` : ""}</div>` : ""}</td>
       </tr>`);
     document.querySelector("#template-table").innerHTML = table([t("name"), t("tool"), t("entry"), t("run_2"), ""], rows);
     document.querySelectorAll("[data-launch]").forEach((button) => {
@@ -1071,6 +1072,17 @@ async function pageTemplates() {
           go(`#/jobs/${job.id}`);
         } catch (error) {
           button.disabled = false;
+          handle(error);
+        }
+      });
+    });
+    document.querySelectorAll("[data-launch-options]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const item = items.find((row) => row.id === button.dataset.launchOptions);
+        if (!item) return;
+        try {
+          await openLaunchPrompt(item, true);
+        } catch (error) {
           handle(error);
         }
       });

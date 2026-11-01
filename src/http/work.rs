@@ -71,6 +71,8 @@ pub struct LaunchBody {
     /// Ansible prompt fields merged onto the template spec.
     #[serde(default)]
     spec: Option<Value>,
+    #[serde(default)]
+    launch_with_options: bool,
 }
 
 fn empty_object() -> Value {
@@ -210,6 +212,7 @@ pub async fn launch_template(
                 inventory_id: body.inventory_id,
                 credential_ids: body.credential_ids,
                 spec: body.spec,
+                launch_with_options: body.launch_with_options,
             },
         },
     )?;
