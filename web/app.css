@@ -170,7 +170,6 @@ a.btn { display: inline-block; text-decoration: none; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: white; }
 .btn.danger { background: white; color: var(--bad); border-color: #fecdd3; }
 .row > .btn.danger { margin-left: auto; }
-.split-actions { display: inline-flex; align-items: center; gap: 16px; }
 .card.danger-zone { border-color: #fecdd3; }
 .btn.ghost { background: transparent; }
 .btn.pill { border-radius: 999px; padding: 7px 14px; font-weight: 600; }
@@ -367,6 +366,7 @@ textarea.secret-mask { -webkit-text-security: disc; }
 .table th.tight, .table td.tight { width: 1%; white-space: nowrap; text-align: center; }
 .table th.actions, .table td.actions { width: 1%; white-space: nowrap; text-align: right; }
 .table td.actions .btn + .btn { margin-left: 6px; }
+.table td.danger { border-left: 1px solid var(--line); padding-left: 18px; }
 .btn.compact { padding: 4px 8px; }
 .pill.warn { background: var(--warn-bg); color: var(--warn); }
 .switch { position: relative; display: inline-flex; width: 42px; height: 24px; flex: 0 0 auto; }
