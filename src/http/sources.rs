@@ -19,6 +19,7 @@ use super::catalog::inventory_json;
 use super::{blank, check_static_ini, created, gate, require_name, team_header};
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct SourceInput {
     kind: String,
     #[serde(default)]
@@ -46,6 +47,7 @@ pub(super) struct SourceInput {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct ImportBody {
     project_id: String,
     path: String,
@@ -53,6 +55,7 @@ pub(super) struct ImportBody {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct NetboxBody {
     name: String,
     api_endpoint: String,
@@ -70,6 +73,7 @@ pub(super) struct NetboxBody {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct NetboxTestBody {
     #[serde(default)]
     api_endpoint: String,
@@ -618,6 +622,7 @@ pub async fn sync_source(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct SourcePatch {
     #[serde(default)]
     name: String,

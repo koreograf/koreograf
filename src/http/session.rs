@@ -14,12 +14,14 @@ use crate::ldap;
 use crate::Shared;
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LoginBody {
     username: String,
     password: String,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UserBody {
     username: String,
     password: String,
@@ -29,6 +31,7 @@ pub struct UserBody {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct MeUpdate {
     display_name: String,
     email: Option<String>,
@@ -37,6 +40,7 @@ pub(super) struct MeUpdate {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct UserUpdate {
     display_name: String,
     is_admin: bool,

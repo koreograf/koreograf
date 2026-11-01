@@ -28,12 +28,14 @@ use super::{
 };
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct RelaunchBody {
     #[serde(default)]
     only_failed_hosts: bool,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TemplateBody {
     name: String,
     #[serde(default)]
@@ -59,6 +61,7 @@ fn default_true() -> bool {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LaunchBody {
     #[serde(default = "empty_object")]
     extra_vars: Value,
@@ -80,6 +83,7 @@ fn empty_object() -> Value {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WorkflowBody {
     name: String,
     #[serde(default)]
@@ -89,6 +93,7 @@ pub struct WorkflowBody {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HookBody {
     name: String,
     match_alertname: String,

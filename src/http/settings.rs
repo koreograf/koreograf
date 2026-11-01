@@ -9,6 +9,7 @@ use crate::settings::{self, SettingsWrite};
 use crate::Shared;
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct SettingsBody {
     #[serde(default)]
     reset: bool,
@@ -23,6 +24,7 @@ pub(super) struct SettingsBody {
 }
 
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub(super) struct LdapBody {
     #[serde(default)]
     url: String,
@@ -51,6 +53,7 @@ pub(super) struct LdapBody {
 }
 
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub(super) struct ProxyBody {
     #[serde(default)]
     url: String,

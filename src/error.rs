@@ -176,8 +176,10 @@ impl IntoResponse for ApiError {
 /// JSON object body.
 ///
 /// A missing content type is `json_body_required`. An empty buffer, broken
-/// JSON, a non-object, or a type mismatch is `json_body_invalid`. A body over
-/// the limit is `request_too_large` (413).
+/// JSON, a non-object, or a type mismatch is `json_body_invalid`. A field the
+/// request type does not support is `json_field_is_not_supported` with the
+/// field name in `vars.field`. A body over the limit is `request_too_large`
+/// (413).
 pub struct ApiJson<T>(pub T);
 
 impl<T, S> FromRequest<S> for ApiJson<T>
@@ -194,8 +196,20 @@ where
         }
         serde_json::from_value(value)
             .map(Self)
-            .map_err(|_| ApiError::bad("json_body_invalid"))
+            .map_err(|err| match unknown_field(&err) {
+                Some(field) => {
+                    ApiError::bad_vars("json_field_is_not_supported", [("field", field)])
+                }
+                None => ApiError::bad("json_body_invalid"),
+            })
     }
+}
+
+fn unknown_field(err: &serde_json::Error) -> Option<String> {
+    let text = err.to_string();
+    let field = text.strip_prefix("unknown field `")?;
+    let (name, _) = field.split_once('`')?;
+    Some(name.to_string())
 }
 
 /// Any JSON value. Webhook payloads may be an object, an array, or a scalar.

@@ -16,6 +16,7 @@ use crate::Shared;
 use super::{created, gate, no_content, require_name, team_header};
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ScheduleBody {
     name: String,
     timezone: String,
@@ -33,6 +34,7 @@ pub struct ScheduleBody {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PreviewBody {
     timezone: String,
     start_date: String,
@@ -49,11 +51,13 @@ pub struct PreviewBody {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EnabledBody {
     enabled: bool,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MissedBody {
     accept: bool,
 }

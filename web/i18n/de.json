@@ -259,6 +259,7 @@
   "jobs_workflows_and_alerts_for_several_teams_local": "Aufträge, Workflows und Alarme für mehrere Teams. Lokales Konto oder LDAP.",
   "json_body_invalid": "Der JSON-Inhalt ist nicht gültig.",
   "json_body_required": "Die Anfrage braucht einen JSON-Inhalt.",
+  "json_field_is_not_supported": "Das Feld {field} wird hier nicht unterstützt.",
   "key_value_one_variable_per_line": "KEY=Wert, eine Zeile je Variable",
   "koreograf_stores_data_in_sqlite_the_backup_contains": "Koreograf speichert in SQLite. Die Sicherung enthält die Datenbank und den Schlüssel für die Zugänge. Cache, Git-Checkouts und Auftragsverzeichnisse bleiben außen vor.",
   "kubernetes": "Kubernetes",

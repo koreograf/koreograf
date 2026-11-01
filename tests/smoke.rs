@@ -4495,6 +4495,20 @@ async fn signed_in_user_can_read_their_own_account() {
         call(&app, "GET", "/api/users", Some(&nia_cookie), None, None).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{forbidden}");
 
+    expect_unknown_field(
+        &app,
+        "PUT",
+        "/api/me",
+        Some(&nia_cookie),
+        None,
+        &json!({
+            "display_name": "Nia Klein",
+            "email": "nia@example.com",
+            "is_admin": true
+        }),
+        "is_admin",
+    )
+    .await;
     let (status, saved, _) = call(
         &app,
         "PUT",
@@ -4503,8 +4517,7 @@ async fn signed_in_user_can_read_their_own_account() {
         None,
         Some(json!({
             "display_name": "Nia Klein",
-            "email": "nia@example.com",
-            "is_admin": true
+            "email": "nia@example.com"
         })),
     )
     .await;
@@ -6511,7 +6524,7 @@ async fn an_operator_cannot_start_a_local_job_or_an_arbitrary_path() {
         &format!("/api/templates/{health_id}"),
         Some(&operator_cookie),
         Some(&team),
-        Some(health.clone()),
+        Some(template_write_body(&health)),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{edited}");
@@ -6532,7 +6545,7 @@ async fn an_operator_cannot_start_a_local_job_or_an_arbitrary_path() {
         &format!("/api/templates/{health_id}"),
         Some(&cookie),
         Some(&team),
-        Some(health),
+        Some(template_write_body(&health)),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{restored}");
@@ -7373,6 +7386,521 @@ async fn json_bodies_are_rejected_by_kind_and_objects_reject_arrays() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[tokio::test]
+async fn unknown_fields_are_rejected_on_write_endpoints() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-unknown-{nanos}"));
+    let origin = std::env::temp_dir().join(format!("koreograf-unknown-origin-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(&origin).unwrap();
+    let mut cfg = config(&dir);
+    cfg.project_roots.push(origin.clone());
+    let state = koreograf::boot(cfg).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+    let organization = me["teams"][0]["organization_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let project = json!({
+        "name": "Unknown project",
+        "source_type": "git",
+        "source": format!("file://{}", origin.display())
+    });
+    let mut rejected = project.clone();
+    rejected["credential_id"] = json!("ignored");
+    expect_unknown_field(
+        &app,
+        "POST",
+        "/api/projects",
+        Some(&cookie),
+        Some(&team),
+        &rejected,
+        "credential_id",
+    )
+    .await;
+    let (status, project, _) = call(
+        &app,
+        "POST",
+        "/api/projects",
+        Some(&cookie),
+        Some(&team),
+        Some(project),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{project}");
+    let project_id = project["id"].as_str().unwrap().to_string();
+
+    let assignment = json!({"organization_id": organization, "team_ids": []});
+    let mut rejected = assignment.clone();
+    rejected["name"] = json!("ignored");
+    expect_unknown_field(
+        &app,
+        "PUT",
+        &format!("/api/projects/{project_id}"),
+        Some(&cookie),
+        Some(&team),
+        &rejected,
+        "name",
+    )
+    .await;
+    let (status, assigned, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/projects/{project_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(assignment),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{assigned}");
+
+    let inventory = json!({"name": "Unknown inventory", "body": "[all]\nbox\n"});
+    let mut rejected = inventory.clone();
+    rejected["api_endpoint"] = json!("ignored");
+    expect_unknown_field(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        &rejected,
+        "api_endpoint",
+    )
+    .await;
+    let (status, inventory, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(inventory),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{inventory}");
+    let inventory_id = inventory["id"].as_str().unwrap().to_string();
+
+    let update = json!({"name": "Unknown inventory", "body": ""});
+    let mut rejected = update.clone();
+    rejected["sources"] = json!([]);
+    expect_unknown_field(
+        &app,
+        "PUT",
+        &format!("/api/inventories/{inventory_id}"),
+        Some(&cookie),
+        Some(&team),
+        &rejected,
+        "sources",
+    )
+    .await;
+    let (status, updated, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/inventories/{inventory_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(update),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+
+    let source = json!({"kind": "ini", "name": "Extra source", "body": "web-2\n"});
+    let mut rejected = source.clone();
+    rejected["group_names_raw"] = json!(true);
+    expect_unknown_field(
+        &app,
+        "POST",
+        &format!("/api/inventories/{inventory_id}/sources"),
+        Some(&cookie),
+        Some(&team),
+        &rejected,
+        "group_names_raw",
+    )
+    .await;
+    let (status, inventory, _) = call(
+        &app,
+        "POST",
+        &format!("/api/inventories/{inventory_id}/sources"),
+        Some(&cookie),
+        Some(&team),
+        Some(source),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{inventory}");
+    let source_id = inventory["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["name"] == "Extra source")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let source_update = json!({"body": "web-3\n"});
+    let mut rejected = source_update.clone();
+    rejected["api_endpoint"] = json!("ignored");
+    expect_unknown_field(
+        &app,
+        "PUT",
+        &format!("/api/inventories/{inventory_id}/sources/{source_id}"),
+        Some(&cookie),
+        Some(&team),
+        &rejected,
+        "api_endpoint",
+    )
+    .await;
+    let (status, inventory, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/inventories/{inventory_id}/sources/{source_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(source_update),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{inventory}");
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let mock = axum::Router::new().route("/api/dcim/devices/", axum::routing::get(nb_devices));
+    tokio::spawn(async move {
+        axum::serve(listener, mock).await.unwrap();
+    });
+    let netbox = json!({
+        "name": "Unknown NetBox",
+        "api_endpoint": format!("http://{addr}"),
+        "token": "secret-token",
+        "query_filters": ["status=active"],
+        "virtual_machines": false
+    });
+    let mut rejected = netbox.clone();
+    rejected["group_names_raw"] = json!(true);
+    expect_unknown_field(
+        &app,
+        "POST",
+        "/api/inventories/netbox",
+        Some(&cookie),
+        Some(&team),
+        &rejected,
+        "group_names_raw",
+    )
+    .await;
+    let (status, netbox, _) = call(
+        &app,
+        "POST",
+        "/api/inventories/netbox",
+        Some(&cookie),
+        Some(&team),
+        Some(netbox),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{netbox}");
+
+    let template = json!({
+        "name": "Unknown template",
+        "tool": "shell",
+        "spec": {"script": "true"}
+    });
+    let mut rejected = template.clone();
+    rejected["api_endpoint"] = json!("ignored");
+    expect_unknown_field(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        &rejected,
+        "api_endpoint",
+    )
+    .await;
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(template),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().unwrap().to_string();
+
+    let template_update = json!({
+        "name": "Unknown template changed",
+        "tool": "shell",
+        "spec": {"script": "true"}
+    });
+    let mut rejected = template_update.clone();
+    rejected["api_endpoint"] = json!("ignored");
+    expect_unknown_field(
+        &app,
+        "PUT",
+        &format!("/api/templates/{template_id}"),
+        Some(&cookie),
+        Some(&team),
+        &rejected,
+        "api_endpoint",
+    )
+    .await;
+    let (status, changed, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/templates/{template_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(template_update),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+
+    let mut rejected = daily_schedule("Unknown schedule");
+    rejected["api_endpoint"] = json!("ignored");
+    expect_unknown_field(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/schedules"),
+        Some(&cookie),
+        Some(&team),
+        &rejected,
+        "api_endpoint",
+    )
+    .await;
+    let (status, schedule, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/schedules"),
+        Some(&cookie),
+        Some(&team),
+        Some(daily_schedule("Unknown schedule")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{schedule}");
+    let schedule_id = schedule["id"].as_str().unwrap().to_string();
+
+    let mut rejected = daily_schedule("Unknown schedule changed");
+    rejected["api_endpoint"] = json!("ignored");
+    expect_unknown_field(
+        &app,
+        "PUT",
+        &format!("/api/schedules/{schedule_id}"),
+        Some(&cookie),
+        Some(&team),
+        &rejected,
+        "api_endpoint",
+    )
+    .await;
+    let (status, schedule, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/schedules/{schedule_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(daily_schedule("Unknown schedule changed")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{schedule}");
+
+    let credential = json!({
+        "name": "Unknown credential",
+        "kind": "ssh",
+        "secret": {"username": "deploy", "password": "secret"}
+    });
+    let mut rejected = credential.clone();
+    rejected["api_endpoint"] = json!("ignored");
+    expect_unknown_field(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        &rejected,
+        "api_endpoint",
+    )
+    .await;
+    let (status, credential, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        Some(credential),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{credential}");
+    let credential_id = credential["id"].as_str().unwrap().to_string();
+
+    let credential_update = json!({
+        "name": "Unknown credential changed",
+        "secret": {"username": "deploy", "password": "secret"}
+    });
+    let mut rejected = credential_update.clone();
+    rejected["kind"] = json!("ssh");
+    expect_unknown_field(
+        &app,
+        "PUT",
+        &format!("/api/credentials/{credential_id}"),
+        Some(&cookie),
+        Some(&team),
+        &rejected,
+        "kind",
+    )
+    .await;
+    let (status, credential, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/credentials/{credential_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(credential_update),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{credential}");
+
+    let mut rejected = json!({"reset": true});
+    rejected["api_endpoint"] = json!("ignored");
+    expect_unknown_field(
+        &app,
+        "PUT",
+        "/api/settings",
+        Some(&cookie),
+        None,
+        &rejected,
+        "api_endpoint",
+    )
+    .await;
+    let (status, settings, _) = call(
+        &app,
+        "PUT",
+        "/api/settings",
+        Some(&cookie),
+        None,
+        Some(json!({"reset": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{settings}");
+
+    let hook = json!({
+        "name": "Unknown hook",
+        "match_alertname": "Alert",
+        "match_status": "firing",
+        "template_id": template_id
+    });
+    let mut rejected = hook.clone();
+    rejected["api_endpoint"] = json!("ignored");
+    expect_unknown_field(
+        &app,
+        "POST",
+        "/api/hooks",
+        Some(&cookie),
+        Some(&team),
+        &rejected,
+        "api_endpoint",
+    )
+    .await;
+    let (status, hook, _) = call(
+        &app,
+        "POST",
+        "/api/hooks",
+        Some(&cookie),
+        Some(&team),
+        Some(hook),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{hook}");
+
+    let (status, workflow, _) = call(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Unknown workflow",
+            "graph": {"nodes": [], "edges": []}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{workflow}");
+    let workflow_id = workflow["id"].as_str().unwrap().to_string();
+    let mut rejected = json!({
+        "name": "Unknown workflow",
+        "graph": {"nodes": [], "edges": []}
+    });
+    rejected["api_endpoint"] = json!("ignored");
+    expect_unknown_field(
+        &app,
+        "PUT",
+        &format!("/api/workflows/{workflow_id}"),
+        Some(&cookie),
+        Some(&team),
+        &rejected,
+        "api_endpoint",
+    )
+    .await;
+    let (status, changed, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/workflows/{workflow_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Unknown workflow changed",
+            "graph": {"nodes": [], "edges": []}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&origin);
+}
+
+async fn expect_unknown_field(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    cookie: Option<&str>,
+    team: Option<&str>,
+    body: &Value,
+    field: &str,
+) {
+    let mut headers = vec![("content-type", "application/json")];
+    if let Some(team) = team {
+        headers.push(("x-team-id", team));
+    }
+    let (status, bytes, _) = call_raw(
+        app,
+        method,
+        uri,
+        cookie,
+        &headers,
+        Some(body.to_string().into_bytes()),
+    )
+    .await;
+    let text = String::from_utf8_lossy(&bytes);
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{text}");
+    let parsed: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    assert_eq!(parsed["error"], "json_field_is_not_supported", "{text}");
+    assert_eq!(parsed["vars"]["field"], field, "{text}");
+}
+
 async fn job_count(app: &axum::Router, cookie: &str, team: &str) -> usize {
     let (status, jobs, _) = call(app, "GET", "/api/jobs", Some(cookie), Some(team), None).await;
     assert_eq!(status, StatusCode::OK, "{jobs}");
@@ -8098,13 +8626,18 @@ async fn a_schedule_runs_the_last_miss_once_and_lists_on_its_target() {
     assert_eq!(status, StatusCode::OK, "{list}");
     assert_eq!(list.as_array().unwrap().len(), 1);
 
+    let mut preview_body = daily_schedule("ignored");
+    preview_body
+        .as_object_mut()
+        .expect("schedule object")
+        .remove("name");
     let (status, preview, _) = call(
         &app,
         "POST",
         "/api/schedules/preview",
         Some(&cookie),
         Some(&team),
-        Some(daily_schedule("ignored")),
+        Some(preview_body),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{preview}");
@@ -8775,6 +9308,15 @@ async fn an_edit_records_the_user_who_changed_the_schedule() {
     assert_eq!(row["created_by"], "admin");
     assert_eq!(row["updated_by"], "operator");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn template_write_body(item: &Value) -> Value {
+    let mut body = item.clone();
+    let map = body.as_object_mut().expect("template object");
+    for key in ["id", "team_id", "created_at"] {
+        map.remove(key);
+    }
+    body
 }
 
 fn daily_schedule(name: &str) -> Value {
