@@ -56,7 +56,7 @@ function t(key, vars) {
     Object.entries(vars).forEach(([name, value]) => {
       const raw = String(value ?? "");
       const text = name === "field" || name === "label" ? lookup(lang, raw) : raw;
-      out = out.replaceAll(`{${name}}`, text);
+      out = out.replaceAll(`{${name}}`, () => text);
     });
   }
   return out;
@@ -1391,7 +1391,7 @@ async function pageTemplateForm(id) {
   const remove = document.querySelector("#delete-template");
   if (remove) {
     remove.addEventListener("click", async () => {
-      if (!confirm(t("delete_this_template"))) return;
+      if (!confirm(t("delete_this_template", { name: item.name }))) return;
       try {
         await api("DELETE", `/api/templates/${encodeURIComponent(id)}`);
         go("#/templates");
@@ -1534,7 +1534,8 @@ function bindScheduleActions(card, items, kind, target, draw) {
   });
   card.querySelectorAll("[data-schedule-delete]").forEach((button) => {
     button.addEventListener("click", async () => {
-      if (!confirm(t("delete_this_schedule"))) return;
+      const item = items.find((row) => row.id === button.dataset.scheduleDelete);
+      if (!confirm(t("delete_this_schedule", { name: item ? item.name : "" }))) return;
       try {
         await api("DELETE", `/api/schedules/${encodeURIComponent(button.dataset.scheduleDelete)}`);
         await draw();
@@ -1851,6 +1852,9 @@ async function pageJobs() {
     document.querySelector("#job-table").innerHTML = table([t("name"), t("tool"), t("status"), t("trigger"), t("created"), t("duration"), ""], filtered);
     document.querySelectorAll("[data-relaunch]").forEach((button) => {
       button.addEventListener("click", async () => {
+        const job = jobs.find((item) => item.id === button.dataset.relaunch);
+        if (!job) return;
+        if (!confirm(relaunchPrompt(job, button.dataset.failed === "1"))) return;
         button.disabled = true;
         try {
           const copy = await api("POST", `/api/jobs/${encodeURIComponent(button.dataset.relaunch)}/relaunch`, {
@@ -2038,6 +2042,12 @@ function jobParameters(job) {
   <pre class="vars">${esc(JSON.stringify(params.extra_vars || {}, null, 2))}</pre>`;
 }
 
+function relaunchPrompt(job, onlyFailed) {
+  const spec = (job.parameters && job.parameters.spec) || {};
+  const limit = spec.limit ? String(spec.limit) : t("all_hosts");
+  return t(onlyFailed ? "relaunch_this_job_on_failed_hosts" : "relaunch_this_job", { name: job.name, limit });
+}
+
 function jobListActions(job) {
   if (!can("operator") || (job.status !== "failed" && job.status !== "canceled")) return "";
   const hosts = Array.isArray(job.failed_hosts) ? job.failed_hosts : [];
@@ -2084,6 +2094,7 @@ async function pageJob(id) {
   (job.events || []).forEach(appendLog);
   const relaunchButtons = () => document.querySelectorAll("[data-action=relaunch], [data-action=relaunch-failed]");
   const startAgain = async (onlyFailed) => {
+    if (!confirm(relaunchPrompt(job, onlyFailed))) return;
     relaunchButtons().forEach((button) => {
       button.disabled = true;
     });
@@ -2297,9 +2308,13 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
       <aside class="card inspector" id="inspector"></aside>
     </div>
     ${readonly ? `<section class="card run-log" id="run-log" aria-live="polite"></section>` : `<section class="card" id="schedule-card" data-kind="workflow" data-target="${esc(workflow.id)}"></section>`}
+    ${readonly || !can("operator") ? "" : `<section class="card danger-zone">
+      <h2>${h("danger_zone")}</h2>
+      <p class="small muted">${h("deleting_cannot_be_undone")}</p>
+      <button class="btn danger" id="wf-delete" type="button">${h("delete")}</button>
+    </section>`}
     </div>`, readonly ? back : `
-      ${can("operator") ? `<button class="btn" id="wf-save" type="button">${h("save")}</button><button class="btn primary" id="wf-launch" type="button">${h("launch")}</button>` : ""}
-      ${can("operator") ? `<button class="btn danger" id="wf-delete" type="button">${h("delete")}</button>` : ""}`);
+      ${can("operator") ? `<button class="btn" id="wf-save" type="button">${h("save")}</button><button class="btn primary" id="wf-launch" type="button">${h("launch")}</button>` : ""}`);
 
   const board = document.querySelector("#board");
   const svg = document.querySelector("#edges");
@@ -2732,6 +2747,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
       });
     });
     host.querySelector("#node-delete").addEventListener("click", () => {
+      if (!confirm(t("delete_this_node", { name: node.name }))) return;
       flushNode = () => true;
       graph.nodes = graph.nodes.filter((item) => item.id !== node.id);
       graph.edges = graph.edges.filter((edge) => edge.from !== node.id && edge.to !== node.id);
@@ -2803,7 +2819,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
   const remove = document.querySelector("#wf-delete");
   if (remove) {
     remove.addEventListener("click", async () => {
-      if (!confirm(t("delete_this_workflow"))) return;
+      if (!confirm(t("delete_this_workflow", { name: workflow.name }))) return;
       try {
         await api("DELETE", `/api/workflows/${encodeURIComponent(workflow.id)}`);
         go("#/workflows");
@@ -3076,10 +3092,11 @@ async function pageHooks() {
       return `<tr>
         <td>${esc(hook.name)}<div class="small muted">${esc(hook.match_alertname)} · ${esc(hookStatusLabel(hook.match_status))}</div></td>
         <td class="mono">${url ? esc(url) : h("token_is_visible_to_operators")}</td>
-        <td>${can("operator") ? `<span class="split-actions"><button class="btn" type="button" data-test="${esc(hook.id)}">${h("test")}</button><button class="btn danger" type="button" data-delete="${esc(hook.id)}">${h("delete")}</button></span>` : ""}</td>
+        <td>${can("operator") ? `<button class="btn" type="button" data-test="${esc(hook.id)}">${h("test")}</button>` : ""}</td>
+        <td class="actions danger">${can("operator") ? `<button class="btn danger" type="button" data-delete="${esc(hook.id)}">${h("delete")}</button>` : ""}</td>
       </tr>`;
     });
-    document.querySelector("#hook-table").innerHTML = table([t("hook"), t("address"), ""], rows);
+    document.querySelector("#hook-table").innerHTML = table([t("hook"), t("address"), "", ""], rows);
     document.querySelectorAll("[data-test]").forEach((button) => {
       button.addEventListener("click", async () => {
         try {
@@ -3094,7 +3111,8 @@ async function pageHooks() {
     });
     document.querySelectorAll("[data-delete]").forEach((button) => {
       button.addEventListener("click", async () => {
-        if (!confirm(t("delete_this_webhook"))) return;
+        const hook = hooks.find((row) => row.id === button.dataset.delete);
+        if (!confirm(t("delete_this_webhook", { name: hook ? hook.name : "" }))) return;
         try {
           await api("DELETE", `/api/hooks/${encodeURIComponent(button.dataset.delete)}`);
           route();
@@ -3448,7 +3466,7 @@ async function pageProject(id) {
   const remove = document.querySelector("#delete-project");
   if (remove) {
     remove.addEventListener("click", async () => {
-      if (!confirm(t("delete_this_project"))) return;
+      if (!confirm(t("delete_this_project", { name: project.name }))) return;
       try {
         await api("DELETE", `/api/projects/${encodeURIComponent(id)}`);
         go("#/projects");
@@ -3704,10 +3722,7 @@ async function pageInventory(id) {
       ${table([t("name"), t("groups"), t("variables")], rows)}
     </section>
     <section>
-      <div class="spread">
-        <h2>${h("sources")}</h2>
-        ${can("operator") ? `<button class="btn danger" id="delete-inventory" type="button">${h("delete_inventory")}</button>` : ""}
-      </div>
+      <h2>${h("sources")}</h2>
       ${sourceCards || `<p class="small muted">${h("no_source_yet")}</p>`}
       ${can("operator") ? `<div class="card" style="margin-top:14px">
         <h2>${h("add_source")}</h2>
@@ -3719,7 +3734,12 @@ async function pageInventory(id) {
         <div id="source-drafts"></div>
         <button class="btn pill primary" id="add-sources" type="button" style="margin-top:12px">${h("add")}</button>
       </div>` : ""}
-    </section>`,
+    </section>
+    ${can("operator") ? `<section class="card danger-zone" style="margin-top:14px">
+      <h2>${h("danger_zone")}</h2>
+      <p class="small muted">${h("deleting_cannot_be_undone")}</p>
+      <button class="btn danger" id="delete-inventory" type="button">${h("delete_inventory")}</button>
+    </section>` : ""}`,
     can("operator") ? `<a class="btn pill" href="#/inventories/new">${h("inventory_2")}</a>` : "");
   const sync = document.querySelector("#sync-inventory");
   if (sync) {
@@ -3756,7 +3776,8 @@ async function pageInventory(id) {
   });
   document.querySelectorAll("[data-drop-source]").forEach((button) => {
     button.addEventListener("click", async () => {
-      if (!confirm(t("remove_this_source"))) return;
+      const source = (item.sources || []).find((row) => row.id === button.dataset.dropSource);
+      if (!confirm(t("remove_this_source", { name: source ? sourceTitle(source) : "" }))) return;
       try {
         await api("DELETE", `/api/inventories/${encodeURIComponent(id)}/sources/${encodeURIComponent(button.dataset.dropSource)}`);
         route();
@@ -3789,7 +3810,7 @@ async function pageInventory(id) {
       } catch (error) { handle(error); }
     });
     document.querySelector("#delete-inventory").addEventListener("click", async () => {
-      if (!confirm(t("delete_this_inventory"))) return;
+      if (!confirm(t("delete_this_inventory", { name: item.name }))) return;
       try {
         await api("DELETE", `/api/inventories/${encodeURIComponent(id)}`);
         go("#/inventories");
@@ -4783,7 +4804,7 @@ async function pageUser(id) {
   const deleteButton = document.querySelector("#delete-user");
   if (deleteButton) {
     deleteButton.addEventListener("click", async () => {
-      if (!window.confirm(t("delete_this_account"))) return;
+      if (!window.confirm(t("delete_this_account", { name: item.display_name }))) return;
       try {
         await api("DELETE", `/api/users/${encodeURIComponent(id)}`);
         go("#/users");
