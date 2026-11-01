@@ -260,6 +260,8 @@
   "language": "Sprache",
   "launch": "Starten",
   "launch_fields_are_only_for_ansible": "Limit, Tags, übersprungene Tags, Job-Typ und Ausführlichkeit gelten nur für Ansible-Vorlagen.",
+  "launch_with_options": "Mit Optionen starten",
+  "launch_with_options_help": "Inventar, Zugangsdaten, Limit, Tags, übersprungene Tags, Job-Typ, Ausführlichkeit und zusätzliche Variablen nur für diesen Lauf setzen. Die Vorlage bleibt unverändert.",
   "ldap_group": "LDAP-Gruppe",
   "ldap_group_group": "LDAP-Gruppe: {group}",
   "ldap_is_configured": "LDAP ist konfiguriert.",

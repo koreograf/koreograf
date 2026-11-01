@@ -16,7 +16,7 @@ On the job page, `fatal:`, `UNREACHABLE!`, `ERROR!`, and a recap line with `fail
 
 ## Prompt on launch
 
-A template can ask before it starts. The launch button then opens a dialog filled with the template's inventory, credentials, limit, tags, skip tags, job type, verbosity, and extra variables. Cancel starts nothing. Confirm runs that one job with the dialog values and leaves the template row unchanged. `POST /api/templates/{id}/launch` with only `extra_vars`, or with none of the prompt fields, still uses the template. The same applies to hooks and scripts. Inventory, credentials, and the Ansible fields above are accepted only when prompt on launch is on.
+A template can ask before it starts. The launch button then opens a dialog filled with the template's inventory, credentials, limit, tags, skip tags, job type, verbosity, and extra variables. Cancel starts nothing. Confirm runs that one job with the dialog values and leaves the template row unchanged. An Ansible template without prompt on launch also offers Launch with options for operators. That action opens the same dialog and sends `launch_with_options: true` with the run overrides. `POST /api/templates/{id}/launch` with only `extra_vars`, or with none of the prompt fields, still uses the template. The same applies to hooks and scripts. Inventory, credentials, and the Ansible fields above are accepted only when prompt on launch is on, or when that explicit flag asks for the options run.
 
 ## Execution environments
 

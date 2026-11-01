@@ -1153,6 +1153,130 @@ async fn prompt_on_launch_overrides_the_job_and_keeps_the_template() {
 }
 
 #[tokio::test]
+async fn launch_with_options_overrides_a_template_without_prompt_on_launch() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-launch-options-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, inventory, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Options hosts", "body": "[web]\nweb-1\n"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{inventory}");
+    let inventory_id = inventory["id"].as_str().unwrap();
+
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Options",
+            "tool": "ansible",
+            "entrypoint": "site.yml",
+            "inventory_id": inventory_id,
+            "extra_vars": {"keep": "template"},
+            "spec": {"job_type": "run", "tags": "ping", "limit": "web"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    assert_eq!(template["prompt_on_launch"], false);
+    let template_id = template["id"].as_str().unwrap();
+
+    let (status, blocked, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"extra_vars": {}, "spec": {"limit": "db", "tags": "heal"}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{blocked}");
+    assert_eq!(blocked["error"], "prompt_on_launch_is_off");
+
+    let (status, launched, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "extra_vars": {"from_launch": "yes"},
+            "spec": {"limit": "db", "tags": "heal", "job_type": "check"},
+            "launch_with_options": true
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{launched}");
+    let job_id = launched["id"].as_str().unwrap();
+    assert_eq!(launched["parameters"]["spec"]["limit"], "db");
+    assert_eq!(launched["parameters"]["spec"]["tags"], "heal");
+    assert_eq!(launched["parameters"]["spec"]["job_type"], "check");
+    assert_eq!(launched["parameters"]["extra_vars"]["keep"], "template");
+    assert_eq!(launched["parameters"]["extra_vars"]["from_launch"], "yes");
+    let _ = call(
+        &app,
+        "POST",
+        &format!("/api/jobs/{job_id}/cancel"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+
+    let (status, stored, _) = call(
+        &app,
+        "GET",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{stored}");
+    let row = stored
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == template_id)
+        .unwrap();
+    assert_eq!(row["prompt_on_launch"], false);
+    assert_eq!(row["spec"]["limit"], "web");
+    assert_eq!(row["spec"]["tags"], "ping");
+    assert_eq!(row["spec"]["job_type"], "run");
+    assert_eq!(row["extra_vars"]["keep"], "template");
+    assert!(row["extra_vars"].get("from_launch").is_none());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn ansible_launch_requires_an_inventory() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

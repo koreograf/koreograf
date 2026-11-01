@@ -260,6 +260,8 @@
   "language": "Language",
   "launch": "Launch",
   "launch_fields_are_only_for_ansible": "Limit, tags, skip tags, job type, and verbosity apply to Ansible templates.",
+  "launch_with_options": "Launch with options",
+  "launch_with_options_help": "Set the inventory, credentials, limit, tags, skip tags, job type, verbosity, and extra variables for this run only. The template stays unchanged.",
   "ldap_group": "LDAP group",
   "ldap_group_group": "LDAP group: {group}",
   "ldap_is_configured": "LDAP is configured.",
