@@ -223,7 +223,7 @@ Shell: `entrypoint` or `spec.script`. The script is written as `inline.sh`.
 
 `GET /api/inventories/{id}` returns `hosts`, `host_count`, `source_kind`, and `source`. Groups with `:vars` or `:children` are not hosts. A git sync that fails answers with the last lines from git. `contents` answers with `playbooks` and `inventories`. The NetBox fetch happens before the save.
 
-Launches answer 202 and need a JSON object, at least `{}`. An array is rejected. `extra_vars` is an object. A request without a JSON content type is `json_body_required`. An empty body, broken JSON, a non-object, or a field of the wrong type is `json_body_invalid`. A body over 2 MiB is `request_too_large` with status 413. `POST /hooks/{id}/{token}` accepts any JSON value.
+Launches answer 202 and need a JSON object, at least `{}`. An array is rejected. `extra_vars` is an object. A request without a JSON content type is `json_body_required`. An empty body, broken JSON, a non-object, or a field of the wrong type is `json_body_invalid`. An unknown field is `json_field_is_not_supported` with the field name in `vars.field`; every endpoint that reads a JSON request body rejects a field its request type does not use. A body over 2 MiB is `request_too_large` with status 413. `POST /hooks/{id}/{token}` is the only endpoint that accepts any JSON value, including arbitrary fields.
 
 `PUT /api/settings` takes a complete body. `ldap`, `proxy`, `runner`, and `job_timeout_secs` are required, and a body that leaves one of them out answers 400 with `the_settings_body_is_incomplete` and the missing names in `fields`. `job_output_lines` is optional. `{ "reset": true }` needs no other fields.
 

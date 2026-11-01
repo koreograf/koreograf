@@ -259,6 +259,7 @@
   "jobs_workflows_and_alerts_for_several_teams_local": "Jobs, workflows, and alerts for several teams. Local account or LDAP.",
   "json_body_invalid": "The JSON body is not valid.",
   "json_body_required": "The request needs a JSON body.",
+  "json_field_is_not_supported": "The field {field} is not supported here.",
   "key_value_one_variable_per_line": "KEY=value, one variable per line",
   "koreograf_stores_data_in_sqlite_the_backup_contains": "Koreograf stores data in SQLite. The backup contains the database and the key for credentials. Cache, git checkouts and job directories stay out.",
   "kubernetes": "Kubernetes",

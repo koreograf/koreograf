@@ -20,6 +20,7 @@ use super::{
 };
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TeamBody {
     name: String,
     #[serde(default)]
@@ -29,12 +30,14 @@ pub struct TeamBody {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MemberBody {
     username: String,
     role: String,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProjectBody {
     name: String,
     source_type: String,
@@ -47,6 +50,7 @@ pub struct ProjectBody {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProjectAssignBody {
     organization_id: String,
     #[serde(default)]
@@ -54,6 +58,7 @@ pub struct ProjectAssignBody {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OrganizationBody {
     name: String,
     #[serde(default)]
@@ -61,6 +66,7 @@ pub struct OrganizationBody {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InventoryBody {
     name: String,
     #[serde(default)]
@@ -70,6 +76,15 @@ pub struct InventoryBody {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InventoryUpdateBody {
+    name: String,
+    #[serde(default)]
+    body: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CredentialBody {
     name: String,
     kind: String,
@@ -77,6 +92,7 @@ pub struct CredentialBody {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CredentialUpdate {
     name: String,
     #[serde(default)]
@@ -86,6 +102,7 @@ pub struct CredentialUpdate {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EnvironmentBody {
     name: String,
     image: String,
@@ -518,7 +535,7 @@ pub async fn update_inventory(
     headers: HeaderMap,
     user: AuthUser,
     Path(id): Path<String>,
-    ApiJson(body): ApiJson<InventoryBody>,
+    ApiJson(body): ApiJson<InventoryUpdateBody>,
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;

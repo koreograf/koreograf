@@ -55,6 +55,7 @@ impl NodePhase {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GraphNode {
     pub id: String,
     pub template_id: String,
@@ -73,6 +74,7 @@ pub struct GraphNode {
 
 /// Per-node launch values. An empty string clears a template inventory or credential.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NodeOverrides {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inventory_id: Option<String>,
@@ -151,6 +153,7 @@ fn merge_spec(base: &Value, overlay: &Value) -> Value {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GraphEdge {
     pub from: String,
     pub to: String,
@@ -158,6 +161,7 @@ pub struct GraphEdge {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Graph {
     #[serde(default)]
     pub nodes: Vec<GraphNode>,
