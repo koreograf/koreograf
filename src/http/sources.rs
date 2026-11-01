@@ -69,6 +69,18 @@ pub(super) struct NetboxBody {
     virtual_machines: bool,
 }
 
+#[derive(Deserialize)]
+pub(super) struct NetboxTestBody {
+    #[serde(default)]
+    api_endpoint: String,
+    #[serde(default)]
+    token: String,
+    #[serde(default = "yes")]
+    validate_certs: bool,
+    #[serde(default)]
+    ca_file: String,
+}
+
 fn yes() -> bool {
     true
 }
@@ -214,6 +226,27 @@ pub async fn create_netbox(
     Ok(created(inventory_json(&db, &item)?))
 }
 
+pub async fn test_netbox(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    user: AuthUser,
+    ApiJson(body): ApiJson<NetboxTestBody>,
+) -> AppResult<Json<Value>> {
+    let team = team_header(&headers)?;
+    gate(&state, &user, &team, Role::Operator)?;
+    let source = connection_source(
+        &body.api_endpoint,
+        &body.token,
+        body.validate_certs,
+        &body.ca_file,
+    )?;
+    let proxy = crate::settings::load(&state)?.proxy;
+    let version = netbox::test_connection(&source, body.token.trim(), &proxy)
+        .await
+        .map_err(ApiError::bad)?;
+    Ok(Json(json!({ "version": version })))
+}
+
 pub async fn sync_inventory(
     State(state): State<Shared>,
     headers: HeaderMap,
@@ -321,15 +354,39 @@ fn token_from_secret(plain: &str) -> AppResult<String> {
     Ok(token.to_string())
 }
 
-fn netbox_source(body: &NetboxBody) -> AppResult<NetboxSource> {
-    let endpoint = body.api_endpoint.trim().trim_end_matches('/').to_string();
+fn connection_source(
+    api_endpoint: &str,
+    token: &str,
+    validate_certs: bool,
+    ca_file: &str,
+) -> AppResult<NetboxSource> {
+    let endpoint = api_endpoint.trim().trim_end_matches('/').to_string();
     if !netbox::valid_endpoint(&endpoint) {
         return Err(ApiError::bad("the_netbox_address_must_be_http_or_https"));
     }
-    if !netbox::valid_token(body.token.trim()) {
+    if !netbox::valid_token(token.trim()) {
         return Err(ApiError::bad("the_netbox_token_is_invalid"));
     }
-    let group_by = body
+    let ca_file = ca_file.trim().to_string();
+    crate::tls::absolute_ca_path(&ca_file).map_err(ApiError::bad)?;
+    Ok(NetboxSource {
+        api_endpoint: endpoint,
+        validate_certs,
+        ca_file,
+        group_by: Vec::new(),
+        query: Vec::new(),
+        virtual_machines: false,
+    })
+}
+
+fn netbox_source(body: &NetboxBody) -> AppResult<NetboxSource> {
+    let mut source = connection_source(
+        &body.api_endpoint,
+        &body.token,
+        body.validate_certs,
+        &body.ca_file,
+    )?;
+    source.group_by = body
         .group_by
         .iter()
         .flat_map(|item| item.split(','))
@@ -337,16 +394,9 @@ fn netbox_source(body: &NetboxBody) -> AppResult<NetboxSource> {
         .filter(|item| !item.is_empty())
         .map(str::to_string)
         .collect();
-    let ca_file = body.ca_file.trim().to_string();
-    crate::tls::absolute_ca_path(&ca_file).map_err(ApiError::bad)?;
-    Ok(NetboxSource {
-        api_endpoint: endpoint,
-        validate_certs: body.validate_certs,
-        ca_file,
-        group_by,
-        query: netbox::parse_filters(&body.query_filters).map_err(ApiError::bad)?,
-        virtual_machines: body.virtual_machines,
-    })
+    source.query = netbox::parse_filters(&body.query_filters).map_err(ApiError::bad)?;
+    source.virtual_machines = body.virtual_machines;
+    Ok(source)
 }
 
 fn visible_project(state: &Shared, id: &str, team: &str) -> AppResult<Project> {
