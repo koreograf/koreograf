@@ -480,6 +480,9 @@ fn parameters_for_launch(
         };
         map.insert("spec".into(), merged);
     }
+    if let Some(map) = params.as_object_mut() {
+        map.insert("launch_with_options".into(), Value::Bool(true));
+    }
     Ok(params.to_string())
 }
 

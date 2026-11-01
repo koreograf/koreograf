@@ -1276,6 +1276,181 @@ async fn launch_with_options_overrides_a_template_without_prompt_on_launch() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+async fn launch_options_admin_app(dir: &Path) -> (axum::Router, String, String, String) {
+    let mut cfg = config(dir);
+    cfg.local_jobs = LocalJobs::Admins;
+    let state = koreograf::boot(cfg).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, inventory, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Gated hosts", "body": "[web]\nweb-1\n"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{inventory}");
+    let inventory_id = inventory["id"].as_str().unwrap().to_string();
+
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Gated",
+            "tool": "ansible",
+            "entrypoint": "site.yml",
+            "inventory_id": inventory_id,
+            "spec": {"job_type": "run", "tags": "ping", "limit": "web"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().unwrap().to_string();
+    (app, cookie, team, template_id)
+}
+
+#[tokio::test]
+async fn options_launch_passes_the_local_runner_gate() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-options-gate-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (app, cookie, team, template_id) = launch_options_admin_app(&dir).await;
+
+    let (status, launched, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "spec": {"limit": "db", "tags": "heal", "job_type": "check"},
+            "launch_with_options": true
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{launched}");
+    let job_id = launched["id"].as_str().unwrap();
+    assert_eq!(launched["parameters"]["launch_with_options"], true);
+    assert_eq!(launched["parameters"]["spec"]["limit"], "db");
+    assert_eq!(launched["parameters"]["spec"]["tags"], "heal");
+    assert_eq!(launched["parameters"]["spec"]["job_type"], "check");
+    let _ = call(
+        &app,
+        "POST",
+        &format!("/api/jobs/{job_id}/cancel"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+
+    let (status, stored, _) = call(
+        &app,
+        "GET",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{stored}");
+    let stored = stored
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == template_id.as_str())
+        .unwrap();
+    assert_eq!(stored["spec"]["limit"], "web");
+    assert_eq!(stored["spec"]["tags"], "ping");
+    assert_eq!(stored["spec"]["job_type"], "run");
+    assert_eq!(stored["prompt_on_launch"], false);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn options_launch_relaunch_passes_the_local_runner_gate() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-options-relaunch-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (app, cookie, team, template_id) = launch_options_admin_app(&dir).await;
+
+    let (status, launched, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "spec": {"limit": "db", "tags": "heal"},
+            "launch_with_options": true
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{launched}");
+    let job_id = launched["id"].as_str().unwrap();
+    let _ = call(
+        &app,
+        "POST",
+        &format!("/api/jobs/{job_id}/cancel"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+
+    let (status, again, _) = call(
+        &app,
+        "POST",
+        &format!("/api/jobs/{job_id}/relaunch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{again}");
+    assert_ne!(again["id"], job_id);
+    assert_eq!(again["trigger"], "relaunch");
+    assert_eq!(again["parameters"]["launch_with_options"], true);
+    assert_eq!(again["parameters"]["spec"]["limit"], "db");
+    assert_eq!(again["parameters"]["spec"]["tags"], "heal");
+    let _ = call(
+        &app,
+        "POST",
+        &format!("/api/jobs/{}/cancel", again["id"].as_str().unwrap()),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[tokio::test]
 async fn ansible_launch_requires_an_inventory() {
     let nanos = SystemTime::now()
