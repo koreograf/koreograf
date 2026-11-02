@@ -13230,13 +13230,14 @@ fn schedule_overlay_address_opens_and_closes_the_dialog() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
     assert!(script.contains("if (request.edit)"));
-    assert!(script.contains("openScheduleForm(item.target_kind || kind, item.target_id || target, item, draw, { fromHash: true })"));
-    assert!(
-        script.contains("openScheduleForm(openKind, openTarget, null, draw, { fromHash: true })")
-    );
+    assert!(script.contains(
+        "openScheduleForm(item.target_kind || kind, item.target_id || target, item, draw);"
+    ));
+    assert!(script.contains("openScheduleForm(openKind, openTarget, null, draw);"));
+    assert!(!script.contains("fromHash"));
     assert!(script.contains("rememberScheduleHash({ edit: item.id })"));
     assert!(script.contains("rememberScheduleHash({ new: \"1\" })"));
-    assert!(script.contains("onClose: clearScheduleHash"));
+    assert!(script.contains("onClose: () => {"));
     assert!(script.contains("document.querySelector(\"#schedule-form\")?.remove();"));
     let functions = format!(
         "{}\n{}\n{}",
@@ -13263,6 +13264,24 @@ check(scheduleAddress({{}}, "#/schedules?edit=s1&page=2") === "#/schedules?page=
 "##
     );
     run_node_probe("schedule-address", &probe);
+}
+
+#[test]
+fn schedule_overlay_guards_unsaved_edits() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    assert!(script.contains("dirty: () => dirty"));
+    let form = extract_braced_function(&script, "function openScheduleForm");
+    assert!(form.contains("leaveGuard = () => dialog.dirty();"));
+    let submit = form
+        .find("onSubmit: async")
+        .expect("schedule dialog submit");
+    let close = form
+        .find("onClose: () => {")
+        .expect("schedule dialog close");
+    assert!(submit < close);
+    assert!(form[submit..close].contains("leaveGuard = null;"));
+    assert!(form[close..].contains("leaveGuard = null;"));
 }
 
 #[test]

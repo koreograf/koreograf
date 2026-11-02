@@ -1055,7 +1055,7 @@ function openDialog({ id, formId, title, body, submit, onSubmit, danger, form = 
       }
     });
   }
-  return { overlay, card, form: shell, close: () => { dirty = false; dismiss(); } };
+  return { overlay, card, form: shell, close: () => { dirty = false; dismiss(); }, dirty: () => dirty };
 }
 
 async function openLaunchPrompt(item, launchWithOptions = false, preset = {}) {
@@ -1714,7 +1714,7 @@ function mountSchedules(card) {
     const request = scheduleQuery();
     if (request.edit) {
       const item = items.find((row) => row.id === request.edit);
-      if (item) openScheduleForm(item.target_kind || kind, item.target_id || target, item, draw, { fromHash: true });
+      if (item) openScheduleForm(item.target_kind || kind, item.target_id || target, item, draw);
       return;
     }
     if (request.create === null) return;
@@ -1730,7 +1730,7 @@ function mountSchedules(card) {
       else if (workflows.some((row) => row.id === openTarget)) openKind = "workflow";
     }
     if (openKind && openTarget) {
-      openScheduleForm(openKind, openTarget, null, draw, { fromHash: true });
+      openScheduleForm(openKind, openTarget, null, draw);
     }
   };
   const render = () => {
@@ -2029,6 +2029,7 @@ function openScheduleForm(kind, target, existing, redraw) {
       const body = { ...payload(), name: form.name.value };
       if (existing) await api("PUT", `/api/schedules/${encodeURIComponent(existing.id)}`, body);
       else await api("POST", `/api/${kind}s/${encodeURIComponent(target)}/schedules`, body);
+      leaveGuard = null;
       close();
       await redraw();
       const card = document.querySelector("#schedule-card");
@@ -2037,8 +2038,12 @@ function openScheduleForm(kind, target, existing, redraw) {
         card.insertAdjacentHTML("afterbegin", `<div class="banner good">${h("saved")}</div>`);
       }
     },
-    onClose: clearScheduleHash,
+    onClose: () => {
+      leaveGuard = null;
+      clearScheduleHash();
+    },
   });
+  leaveGuard = () => dialog.dirty();
   const form = dialog.form;
   const showParts = () => {
     const weekly = form.frequency.value === "weekly";
