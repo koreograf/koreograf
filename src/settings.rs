@@ -643,10 +643,8 @@ fn first_env(keys: &[&str]) -> Option<String> {
 fn parse_http_proxy(raw: &str) -> Option<(String, String, String)> {
     let (scheme, rest) = if let Some(rest) = raw.strip_prefix("https://") {
         ("https://", rest)
-    } else if let Some(rest) = raw.strip_prefix("http://") {
-        ("http://", rest)
     } else {
-        return None;
+        ("http://", raw.strip_prefix("http://")?)
     };
     if rest.is_empty() || rest.chars().any(|ch| ch.is_whitespace() || ch.is_control()) {
         return None;
