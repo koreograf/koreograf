@@ -116,6 +116,12 @@
       "minimumReleaseAge": "3 days"
     },
     {
+      "description": "Keep the netbox image commit subject within the 72 character limit",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["docker.io/netboxcommunity/netbox"],
+      "commitMessageTopic": "netbox"
+    },
+    {
       "description": "The Renovate validator pin waits three days",
       "matchPackageNames": ["renovate"],
       "minimumReleaseAge": "3 days"
