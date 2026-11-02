@@ -357,6 +357,7 @@ textarea.secret-mask { -webkit-text-security: disc; }
   background: white;
 }
 .table-wrap { overflow-x: auto; }
+.inventory-hosts-table .table { min-width: 44rem; }
 .schedule-table .table { min-width: 52rem; }
 .schedule-table tbody tr:hover td { background: rgba(28, 25, 23, 0.03); }
 .schedule-table tr.schedule-alert:hover td { background: transparent; }

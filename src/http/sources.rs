@@ -577,6 +577,28 @@ pub async fn add_source(
     Ok(Json(inventory_json(&db, &item)?))
 }
 
+pub async fn get_source(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Path((inventory_id, source_id)): Path<(String, String)>,
+) -> AppResult<Json<Value>> {
+    let team = team_header(&headers)?;
+    gate(&state, &user, &team, Role::Viewer)?;
+    let db = state.db()?;
+    let source = owned_source(&db, &inventory_id, &source_id, &team)?;
+    Ok(Json(json!({
+        "id": source.id,
+        "inventory_id": source.inventory_id,
+        "name": source.name,
+        "kind": source.kind,
+        "source": db::json_object(&source.source_json),
+        "credential_id": source.credential_id,
+        "host_count": crate::inventory::parse_hosts(&source.body).len(),
+        "body": source.body,
+    })))
+}
+
 pub async fn update_source(
     State(state): State<Shared>,
     headers: HeaderMap,

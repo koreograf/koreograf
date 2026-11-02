@@ -2656,6 +2656,311 @@ async fn playbooks_project_inventory_and_netbox() {
 }
 
 #[tokio::test]
+async fn inventory_hosts_page_search_and_filter() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-host-page-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let body = "[web]\n\
+web-01 ansible_host=10.0.0.1 role=frontend\n\
+web-02 ansible_host=10.0.0.2 role=frontend\n\
+web-03 ansible_host=10.0.0.3 role=frontend\n\
+\n\
+[db]\n\
+db-01 ansible_host=10.0.0.11 role=database\n\
+db-02 ansible_host=10.0.0.12 role=database\n\
+\n\
+[cache]\n\
+cache-01 ansible_host=10.0.0.42 role=cache\n";
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Paged hosts", "body": body})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let id = created["id"].as_str().unwrap().to_string();
+    assert_eq!(created["host_count"], 6);
+
+    let (status, listed, _) = call(
+        &app,
+        "GET",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let summary = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == id)
+        .unwrap();
+    assert!(summary.get("hosts").is_none(), "{summary}");
+    assert!(summary.get("body").is_none(), "{summary}");
+    assert_eq!(summary["host_count"], 6);
+    assert_eq!(summary["group_count"], 3);
+    assert_eq!(summary["source_count"], 1);
+    assert!(summary["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|source| source.get("body").is_none()));
+
+    let (status, detail, _) = call(
+        &app,
+        "GET",
+        &format!("/api/inventories/{id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert!(detail.get("hosts").is_none(), "{detail}");
+    assert!(detail.get("body").is_none(), "{detail}");
+    assert!(detail["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|source| source.get("body").is_none()));
+
+    let source_id = detail["sources"][0]["id"].as_str().unwrap();
+    let (status, source, _) = call(
+        &app,
+        "GET",
+        &format!("/api/inventories/{id}/sources/{source_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{source}");
+    assert!(source["body"].as_str().unwrap_or("").contains("web-01"));
+    assert_eq!(source["host_count"], 6);
+
+    let hosts_url = |query: &str| format!("/api/inventories/{id}/hosts{query}");
+    let (status, first, _) = call(
+        &app,
+        "GET",
+        &hosts_url(""),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(first["total"], 6);
+    assert_eq!(first["page"], 1);
+    assert_eq!(first["page_size"], 50);
+    assert_eq!(first["hosts"].as_array().unwrap().len(), 6);
+    assert_eq!(first["groups"], json!(["cache", "db", "web"]));
+
+    let (status, second, _) = call(
+        &app,
+        "GET",
+        &hosts_url("?page=2&page_size=2"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(second["total"], 6);
+    assert_eq!(second["page"], 2);
+    assert_eq!(second["hosts"][0]["name"], "db-02");
+    assert_eq!(second["hosts"][1]["name"], "web-01");
+    assert_eq!(second["hosts"].as_array().unwrap().len(), 2);
+
+    let (status, beyond, _) = call(
+        &app,
+        "GET",
+        &hosts_url("?page=4&page_size=2"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{beyond}");
+    assert_eq!(beyond["total"], 6);
+    assert_eq!(beyond["page"], 4);
+    assert_eq!(beyond["hosts"], json!([]));
+
+    let (status, huge, _) = call(
+        &app,
+        "GET",
+        &hosts_url("?page=18446744073709551615&page_size=2"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{huge}");
+    assert_eq!(huge["total"], 6);
+    assert_eq!(huge["hosts"], json!([]));
+
+    let (status, zero, _) = call(
+        &app,
+        "GET",
+        &hosts_url("?page=0"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{zero}");
+    assert_eq!(zero["page"], 1);
+    assert_eq!(zero["hosts"].as_array().unwrap().len(), 6);
+
+    let (status, capped, _) = call(
+        &app,
+        "GET",
+        &hosts_url("?limit=5000"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{capped}");
+    assert_eq!(capped["page_size"], 200);
+
+    let (status, offset, _) = call(
+        &app,
+        "GET",
+        &hosts_url("?offset=4&limit=2"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{offset}");
+    assert_eq!(offset["page"], 3);
+    assert_eq!(offset["hosts"][0]["name"], "web-02");
+    assert_eq!(offset["hosts"].as_array().unwrap().len(), 2);
+
+    let (status, search, _) = call(
+        &app,
+        "GET",
+        &hosts_url("?search=web"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{search}");
+    assert_eq!(search["total"], 3);
+    assert!(search["hosts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|host| host["name"].as_str().unwrap().starts_with("web-")));
+
+    let (status, address, _) = call(
+        &app,
+        "GET",
+        &hosts_url("?search=10.0.0.42"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{address}");
+    assert_eq!(address["total"], 1);
+    assert_eq!(address["hosts"][0]["name"], "cache-01");
+
+    let (status, variable, _) = call(
+        &app,
+        "GET",
+        &hosts_url("?search=database"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{variable}");
+    assert_eq!(variable["total"], 2);
+
+    let (status, grouped, _) = call(
+        &app,
+        "GET",
+        &hosts_url("?group=db"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{grouped}");
+    assert_eq!(grouped["total"], 2);
+    assert!(grouped["hosts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|host| host["groups"] == json!(["db"])));
+
+    let (status, combined, _) = call(
+        &app,
+        "GET",
+        &hosts_url("?group=web&search=web-02"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{combined}");
+    assert_eq!(combined["total"], 1);
+
+    let (status, empty, _) = call(
+        &app,
+        "GET",
+        &hosts_url("?search=missing"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{empty}");
+    assert_eq!(empty["total"], 0);
+    assert_eq!(empty["hosts"], json!([]));
+
+    let (status, reversed, _) = call(
+        &app,
+        "GET",
+        &hosts_url("?sort=-name&page_size=1"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reversed}");
+    assert_eq!(reversed["hosts"][0]["name"], "web-03");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn inventory_sources_can_be_edited_and_inventories_renamed() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

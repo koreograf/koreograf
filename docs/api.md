@@ -202,8 +202,9 @@ Shell: `entrypoint` or `spec.script`. The script is written as `inline.sh`.
 | POST | `/api/projects/{id}/sync` |
 | POST | `/api/inventories/import`, `/api/inventories/netbox` |
 | POST | `/api/inventories/{id}/sync` |
+| GET | `/api/inventories/{id}/hosts` |
 | POST | `/api/inventories/{id}/sources` |
-| PUT, DELETE | `/api/inventories/{id}/sources/{source_id}` |
+| GET, PUT, DELETE | `/api/inventories/{id}/sources/{source_id}` |
 | POST | `/api/inventories/{id}/sources/{source_id}/sync` |
 | GET | `/api/cache`, `/api/plugins` |
 | GET, POST | `/api/templates`, `/api/workflows`, `/api/hooks`, `/api/jobs` |
@@ -223,7 +224,11 @@ Shell: `entrypoint` or `spec.script`. The script is written as `inline.sh`.
 | GET, POST | `/api/admin/backup` |
 | GET, PUT | `/api/settings` |
 
-`GET /api/inventories/{id}` returns `hosts`, `host_count`, `source_kind`, and `source`. Groups with `:vars` or `:children` are not hosts. A git sync that fails answers with the last lines from git. `contents` answers with `playbooks` and `inventories`. The NetBox fetch happens before the save.
+`GET /api/inventories` returns one summary per inventory with `id`, `name`, `created_at`, `source_kind`, `source`, `source_count`, `host_count`, `group_count`, and `sources` metadata. A summary has no `hosts` array and no source `body`. This is a breaking change for alpha clients that read `hosts` from the list.
+
+`GET /api/inventories/{id}` returns the same summary. It has no `hosts` array and no source `body`. `GET /api/inventories/{id}/hosts` returns a page of parsed hosts with `id`, `total`, `page`, `page_size`, `groups`, and `hosts`. `page` starts at 1. `page_size` defaults to 50 and is capped at 200; `limit` is an alias and `offset` starts at zero. `search` matches the host name, group names, variable names, and variable values. `group` keeps hosts in that exact group. `sort` is `name` (default), `address` (the `ansible_host` value), or `groups`; a leading `-` reverses the order.
+
+`GET /api/inventories/{id}/sources/{source_id}` returns one source including its raw `body`. Groups with `:vars` or `:children` are not hosts. A git sync that fails answers with the last lines from git. `contents` answers with `playbooks` and `inventories`. The NetBox fetch happens before the save.
 
 Launches answer 202 and need a JSON object, at least `{}`. An array is rejected. `extra_vars` is an object. A request without a JSON content type is `json_body_required`. An empty body, broken JSON, a non-object, or a field of the wrong type is `json_body_invalid`. An unknown field is `json_field_is_not_supported` with the field name in `vars.field`; every endpoint that reads a JSON request body rejects a field its request type does not use. A body over 2 MiB is `request_too_large` with status 413. `POST /hooks/{id}/{token}` is the only endpoint that accepts any JSON value, including arbitrary fields.
 
