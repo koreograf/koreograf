@@ -1534,6 +1534,9 @@ fn sync_log_line(err: String) -> String {
         "path_projects_are_limited_to_administrators" => {
             ProjectPathError::AdminsOnly.job_text().into()
         }
+        "the_git_checkout_is_owned_by_another_user" => {
+            "The Git checkout is owned by another user. Change its owner to 10001 or recreate the project.".into()
+        }
         _ => err,
     }
 }
@@ -1970,6 +1973,8 @@ fn hex_digit(byte: u8) -> Option<u8> {
 
 pub async fn head_commit(path: &Path) -> Option<String> {
     let output = Command::new("git")
+        .arg("-c")
+        .arg(safe_directory(path))
         .arg("-C")
         .arg(path)
         .args(["rev-parse", "--short", "HEAD"])
@@ -2252,14 +2257,23 @@ fn git_auth_material(secret: &Value, url: &str) -> Result<Option<GitAuth>, Strin
     }
 }
 
+fn safe_directory(path: &Path) -> String {
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    format!("safe.directory={}", path.display())
+}
+
 fn git_cmd(
     proxy: &crate::settings::ProxySettings,
     allow_file: bool,
     auth: Option<&GitAuth>,
+    checkout: Option<&Path>,
 ) -> Command {
     let mut cmd = Command::new("git");
     if allow_file {
         cmd.arg("-c").arg("protocol.file.allow=always");
+    }
+    if let Some(path) = checkout {
+        cmd.arg("-c").arg(safe_directory(path));
     }
     cmd.env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "never")
@@ -2270,6 +2284,14 @@ fn git_cmd(
     }
     proxy.apply_command(&mut cmd);
     cmd
+}
+
+fn git_error_key(text: &str) -> Option<&'static str> {
+    if text.to_ascii_lowercase().contains("dubious ownership") {
+        Some("the_git_checkout_is_owned_by_another_user")
+    } else {
+        None
+    }
 }
 
 fn git_text(output: &std::process::Output) -> String {
@@ -2293,6 +2315,8 @@ fn git_text(output: &std::process::Output) -> String {
     }
     if joined.is_empty() {
         format!("Git failed with status {}.", output.status)
+    } else if let Some(key) = git_error_key(&joined) {
+        key.into()
     } else {
         format!("Git:\n{}", mask_pull_credentials(&joined))
     }
@@ -2330,7 +2354,7 @@ async fn git_clone(
     allow_file: bool,
     auth: Option<&GitAuth>,
 ) -> Result<(), String> {
-    let mut cmd = git_cmd(proxy, allow_file, auth);
+    let mut cmd = git_cmd(proxy, allow_file, auth, None);
     cmd.arg("clone").arg("--depth").arg("1");
     if !revision.is_empty() {
         cmd.arg("--branch").arg(revision);
@@ -2346,14 +2370,14 @@ async fn git_checkout(
     allow_file: bool,
     auth: Option<&GitAuth>,
 ) -> Result<(), String> {
-    let mut fetch = git_cmd(proxy, allow_file, auth);
+    let mut fetch = git_cmd(proxy, allow_file, auth, Some(dest));
     fetch
         .arg("-C")
         .arg(dest)
         .args(["fetch", "--depth", "1", "origin"])
         .arg(revision);
     git_run(fetch).await?;
-    let mut checkout = git_cmd(proxy, allow_file, auth);
+    let mut checkout = git_cmd(proxy, allow_file, auth, Some(dest));
     checkout
         .arg("-C")
         .arg(dest)
@@ -2369,7 +2393,7 @@ async fn git_update(
     auth: Option<&GitAuth>,
 ) -> Result<(), String> {
     if revision.is_empty() {
-        let mut cmd = git_cmd(proxy, allow_file, auth);
+        let mut cmd = git_cmd(proxy, allow_file, auth, Some(dest));
         cmd.arg("-C").arg(dest).args(["pull", "--ff-only"]);
         return git_run(cmd).await;
     }
@@ -4131,6 +4155,21 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("password=[redacted]"), "{text}");
+    }
+
+    #[test]
+    fn dubious_ownership_becomes_a_translated_message() {
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(
+                "printf '%s\\n' \"fatal: detected dubious ownership in repository at '/var/lib/koreograf/checkouts/abc'\" >&2; exit 1",
+            )
+            .output()
+            .expect("shell");
+        assert_eq!(
+            git_text(&output),
+            "the_git_checkout_is_owned_by_another_user"
+        );
     }
 
     #[test]

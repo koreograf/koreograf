@@ -17,18 +17,16 @@ spec:
       {{- if .Values.podSecurityContext }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      {{- else if .Values.runner.dockerSocket.enabled }}
-      securityContext:
-        runAsUser: 0
-        runAsNonRoot: false
-        seccompProfile:
-          type: RuntimeDefault
       {{- else }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
         runAsGroup: 10001
         fsGroup: 10001
+        {{- if .Values.runner.dockerSocket.enabled }}
+        supplementalGroups:
+          - {{ .Values.runner.dockerSocket.group | int }}
+        {{- end }}
         seccompProfile:
           type: RuntimeDefault
       {{- end }}
@@ -39,11 +37,6 @@ spec:
           {{- if .Values.securityContext }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          {{- else if .Values.runner.dockerSocket.enabled }}
-          securityContext:
-            runAsUser: 0
-            runAsNonRoot: false
-            allowPrivilegeEscalation: false
           {{- else }}
           securityContext:
             runAsNonRoot: true

@@ -717,6 +717,7 @@
   "the_git_address_contains_credentials": "Die Git-Adresse enthält Zugangsdaten. Trag sie im Quellcode-Zugang ein.",
   "the_git_address_is_invalid": "Git-Adresse ist ungültig.",
   "the_git_address_must_be_http_s_ssh": "Git-Adresse muss http(s), ssh, git@ oder file sein.",
+  "the_git_checkout_is_owned_by_another_user": "Der Git-Checkout gehört einem anderen Benutzer. Ändere den Besitzer auf 10001 oder lege das Projekt neu an.",
   "the_hook_has_no_target": "Hook hat kein Ziel.",
   "the_image_name_is_invalid": "Image-Name ist ungültig.",
   "the_inventory_belongs_to_another_team": "Inventar gehört zu einem anderen Team.",
