@@ -158,6 +158,8 @@ pub struct Config {
     /// Consumed during the first boot. Cleared afterwards.
     pub admin_password: Option<String>,
     pub runner: RunnerMode,
+    /// Set by the image build. The image has no local tool set of its own.
+    pub container_image: bool,
     pub job_timeout_secs: u64,
     /// `KOREOGRAF_JOB_OUTPUT_LINES`. Lines kept for each of stdout and stderr.
     pub job_output_lines: u64,
@@ -226,6 +228,7 @@ impl Config {
                 Some(password)
             },
             runner: RunnerMode::parse(&env_or("KOREOGRAF_RUNNER", "auto")),
+            container_image: env_flag("KOREOGRAF_CONTAINER_IMAGE"),
             job_timeout_secs: env_or("KOREOGRAF_JOB_TIMEOUT_SECS", "1800")
                 .parse()
                 .unwrap_or(1800)

@@ -736,6 +736,66 @@ function renderLogin(message, tone, vars, username) {
   });
 }
 
+function preflightNotices(report) {
+  if (!report || report.ok) return [];
+  const missing = report.missing || [];
+  const runtimeMissing = missing.some((item) => item.kind === "runtime");
+  return missing.map((item) => {
+    if (item.kind === "runtime") {
+      const reason = item.reason === "timeout" || item.reason === "not_answering" ? item.reason : "missing";
+      return { key: `preflight_runtime_${reason}` };
+    }
+    if (item.kind === "project") {
+      return {
+        key: item.reason === "timeout" || item.reason === "failed" ? "preflight_project_unusable" : "preflight_project_missing",
+        tool: item.tool,
+      };
+    }
+    if (item.reason === "version") {
+      return {
+        key: "preflight_tool_too_old",
+        tool: item.tool,
+        template_tool: item.template_tool,
+        version: item.version || "",
+        minimum: item.minimum || "",
+      };
+    }
+    if (item.reason === "timeout" || item.reason === "failed") {
+      return { key: "preflight_tool_unusable", tool: item.tool, template_tool: item.template_tool };
+    }
+    return {
+      key: runtimeMissing ? "preflight_no_runtime_and_tool_missing" : "preflight_tool_missing",
+      tool: item.tool,
+      template_tool: item.template_tool,
+    };
+  });
+}
+
+function preflightNoticeHtml(report) {
+  const notices = preflightNotices(report);
+  if (!notices.length) return "";
+  const lines = notices.map((item) => {
+    const template = item.template_tool || "";
+    const vars = {
+      ...item,
+      templates: template ? t(template) : "",
+      install: item.tool === "sh"
+        ? t("preflight_install_shell")
+        : item.tool === "ssh"
+          ? t("preflight_install_ssh")
+          : item.kind === "project"
+            ? t("preflight_install_git")
+            : (template ? t(template) : item.tool),
+    };
+    return `<p>${h(item.key, vars)}</p>`;
+  }).join("");
+  return `<div class="banner warn">${lines}</div>`;
+}
+
+function preflightReportHtml(report) {
+  return preflightNoticeHtml(report) || `<div class="banner good">${h("preflight_ready")}</div>`;
+}
+
 async function pageDashboard() {
   if (!needTeam()) return;
   const data = await api("GET", "/api/overview");
@@ -746,6 +806,7 @@ async function pageDashboard() {
     `<tr><td>${esc(item.hook_name)}</td><td>${pill(item.status)}</td><td>${esc(item.summary)}</td></tr>`
   );
   shell(t("overview"), `
+    ${data.preflight ? preflightNoticeHtml(data.preflight) : ""}
     <div class="grid-3">
       <article class="card stat"><span class="small muted">${h("dependency_cache")}</span><strong>${esc(bytes(data.cache_bytes))}</strong><p class="small muted">${h("collections_roles_and_opentofu_providers_stay_between_runs")}</p></article>
       <article class="card stat"><span class="small muted">${h("workflow")}</span><strong>${data.workflow_id ? `<a href="#/workflows/${esc(data.workflow_id)}">${esc(data.workflow_name)}</a>` : "—"}</strong><p class="small muted">${h("success_edges_and_failure_edges_start_the_next")}</p></article>
@@ -6846,7 +6907,8 @@ async function pageSettings(notice) {
       <label class="field"><span>${h("exceptions")}</span><input name="proxy_no_proxy" value="${esc(proxy.no_proxy || "")}" placeholder="localhost,127.0.0.1,.internal" autocomplete="off" spellcheck="false"></label>
     </section>
     <section class="form-section">
-      <h2>${h("jobs")}</h2>
+      <div class="spread"><h2>${h("jobs")}</h2><button class="btn pill" id="preflight-check" type="button">${h("check_again")}</button></div>
+      <div id="preflight-result"></div>
       <p class="small muted">${h("the_mode_and_the_time_limit_apply_to")}</p>
       <div class="field-row">
         <label class="field"><span>${h("runner")}</span>
@@ -6898,6 +6960,18 @@ async function pageSettings(notice) {
       await pageSettings("settings_saved");
     } catch (error) {
       handle(error);
+    }
+  });
+  document.querySelector("#preflight-check").addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      const report = await api("GET", "/api/runner/preflight");
+      document.querySelector("#preflight-result").innerHTML = preflightReportHtml(report);
+    } catch (error) {
+      handle(error);
+    } finally {
+      button.disabled = false;
     }
   });
   document.querySelector("#settings-reset").addEventListener("click", async () => {

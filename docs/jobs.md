@@ -42,6 +42,8 @@ Runner modes are in [Configuration](configuration.md#environment-variables).
 
 ## Tools
 
+Before a job does any work, the runner checks the tool it needs. In `auto`, a job fails at start when its tool is missing locally and no container runtime answers. `local` starts the job and the missing tool fails the run in the job log. Missing `git` blocks project sync, and missing `ssh` is reported for Ansible. The failure line is the same as the overview notice and names the tool, the affected templates, and what to install. `koreograf doctor` prints the complete check, and `GET /api/runner/preflight` runs it again for an administrator and refreshes the cached overview report. Installation paths are in [Installation](installation.md#run-on-a-machine).
+
 The registry lives in `runner::tools()`. Another CLI tool needs an entry there and a branch in `src/wrapper.sh`. The three built-in tools:
 
 | Id | Run |

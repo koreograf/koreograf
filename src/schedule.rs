@@ -1395,6 +1395,7 @@ mod tests {
             admin_user: "admin".into(),
             admin_password: Some("test-admin-pass".into()),
             runner: crate::config::RunnerMode::Local,
+            container_image: false,
             job_timeout_secs: 60,
             job_output_lines: 8_000,
             local_jobs: crate::config::LocalJobs::Admins,

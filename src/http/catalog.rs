@@ -151,6 +151,19 @@ pub async fn runner_status(
     })))
 }
 
+pub async fn runner_preflight(
+    State(state): State<Shared>,
+    user: AuthUser,
+) -> AppResult<Json<Value>> {
+    if !user.is_admin {
+        return Err(ApiError::Forbidden);
+    }
+    let effective = crate::settings::load(&state)?;
+    let report = crate::preflight::check(effective.runner, state.cfg.container_image).await;
+    state.set_preflight_report(report.clone());
+    Ok(Json(report.json()))
+}
+
 pub async fn overview(
     State(state): State<Shared>,
     headers: HeaderMap,
@@ -158,10 +171,15 @@ pub async fn overview(
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
-    // The runtime probe awaits. Take it before the database lock so the
+    // The preflight awaits. Take it before the database lock so the
     // connection guard, which is not Send, is never held across that point.
-    let runtime = runner::detect_runtime().await;
     let effective = crate::settings::load(&state)?;
+    let runtime = runner::detect_runtime().await;
+    let preflight = if user.is_admin {
+        state.preflight_report()
+    } else {
+        None
+    };
     let db = state.db()?;
     let (jobs, _) = db::list_jobs(
         &db,
@@ -178,6 +196,7 @@ pub async fn overview(
     Ok(Json(json!({
         "runner_mode": effective.runner.as_str(),
         "runtime": runtime,
+        "preflight": preflight.as_ref().map(|report| report.json()),
         "ldap": effective.directory().is_some(),
         "cache_bytes": cache.collections_bytes + cache.roles_bytes + cache.tofu_bytes,
         "jobs": jobs.iter().map(|job| super::job_json(job, None)).collect::<Vec<_>>(),

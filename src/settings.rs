@@ -221,6 +221,27 @@ struct Draft {
     default_environment_shell: String,
 }
 
+/// Runner mode for `koreograf doctor`. Reads the saved value when the
+/// database exists and falls back to the environment configuration.
+pub fn configured_mode(cfg: &crate::Config) -> RunnerMode {
+    let path = cfg.data_dir.join("koreograf.db");
+    if !path.is_file() {
+        return cfg.runner;
+    }
+    let Ok(conn) = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+    else {
+        return cfg.runner;
+    };
+    conn.query_row(
+        "SELECT value FROM settings WHERE key = 'runner'",
+        [],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
+    .map(|value| parse_runner_stored(&value, cfg.runner))
+    .unwrap_or(cfg.runner)
+}
+
 pub fn load(state: &Shared) -> AppResult<Effective> {
     let rows = {
         let db = state.db()?;
@@ -919,6 +940,7 @@ mod tests {
             admin_user: "admin".into(),
             admin_password: Some("test-admin-pass".into()),
             runner: RunnerMode::Local,
+            container_image: false,
             job_timeout_secs: 60,
             job_output_lines: 8_000,
             local_jobs: crate::config::LocalJobs::All,

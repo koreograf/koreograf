@@ -21,6 +21,7 @@ mod jobs;
 mod ldap;
 mod metrics;
 mod netbox;
+mod preflight;
 mod runner;
 mod scan;
 mod schedule;
@@ -50,6 +51,7 @@ pub struct AppState {
     pub(crate) procs: Mutex<HashMap<String, RunningProc>>,
     /// Jobs whose later output is discarded. Set when cancel commits.
     pub(crate) canceled: Mutex<HashSet<String>>,
+    pub(crate) preflight: Mutex<Option<preflight::Report>>,
 }
 
 pub type Shared = Arc<AppState>;
@@ -116,11 +118,39 @@ where
         .any(|arg| arg.as_ref() == "--version")
 }
 
+/// True when argv asks for `doctor`. The first value is the program name.
+pub fn doctor_requested<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter().skip(1).any(|arg| arg.as_ref() == "doctor")
+}
+
+/// Print the runner preflight and return the process exit code.
+pub async fn doctor() -> anyhow::Result<i32> {
+    let cfg = Config::from_env();
+    let mode = settings::configured_mode(&cfg);
+    let report = preflight::check(mode, cfg.container_image).await;
+    println!("{}", report.log_block());
+    Ok(if report.ok() { 0 } else { 2 })
+}
+
 impl AppState {
     pub fn db(&self) -> Result<std::sync::MutexGuard<'_, Connection>, ApiError> {
         self.conn
             .lock()
             .map_err(|_| ApiError::Internal("database lock is damaged".into()))
+    }
+
+    pub(crate) fn preflight_report(&self) -> Option<preflight::Report> {
+        self.preflight.lock().ok().and_then(|report| report.clone())
+    }
+
+    pub(crate) fn set_preflight_report(&self, report: preflight::Report) {
+        if let Ok(mut slot) = self.preflight.lock() {
+            *slot = Some(report);
+        }
     }
 
     pub(crate) fn encrypt(&self, plain: &str) -> Result<String, ApiError> {
@@ -166,6 +196,7 @@ pub fn boot(mut cfg: Config) -> anyhow::Result<Shared> {
         maintenance: Mutex::new(()),
         procs: Mutex::new(HashMap::new()),
         canceled: Mutex::new(HashSet::new()),
+        preflight: Mutex::new(None),
     });
     credentials::backfill_netbox_urls(&state)?;
     Ok(state)
@@ -176,9 +207,16 @@ pub async fn serve(cfg: Config) -> anyhow::Result<()> {
     let url = std::env::var("KOREOGRAF_DATABASE_URL").unwrap_or_default();
     config::database_choice(&url).map_err(anyhow::Error::msg)?;
     let state = boot(cfg)?;
-    if let Ok(effective) = settings::load(&state) {
-        tls::warn_directory(&effective.ldap);
-    }
+    let mode = match settings::load(&state) {
+        Ok(effective) => {
+            tls::warn_directory(&effective.ldap);
+            effective.runner
+        }
+        Err(_) => state.cfg.runner,
+    };
+    let report = preflight::check(mode, state.cfg.container_image).await;
+    tracing::info!("{}", report.log_block());
+    state.set_preflight_report(report);
     schedule::spawn(state.clone());
     let bind = state.cfg.bind.clone();
     let data_dir = state.cfg.data_dir.display().to_string();

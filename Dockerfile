@@ -59,6 +59,7 @@ RUN chmod 755 /usr/local/bin/entrypoint.sh \
     && mkdir -p /var/lib/koreograf \
     && chown 10001:10001 /var/lib/koreograf
 ENV KOREOGRAF_BIND=0.0.0.0:8080 \
+    KOREOGRAF_CONTAINER_IMAGE=1 \
     KOREOGRAF_DATA=/var/lib/koreograf \
     KOREOGRAF_WEB=/opt/koreograf/web \
     KOREOGRAF_EXAMPLES=/opt/koreograf/examples \
