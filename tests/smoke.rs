@@ -7703,6 +7703,87 @@ async fn owner_can_edit_an_execution_environment() {
 }
 
 #[tokio::test]
+async fn an_environment_tool_limits_the_templates_that_can_use_it() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-env-tool-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap();
+
+    let (status, environment, _) = call(
+        &app,
+        "POST",
+        "/api/environments",
+        Some(&cookie),
+        Some(team),
+        Some(json!({
+            "name": "Tofu",
+            "image": "ghcr.io/opentofu/opentofu:latest",
+            "tool": "opentofu"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{environment}");
+    assert_eq!(environment["tool"], "opentofu");
+    let environment_id = environment["id"].as_str().unwrap();
+
+    let (status, rejected, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(team),
+        Some(json!({
+            "name": "Ansible",
+            "tool": "ansible",
+            "entrypoint": "site.yml",
+            "environment_id": environment_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+    assert_eq!(
+        rejected["error"],
+        "the_execution_environment_is_for_another_tool"
+    );
+
+    let (status, accepted, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(team),
+        Some(json!({
+            "name": "Tofu",
+            "tool": "opentofu",
+            "entrypoint": "module",
+            "environment_id": environment_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{accepted}");
+    assert_eq!(accepted["environment_id"], environment_id);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn environment_scopes_follow_the_selected_team() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

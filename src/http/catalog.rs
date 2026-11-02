@@ -115,6 +115,8 @@ pub struct CredentialUpdate {
 pub struct EnvironmentBody {
     name: String,
     image: String,
+    #[serde(default = "default_tool")]
+    tool: String,
     #[serde(default = "default_pull")]
     pull_policy: String,
     #[serde(default)]
@@ -127,6 +129,10 @@ pub struct EnvironmentBody {
 
 fn default_pull() -> String {
     "if_not_present".into()
+}
+
+fn default_tool() -> String {
+    "any".into()
 }
 
 pub async fn runner_status(
@@ -1376,7 +1382,10 @@ fn visible_environment(db: &Connection, id: &str, team: &db::Team) -> AppResult<
 fn environment_fields(
     user: &AuthUser,
     body: &EnvironmentBody,
-) -> AppResult<(String, String, String, String, String)> {
+) -> AppResult<(String, String, String, String, String, String)> {
+    if !matches!(body.tool.as_str(), "any" | "ansible" | "opentofu" | "shell") {
+        return Err(ApiError::bad("the_tool_is_any_ansible_opentofu_or_shell"));
+    }
     if !matches!(
         body.pull_policy.as_str(),
         "if_not_present" | "always" | "never"
@@ -1400,6 +1409,7 @@ fn environment_fields(
         body.pull_policy.clone(),
         network.to_string(),
         require_description(&body.description)?,
+        body.tool.clone(),
     ))
 }
 
@@ -1411,7 +1421,7 @@ pub async fn create_environment(
 ) -> AppResult<axum::response::Response> {
     let team_id = team_header(&headers)?;
     gate(&state, &user, &team_id, Role::Owner)?;
-    let (name, image, pull_policy, network, description) = environment_fields(&user, &body)?;
+    let (name, image, pull_policy, network, description, tool) = environment_fields(&user, &body)?;
     let scope = environment_scope(body.scope.as_deref(), "team")?;
     if !may_manage_environment(&user, &scope) {
         return Err(ApiError::Forbidden);
@@ -1423,6 +1433,7 @@ pub async fn create_environment(
         team_id: None,
         organization_id: None,
         name,
+        tool,
         image,
         pull_policy,
         network,
@@ -1461,7 +1472,7 @@ pub async fn update_environment(
 ) -> AppResult<Json<Value>> {
     let team_id = team_header(&headers)?;
     gate(&state, &user, &team_id, Role::Owner)?;
-    let (name, image, pull_policy, network, description) = environment_fields(&user, &body)?;
+    let (name, image, pull_policy, network, description, tool) = environment_fields(&user, &body)?;
     let db = state.db()?;
     let team = db::team_by_id(&db, &team_id)?.ok_or(ApiError::NotFound)?;
     let mut item = visible_environment(&db, &id, &team)?;
@@ -1471,6 +1482,7 @@ pub async fn update_environment(
     }
     item.name = name;
     item.image = image;
+    item.tool = tool;
     item.pull_policy = pull_policy;
     item.network = network;
     item.description = description;
@@ -1599,4 +1611,42 @@ fn team_json(team: &db::Team) -> Value {
         "organization_name": team.organization_name,
         "created_at": team.created_at,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn user() -> AuthUser {
+        AuthUser {
+            id: "user".into(),
+            username: "ada".into(),
+            display_name: "Ada".into(),
+            auth_source: "local".into(),
+            email: None,
+            is_admin: false,
+        }
+    }
+
+    fn body(tool: &str) -> EnvironmentBody {
+        EnvironmentBody {
+            name: "EE".into(),
+            image: "quay.io/example/ee:1".into(),
+            tool: tool.into(),
+            pull_policy: "if_not_present".into(),
+            network: String::new(),
+            description: String::new(),
+            scope: None,
+        }
+    }
+
+    #[test]
+    fn environment_tools_are_any_ansible_opentofu_or_shell() {
+        for tool in ["any", "ansible", "opentofu", "shell"] {
+            let (_, _, _, _, _, parsed) = environment_fields(&user(), &body(tool)).unwrap();
+            assert_eq!(parsed, tool);
+        }
+        let err = environment_fields(&user(), &body("docker")).unwrap_err();
+        assert_eq!(err.to_string(), "the_tool_is_any_ansible_opentofu_or_shell");
+    }
 }
