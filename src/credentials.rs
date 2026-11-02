@@ -41,6 +41,27 @@ pub fn known_kind(kind: &str) -> bool {
     KINDS.contains(&kind)
 }
 
+pub fn kinds_for_tool(tool: &str) -> &'static [&'static str] {
+    match tool {
+        "ansible" => &["ssh", "vault"],
+        "opentofu" => &[
+            "aws",
+            "azure",
+            "gce",
+            "vmware",
+            "openstack",
+            "kubernetes",
+            "env",
+        ],
+        "shell" => &["ssh", "env"],
+        _ => &[],
+    }
+}
+
+pub fn kind_fits_tool(tool: &str, kind: &str) -> bool {
+    kinds_for_tool(tool).contains(&kind)
+}
+
 /// One credential chosen for a template. `vault_id` is empty for every kind except vault.
 #[derive(Clone, Copy)]
 pub struct AssignedCredential<'a> {
