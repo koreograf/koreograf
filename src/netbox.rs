@@ -4,8 +4,9 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-const MAX_PAGES: usize = 20;
-const MAX_HOSTS: usize = 2_000;
+pub const DEFAULT_MAX_HOSTS: usize = 2_000;
+pub const MAX_HOSTS_LIMIT: usize = 10_000;
+const PAGE_SIZE: usize = 100;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NetboxSource {
@@ -13,8 +14,24 @@ pub struct NetboxSource {
     pub validate_certs: bool,
     pub ca_file: String,
     pub group_by: Vec<String>,
+    pub group_names_raw: bool,
+    pub load_config_context: bool,
+    pub max_hosts: usize,
     pub query: Vec<(String, String)>,
     pub virtual_machines: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct NetboxResult {
+    pub body: String,
+    pub collisions: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct NetboxPreview {
+    pub host_count: usize,
+    pub groups: Vec<(String, usize)>,
+    pub sample_host: Option<(String, BTreeMap<String, String>)>,
 }
 
 #[derive(Clone, Debug)]
@@ -23,6 +40,8 @@ struct NbHost {
     ansible_host: Option<String>,
     netbox_id: Option<i64>,
     groups: Vec<String>,
+    group_keys: Vec<(String, String)>,
+    vars: BTreeMap<String, Value>,
 }
 
 pub fn valid_endpoint(url: &str) -> bool {
@@ -38,9 +57,18 @@ pub fn source_json(source: &NetboxSource) -> Value {
         "validate_certs": source.validate_certs,
         "ca_file": source.ca_file,
         "group_by": source.group_by,
+        "group_names_raw": source.group_names_raw,
+        "load_config_context": source.load_config_context,
+        "max_hosts": source.max_hosts,
         "query": source.query,
         "virtual_machines": source.virtual_machines,
     })
+}
+
+pub fn source_json_with_collisions(source: &NetboxSource, collisions: &[String]) -> Value {
+    let mut value = source_json(source);
+    value["collisions"] = json!(collisions);
+    value
 }
 
 pub fn valid_token(token: &str) -> bool {
@@ -62,6 +90,11 @@ pub fn parse_plugin(text: &str) -> Option<NetboxSource> {
         validate_certs: flag(text, "validate_certs").unwrap_or(true),
         ca_file: String::new(),
         group_by: list_items(text, "group_by"),
+        group_names_raw: flag(text, "group_names_raw").unwrap_or(false),
+        load_config_context: flag(text, "load_config_context").unwrap_or(false),
+        max_hosts: scalar(text, "max_hosts")
+            .and_then(|raw| raw.parse().ok())
+            .unwrap_or(DEFAULT_MAX_HOSTS),
         query: query_items(text, "query_filters"),
         virtual_machines: flag(text, "virtual_machines").unwrap_or(true),
     })
@@ -93,16 +126,23 @@ pub fn parse_filters(lines: &[String]) -> Result<Vec<(String, String)>, String> 
     Ok(query)
 }
 
-pub async fn fetch_ini(
+pub async fn fetch(
     source: &NetboxSource,
     token: &str,
     proxy: &crate::settings::ProxySettings,
-) -> Result<String, String> {
+) -> Result<NetboxResult, String> {
     if !valid_endpoint(&source.api_endpoint) {
         return Err("the_netbox_address_must_be_http_or_https".into());
     }
     if !valid_token(token) {
         return Err("the_netbox_token_is_invalid".into());
+    }
+    if source.max_hosts == 0 || source.max_hosts > MAX_HOSTS_LIMIT {
+        let max = MAX_HOSTS_LIMIT.to_string();
+        return Err(crate::error::message(
+            "netbox_host_limit_is_out_of_range",
+            &[("max", &max)],
+        ));
     }
     for key in &source.group_by {
         if !known_group(key) {
@@ -122,6 +162,9 @@ pub async fn fetch_ini(
         query: &source.query,
         is_virtual: false,
         group_by: &source.group_by,
+        group_names_raw: source.group_names_raw,
+        load_config_context: source.load_config_context,
+        max_hosts: source.max_hosts,
     };
     collect(&devices, &mut hosts).await?;
     if source.virtual_machines {
@@ -132,7 +175,43 @@ pub async fn fetch_ini(
         };
         collect(&machines, &mut hosts).await?;
     }
-    Ok(render_ini(&hosts))
+    let collisions = collisions(&hosts);
+    let body = if source.load_config_context {
+        render_yaml(&hosts)
+    } else {
+        render_ini(&hosts)
+    };
+    Ok(NetboxResult { body, collisions })
+}
+
+#[cfg(test)]
+pub async fn fetch_ini(
+    source: &NetboxSource,
+    token: &str,
+    proxy: &crate::settings::ProxySettings,
+) -> Result<String, String> {
+    Ok(fetch(source, token, proxy).await?.body)
+}
+
+pub fn preview(body: &str) -> NetboxPreview {
+    let data = crate::inventory::parse_inventory(body);
+    let mut groups = BTreeMap::new();
+    for host in &data.hosts {
+        for group in &host.groups {
+            if group != "all" && group != "ungrouped" {
+                *groups.entry(group.clone()).or_insert(0usize) += 1;
+            }
+        }
+    }
+    let sample_host = data
+        .hosts
+        .first()
+        .map(|host| (host.name.clone(), host.vars.clone()));
+    NetboxPreview {
+        host_count: data.hosts.len(),
+        groups: groups.into_iter().collect(),
+        sample_host,
+    }
 }
 
 pub async fn test_connection(
@@ -223,15 +302,19 @@ struct PageQuery<'a> {
     query: &'a [(String, String)],
     is_virtual: bool,
     group_by: &'a [String],
+    group_names_raw: bool,
+    load_config_context: bool,
+    max_hosts: usize,
 }
 
 async fn collect(page: &PageQuery<'_>, hosts: &mut Vec<NbHost>) -> Result<(), String> {
     let mut url = Some(page_url(page.endpoint, page.path, page.query));
     let mut pages = 0usize;
+    let max_pages = page.max_hosts.div_ceil(PAGE_SIZE).max(1);
     while let Some(current) = url.take() {
         pages += 1;
-        if pages > MAX_PAGES || hosts.len() >= MAX_HOSTS {
-            return Err("the_netbox_response_is_too_large_limit_20".into());
+        if pages > max_pages {
+            return Err(limit_error(page.max_hosts));
         }
         let body = get_json(page.client, &current, page.token).await?;
         let results = body
@@ -239,10 +322,16 @@ async fn collect(page: &PageQuery<'_>, hosts: &mut Vec<NbHost>) -> Result<(), St
             .and_then(Value::as_array)
             .ok_or_else(|| "the_netbox_response_has_no_results".to_string())?;
         for item in results {
-            if hosts.len() >= MAX_HOSTS {
-                break;
+            if hosts.len() >= page.max_hosts {
+                return Err(limit_error(page.max_hosts));
             }
-            if let Some(host) = host_from_json(item, page.is_virtual, page.group_by) {
+            if let Some(host) = host_from_json(
+                item,
+                page.is_virtual,
+                page.group_by,
+                page.group_names_raw,
+                page.load_config_context,
+            ) {
                 hosts.push(host);
             }
         }
@@ -259,24 +348,59 @@ async fn collect(page: &PageQuery<'_>, hosts: &mut Vec<NbHost>) -> Result<(), St
     Ok(())
 }
 
-fn host_from_json(value: &Value, is_virtual: bool, group_by: &[String]) -> Option<NbHost> {
+fn limit_error(limit: usize) -> String {
+    crate::error::message(
+        "the_netbox_host_limit_of_was_reached_raise_max_hosts",
+        &[("limit", &limit.to_string())],
+    )
+}
+
+fn host_from_json(
+    value: &Value,
+    is_virtual: bool,
+    group_by: &[String],
+    group_names_raw: bool,
+    load_config_context: bool,
+) -> Option<NbHost> {
     let name = sanitize(value.get("name")?.as_str()?);
     if name.is_empty() {
         return None;
     }
     let mut groups = Vec::new();
+    let mut group_keys = Vec::new();
     for key in group_by {
-        groups.extend(group_names(key, value, is_virtual));
+        for group in group_names(key, value, is_virtual, group_names_raw) {
+            if !groups.contains(&group) {
+                groups.push(group.clone());
+            }
+            group_keys.push((group, key.clone()));
+        }
     }
+    let vars = if load_config_context {
+        value
+            .get("config_context")
+            .and_then(Value::as_object)
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        BTreeMap::new()
+    };
     Some(NbHost {
         name,
         ansible_host: primary_ip(value),
         netbox_id: value.get("id").and_then(Value::as_i64),
         groups,
+        group_keys,
+        vars,
     })
 }
 
-fn group_names(key: &str, value: &Value, is_virtual: bool) -> Vec<String> {
+fn group_names(key: &str, value: &Value, is_virtual: bool, raw: bool) -> Vec<String> {
     let slugs = match key {
         "sites" | "site" => slugs_of(value.get("site")),
         "location" => slugs_of(value.get("location")),
@@ -314,9 +438,29 @@ fn group_names(key: &str, value: &Value, is_virtual: bool) -> Vec<String> {
             let slug = sanitize_group(&slug);
             if slug.is_empty() {
                 None
+            } else if raw {
+                Some(slug)
             } else {
                 Some(format!("{key}_{slug}"))
             }
+        })
+        .collect()
+}
+
+fn collisions(hosts: &[NbHost]) -> Vec<String> {
+    let mut keys: BTreeMap<&str, std::collections::BTreeSet<&str>> = BTreeMap::new();
+    for host in hosts {
+        for (group, key) in &host.group_keys {
+            keys.entry(group).or_default().insert(key);
+        }
+    }
+    keys.into_iter()
+        .filter(|(_, sources)| sources.len() > 1)
+        .map(|(group, sources)| {
+            format!(
+                "{group} ({})",
+                sources.into_iter().collect::<Vec<_>>().join(", ")
+            )
         })
         .collect()
 }
@@ -426,6 +570,98 @@ fn render_ini(hosts: &[NbHost]) -> String {
         }
     }
     out
+}
+
+fn render_yaml(hosts: &[NbHost]) -> String {
+    let mut out = String::from("all:\n  hosts:\n");
+    for host in hosts {
+        out.push_str("    ");
+        out.push_str(&yaml_key(&host.name));
+        out.push_str(":\n");
+        let mut vars = host.vars.clone();
+        if let Some(address) = &host.ansible_host {
+            vars.insert("ansible_host".into(), Value::String(address.clone()));
+        }
+        if let Some(id) = host.netbox_id {
+            vars.insert("netbox_id".into(), Value::Number(id.into()));
+        }
+        write_yaml_vars(&mut out, 6, &vars);
+    }
+    let mut grouped: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for host in hosts {
+        for group in &host.groups {
+            grouped.entry(group).or_default().push(&host.name);
+        }
+    }
+    if !grouped.is_empty() {
+        out.push_str("  children:\n");
+        for (group, names) in grouped {
+            out.push_str("    ");
+            out.push_str(&yaml_key(group));
+            out.push_str(":\n      hosts:\n");
+            for name in names {
+                out.push_str("        ");
+                out.push_str(&yaml_key(name));
+                out.push_str(":\n");
+            }
+        }
+    }
+    out
+}
+
+fn write_yaml_vars(out: &mut String, indent: usize, vars: &BTreeMap<String, Value>) {
+    for (key, value) in vars {
+        out.push_str(&" ".repeat(indent));
+        out.push_str(&yaml_key(key));
+        match value {
+            Value::Object(items) if !items.is_empty() => {
+                out.push_str(":\n");
+                let nested = items
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect();
+                write_yaml_vars(out, indent + 2, &nested);
+            }
+            _ => {
+                out.push_str(": ");
+                out.push_str(&yaml_value(value));
+                out.push('\n');
+            }
+        }
+    }
+}
+
+fn yaml_key(value: &str) -> String {
+    if plain_yaml(value) {
+        value.to_string()
+    } else {
+        serde_json::to_string(value).unwrap_or_else(|_| format!("{value:?}"))
+    }
+}
+
+fn yaml_value(value: &Value) -> String {
+    match value {
+        Value::String(text) => yaml_key(text),
+        Value::Number(number) => number.to_string(),
+        Value::Bool(flag) => flag.to_string(),
+        Value::Null => "null".into(),
+        Value::Array(_) | Value::Object(_) => {
+            let text = serde_json::to_string(value).unwrap_or_else(|_| "null".into());
+            yaml_key(&text)
+        }
+    }
+}
+
+fn plain_yaml(value: &str) -> bool {
+    !value.is_empty()
+        && !value.chars().next().is_some_and(|ch| ch.is_ascii_digit())
+        && !matches!(
+            value.to_ascii_lowercase().as_str(),
+            "null" | "true" | "false" | "yes" | "no" | "on" | "off"
+        )
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '/' | '-'))
 }
 
 fn sanitize(value: &str) -> String {
@@ -651,6 +887,8 @@ mod tests {
             &device,
             false,
             &["sites".into(), "device_roles".into(), "tags".into()],
+            false,
+            false,
         )
         .unwrap();
         let ini = render_ini(&[host]);
@@ -668,7 +906,7 @@ mod tests {
             "name": "legacy",
             "primary_ip": {"address": "2001:db8::13/64"}
         });
-        let host = host_from_json(&device, false, &[]).unwrap();
+        let host = host_from_json(&device, false, &[], false, false).unwrap();
         assert_eq!(host.ansible_host.as_deref(), Some("2001:db8::13"));
     }
 
@@ -681,7 +919,7 @@ mod tests {
             "primary_ip": {"address": "2001:db8::8/64"},
             "primary_ip6": {"address": "2001:db8::99/64"}
         });
-        let host = host_from_json(&device, false, &[]).unwrap();
+        let host = host_from_json(&device, false, &[], false, false).unwrap();
         assert_eq!(host.ansible_host.as_deref(), Some("2001:db8::8"));
         let ini = render_ini(&[host]);
         assert!(ini.contains("v6-only ansible_host=2001:db8::8 netbox_id=8\n"));
@@ -701,7 +939,7 @@ mod tests {
             "primary_ip": null,
             "primary_ip6": {"address": "2001:db8::9/64"}
         });
-        let host = host_from_json(&device, false, &[]).unwrap();
+        let host = host_from_json(&device, false, &[], false, false).unwrap();
         assert_eq!(host.ansible_host.as_deref(), Some("2001:db8::9"));
         let ini = render_ini(&[host]);
         assert!(ini.contains("v6-field ansible_host=2001:db8::9 netbox_id=9\n"));
@@ -716,7 +954,7 @@ mod tests {
             "primary_ip": null,
             "primary_ip6": {"address": "2001:db8::12/64"}
         });
-        let host = host_from_json(&device, false, &[]).unwrap();
+        let host = host_from_json(&device, false, &[], false, false).unwrap();
         assert_eq!(host.ansible_host.as_deref(), Some("2001:db8::12"));
     }
 
@@ -729,7 +967,7 @@ mod tests {
             "primary_ip": {"address": "2001:db8::8/64"},
             "primary_ip6": {"address": "2001:db8::8/64"}
         });
-        let host = host_from_json(&device, false, &[]).unwrap();
+        let host = host_from_json(&device, false, &[], false, false).unwrap();
         assert_eq!(host.ansible_host.as_deref(), Some("10.0.0.8"));
         let ini = render_ini(&[host]);
         assert!(ini.contains("dual ansible_host=10.0.0.8 netbox_id=11\n"));
@@ -742,7 +980,7 @@ mod tests {
             "name": "v4",
             "primary_ip4": {"address": "10.1.2.3"}
         });
-        let host = host_from_json(&v4, false, &[]).unwrap();
+        let host = host_from_json(&v4, false, &[], false, false).unwrap();
         assert_eq!(host.ansible_host.as_deref(), Some("10.1.2.3"));
 
         let v6 = json!({
@@ -751,7 +989,7 @@ mod tests {
             "primary_ip4": null,
             "primary_ip6": {"address": "2001:db8::20"}
         });
-        let host = host_from_json(&v6, false, &[]).unwrap();
+        let host = host_from_json(&v6, false, &[], false, false).unwrap();
         assert_eq!(host.ansible_host.as_deref(), Some("2001:db8::20"));
 
         let prefixed = json!({
@@ -759,7 +997,7 @@ mod tests {
             "name": "prefixed",
             "primary_ip4": {"address": "192.0.2.10/24"}
         });
-        let host = host_from_json(&prefixed, false, &[]).unwrap();
+        let host = host_from_json(&prefixed, false, &[], false, false).unwrap();
         assert_eq!(host.ansible_host.as_deref(), Some("192.0.2.10"));
         assert!(render_ini(&[host]).contains("prefixed ansible_host=192.0.2.10 netbox_id=23\n"));
 
@@ -787,8 +1025,8 @@ mod tests {
             .finish();
         let (bad_host, clean_host) = tracing::subscriber::with_default(subscriber, || {
             (
-                host_from_json(&bad, false, &groups).unwrap(),
-                host_from_json(&clean, false, &groups).unwrap(),
+                host_from_json(&bad, false, &groups, false, false).unwrap(),
+                host_from_json(&clean, false, &groups, false, false).unwrap(),
             )
         });
         assert!(bad_host.ansible_host.is_none());
@@ -817,7 +1055,7 @@ mod tests {
             "primary_ip": null,
             "primary_ip6": null
         });
-        let host = host_from_json(&device, false, &[]).unwrap();
+        let host = host_from_json(&device, false, &[], false, false).unwrap();
         assert!(host.ansible_host.is_none());
         let ini = render_ini(&[host]);
         assert!(ini.contains("lonely netbox_id=10\n"));
@@ -835,7 +1073,7 @@ mod tests {
                 {"slug": "lab.west"}
             ]
         });
-        let host = host_from_json(&device, false, &["tags".into()]).unwrap();
+        let host = host_from_json(&device, false, &["tags".into()], false, false).unwrap();
         assert_eq!(
             host.groups,
             vec![
@@ -865,9 +1103,142 @@ mod tests {
     }
 
     #[test]
+    fn keeps_plain_group_names_when_the_option_is_on() {
+        let device = json!({
+            "id": 30,
+            "name": "web-1",
+            "tags": [{"slug": "webserver"}],
+            "role": {"slug": "web"},
+            "site": {"slug": "berlin"}
+        });
+        let prefixed = host_from_json(
+            &device,
+            false,
+            &["tags".into(), "device_roles".into()],
+            false,
+            false,
+        )
+        .unwrap();
+        assert!(prefixed.groups.contains(&"tags_webserver".into()));
+        assert!(prefixed.groups.contains(&"device_roles_web".into()));
+        let plain = host_from_json(
+            &device,
+            false,
+            &["tags".into(), "device_roles".into()],
+            true,
+            false,
+        )
+        .unwrap();
+        assert_eq!(plain.groups, vec!["webserver", "web"]);
+        let ini = render_ini(&[plain]);
+        assert!(ini.contains("[webserver]\nweb-1\n"));
+        assert!(ini.contains("[web]\nweb-1\n"));
+    }
+
+    #[test]
+    fn detects_group_name_collisions_between_keys() {
+        let device = json!({
+            "id": 31,
+            "name": "web-1",
+            "tags": [{"slug": "web"}],
+            "role": {"slug": "web"}
+        });
+        let host = host_from_json(
+            &device,
+            false,
+            &["tags".into(), "device_roles".into()],
+            true,
+            false,
+        )
+        .unwrap();
+        assert_eq!(host.groups, vec!["web"]);
+        assert_eq!(collisions(&[host]), vec!["web (device_roles, tags)"]);
+    }
+
+    #[test]
+    fn renders_config_context_as_yaml_and_parses_it_back() {
+        let device = json!({
+            "id": 32,
+            "name": "web-1",
+            "primary_ip4": {"address": "10.0.0.8/24"},
+            "tags": [{"slug": "webserver"}],
+            "config_context": {
+                "http_port": 8080,
+                "ntp": {"server": "pool.ntp.org"}
+            }
+        });
+        let host = host_from_json(&device, false, &["tags".into()], false, true).unwrap();
+        let body = render_yaml(&[host]);
+        assert!(body.starts_with("all:\n  hosts:\n"));
+        assert!(!body.contains("[tags_webserver]"));
+        assert!(body.contains("      http_port: 8080\n"), "{body}");
+        assert!(
+            body.contains("      ntp:\n        server: pool.ntp.org\n"),
+            "{body}"
+        );
+        let parsed = crate::inventory::parse_hosts(&body);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].name, "web-1");
+        assert_eq!(
+            parsed[0].vars.get("ansible_host").map(String::as_str),
+            Some("10.0.0.8")
+        );
+        assert_eq!(
+            parsed[0].vars.get("http_port").map(String::as_str),
+            Some("8080")
+        );
+        assert_eq!(
+            parsed[0].vars.get("ntp.server").map(String::as_str),
+            Some("pool.ntp.org")
+        );
+        assert_eq!(parsed[0].groups, vec!["all", "tags_webserver"]);
+    }
+
+    #[tokio::test]
+    async fn stops_at_the_configurable_host_limit() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new().route(
+            "/api/dcim/devices/",
+            get(|| async {
+                axum::Json(json!({
+                    "next": null,
+                    "results": [
+                        {"id": 1, "name": "web-1"},
+                        {"id": 2, "name": "web-2"},
+                        {"id": 3, "name": "web-3"}
+                    ]
+                }))
+            }),
+        );
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let source = NetboxSource {
+            api_endpoint: format!("http://{addr}"),
+            validate_certs: true,
+            ca_file: String::new(),
+            group_by: Vec::new(),
+            group_names_raw: false,
+            load_config_context: false,
+            max_hosts: 2,
+            query: Vec::new(),
+            virtual_machines: false,
+        };
+        let proxy = crate::settings::ProxySettings::inherit();
+        let error = fetch(&source, "token", &proxy).await.unwrap_err();
+        assert!(
+            error.starts_with("the_netbox_host_limit_of_was_reached_raise_max_hosts"),
+            "{error}"
+        );
+        assert!(error.contains("\"limit\":\"2\""), "{error}");
+        assert!(error.contains("max_hosts"), "{error}");
+    }
+
+    #[test]
     fn keeps_hyphens_and_dots_in_a_netbox_host_name() {
         let device = json!({ "name": "web-1.example" });
-        let host = host_from_json(&device, false, &[]).unwrap();
+        let host = host_from_json(&device, false, &[], false, false).unwrap();
         assert_eq!(host.name, "web-1.example");
     }
 
@@ -877,7 +1248,7 @@ mod tests {
             "name": "web-1",
             "tags": [{"slug": "---"}, {"slug": "..."}, {"slug": "-_-"}]
         });
-        let host = host_from_json(&device, false, &["tags".into()]).unwrap();
+        let host = host_from_json(&device, false, &["tags".into()], false, false).unwrap();
         assert_eq!(host.name, "web-1");
         assert!(host.groups.is_empty(), "{:?}", host.groups);
     }
@@ -919,6 +1290,9 @@ mod tests {
             validate_certs: true,
             ca_file: String::new(),
             group_by: vec!["sites".into()],
+            group_names_raw: false,
+            load_config_context: false,
+            max_hosts: DEFAULT_MAX_HOSTS,
             query: vec![("status".into(), "active".into())],
             virtual_machines: true,
         };
@@ -939,6 +1313,9 @@ mod tests {
             validate_certs: false,
             ca_file: "/no/such/koreograf-ca.pem".into(),
             group_by: Vec::new(),
+            group_names_raw: false,
+            load_config_context: false,
+            max_hosts: DEFAULT_MAX_HOSTS,
             query: Vec::new(),
             virtual_machines: false,
         };
@@ -954,6 +1331,9 @@ mod tests {
             validate_certs: true,
             ca_file: String::new(),
             group_by: Vec::new(),
+            group_names_raw: false,
+            load_config_context: false,
+            max_hosts: DEFAULT_MAX_HOSTS,
             query: Vec::new(),
             virtual_machines: false,
         };

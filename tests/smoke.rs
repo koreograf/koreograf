@@ -2575,6 +2575,33 @@ async fn playbooks_project_inventory_and_netbox() {
         axum::serve(listener, mock).await.unwrap();
     });
 
+    let (status, preview, _) = call(
+        &app,
+        "POST",
+        "/api/inventories/netbox/preview",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "api_endpoint": format!("http://{addr}"),
+            "token": "secret-token",
+            "group_by": ["tags"],
+            "group_names_raw": true,
+            "load_config_context": true,
+            "query_filters": ["status=active"],
+            "virtual_machines": false,
+            "max_hosts": 100
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["host_count"], 1);
+    assert_eq!(preview["groups"][0]["name"], "webserver");
+    assert_eq!(preview["groups"][0]["host_count"], 1);
+    assert_eq!(preview["sample_host"]["name"], "web-1");
+    assert_eq!(preview["sample_host"]["vars"]["http_port"], "8080");
+    assert!(preview["collisions"].as_array().unwrap().is_empty());
+    assert!(!preview.to_string().contains("secret-token"));
+
     let (status, created, _) = call(
         &app,
         "POST",
@@ -2585,9 +2612,12 @@ async fn playbooks_project_inventory_and_netbox() {
             "name": "Aus NetBox",
             "api_endpoint": format!("http://{addr}"),
             "token": "secret-token",
-            "group_by": ["sites"],
+            "group_by": ["tags"],
+            "group_names_raw": true,
+            "load_config_context": true,
             "query_filters": ["status=active"],
-            "virtual_machines": false
+            "virtual_machines": false,
+            "max_hosts": 100
         })),
     )
     .await;
@@ -2598,10 +2628,11 @@ async fn playbooks_project_inventory_and_netbox() {
         .unwrap()
         .iter()
         .any(|item| item["name"] == "web-1"));
-    assert!(!created["body"]
-        .as_str()
-        .unwrap_or("")
-        .contains("secret-token"));
+    let body = created["body"].as_str().unwrap_or("");
+    assert!(body.starts_with("all:\n  hosts:\n"), "{body}");
+    assert!(body.contains("http_port: 8080"), "{body}");
+    assert!(body.contains("    webserver:\n"), "{body}");
+    assert!(!body.contains("secret-token"));
     let netbox_id = created["id"].as_str().unwrap();
     let (status, again, _) = call(
         &app,
@@ -4932,7 +4963,9 @@ async fn nb_devices(
             "id": 1,
             "name": "web-1",
             "primary_ip4": {"address": "10.0.0.8/24"},
-            "site": {"slug": "berlin"}
+            "site": {"slug": "berlin"},
+            "tags": [{"slug": "webserver"}],
+            "config_context": {"http_port": 8080, "db_password": "secret"}
         }]
     }))
     .into_response()
@@ -9956,7 +9989,7 @@ async fn unknown_fields_are_rejected_on_write_endpoints() {
 
     let source = json!({"kind": "ini", "name": "Extra source", "body": "web-2\n"});
     let mut rejected = source.clone();
-    rejected["group_names_raw"] = json!(true);
+    rejected["group_name_prefix"] = json!(true);
     expect_unknown_field(
         &app,
         "POST",
@@ -9964,7 +9997,7 @@ async fn unknown_fields_are_rejected_on_write_endpoints() {
         Some(&cookie),
         Some(&team),
         &rejected,
-        "group_names_raw",
+        "group_name_prefix",
     )
     .await;
     let (status, inventory, _) = call(
@@ -10025,7 +10058,7 @@ async fn unknown_fields_are_rejected_on_write_endpoints() {
         "virtual_machines": false
     });
     let mut rejected = netbox.clone();
-    rejected["group_names_raw"] = json!(true);
+    rejected["group_name_prefix"] = json!(true);
     expect_unknown_field(
         &app,
         "POST",
@@ -10033,7 +10066,7 @@ async fn unknown_fields_are_rejected_on_write_endpoints() {
         Some(&cookie),
         Some(&team),
         &rejected,
-        "group_names_raw",
+        "group_name_prefix",
     )
     .await;
     let (status, netbox, _) = call(

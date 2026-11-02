@@ -429,6 +429,8 @@ fn parse_yaml_inventory(body: &str) -> InventoryData {
     let mut data = InventoryData::default();
     let mut group_stack: Vec<(usize, String)> = Vec::new();
     let mut host: Option<String> = None;
+    let mut host_indent: Option<usize> = None;
+    let mut var_stack: Vec<(usize, String)> = Vec::new();
     let mut hosts_indent: Option<usize> = None;
     let mut vars_indent: Option<usize> = None;
     let mut children_indent: Option<usize> = None;
@@ -454,6 +456,8 @@ fn parse_yaml_inventory(body: &str) -> InventoryData {
         }
         if hosts_indent.is_some_and(|level| indent <= level) {
             host = None;
+            host_indent = None;
+            var_stack.clear();
             hosts_indent = None;
         }
         if vars_indent.is_some_and(|level| indent <= level) {
@@ -489,11 +493,26 @@ fn parse_yaml_inventory(body: &str) -> InventoryData {
             continue;
         }
         if hosts_indent.is_some() {
+            while var_stack.last().is_some_and(|(level, _)| *level >= indent) {
+                var_stack.pop();
+            }
             if value.is_empty() {
-                host = Some(key.to_string());
-                remember_host(&mut data, key, &group);
+                if host.is_some() && host_indent.is_some_and(|level| indent > level) {
+                    var_stack.push((indent, key.to_string()));
+                } else {
+                    host = Some(key.to_string());
+                    host_indent = Some(indent);
+                    var_stack.clear();
+                    remember_host(&mut data, key, &group);
+                }
             } else if let Some(name) = &host {
-                set_var(&mut data.hosts, name, key, value);
+                let mut full = String::new();
+                for (_, part) in &var_stack {
+                    full.push_str(part);
+                    full.push('.');
+                }
+                full.push_str(key);
+                set_var(&mut data.hosts, name, &full, value);
             }
             continue;
         }
