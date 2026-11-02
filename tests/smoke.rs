@@ -13153,7 +13153,10 @@ fn schedule_overlay_uses_the_shared_wide_form() {
     assert!(css.contains(".schedule-layout { grid-template-columns: 1fr; height: auto; }"));
     assert!(css.contains(".dialog-footer { display: block; }"));
     assert!(css.contains(".schedule-pin { display: block;"));
-    assert!(css.contains("#schedule-form input:not([type=\"checkbox\"]):not([type=\"radio\"])"));
+    assert!(
+        css.contains(".overlay-card.dialog input:not([type=\"checkbox\"]):not([type=\"radio\"])")
+    );
+    assert!(!css.contains("#schedule-form input"));
 }
 
 #[test]
