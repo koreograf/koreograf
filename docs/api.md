@@ -76,6 +76,8 @@ curl -fsS -b "$JAR" "$BASE/api/jobs/$JOB_ID/output"
 
 `/output` is the kept log: the first three quarters of the line limit and the last quarter, for stdout and for stderr. The default limit is 8000 lines. The download stops at 8 MiB. `GET /api/jobs/{id}` includes `output_capped`, true when the download would stop at that cap, and a `gap` event with the omitted line count when the page leaves out the middle.
 
+`GET /api/jobs` lists the selected team's jobs, newest first. `limit` defaults to 25 and is capped at 100; `offset` skips rows. `q` searches the name, tool, status, and trigger. `status`, `tool`, `trigger`, and `template_id` filter exact values. `since` and `until` are RFC 3339 bounds on `created_at`. The response is `{"items": [...], "total": N}`, where `total` counts every match. The bare array this route returned before is gone; clients read `items`.
+
 `POST /api/login` takes `username` and `password` and returns 200 with the session cookie. A rejected sign-in returns 401 and `invalid_username_or_password` for a wrong password, an unknown user, an empty password, and a directory failure. A request without a session still returns `sign_in_is_required`. Creating a credential needs an owner. Launch returns 202 and needs a JSON object. `extra_vars` is that object, or `{}`.
 
 On a machine without Compose, read `data/initial-admin-password` instead of `docker compose exec`, and use the same JSON.

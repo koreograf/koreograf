@@ -111,6 +111,47 @@ pub struct AfterQuery {
     after: Option<i64>,
 }
 
+#[derive(Deserialize, Default)]
+pub struct ListJobsQuery {
+    limit: Option<String>,
+    offset: Option<String>,
+    q: Option<String>,
+    status: Option<String>,
+    tool: Option<String>,
+    trigger: Option<String>,
+    template_id: Option<String>,
+    since: Option<String>,
+    until: Option<String>,
+}
+
+fn filter_value(value: Option<String>) -> String {
+    value
+        .map(|item| item.trim().to_string())
+        .unwrap_or_default()
+}
+
+fn query_number(value: Option<String>, fallback: i64, field: &str) -> AppResult<i64> {
+    match value.map(|item| item.trim().to_string()) {
+        Some(item) if !item.is_empty() => item
+            .parse::<i64>()
+            .map_err(|_| ApiError::bad_vars("invalid_query_parameter", [("field", field)])),
+        _ => Ok(fallback),
+    }
+}
+
+fn query_date(value: Option<String>, field: &str) -> AppResult<String> {
+    let value = filter_value(value);
+    if value.is_empty() {
+        return Ok(value);
+    }
+    let parsed = chrono::DateTime::parse_from_rfc3339(&value)
+        .map_err(|_| ApiError::bad_vars("invalid_query_parameter", [("field", field)]))?;
+    Ok(parsed
+        .with_timezone(&chrono::Utc)
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string())
+}
+
 fn default_status() -> String {
     "firing".into()
 }
@@ -232,15 +273,29 @@ pub async fn list_jobs(
     State(state): State<Shared>,
     headers: HeaderMap,
     user: AuthUser,
+    Query(query): Query<ListJobsQuery>,
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
+    let limit = query_number(query.limit, 25, "limit")?.clamp(1, 100);
+    let offset = query_number(query.offset, 0, "offset")?.max(0);
+    let filter = db::JobQuery {
+        limit,
+        offset,
+        q: filter_value(query.q),
+        status: filter_value(query.status),
+        tool: filter_value(query.tool),
+        trigger: filter_value(query.trigger),
+        template_id: filter_value(query.template_id),
+        since: query_date(query.since, "since")?,
+        until: query_date(query.until, "until")?,
+    };
     let db = state.db()?;
-    let jobs = db::list_jobs(&db, &team, 50)?;
-    Ok(Json(json!(jobs
-        .iter()
-        .map(|job| job_json(job, None))
-        .collect::<Vec<_>>())))
+    let (jobs, total) = db::list_jobs(&db, &team, &filter)?;
+    Ok(Json(json!({
+        "items": jobs.iter().map(|job| job_json(job, None)).collect::<Vec<_>>(),
+        "total": total,
+    })))
 }
 
 pub async fn get_job(

@@ -163,7 +163,14 @@ pub async fn overview(
     let runtime = runner::detect_runtime().await;
     let effective = crate::settings::load(&state)?;
     let db = state.db()?;
-    let jobs = db::list_jobs(&db, &team, 8)?;
+    let (jobs, _) = db::list_jobs(
+        &db,
+        &team,
+        &db::JobQuery {
+            limit: 8,
+            ..Default::default()
+        },
+    )?;
     let deliveries = db::list_deliveries(&db, &team, 8)?;
     let workflow = db::first_workflow(&db, &team)?;
     let hook = db::first_hook(&db, &team)?;
