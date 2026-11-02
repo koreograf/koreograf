@@ -537,25 +537,31 @@ function navActive(here, href) {
 function shell(title, body, actions) {
   const here = (location.hash || "#/").split("?")[0];
   const groups = [
-    [t("automation"), [
+    [t("nav.operations"), [
       ["#/", t("overview")],
-      ["#/templates", t("templates")],
       ["#/jobs", t("jobs")],
-      ["#/workflows", t("workflows")],
       ["#/schedules", t("schedules")],
+    ]],
+    [t("automation"), [
+      ["#/templates", t("templates")],
+      ["#/workflows", t("workflows")],
       ["#/hooks", t("webhooks")],
     ]],
     [t("resources"), [
       ["#/projects", t("projects")],
       ["#/inventories", t("inventories")],
       ["#/credentials", t("credentials")],
-      ["#/runtime", t("runtime")],
+      ["#/runtime", t("execution_environments")],
     ]],
-    [t("nav.access"), [
-      ["#/organizations", t("organizations")],
+    [t("nav.team"), [
       ["#/team", t("team")],
-      ...(me.is_admin ? [["#/settings", t("settings")], ["#/users", t("users")], ["#/backup", t("backup")]] : []),
+      ["#/organizations", t("organizations")],
     ]],
+    ...(me.is_admin ? [[t("nav.administration"), [
+      ["#/settings", t("settings")],
+      ["#/users", t("users")],
+      ["#/backup", t("backup")],
+    ]]] : []),
   ];
   const nav = groups.map(([label, links]) => `
     <div class="nav-group">
@@ -3407,7 +3413,7 @@ async function pageRuntime() {
   const collectionRows = (cache.collections || []).map((item) => `<tr><td>${esc(item.name)}</td><td>${esc(item.version)}</td></tr>`);
   const roleRows = (cache.roles || []).map((item) => `<tr><td>${esc(item.name)}</td><td>${esc(item.version)}</td></tr>`);
   const pluginRows = plugins.map((item) => `<tr><td class="tool">${esc(item.id)}</td><td>${esc(t(item.summary))}</td></tr>`);
-  shell(t("runtime"), `
+  shell(t("execution_environments"), `
     <section class="card" style="margin-bottom:14px">
       <h2>${h("execution_environments")}</h2>
       <input class="search" id="environment-search" placeholder="${h("search_environments")}" autocomplete="off">
