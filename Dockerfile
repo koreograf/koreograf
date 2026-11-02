@@ -4,7 +4,7 @@
 # then drops privileges and adds the mounted Docker socket's group for uid 10001.
 # That socket is root-equivalent on the host.
 
-FROM rust:1.96.0-bookworm AS build
+FROM rust:1.99.1-bookworm@sha256:9181b56c2a21ab1d5e73cffe04fc762426d30aa7fac3c91141dd033f49a7fc8b AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src

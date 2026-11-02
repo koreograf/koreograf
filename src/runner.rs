@@ -1856,10 +1856,8 @@ fn file_url_path(url: &str) -> Option<PathBuf> {
         format!("/{after}")
     } else if rest == "localhost" {
         "/".to_string()
-    } else if let Some(stripped) = rest.strip_prefix('/') {
-        format!("/{stripped}")
     } else {
-        return None;
+        format!("/{}", rest.strip_prefix('/')?)
     };
     let decoded = percent_decode(&path);
     if decoded.contains('\0') {

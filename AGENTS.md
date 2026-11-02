@@ -21,7 +21,7 @@ Koreograf is a Rust prototype: one binary with an HTTP API, a browser UI, and a 
 
 ## Build and test
 
-- `rust-toolchain.toml` pins Rust 1.96.0 with rustfmt and Clippy. `Cargo.toml` `rust-version` is 1.89. CI checks 1.89 with `cargo check --locked` and runs the full suite on 1.96.
+- `rust-toolchain.toml` pins Rust 1.99.1 with rustfmt and Clippy. `Cargo.toml` `rust-version` is 1.89. CI checks 1.89 with `cargo check --locked` and runs the full suite on 1.99.1.
 - For a behavior change, before committing:
 
 ```bash
