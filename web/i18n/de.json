@@ -635,6 +635,7 @@
   "secret_key": "Secret Key",
   "secret_looking_variables_are_masked": "Variablen, deren Namen nach einem Geheimnis aussehen, werden immer maskiert.",
   "secrets_are_stored_encrypted_and_are_not_shown": "Geheimnisse werden verschlüsselt gespeichert und nicht wieder angezeigt.",
+  "sections": "Bereiche",
   "select": "Auswählen",
   "select_a_node_to_connect_it": "Wähle einen Knoten, um ihn zu verbinden.",
   "service_account": "Dienstkonto",

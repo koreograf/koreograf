@@ -635,6 +635,7 @@
   "secret_key": "Secret key",
   "secret_looking_variables_are_masked": "Variables whose names look secret are always masked.",
   "secrets_are_stored_encrypted_and_are_not_shown": "Secrets are stored encrypted and are not shown again.",
+  "sections": "Sections",
   "select": "Select",
   "select_a_node_to_connect_it": "Select a node to connect it.",
   "service_account": "Service account",
