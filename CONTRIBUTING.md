@@ -33,6 +33,8 @@ Do not edit versions by hand. release-please reads Conventional Commits on `main
 
 `feat:` is a feature. `fix:` and `perf:` are fixes. `feat!:` or a `BREAKING CHANGE:` footer is a breaking change. `docs:`, `chore:`, `ci:`, `test:`, `refactor:`, and `style:` do not release. Squash merges must use the pull request title as the commit. The title check is `.github/workflows/pr-title.yml`. It runs when a pull request is opened, edited, synchronized, or reopened, so an edited title does not keep a stale green check and does not re-run the rest of CI. Make `title` a required check. CI rejects a title that is not a Conventional Commit, that starts with an uppercase letter, that ends with a period, or that is longer than 72 characters.
 
+Merge the release pull request after a series of fixes and features, not only when someone asks. The quick start points at the published image, so a release that lags far behind `main` leaves documented behaviour out of that image.
+
 The manifest starts at `0.1.0-alpha.1`. `versioning` is `prerelease` and `prerelease` is true, so the line stays `0.1.0-alpha.N`. The next release-worthy commit, including a `fix:`, becomes `0.1.0-alpha.2`, not `0.1.1`. On this alpha line the patch is 0, so `feat:` and `feat!:` also only increment N.
 
 `bump-patch-for-minor-pre-major` is false, so after the alpha line a `feat:` bumps the minor (`0.1.0` to `0.2.0`). `bump-minor-pre-major` is true, so before 1.0.0 a `feat!:` bumps the minor, not the major. From 1.0.0 onward a `feat!:` bumps the major.
