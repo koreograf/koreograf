@@ -13670,15 +13670,18 @@ async fn wait_for_workflow(app: &axum::Router, cookie: &str, team: &str, run_id:
 }
 
 #[test]
-fn the_image_reaps_orphans_with_tini() {
+fn the_image_starts_the_binary_entrypoint_without_an_init_or_shell() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let dockerfile = std::fs::read_to_string(root.join("Dockerfile")).expect("Dockerfile");
-    assert!(dockerfile.contains("tini \\"));
-    assert!(dockerfile
-        .contains("ENTRYPOINT [\"/usr/bin/tini\", \"--\", \"/usr/local/bin/entrypoint.sh\"]"));
+    assert!(!dockerfile.contains("tini"));
+    assert!(!dockerfile.contains("entrypoint.sh"));
+    assert!(dockerfile.contains("USER 10001:10001"));
+    assert!(dockerfile.contains("ENTRYPOINT [\"/usr/local/bin/koreograf\", \"entrypoint\"]"));
+    assert!(dockerfile.contains("CMD [\"koreograf\"]"));
+    assert!(dockerfile.contains("CMD [\"/usr/local/bin/koreograf\", \"healthcheck\"]"));
     let docs = std::fs::read_to_string(root.join("docs/installation.md")).expect("installation.md");
-    assert!(docs.contains("PID 1 in the image is"));
-    assert!(docs.contains("tini -- /usr/local/bin/entrypoint.sh"));
+    assert!(docs.contains("PID 1 is the Koreograf binary itself"));
+    assert!(docs.contains("koreograf entrypoint"));
     assert!(docs.contains("cargo run"));
 }
 

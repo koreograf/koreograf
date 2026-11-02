@@ -226,11 +226,11 @@ struct Draft {
 pub fn configured_mode(cfg: &crate::Config) -> RunnerMode {
     let path = cfg.data_dir.join("koreograf.db");
     if !path.is_file() {
-        return cfg.runner;
+        return cfg.runner.in_container(cfg.container_image);
     }
     let Ok(conn) = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
     else {
-        return cfg.runner;
+        return cfg.runner.in_container(cfg.container_image);
     };
     conn.query_row(
         "SELECT value FROM settings WHERE key = 'runner'",
@@ -238,8 +238,8 @@ pub fn configured_mode(cfg: &crate::Config) -> RunnerMode {
         |row| row.get::<_, String>(0),
     )
     .ok()
-    .map(|value| parse_runner_stored(&value, cfg.runner))
-    .unwrap_or(cfg.runner)
+    .map(|value| parse_runner_stored(&value, cfg.runner).in_container(cfg.container_image))
+    .unwrap_or(cfg.runner.in_container(cfg.container_image))
 }
 
 pub fn load(state: &Shared) -> AppResult<Effective> {
@@ -248,7 +248,9 @@ pub fn load(state: &Shared) -> AppResult<Effective> {
         read_rows(&db)?
     };
     if rows.get(SAVED).map(String::as_str) == Some("1") {
-        return from_saved(state, &rows);
+        let mut effective = from_saved(state, &rows)?;
+        effective.runner = effective.runner.in_container(state.cfg.container_image);
+        return Ok(effective);
     }
     let mut effective = from_env(state);
     effective.default_environment_ansible = rows
@@ -284,6 +286,11 @@ pub fn save(state: &Shared, input: &SettingsWrite) -> AppResult<Value> {
         let db = state.db()?;
         validate(input, &current, &db)?
     };
+    let mut draft = draft;
+    if state.cfg.container_image && draft.runner == RunnerMode::Local {
+        tracing::warn!("The container image has no local runner; using docker.");
+        draft.runner = RunnerMode::Docker;
+    }
     let ldap_secret = encrypt_secret(state, &draft.ldap_bind_password)?;
     let proxy_secret = encrypt_secret(state, &draft.proxy_password)?;
     let mut db = state.db()?;
@@ -396,7 +403,7 @@ fn from_env(state: &Shared) -> Effective {
     Effective {
         ldap,
         proxy,
-        runner: state.cfg.runner,
+        runner: state.cfg.runner.in_container(state.cfg.container_image),
         job_timeout_secs: state.cfg.job_timeout_secs,
         job_output_lines: state.cfg.job_output_lines,
         default_environment_ansible: String::new(),

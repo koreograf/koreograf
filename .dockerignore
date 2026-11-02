@@ -1,6 +1,11 @@
 target
 data
 .git
+.github
+tests
+docs
+deploy
+node_modules
 *.db
 *.db-wal
 *.db-shm
@@ -9,4 +14,11 @@ secret.key
 initial-admin-password
 restore-previous.zip
 *.log
-tests/harness/.secrets
+*.md
+package.json
+package-lock.json
+commitlint.config.mjs
+release-please-config.json
+renovate.json
+Dockerfile
+docker-compose*.yml

@@ -15,7 +15,7 @@ This is an early prototype, not a replacement for AWX and not a rebuild of Semap
 
 ### Docker Compose
 
-You need Docker Engine 20.10 or newer and Docker Compose v2, the `docker compose` command. The published image is `linux/amd64`.
+You need Docker Engine 20.10 or newer and Docker Compose v2, the `docker compose` command. The published image is `linux/amd64` and `linux/arm64`.
 
 ```bash
 git clone https://github.com/koreograf/koreograf.git

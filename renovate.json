@@ -24,15 +24,15 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "OpenTofu version in the image. TOFU_SHA256_AMD64 and TOFU_SHA256_ARM64 are not updated; copy them from that release's SHA256SUMS or the image build fails.",
+      "description": "Static Docker CLI in the image. DOCKER_SHA256_AMD64 and DOCKER_SHA256_ARM64 are not updated; copy them from the release download or the image build fails.",
       "managerFilePatterns": ["/^Dockerfile$/"],
       "matchStrings": [
-        "ARG TOFU_VERSION=(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+        "ARG DOCKER_VERSION=(?<currentValue>\\d+\\.\\d+\\.\\d+)"
       ],
-      "depNameTemplate": "opentofu",
-      "packageNameTemplate": "opentofu/opentofu",
+      "depNameTemplate": "docker",
+      "packageNameTemplate": "docker/docker",
       "datasourceTemplate": "github-releases",
-      "extractVersionTemplate": "^v(?<version>\\d+\\.\\d+\\.\\d+)$"
+      "extractVersionTemplate": "^v?(?<version>\\d+\\.\\d+\\.\\d+)$"
     },
     {
       "customType": "regex",
@@ -116,8 +116,8 @@
       "semanticCommitType": "fix"
     },
     {
-      "description": "OpenTofu in the image is runtime",
-      "matchPackageNames": ["opentofu/opentofu"],
+      "description": "Static Docker CLI in the image is runtime",
+      "matchPackageNames": ["docker/docker"],
       "semanticCommitType": "fix"
     },
     {

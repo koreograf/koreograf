@@ -34,13 +34,14 @@ existingSecretKeys:
   ldapBindPassword: ldap-bind-password
 
 # Leer: non-root (uid 10001), ausser runner.dockerSocket.enabled ist true.
-# Ein gesetztes Objekt ersetzt die Vorgabe komplett.
+# Ein gesetztes Objekt ersetzt die Vorgabe komplett, inklusive
+# readOnlyRootFilesystem, seccompProfile und dem /tmp-emptyDir.
 # fsGroup 10001 setzt der Volume-Treiber. Ohne fsGroup bleiben alte Dateien root.
 podSecurityContext: {}
 securityContext: {}
 
 runner:
-  # auto, docker oder local
+  # auto, docker oder local. Das Abbild hat keinen local-Modus.
   mode: auto
   # admins oder all. Vorgabe admins: nur Administratoren starten einen lokalen Job.
   # all ist für ein vertrautes Netz, in dem Webhooks lokal laufen sollen.
