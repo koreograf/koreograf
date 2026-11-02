@@ -328,6 +328,7 @@ function bytes(value) {
 function closeLive() {
   generation += 1;
   document.querySelector("#schedule-form")?.remove();
+  document.querySelectorAll("[data-edit-overlay]").forEach((node) => node.remove());
   if (source) {
     source.close();
     source = null;
@@ -997,7 +998,7 @@ function makeModal(overlay, close) {
 
 let dialogSerial = 0;
 
-function openDialog({ id, formId, title, body, submit, onSubmit, danger, form = Boolean(onSubmit), actions = true, wide = false, bodyClass = "", footer = "", onClose }) {
+function openDialog({ id, formId, title, body, submit, onSubmit, danger, form = Boolean(onSubmit), actions = true, wide = false, bodyClass = "", footer = "", onClose, onError }) {
   const serial = ++dialogSerial;
   const titleId = `dialog-title-${serial}`;
   const shellTag = form ? "form" : "div";
@@ -1053,10 +1054,158 @@ function openDialog({ id, formId, title, body, submit, onSubmit, danger, form = 
         await onSubmit({ form: shell, close: () => { dirty = false; dismiss(); } });
       } catch (error) {
         handle(error);
+        if (onError) onError(error);
       }
     });
   }
-  return { overlay, card, form: shell, close: () => { dirty = false; dismiss(); }, dirty: () => dirty };
+  return { overlay, card, form: shell, close: () => { dirty = false; dismiss(); }, clean: () => { dirty = false; }, dirty: () => dirty };
+}
+
+function editQuery(hash = location.hash || "#/") {
+  const params = new URLSearchParams((hash || "").split("?")[1] || "");
+  return {
+    create: params.has("new") ? (params.get("new") || "1") : null,
+    edit: params.get("edit") || "",
+    tab: params.get("tab") || "",
+  };
+}
+
+function editAddress(params, hash = location.hash || "#/") {
+  params = params || {};
+  const [path, query] = (hash || "#/").split("?");
+  const search = new URLSearchParams(query || "");
+  ["new", "edit", "tab"].forEach((key) => search.delete(key));
+  if (params.create !== undefined && params.create !== null) search.set("new", params.create || "1");
+  if (params.edit) search.set("edit", params.edit);
+  if (params.tab) search.set("tab", params.tab);
+  const rest = search.toString();
+  return `${path}${rest ? `?${rest}` : ""}`;
+}
+
+function rememberEditHash(params, push = true) {
+  const next = editAddress(params);
+  if (push) history.pushState(null, "", next);
+  else history.replaceState(null, "", next);
+  shownHash = next;
+}
+
+function clearEditHash() {
+  const next = editAddress({});
+  if ((location.hash || "#/") === next) return;
+  history.replaceState(null, "", next);
+  shownHash = next;
+}
+
+let editSerial = 0;
+
+function openEditDialog({
+  id,
+  title,
+  tabs,
+  body = "",
+  hint = "fields_marked_with_a_star_are_required",
+  submit,
+  onSubmit,
+  danger,
+  actions = true,
+  wide = false,
+  initialTab = "",
+  onClose,
+  onTab,
+}) {
+  const entries = tabs || [];
+  const tabbed = entries.length > 0;
+  const serial = ++editSerial;
+  const selected = entries.some((entry) => entry.id === initialTab) ? initialTab : (entries[0] || {}).id;
+  const tabBar = tabbed
+    ? `<div class="dialog-tabs" role="tablist" aria-label="${h("sections")}">${entries.map((entry) => {
+      const active = entry.id === selected;
+      return `<button class="dialog-tab" type="button" role="tab" data-dialog-tab="${esc(entry.id)}" aria-selected="${active}" aria-controls="dialog-panel-${serial}-${esc(entry.id)}" tabindex="${active ? "0" : "-1"}">${esc(entry.label)}</button>`;
+    }).join("")}</div>`
+    : "";
+  const panelMarkup = tabbed
+    ? `<div class="dialog-panels">${entries.map((entry) => `<div class="dialog-panel" id="dialog-panel-${serial}-${esc(entry.id)}" role="tabpanel" data-dialog-panel="${esc(entry.id)}"${entry.id === selected ? "" : " hidden"}>${entry.body}</div>`).join("")}</div>`
+    : body;
+  const dialog = openDialog({
+    id,
+    formId: id ? `${id}-form` : undefined,
+    title,
+    body: `${hint ? `<p class="small muted dialog-hint">${h(hint)}</p>` : ""}${tabBar}${panelMarkup}`,
+    submit,
+    onSubmit,
+    danger,
+    actions,
+    wide,
+    onClose: () => {
+      leaveGuard = null;
+      clearEditHash();
+      if (onClose) onClose();
+    },
+    onError: (error) => {
+      if (!tabbed) return;
+      const fieldName = (error.vars && error.vars.field) || ERROR_FIELD[error.message] || "";
+      const control = fieldName ? fieldControl(fieldName) : document.activeElement;
+      const panel = control && control.closest ? control.closest("[data-dialog-panel]") : null;
+      if (panel) choose(panel.dataset.dialogPanel, false);
+    },
+  });
+  dialog.overlay.setAttribute("data-edit-overlay", "");
+  leaveGuard = () => dialog.dirty();
+  if (!tabbed) return dialog;
+  const buttons = [...dialog.overlay.querySelectorAll("[data-dialog-tab]")];
+  const panelNodes = [...dialog.overlay.querySelectorAll("[data-dialog-panel]")];
+  const activate = (tabId, focusTab) => {
+    const current = entries.some((entry) => entry.id === tabId) ? tabId : entries[0].id;
+    buttons.forEach((button) => {
+      const active = button.dataset.dialogTab === current;
+      button.setAttribute("aria-selected", String(active));
+      button.tabIndex = active ? 0 : -1;
+      if (active && focusTab) button.focus();
+    });
+    panelNodes.forEach((panel) => {
+      panel.hidden = panel.dataset.dialogPanel !== current;
+    });
+  };
+  const choose = (tabId, focusTab) => {
+    activate(tabId, focusTab);
+    if (onTab) onTab(tabId);
+  };
+  buttons.forEach((button, index) => {
+    button.addEventListener("click", () => choose(button.dataset.dialogTab, false));
+    button.addEventListener("keydown", (event) => {
+      let next = null;
+      if (event.key === "ArrowRight") next = (index + 1) % buttons.length;
+      else if (event.key === "ArrowLeft") next = (index - 1 + buttons.length) % buttons.length;
+      else if (event.key === "Home") next = 0;
+      else if (event.key === "End") next = buttons.length - 1;
+      if (next === null) return;
+      event.preventDefault();
+      choose(buttons[next].dataset.dialogTab, true);
+    });
+  });
+  const mark = (tabId) => {
+    const button = buttons.find((item) => item.dataset.dialogTab === tabId);
+    if (!button) return;
+    button.classList.add("has-error");
+    button.setAttribute("aria-invalid", "true");
+  };
+  dialog.form.addEventListener("invalid", (event) => {
+    const panel = event.target.closest && event.target.closest("[data-dialog-panel]");
+    if (!panel) return;
+    mark(panel.dataset.dialogPanel);
+    choose(panel.dataset.dialogPanel, false);
+    event.target.focus();
+  }, true);
+  dialog.form.addEventListener("input", (event) => {
+    const panel = event.target.closest && event.target.closest("[data-dialog-panel]");
+    if (!panel) return;
+    if (panel.querySelector(":invalid")) return;
+    const button = buttons.find((item) => item.dataset.dialogTab === panel.dataset.dialogPanel);
+    if (!button) return;
+    button.classList.remove("has-error");
+    button.removeAttribute("aria-invalid");
+  });
+  return dialog;
 }
 
 async function openLaunchPrompt(item, launchWithOptions = false, preset = {}) {
@@ -5831,11 +5980,11 @@ async function pageCredentials() {
       <input class="search" id="credential-search" placeholder="${h("search_credentials")}" autocomplete="off">
       <div id="credential-table"></div>
     </section>`,
-    can("owner") ? addLink("#/credentials/new", "credential") : "");
+    can("owner") ? addLink("#/credentials?new=1", "credential") : "");
   const drawCredentials = () => {
     const needle = document.querySelector("#credential-search").value.trim().toLowerCase();
     const rows = credentials.filter((item) => !needle || `${item.name} ${item.kind} ${credentialKindLabel(item.kind)} ${credentialUsageNames(item)}`.toLowerCase().includes(needle)).map((item) =>
-      `<tr><td><a href="#/credentials/${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(credentialKindLabel(item.kind))}</td><td>${esc(credentialUsageNames(item) || t("not_used"))}</td><td>${can("owner") ? `<button class="btn danger" type="button" data-credential="${esc(item.id)}">${h("delete")}</button>` : ""}</td></tr>`
+      `<tr><td><a href="#/credentials?edit=${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(credentialKindLabel(item.kind))}</td><td>${esc(credentialUsageNames(item) || t("not_used"))}</td><td>${can("owner") ? `<button class="btn danger" type="button" data-credential="${esc(item.id)}">${h("delete")}</button>` : ""}</td></tr>`
     );
     document.querySelector("#credential-table").innerHTML = table([t("name"), t("type"), t("used_by"), ""], rows);
     document.querySelectorAll("[data-credential]").forEach((button) => {
@@ -5849,6 +5998,18 @@ async function pageCredentials() {
   };
   document.querySelector("#credential-search").addEventListener("input", drawCredentials);
   drawCredentials();
+  const request = editQuery();
+  if (request.create !== null) {
+    if (can("owner")) openCredentialDialog(null);
+    return;
+  }
+  if (!request.edit) return;
+  try {
+    const item = await api("GET", `/api/credentials/${encodeURIComponent(request.edit)}`);
+    openCredentialDialog(item, !can("owner"), request.tab);
+  } catch (error) {
+    handle(error);
+  }
 }
 
 const SECRET_FIELD_NAMES = {
@@ -5918,89 +6079,79 @@ function credentialUpdateBody(form, kind) {
   return { secret, clear };
 }
 
-function credentialEditForm(item) {
-  return `<form class="card form" id="credential-form" data-kind="${esc(item.kind)}">
-    <label class="field"><span>${h("name")}</span><input name="name" required value="${esc(item.name)}"></label>
-    <label class="field"><span>${h("type")}</span><input value="${esc(credentialKindLabel(item.kind))}" disabled></label>
-    <p class="small muted">${h("the_type_cannot_be_changed")}</p>
-    ${credentialFields(item.kind, item)}
-    <button class="btn pill primary" type="submit">${h("save")}</button>
-  </form>`;
-}
-
-async function pageCredential(id) {
-  if (!needTeam()) return;
-  const item = await api("GET", `/api/credentials/${encodeURIComponent(id)}`);
-  if (!can("owner")) {
+function openCredentialDialog(item, readOnly = false, initialTab = "") {
+  const editing = Boolean(item);
+  if (readOnly) {
     const visible = Object.entries(item.fields || {}).map(([key, value]) => {
       const shown = typeof value === "boolean" ? t(value ? "yes" : "no") : String(value);
       return paramRow(fieldLabel(key), shown);
     }).join("");
     const stored = (item.set || []).map((key) => paramRowHtml(fieldLabel(key), `<input type="password" value="********" disabled tabindex="-1">`)).join("");
-    shell(item.name, `<section class="card"><dl class="kv">${paramRow("name", item.name)}${paramRow("type", credentialKindLabel(item.kind))}${visible}${stored}</dl></section>${credentialUsageCard(item)}`);
-    return;
-  }
-  shell(item.name, `${credentialEditForm(item)}${credentialUsageCard(item)}`, `<button class="btn danger" id="delete-credential" type="button">${h("delete")}</button>`);
-  const form = document.querySelector("#credential-form");
-  form.querySelectorAll("[data-stored-mask]").forEach((field) => {
-    field.addEventListener("focus", () => {
-      if (field.dataset.storedMask === "1") field.select();
+    openEditDialog({
+      id: "credential-dialog",
+      title: item.name,
+      body: `<dl class="kv">${paramRow("name", item.name)}${paramRow("type", credentialKindLabel(item.kind))}${visible}${stored}</dl>${credentialUsageCard(item)}`,
+      hint: "",
+      actions: false,
     });
-    field.addEventListener("input", () => {
-      delete field.dataset.storedMask;
-    });
-  });
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    try {
-      const body = credentialUpdateBody(form, item.kind);
-      await api("PUT", `/api/credentials/${encodeURIComponent(id)}`, {
-        name: form.name.value,
-        secret: body.secret,
-        clear: body.clear,
-      });
-      markSaved();
-      go("#/credentials");
-    } catch (error) { handle(error); }
-  });
-  document.querySelector("#delete-credential").addEventListener("click", async () => {
-    try {
-      await api("DELETE", `/api/credentials/${encodeURIComponent(id)}`);
-      go("#/credentials");
-    } catch (error) { handle(error); }
-  });
-}
-
-async function pageCredentialNew() {
-  if (!needTeam()) return;
-  if (!can("owner")) {
-    deny("nav.access", "owner");
     return;
   }
   const kindOptions = CREDENTIAL_KINDS.map(([id, label]) => `<option value="${esc(id)}">${h(label)}</option>`).join("");
-  shell(t("new_credential"), `
-    <form class="card form" id="credential-form">
-      <label class="field"><span>${h("name")}</span><input name="name" required></label>
-      <div class="field-row">
-        <label class="field"><span>${h("type")}</span><select class="fit" name="kind">${kindOptions}</select></label>
-      </div>
-      <div id="credential-fields"></div>
-      <button class="btn pill primary" type="submit">${h("create")}</button>
-    </form>`);
-  const form = document.querySelector("#credential-form");
-  bindCredentialKind(form);
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    try {
-      await api("POST", "/api/credentials", {
-        name: form.name.value,
-        kind: form.kind.value,
-        secret: credentialSecret(form),
-      });
+  const dialog = openEditDialog({
+    id: "credential-dialog",
+    title: editing ? item.name : t("new_credential"),
+    body: `
+      <label class="field required"><span>${h("name")}</span><input name="name" required value="${editing ? esc(item.name) : ""}"></label>
+      ${editing
+        ? `<label class="field"><span>${h("type")}</span><input value="${esc(credentialKindLabel(item.kind))}" disabled></label><p class="small muted">${h("the_type_cannot_be_changed")}</p>`
+        : `<label class="field"><span>${h("type")}</span><select name="kind">${kindOptions}</select></label>`}
+      <div id="credential-fields">${editing ? credentialFields(item.kind, item) : ""}</div>
+      ${editing ? credentialUsageCard(item) : ""}`,
+    submit: editing ? t("save") : t("create"),
+    danger: editing ? `<button class="btn danger" type="button" data-credential-delete>${h("delete")}</button>` : "",
+    onSubmit: async ({ form, close }) => {
+      if (editing) {
+        const body = credentialUpdateBody(form, item.kind);
+        await api("PUT", `/api/credentials/${encodeURIComponent(item.id)}`, {
+          name: form.name.value,
+          secret: body.secret,
+          clear: body.clear,
+        });
+      } else {
+        await api("POST", "/api/credentials", {
+          name: form.name.value,
+          kind: form.kind.value,
+          secret: credentialSecret(form),
+        });
+      }
       markSaved();
-      go("#/credentials");
-    } catch (error) { handle(error); }
+      close();
+      await route();
+    },
+    initialTab,
   });
+  const form = dialog.form;
+  if (editing) {
+    form.querySelectorAll("[data-stored-mask]").forEach((field) => {
+      field.addEventListener("focus", () => {
+        if (field.dataset.storedMask === "1") field.select();
+      });
+      field.addEventListener("input", () => {
+        delete field.dataset.storedMask;
+      });
+    });
+    const remove = dialog.overlay.querySelector("[data-credential-delete]");
+    remove.addEventListener("click", async () => {
+      try {
+        await api("DELETE", `/api/credentials/${encodeURIComponent(item.id)}`);
+        markSaved();
+        dialog.close();
+        await route();
+      } catch (error) { handle(error); }
+    });
+  } else {
+    bindCredentialKind(form);
+  }
 }
 
 async function pageOrganizations() {
@@ -6010,72 +6161,67 @@ async function pageOrganizations() {
       <input class="search" id="organization-search" placeholder="${h("search_organizations")}" autocomplete="off">
       <div id="organization-table"></div>
     </section>`,
-    me.is_admin ? addLink("#/organizations/new", "organization_2") : "");
+    me.is_admin ? addLink("#/organizations?new=1", "organization_2") : "");
   const drawOrganizations = () => {
     const needle = document.querySelector("#organization-search").value.trim().toLowerCase();
     const rows = items.filter((item) => !needle || `${item.name} ${item.description || ""}`.toLowerCase().includes(needle)).map((item) =>
-      `<tr><td><a href="#/organizations/${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(item.description || "")}</td></tr>`
+      `<tr><td><a href="#/organizations?edit=${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(item.description || "")}</td></tr>`
     );
     document.querySelector("#organization-table").innerHTML = table([t("name"), t("description")], rows);
   };
   document.querySelector("#organization-search").addEventListener("input", drawOrganizations);
   drawOrganizations();
-}
-
-async function pageOrganizationNew() {
-  if (!me.is_admin) {
-    deny("organization", "admin");
+  const request = editQuery();
+  if (request.create !== null) {
+    if (me.is_admin) openOrganizationDialog(null);
     return;
   }
-  shell(t("new_organization"), `
-    <form class="card form" id="org-form">
-      <label class="field"><span>${h("name")}</span><input name="name" required></label>
-      <label class="field"><span>${h("description")}</span><input name="description" maxlength="1000"></label>
-      <button class="btn pill primary" type="submit">${h("create")}</button>
-    </form>`);
-  document.querySelector("#org-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    try {
-      await api("POST", "/api/organizations", { name: form.name.value, description: form.description.value });
-      markSaved();
-      go("#/organizations");
-    } catch (error) { handle(error); }
-  });
+  if (!request.edit) return;
+  try {
+    const item = await api("GET", `/api/organizations/${encodeURIComponent(request.edit)}`);
+    openOrganizationDialog(item, !me.is_admin, request.tab);
+  } catch (error) {
+    handle(error);
+  }
 }
 
-async function pageOrganization(id) {
-  const item = await api("GET", `/api/organizations/${encodeURIComponent(id)}`);
-  const rows = (item.teams || []).map((team) =>
+function openOrganizationDialog(item, readOnly = false, initialTab = "") {
+  const editing = Boolean(item);
+  const general = `
+    <label class="field required"><span>${h("name")}</span><input name="name" required value="${editing ? esc(item.name) : ""}"></label>
+    <label class="field"><span>${h("description")}</span><input name="description" maxlength="1000" value="${editing ? esc(item.description || "") : ""}"></label>`;
+  const rows = editing ? (item.teams || []).map((team) =>
     `<tr><td>${esc(team.name)}</td><td>${esc(team.description || "")}</td><td class="small muted">${esc(team.ldap_group || "")}</td></tr>`
-  );
-  shell(item.name, `
-    <section class="card" style="margin-bottom:14px">
-      ${me.is_admin ? `<form class="form" id="org-edit">
-        <label class="field"><span>${h("name")}</span><input name="name" value="${esc(item.name)}" required></label>
-        <label class="field"><span>${h("description")}</span><input name="description" maxlength="1000" value="${esc(item.description || "")}"></label>
-        <button class="btn pill primary" type="submit">${h("save")}</button>
-      </form>` : `<p class="muted">${esc(item.description || "")}</p>`}
-    </section>
-    <section class="card">
-      <h2>${h("teams")}</h2>
-      ${table([t("name"), t("description"), t("ldap_group")], rows)}
-    </section>`);
-  const form = document.querySelector("#org-edit");
-  if (form) {
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      try {
-        await api("PUT", `/api/organizations/${encodeURIComponent(id)}`, {
+  ) : [];
+  const tabs = editing ? [
+    { id: "general", label: t("general"), body: general },
+    { id: "teams", label: t("teams"), body: table([t("name"), t("description"), t("ldap_group")], rows) },
+  ] : null;
+  openEditDialog({
+    id: "organization-dialog",
+    title: editing ? item.name : t("new_organization"),
+    tabs,
+    body: general,
+    hint: readOnly ? "" : undefined,
+    submit: editing ? t("save") : t("create"),
+    actions: !readOnly,
+    onSubmit: readOnly ? undefined : async ({ form, close }) => {
+      if (editing) {
+        await api("PUT", `/api/organizations/${encodeURIComponent(item.id)}`, {
           name: form.name.value,
           description: form.description.value,
         });
         me = await api("GET", "/api/me");
-        markSaved();
-        route();
-      } catch (error) { handle(error); }
-    });
-  }
+      } else {
+        await api("POST", "/api/organizations", { name: form.name.value, description: form.description.value });
+      }
+      markSaved();
+      close();
+      await route();
+    },
+    initialTab,
+    onTab: editing ? (tab) => rememberEditHash({ edit: item.id, tab }, false) : undefined,
+  });
 }
 
 async function pageTeam() {
@@ -6086,7 +6232,7 @@ async function pageTeam() {
   if (teamId) members = await api("GET", `/api/teams/${encodeURIComponent(teamId)}/members`);
   const memberRows = members.map((member) => {
     const name = me.is_admin
-      ? `<a href="#/users/${esc(member.user_id)}">${esc(member.display_name)}</a>`
+      ? `<a href="#/users?edit=${esc(member.user_id)}">${esc(member.display_name)}</a>`
       : esc(member.display_name);
     const roleCell = member.source === "manual" && can("owner")
       ? `<select data-member-role="${esc(member.username)}" data-current="${esc(member.role)}">${roleOptions(member.role)}</select>`
@@ -6101,44 +6247,27 @@ async function pageTeam() {
   });
   const actions = [
     teamId && can("owner") ? addLink("#/team/members/new", "member") : "",
-    me.is_admin ? addLink("#/team/new", "team_2") : "",
-    me.is_admin ? addLink("#/users/new", "user_2") : "",
+    me.is_admin ? addLink("#/team?new=1", "team_2") : "",
+    me.is_admin ? addLink("#/users?new=1", "user_2") : "",
   ].join("");
   shell(t("team"), `
     ${current ? `<section class="card" style="margin-bottom:14px">
       <h2>${esc(current.name)}</h2>
       <p class="muted">${esc(current.description || "")}</p>
       <p class="small">${h("organization_name_2", { name: current.organization_name || "—" })}</p>
-      ${can("owner") ? `<form class="form" id="team-form">
-        <label class="field"><span>${h("name")}</span><input name="name" value="${esc(current.name)}" required></label>
-        <label class="field"><span>${h("description")}</span><input name="description" maxlength="1000" value="${esc(current.description || "")}"></label>
-        <label class="field"><span>${h("ldap_or_ad_group")}</span><input name="ldap_group" value="${esc(current.ldap_group || "")}" placeholder="${h("cn_or_dn_for_example_platform")}"></label>
-        ${me.is_admin ? `<label class="field"><span>${h("move_organization")}</span><select name="organization_id">${orgOptions(organizations, current.organization_id)}</select></label>` : ""}
-        <button class="btn pill primary" type="submit">${h("save_team")}</button>
-      </form>` : `<p class="small">${h("ldap_group_group", { group: current.ldap_group || "—" })}</p>`}
+      ${can("owner") ? `<div class="row"><a class="btn" href="#/team?edit=${esc(current.id)}">${h("edit")}</a></div>` : `<p class="small">${h("ldap_group_group", { group: current.ldap_group || "—" })}</p>`}
     </section>
     <section class="card">
       <h2>${h("members")}</h2>
       ${roleLegend()}
       ${table([t("name"), t("role"), t("source"), ""], memberRows)}
     </section>` : `<div class="card">${h("no_team_selected")}</div>`}`, actions);
-  const teamForm = document.querySelector("#team-form");
-  if (teamForm) {
-    teamForm.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      try {
-        const payload = {
-          name: teamForm.name.value,
-          description: teamForm.description.value,
-          ldap_group: teamForm.ldap_group.value,
-        };
-        if (teamForm.organization_id) payload.organization_id = teamForm.organization_id.value;
-        await api("PUT", `/api/teams/${encodeURIComponent(teamId)}`, payload);
-        me = await api("GET", "/api/me");
-        markSaved();
-        route();
-      } catch (error) { handle(error); }
-    });
+  const request = editQuery();
+  if (request.create !== null) {
+    if (me.is_admin) openTeamDialog(null, organizations, current && current.organization_id);
+  } else if (request.edit) {
+    const item = teams.find((team) => team.id === request.edit) || current;
+    if (item && can("owner")) openTeamDialog(item, organizations);
   }
   document.querySelectorAll("[data-member-role]").forEach((select) => {
     select.addEventListener("change", async () => {
@@ -6162,6 +6291,42 @@ async function pageTeam() {
         route();
       } catch (error) { handle(error); }
     });
+  });
+}
+
+function openTeamDialog(item, organizations, defaultOrganizationId) {
+  const editing = Boolean(item);
+  const organizationField = me.is_admin
+    ? `<label class="field"><span>${h(editing ? "move_organization" : "organization")}</span><select name="organization_id">${editing ? orgOptions(organizations, item.organization_id) : `<option value="">${h("new_organization_named_after_the_team")}</option>${orgOptions(organizations, defaultOrganizationId || "")}`}</select></label>`
+    : "";
+  openEditDialog({
+    id: "team-dialog",
+    title: editing ? item.name : t("new_team_2"),
+    body: `
+      <label class="field required"><span>${h("name")}</span><input name="name" required value="${editing ? esc(item.name) : ""}"></label>
+      <label class="field"><span>${h("description")}</span><input name="description" maxlength="1000" value="${editing ? esc(item.description || "") : ""}"></label>
+      <label class="field"><span>${h("ldap_or_ad_group")}</span><input name="ldap_group" value="${editing ? esc(item.ldap_group || "") : ""}" placeholder="${h("cn_or_dn_for_example_platform")}"></label>
+      ${organizationField}`,
+    submit: editing ? t("save_team") : t("create"),
+    onSubmit: async ({ form, close }) => {
+      const payload = {
+        name: form.name.value,
+        description: form.description.value,
+        ldap_group: form.ldap_group.value,
+      };
+      if (form.organization_id && form.organization_id.value) payload.organization_id = form.organization_id.value;
+      if (editing) {
+        await api("PUT", `/api/teams/${encodeURIComponent(item.id)}`, payload);
+      } else {
+        const created = await api("POST", "/api/teams", payload);
+        teamId = created.id;
+        localStorage.setItem("koreograf.team", teamId);
+      }
+      me = await api("GET", "/api/me");
+      markSaved();
+      close();
+      await route();
+    },
   });
 }
 
@@ -6192,41 +6357,6 @@ async function pageMemberNew() {
         username: form.username.value,
         role: form.role.value,
       });
-      markSaved();
-      go("#/team");
-    } catch (error) { handle(error); }
-  });
-}
-
-async function pageTeamNew() {
-  if (!me.is_admin) {
-    deny("team", "admin");
-    return;
-  }
-  const organizations = await api("GET", "/api/organizations");
-  const current = (me.teams || []).find((team) => team.id === teamId);
-  shell(t("new_team_2"), `
-    <form class="card form" id="create-team">
-      <label class="field"><span>${h("name")}</span><input name="name" required></label>
-      <label class="field"><span>${h("description")}</span><input name="description" maxlength="1000"></label>
-      <label class="field"><span>${h("organization")}</span><select name="organization_id"><option value="">${h("new_organization_named_after_the_team")}</option>${orgOptions(organizations, current && current.organization_id)}</select></label>
-      <label class="field"><span>${h("ldap_group")}</span><input name="ldap_group"></label>
-      <button class="btn pill primary" type="submit">${h("create")}</button>
-    </form>`);
-  document.querySelector("#create-team").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    try {
-      const payload = {
-        name: form.name.value,
-        description: form.description.value,
-        ldap_group: form.ldap_group.value,
-      };
-      if (form.organization_id && form.organization_id.value) payload.organization_id = form.organization_id.value;
-      const created = await api("POST", "/api/teams", payload);
-      me = await api("GET", "/api/me");
-      teamId = created.id;
-      localStorage.setItem("koreograf.team", teamId);
       markSaved();
       go("#/team");
     } catch (error) { handle(error); }
@@ -6297,7 +6427,7 @@ async function pageUsers() {
       <input class="search" id="user-search" placeholder="${h("search_users")}" autocomplete="off">
       <div id="user-table"></div>
     </section>`,
-    addLink("#/users/new", "user_2"));
+    addLink("#/users?new=1", "user_2"));
   const draw = () => {
     const needle = document.querySelector("#user-search").value.trim().toLowerCase();
     const shown = items.filter((item) => {
@@ -6311,7 +6441,7 @@ async function pageUsers() {
       ].filter(Boolean).join(" ");
       const created = when(item.created_at);
       return `<tr>
-        <td><a href="#/users/${esc(item.id)}">${esc(item.display_name)}</a> ${flags}</td>
+        <td><a href="#/users?edit=${esc(item.id)}">${esc(item.display_name)}</a> ${flags}</td>
         <td>${esc(item.username)}</td>
         <td>${esc(authSourceLabel(item.auth_source))}</td>
         <td>${esc(item.team_count)}</td>
@@ -6325,18 +6455,52 @@ async function pageUsers() {
   };
   document.querySelector("#user-search").addEventListener("input", draw);
   draw();
-}
-
-async function pageUser(id) {
-  if (!me.is_admin) {
-    deny("users", "admin");
+  const request = editQuery();
+  if (request.create !== null) {
+    openUserCreateDialog();
     return;
   }
-  const item = await api("GET", `/api/users/${encodeURIComponent(id)}`);
-  const teams = await api("GET", "/api/teams");
+  if (!request.edit) return;
+  try {
+    const [item, teams] = await Promise.all([
+      api("GET", `/api/users/${encodeURIComponent(request.edit)}`),
+      api("GET", "/api/teams"),
+    ]);
+    openUserDialog(item, teams, request.tab);
+  } catch (error) {
+    handle(error);
+  }
+}
+
+function openUserCreateDialog() {
+  openEditDialog({
+    id: "user-dialog",
+    title: t("new_user"),
+    body: `
+      <label class="field required"><span>${h("username")}</span><input name="username" required autocomplete="off"></label>
+      <p class="small muted">${h("username_2_64_characters_a_z_0_9")}</p>
+      <label class="field required"><span>${h("display_name")}</span><input name="display_name" required></label>
+      <label class="field required"><span>${h("password")}</span><input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
+      <label class="row"><input name="is_admin" type="checkbox"> ${h("administrator")}</label>`,
+    submit: t("create"),
+    onSubmit: async ({ form, close }) => {
+      await api("POST", "/api/users", {
+        username: form.username.value,
+        display_name: form.display_name.value,
+        password: form.password.value,
+        is_admin: form.is_admin.checked,
+      });
+      markSaved();
+      close();
+      await route();
+    },
+  });
+}
+
+function openUserDialog(item, teams, initialTab = "") {
+  const self = item.id === me.id;
   const memberIds = new Set((item.memberships || []).map((row) => row.team_id));
   const openTeams = teams.filter((team) => !memberIds.has(team.id));
-  const self = item.id === me.id;
   const rows = (item.memberships || []).map((row) => {
     const org = row.organization_name ? `${row.organization_name} · ` : "";
     const roleCell = row.source === "manual"
@@ -6354,65 +6518,65 @@ async function pageUser(id) {
     const label = team.organization_name ? `${team.organization_name} · ${team.name}` : team.name;
     return `<option value="${esc(team.id)}">${esc(label)}</option>`;
   }).join("");
-  shell(item.display_name, `
-    <div class="stack">
-      <form class="card form" id="user-form">
-        <h2>${h("account")}</h2>
-        <p class="small muted">${h("username")}: ${esc(item.username)} · ${esc(authSourceLabel(item.auth_source))}</p>
-        <p class="small">${h("email")}: ${emailLine(item.email)}</p>
-        <label class="field"><span>${h("display_name")}</span><input name="display_name" value="${esc(item.display_name)}" required></label>
-        <label class="row"><input name="is_admin" type="checkbox"${item.is_admin ? " checked" : ""}> ${h("administrator")}</label>
-        <label class="row"><input name="account_disabled" type="checkbox"${item.disabled ? " checked" : ""}${self ? " disabled" : ""}> ${h("disable_account")}</label>
-        ${passwordField}
-        <div class="row">
-          <button class="btn pill primary" type="submit">${h("save")}</button>
-          ${self ? "" : `<button class="btn danger" id="delete-user" type="button">${h("delete")}</button>`}
-        </div>
-      </form>
-      <section class="card">
-        <h2>${h("permissions")}</h2>
-        ${roleLegend()}
-      </section>
-      <section class="card">
-        <h2>${h("memberships")}</h2>
-        ${table([t("team"), t("role"), t("source"), ""], rows)}
-        ${openTeams.length ? `<form class="form" id="grant-form">
-          <h2>${h("add_to_a_team")}</h2>
-          <label class="field"><span>${h("team")}</span><select name="team_id">${teamChoices}</select></label>
-          <div class="field-row">
-            <label class="field"><span>${h("role")}</span><select class="fit" name="role">${roleOptions("operator")}</select></label>
-          </div>
-          <button class="btn pill primary" type="submit">${h("add")}</button>
-        </form>` : `<p class="muted">${h("the_user_is_in_every_team")}</p>`}
-      </section>
-    </div>`);
-  document.querySelector("#user-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    try {
+  const account = `
+    <p class="small muted">${h("username")}: ${esc(item.username)} · ${esc(authSourceLabel(item.auth_source))}</p>
+    <p class="small">${h("email")}: ${emailLine(item.email)}</p>
+    <label class="field required"><span>${h("display_name")}</span><input name="display_name" value="${esc(item.display_name)}" required></label>
+    <label class="row"><input name="is_admin" type="checkbox"${item.is_admin ? " checked" : ""}> ${h("administrator")}</label>
+    <label class="row"><input name="account_disabled" type="checkbox"${item.disabled ? " checked" : ""}${self ? " disabled" : ""}> ${h("disable_account")}</label>
+    ${passwordField}
+    <div class="form-section">
+      <h2>${h("permissions")}</h2>
+      ${roleLegend()}
+    </div>`;
+  const memberships = `
+    ${table([t("team"), t("role"), t("source"), ""], rows)}
+    ${openTeams.length ? `<div class="form-section">
+      <h2>${h("add_to_a_team")}</h2>
+      <label class="field"><span>${h("team")}</span><select name="grant_team">${teamChoices}</select></label>
+      <div class="field-row">
+        <label class="field"><span>${h("role")}</span><select class="fit" name="grant_role">${roleOptions("operator")}</select></label>
+      </div>
+      <button class="btn pill primary" type="button" data-user-grant>${h("add")}</button>
+    </div>` : `<p class="muted">${h("the_user_is_in_every_team")}</p>`}`;
+  const dialog = openEditDialog({
+    id: "user-dialog",
+    title: item.display_name,
+    tabs: [
+      { id: "account", label: t("account"), body: account },
+      { id: "memberships", label: t("memberships"), body: memberships },
+    ],
+    initialTab,
+    submit: t("save"),
+    danger: self ? "" : `<button class="btn danger" type="button" data-user-delete>${h("delete")}</button>`,
+    onSubmit: async ({ form, close }) => {
       const payload = {
         display_name: form.display_name.value,
         is_admin: form.is_admin.checked,
         disabled: form.account_disabled.checked,
       };
       if (form.password && form.password.value) payload.password = form.password.value;
-      await api("PUT", `/api/users/${encodeURIComponent(id)}`, payload);
+      await api("PUT", `/api/users/${encodeURIComponent(item.id)}`, payload);
       if (self) me = await api("GET", "/api/me");
       markSaved();
-      route();
-    } catch (error) { handle(error); }
+      close();
+      await route();
+    },
+    onTab: (tab) => rememberEditHash({ edit: item.id, tab }, false),
   });
-  const deleteButton = document.querySelector("#delete-user");
-  if (deleteButton) {
-    deleteButton.addEventListener("click", async () => {
+  const remove = dialog.overlay.querySelector("[data-user-delete]");
+  if (remove) {
+    remove.addEventListener("click", async () => {
       if (!window.confirm(t("delete_this_account", { name: item.display_name }))) return;
       try {
-        await api("DELETE", `/api/users/${encodeURIComponent(id)}`);
-        go("#/users");
+        await api("DELETE", `/api/users/${encodeURIComponent(item.id)}`);
+        markSaved();
+        dialog.close();
+        await route();
       } catch (error) { handle(error); }
     });
   }
-  document.querySelectorAll("[data-role]").forEach((select) => {
+  dialog.overlay.querySelectorAll("[data-role]").forEach((select) => {
     select.addEventListener("change", async () => {
       const next = select.value;
       try {
@@ -6421,64 +6585,39 @@ async function pageUser(id) {
           role: next,
         });
         select.dataset.current = next;
+        dialog.clean();
+        await route();
       } catch (error) {
         select.value = select.dataset.current;
         handle(error);
       }
     });
   });
-  document.querySelectorAll("[data-leave]").forEach((button) => {
+  dialog.overlay.querySelectorAll("[data-leave]").forEach((button) => {
     button.addEventListener("click", async () => {
       try {
         await api("DELETE", `/api/teams/${encodeURIComponent(button.dataset.leave)}/members/${encodeURIComponent(item.id)}`);
-        route();
+        dialog.clean();
+        await route();
       } catch (error) { handle(error); }
     });
   });
-  const grant = document.querySelector("#grant-form");
+  const grant = dialog.overlay.querySelector("[data-user-grant]");
   if (grant) {
-    grant.addEventListener("submit", async (event) => {
-      event.preventDefault();
+    grant.addEventListener("click", async () => {
+      const team = dialog.overlay.querySelector("[name=grant_team]");
+      const role = dialog.overlay.querySelector("[name=grant_role]");
       try {
-        await api("POST", `/api/teams/${encodeURIComponent(grant.team_id.value)}/members`, {
+        await api("POST", `/api/teams/${encodeURIComponent(team.value)}/members`, {
           username: item.username,
-          role: grant.role.value,
+          role: role.value,
         });
         markSaved();
-        route();
+        dialog.clean();
+        await route();
       } catch (error) { handle(error); }
     });
   }
-}
-
-async function pageUserNew() {
-  if (!me.is_admin) {
-    deny("user", "admin");
-    return;
-  }
-  shell(t("new_user"), `
-    <form class="card form" id="create-user">
-      <label class="field"><span>${h("username")}</span><input name="username" required autocomplete="off"></label>
-      <p class="small muted">${h("username_2_64_characters_a_z_0_9")}</p>
-      <label class="field"><span>${h("display_name")}</span><input name="display_name" required></label>
-      <label class="field"><span>${h("password")}</span><input name="password" type="password" required minlength="8" autocomplete="new-password"></label>
-      <label class="row"><input name="is_admin" type="checkbox"> ${h("administrator")}</label>
-      <button class="btn pill primary" type="submit">${h("create")}</button>
-    </form>`);
-  document.querySelector("#create-user").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    try {
-      const created = await api("POST", "/api/users", {
-        username: form.username.value,
-        display_name: form.display_name.value,
-        password: form.password.value,
-        is_admin: form.is_admin.checked,
-      });
-      markSaved();
-      go(`#/users/${created.id}`);
-    } catch (error) { handle(error); }
-  });
 }
 
 function optionSelected(current, value) {
@@ -6794,18 +6933,19 @@ async function route() {
     else if (parts[0] === "inventories" && parts[1] && parts[2] === "groups" && parts[3]) await pageInventoryGroup(parts[1], decodeURIComponent(parts[3]));
     else if (parts[0] === "inventories" && parts[1]) await pageInventory(parts[1]);
     else if (parts[0] === "inventories") await pageInventories();
-    else if (parts[0] === "credentials" && parts[1] === "new") await pageCredentialNew();
-    else if (parts[0] === "credentials" && parts[1]) await pageCredential(parts[1]);
+    else if (parts[0] === "credentials" && parts[1] === "new") { location.replace("#/credentials?new=1"); return; }
+    else if (parts[0] === "credentials" && parts[1]) { location.replace(`#/credentials?edit=${encodeURIComponent(parts[1])}`); return; }
     else if (parts[0] === "credentials") await pageCredentials();
-    else if (parts[0] === "organizations" && parts[1] === "new") await pageOrganizationNew();
-    else if (parts[0] === "organizations" && parts[1]) await pageOrganization(parts[1]);
+    else if (parts[0] === "organizations" && parts[1] === "new") { location.replace("#/organizations?new=1"); return; }
+    else if (parts[0] === "organizations" && parts[1]) { location.replace(`#/organizations?edit=${encodeURIComponent(parts[1])}`); return; }
     else if (parts[0] === "organizations") await pageOrganizations();
     else if (parts[0] === "catalog") location.hash = "#/projects";
     else if (parts[0] === "team" && parts[1] === "members" && parts[2] === "new") await pageMemberNew();
-    else if (parts[0] === "team" && parts[1] === "new") await pageTeamNew();
+    else if (parts[0] === "team" && parts[1] === "new") { location.replace("#/team?new=1"); return; }
+    else if (parts[0] === "team" && parts[1]) { location.replace(`#/team?edit=${encodeURIComponent(parts[1])}`); return; }
     else if (parts[0] === "account") await pageAccount();
-    else if (parts[0] === "users" && parts[1] === "new") await pageUserNew();
-    else if (parts[0] === "users" && parts[1]) await pageUser(parts[1]);
+    else if (parts[0] === "users" && parts[1] === "new") { location.replace("#/users?new=1"); return; }
+    else if (parts[0] === "users" && parts[1]) { location.replace(`#/users?edit=${encodeURIComponent(parts[1])}`); return; }
     else if (parts[0] === "users") await pageUsers();
     else if (parts[0] === "settings") await pageSettings();
     else if (parts[0] === "backup") await pageBackup();

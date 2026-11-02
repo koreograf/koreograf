@@ -8595,7 +8595,7 @@ async fn owner_can_store_an_ssh_password_without_a_key() {
     assert!(script.contains("class=\"secret-mask\""));
     assert!(!script.contains("*** bedeutet, dass ein Wert gespeichert ist."));
     assert!(script.contains("the_type_cannot_be_changed"));
-    assert!(script.contains("#/credentials/${esc(item.id)}"));
+    assert!(script.contains("#/credentials?edit=${esc(item.id)}"));
 
     let (status, me, cookie) = call(
         &app,
@@ -13119,6 +13119,162 @@ fn schedule_overlay_guards_unsaved_edits() {
 }
 
 #[test]
+fn edit_overlays_share_one_dialog_helper() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let helper = extract_function_with_destructured_params(&script, "function openEditDialog");
+    assert!(helper.contains("openDialog({"));
+    assert!(helper.contains("fields_marked_with_a_star_are_required"));
+    assert!(helper.contains("role=\"tablist\""));
+    assert!(helper.contains("data-dialog-tab="));
+    assert!(helper.contains("data-dialog-panel="));
+    assert!(helper.contains("ArrowRight"));
+    assert!(helper.contains("ArrowLeft"));
+    assert!(helper.contains("Home"));
+    assert!(helper.contains("End"));
+    assert!(helper.contains("has-error"));
+    assert!(helper.contains("dialog.form.addEventListener(\"invalid\""));
+    assert!(helper.contains("choose(panel.dataset.dialogPanel, false)"));
+    assert!(helper.contains("leaveGuard = () => dialog.dirty();"));
+    assert!(helper.contains("clearEditHash();"));
+    let dialog = extract_function_with_destructured_params(&script, "function openDialog");
+    assert!(dialog.contains("if (dirty && !confirm(t(\"discard_unsaved_changes\"))) return false;"));
+    assert!(dialog.contains("handle(error);"));
+    assert!(dialog.contains("if (onError) onError(error);"));
+    let handle = extract_braced_function(&script, "function handle");
+    assert!(handle.contains("const card = topmostCard();"));
+    assert!(handle.contains("card.querySelector(\".dialog-body\")"));
+    let css = std::fs::read_to_string(root.join("web/app.css")).expect("app.css");
+    assert!(css.contains(".dialog-tabs { display: flex;"));
+    assert!(css.contains(".dialog-tab[aria-selected=\"true\"]"));
+    assert!(css.contains(".dialog-tab.has-error::after"));
+    assert!(css.contains(".dialog-panel[hidden] { display: none; }"));
+    assert!(css.contains(".overlay-card, .overlay-card.dialog { width: 100%;"));
+}
+
+#[test]
+fn edit_overlay_addresses_round_trip_and_old_pages_redirect() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    for redirect in [
+        "location.replace(\"#/credentials?new=1\")",
+        "location.replace(`#/credentials?edit=${encodeURIComponent(parts[1])}`)",
+        "location.replace(\"#/organizations?new=1\")",
+        "location.replace(`#/organizations?edit=${encodeURIComponent(parts[1])}`)",
+        "location.replace(\"#/team?new=1\")",
+        "location.replace(`#/team?edit=${encodeURIComponent(parts[1])}`)",
+        "location.replace(\"#/users?new=1\")",
+        "location.replace(`#/users?edit=${encodeURIComponent(parts[1])}`)",
+    ] {
+        assert!(script.contains(redirect), "missing redirect {redirect}");
+    }
+    for old in [
+        "href=\"#/credentials/${",
+        "href=\"#/organizations/${",
+        "href=\"#/users/${",
+        "addLink(\"#/credentials/new\"",
+        "addLink(\"#/organizations/new\"",
+        "addLink(\"#/team/new\"",
+        "addLink(\"#/users/new\"",
+    ] {
+        assert!(
+            !script.contains(old),
+            "old page link {old} is still in the UI"
+        );
+    }
+    let functions = format!(
+        "{}\n{}\n{}\n{}",
+        extract_braced_function(&script, "function editQuery"),
+        extract_braced_function(&script, "function editAddress"),
+        extract_braced_function(&script, "function rememberEditHash"),
+        extract_braced_function(&script, "function clearEditHash")
+    );
+    let probe = format!(
+        r##"{functions}
+let location = {{ hash: "#/credentials" }};
+let shownHash = null;
+let pushed = 0;
+let replaced = 0;
+const history = {{
+  pushState(_state, _title, url) {{ pushed += 1; location.hash = url; }},
+  replaceState(_state, _title, url) {{ replaced += 1; location.hash = url; }},
+}};
+function check(ok, message) {{
+  if (!ok) {{ console.error(message); process.exit(1); }}
+}}
+const edit = editQuery("#/credentials?edit=c1&tab=memberships");
+check(edit.edit === "c1" && edit.tab === "memberships" && edit.create === null, "edit and tab were not read");
+const create = editQuery("#/organizations?new=1");
+check(create.create === "1" && create.edit === "" && create.tab === "", "new was not read");
+check(editAddress({{ create: "1" }}, "#/credentials") === "#/credentials?new=1", "new address was not built");
+check(editAddress({{ edit: "u1", tab: "account" }}, "#/users?page=2") === "#/users?page=2&edit=u1&tab=account", "edit address was not built");
+check(editAddress({{ edit: "t1" }}, "#/team?edit=t1&tab=general") === "#/team?edit=t1", "old tab was not cleared");
+check(editAddress({{}}, "#/team?edit=t1&tab=general") === "#/team", "address was not cleared");
+rememberEditHash({{ create: "1" }});
+check(pushed === 1 && replaced === 0 && location.hash === "#/credentials?new=1" && shownHash === location.hash, "open did not push the address");
+rememberEditHash({{ edit: "c1", tab: "memberships" }}, false);
+check(pushed === 1 && replaced === 1 && location.hash === "#/credentials?edit=c1&tab=memberships", "tab did not replace the address");
+clearEditHash();
+check(replaced === 2 && location.hash === "#/credentials" && shownHash === "#/credentials", "close did not clear the address");
+"##
+    );
+    run_node_probe("edit-address", &probe);
+}
+
+#[test]
+fn credentials_and_admin_objects_use_the_edit_overlay() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let credentials = extract_braced_function(&script, "async function pageCredentials");
+    assert!(credentials.contains("openCredentialDialog(item, !can(\"owner\"), request.tab)"));
+    assert!(credentials.contains("openCredentialDialog(null)"));
+    assert!(credentials.contains("#/credentials?edit="));
+    assert!(credentials.contains("#/credentials?new=1"));
+    let credential = extract_braced_function(&script, "function openCredentialDialog");
+    assert!(credential.contains("openEditDialog({"));
+    assert!(credential.contains("api(\"POST\", \"/api/credentials\""));
+    assert!(credential.contains("api(\"PUT\", `/api/credentials/"));
+    assert!(credential.contains("api(\"DELETE\", `/api/credentials/"));
+    assert!(credential.contains("data-credential-delete"));
+    assert!(credential.contains("markSaved();"));
+    assert!(credential.contains("close();"));
+    assert!(credential.contains("await route();"));
+    let organizations = extract_braced_function(&script, "async function pageOrganizations");
+    assert!(organizations.contains("openOrganizationDialog(item, !me.is_admin, request.tab)"));
+    assert!(organizations.contains("openOrganizationDialog(null)"));
+    let organization = extract_braced_function(&script, "function openOrganizationDialog");
+    assert!(organization.contains("openEditDialog({"));
+    assert!(organization.contains("api(\"POST\", \"/api/organizations\""));
+    assert!(organization.contains("api(\"PUT\", `/api/organizations/"));
+    assert!(organization.contains("{ id: \"general\", label: t(\"general\")"));
+    assert!(organization.contains("{ id: \"teams\", label: t(\"teams\")"));
+    assert!(organization.contains("onTab: editing ? (tab) => rememberEditHash("));
+    let team = extract_braced_function(&script, "function openTeamDialog");
+    assert!(team.contains("openEditDialog({"));
+    assert!(team.contains("api(\"POST\", \"/api/teams\""));
+    assert!(team.contains("api(\"PUT\", `/api/teams/"));
+    assert!(!script.contains("id=\"team-form\""));
+    let users = extract_braced_function(&script, "async function pageUsers");
+    assert!(users.contains("openUserDialog(item, teams, request.tab)"));
+    assert!(users.contains("openUserCreateDialog()"));
+    let user = extract_braced_function(&script, "function openUserDialog");
+    assert!(user.contains("openEditDialog({"));
+    assert!(user.contains("{ id: \"account\", label: t(\"account\")"));
+    assert!(user.contains("{ id: \"memberships\", label: t(\"memberships\")"));
+    assert!(user.contains("api(\"PUT\", `/api/users/"));
+    assert!(user.contains("api(\"DELETE\", `/api/users/"));
+    assert!(user.contains("onTab: (tab) => rememberEditHash("));
+    let create = extract_braced_function(&script, "function openUserCreateDialog");
+    assert!(create.contains("api(\"POST\", \"/api/users\""));
+    assert!(create.contains("class=\"field required\""));
+    assert!(!script.contains("id=\"create-user\""));
+    for function in [&credential, &organization, &team, &create] {
+        assert!(function.contains("markSaved();"));
+        assert!(function.contains("await route();"));
+    }
+}
+
+#[test]
 fn template_form_saves_the_visible_playbook_path() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
@@ -13247,6 +13403,28 @@ fn extract_braced_function(script: &str, needle: &str) -> String {
             depth -= 1;
             if seen && depth == 0 {
                 return script[start..start + offset + 1].to_string();
+            }
+        }
+    }
+    panic!("function after {needle} has no end");
+}
+
+fn extract_function_with_destructured_params(script: &str, needle: &str) -> String {
+    let start = script
+        .find(needle)
+        .unwrap_or_else(|| panic!("missing {needle} in the UI script"));
+    let body = script[start..]
+        .find("\n}) {")
+        .map(|offset| start + offset + 4)
+        .unwrap_or_else(|| panic!("function after {needle} has no body"));
+    let mut depth = 0;
+    for (offset, ch) in script[body..].char_indices() {
+        if ch == '{' {
+            depth += 1;
+        } else if ch == '}' {
+            depth -= 1;
+            if depth == 0 {
+                return script[start..body + offset + 1].to_string();
             }
         }
     }
