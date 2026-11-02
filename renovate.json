@@ -36,6 +36,16 @@
     },
     {
       "customType": "regex",
+      "description": "Curated execution environment images in the first-run seed",
+      "managerFilePatterns": ["/^src/seed\\.rs$/"],
+      "matchStrings": [
+        "image: \"(?<depName>[^\"@]+):(?<currentValue>[^@\"]+)@(?<currentDigest>sha256:[a-f0-9]{64})\""
+      ],
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "docker"
+    },
+    {
+      "customType": "regex",
       "description": "Shellcheck release used by CI",
       "managerFilePatterns": ["/^\\.github/workflows/ci\\.yml$/"],
       "matchStrings": [
@@ -109,6 +119,17 @@
       "description": "OpenTofu in the image is runtime",
       "matchPackageNames": ["opentofu/opentofu"],
       "semanticCommitType": "fix"
+    },
+    {
+      "description": "Curated execution environments are runtime",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": [
+        "ghcr.io/ansible-community/community-ee-base",
+        "ghcr.io/opentofu/opentofu",
+        "mcr.microsoft.com/devcontainers/base"
+      ],
+      "semanticCommitType": "fix",
+      "groupName": "execution environment images"
     },
     {
       "description": "npm and Cargo wait three days before a new release is suggested",

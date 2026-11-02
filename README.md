@@ -101,6 +101,8 @@ Run `down.sh -v` once after the harness replaced Redis with Valkey. The cache vo
 
 `tests/harness/scripts/ee-awx.sh` uses that same socket setup with `quay.io/ansible/awx-ee:latest` on `127.0.0.1:18084`. It is not part of `cargo test`, and CI does not start it. The script checks that a shell job finishes and that `container.env` stays mode `0600`. `tests/harness/scripts/ee-awx.sh down` removes that stack.
 
+`tests/harness/scripts/ee-seeded.sh` runs an Ansible, an OpenTofu, and a shell demo job on a fresh install with only the seeded default execution environments. It skips with a message when no container runtime answers. It is not part of `cargo test`, and CI does not start it. `tests/harness/scripts/ee-seeded.sh down` removes that stack.
+
 The UI is at `http://127.0.0.1:18080`. The admin password is the file `tests/harness/.secrets/admin-password`. NetBox is at `http://127.0.0.1:18081` when you want to look at the devices.
 
 The demo project asks Galaxy for `ansible.posix` 1.6.2. The role itself uses `ansible.builtin`. A Galaxy failure is logged and the play still runs.

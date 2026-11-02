@@ -82,9 +82,18 @@ pub fn environment_fits_tool(tool: &str, environment_tool: &str) -> bool {
     environment_tool == "any" || environment_tool == tool
 }
 
+/// True when the controller can run this tool without a container.
+pub fn controller_can_run(mode: RunnerMode, container_image: bool, local_tool: bool) -> bool {
+    !container_image && (mode == RunnerMode::Local || (mode == RunnerMode::Auto && local_tool))
+}
+
 /// The environment a job uses: its own choice, otherwise the tool default,
 /// unless the template explicitly runs on the controller.
-pub fn resolved_environment_id(template: &Template, default_id: &str) -> Option<String> {
+pub fn resolved_environment_id(
+    template: &Template,
+    default_id: &str,
+    controller_can_run: bool,
+) -> Option<String> {
     if let Some(id) = template
         .environment_id
         .as_deref()
@@ -92,10 +101,38 @@ pub fn resolved_environment_id(template: &Template, default_id: &str) -> Option<
     {
         return Some(id.to_string());
     }
-    if template.no_environment || default_id.is_empty() {
+    if template.no_environment && controller_can_run {
+        return None;
+    }
+    if default_id.is_empty() {
         return None;
     }
     Some(default_id.to_string())
+}
+
+pub fn tool_label(tool: &str) -> &'static str {
+    match tool {
+        "ansible" => "Ansible",
+        "opentofu" => "OpenTofu",
+        _ => "Shell",
+    }
+}
+
+pub fn missing_default_environment(tool: &str) -> String {
+    format!(
+        "No default execution environment is set for {}. Set one under Settings → Jobs.",
+        tool_label(tool)
+    )
+}
+
+pub fn local_tool_available(state: &Shared, tool: &str) -> bool {
+    if state.cfg.container_image {
+        return false;
+    }
+    state
+        .preflight_report()
+        .map(|report| report.tool_ready(tool))
+        .unwrap_or(true)
 }
 
 pub fn check_ansible_spec(spec: &Value) -> Result<(), String> {
@@ -789,7 +826,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
         (job, template)
     };
     let original = template.clone();
-    let template = with_saved_parameters(template, &job);
+    let mut template = with_saved_parameters(template, &job);
     if !known_tool(&template.tool) {
         return Err(format!("Unknown tool {}.", template.tool));
     }
@@ -801,6 +838,15 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
         if let Some(problem) = preflight.job_problem(&template.tool) {
             return Err(problem);
         }
+    }
+    let local_tool = local_tool_available(state, &template.tool);
+    let can_run = controller_can_run(settings.runner, state.cfg.container_image, local_tool);
+    if !can_run && template.environment_id.is_none() {
+        let default = settings.default_environment(&template.tool);
+        if default.is_empty() {
+            return Err(missing_default_environment(&template.tool));
+        }
+        template.environment_id = Some(default.to_string());
     }
 
     let work = state.cfg.data_dir.join("jobs").join(job_id);
@@ -3671,18 +3717,32 @@ mod tests {
     fn an_own_environment_beats_the_tool_default_and_none_stays_on_the_controller() {
         let own = environment_template(Some("own"), false);
         assert_eq!(
-            resolved_environment_id(&own, "default").as_deref(),
+            resolved_environment_id(&own, "default", true).as_deref(),
             Some("own")
         );
         let inherited = environment_template(None, false);
         assert_eq!(
-            resolved_environment_id(&inherited, "default").as_deref(),
+            resolved_environment_id(&inherited, "default", true).as_deref(),
             Some("default")
         );
         let explicit = environment_template(None, true);
-        assert_eq!(resolved_environment_id(&explicit, "default"), None);
+        assert_eq!(resolved_environment_id(&explicit, "default", true), None);
         let no_default = environment_template(None, false);
-        assert_eq!(resolved_environment_id(&no_default, ""), None);
+        assert_eq!(resolved_environment_id(&no_default, "", true), None);
+    }
+
+    #[test]
+    fn a_controller_without_the_tool_uses_the_tool_default_instead_of_none() {
+        let explicit = environment_template(None, true);
+        assert_eq!(
+            resolved_environment_id(&explicit, "default", false).as_deref(),
+            Some("default")
+        );
+        assert!(controller_can_run(RunnerMode::Local, false, false));
+        assert!(!controller_can_run(RunnerMode::Local, true, true));
+        assert!(controller_can_run(RunnerMode::Auto, false, true));
+        assert!(!controller_can_run(RunnerMode::Auto, false, false));
+        assert!(!controller_can_run(RunnerMode::Docker, false, true));
     }
 
     #[tokio::test]

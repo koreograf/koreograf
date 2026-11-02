@@ -61,6 +61,29 @@ PID 1 in the image is [tini](https://github.com/krallin/tini). It reaps processe
 
 The UI is published on `127.0.0.1` only. To listen on every interface, change the port mapping to `8080:8080`. Use a reverse proxy with TLS when other machines should open the UI.
 
+### First-run execution environments
+
+The first start creates `Ansible (curated)`, `OpenTofu (curated)`, and `Shell (curated)` as global environments and sets each as the default under **Settings → Jobs**. Their images are pinned by digest. Pull them on the Docker host before the first job so the job does not wait for a download:
+
+```bash
+docker pull ghcr.io/ansible-community/community-ee-base:2.21.5-2@sha256:d42f2597080e8e34ce4d1f70f66f987fc841bd0bbeb680f8d234e94ef1afc60a
+docker pull ghcr.io/opentofu/opentofu:1.13.2@sha256:25bdfbe87000b8a88d44c7ef0cca53381da95f6203f7aed1e8cf5b81ecbe18eb
+docker pull mcr.microsoft.com/devcontainers/base:bookworm@sha256:99f5250dd2d5f8b11046d5662dd94c1e3c1dae56b560c7caad5ceb7edf349046
+```
+
+For an air-gapped installation, pull and save them on a connected machine, copy the archives, load them on the isolated host, and push them to the private registry:
+
+```bash
+docker pull ghcr.io/ansible-community/community-ee-base:2.21.5-2@sha256:d42f2597080e8e34ce4d1f70f66f987fc841bd0bbeb680f8d234e94ef1afc60a
+docker save ghcr.io/ansible-community/community-ee-base:2.21.5-2@sha256:d42f2597080e8e34ce4d1f70f66f987fc841bd0bbeb680f8d234e94ef1afc60a -o ansible-ee.tar
+# Repeat for the OpenTofu and Shell images, then copy the tar files.
+docker load -i ansible-ee.tar
+docker tag ghcr.io/ansible-community/community-ee-base:2.21.5-2@sha256:d42f2597080e8e34ce4d1f70f66f987fc841bd0bbeb680f8d234e94ef1afc60a registry.example.com/koreograf/ansible-ee:2.21.5-2
+docker push registry.example.com/koreograf/ansible-ee:2.21.5-2
+```
+
+Set `KOREOGRAF_SEED_ENVIRONMENTS=0` when the curated images are not available. Create the three global environments with the registry image names instead, then choose them as the defaults under **Settings → Jobs**. Image pulls use the Docker daemon, so sign in on the host with `docker login registry.example.com`. The `registry` credential in **Credentials** passes a host, user, and password to a job; Koreograf does not run `docker login` and does not pull with that credential.
+
 The socket line in `docker-compose.yml` is commented out. Uncomment it when a job should run in an image. Without the socket the runner stays local, and the demo health check still runs.
 
 That line mounts `/var/run/docker.sock`. The socket is root on the Docker host. The process still runs as uid 10001 and gets the socket's group as a supplementary group, so adding or removing the socket needs no ownership change for the data directory or `checkouts/`. If the entrypoint cannot read the socket's group, or the socket is not readable for uid 10001, it stops with one English line that names the group and the mode to set. An owner creates an execution environment. A global environment needs an administrator. An operator can select an environment the team can see and store it on a template. A viewer cannot. Those people choose an image that the host daemon starts. The job container does not receive the socket. It does receive the job directory, which holds the decrypted credential files for that job at mode `0600`. The job can read them. They are removed when the job ends.

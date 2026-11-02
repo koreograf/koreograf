@@ -1500,14 +1500,21 @@ async function openTemplateDialog(existing, initialTab = "") {
     return [...matching, ...legacy];
   };
   const environmentDefault = (tool) => runner[`default_environment_${tool}`] || "";
+  const noEnvironmentAvailable = (tool) => !runner.container_image
+    && (runner.runner_mode || "auto") !== "docker"
+    && Boolean(runner.local_tools && runner.local_tools[tool]);
   const environmentOptions = (tool, selected) => {
     const defaultId = environmentDefault(tool);
     const defaultName = environments.find((row) => row.id === defaultId)?.name;
     const label = defaultName ? t("default_environment_named", { name: defaultName }) : t("default_environment_none");
-    const control = `<option value="">${esc(label)}</option>
-      <option value="${NO_ENVIRONMENT}"${selected === NO_ENVIRONMENT ? " selected" : ""}>${h("no_environment_run_on_the_controller")}</option>`;
+    const noEnvironment = noEnvironmentAvailable(tool);
+    const chosen = noEnvironment ? selected : selected === NO_ENVIRONMENT ? "" : selected;
+    const noEnvironmentOption = noEnvironment
+      ? `<option value="${NO_ENVIRONMENT}"${chosen === NO_ENVIRONMENT ? " selected" : ""}>${h("no_environment_run_on_the_controller")}</option>`
+      : "";
+    const control = `<option value="">${esc(label)}</option>${noEnvironmentOption}`;
     const rows = environmentsFor(tool).map((row) =>
-      `<option value="${esc(row.id)}"${row.id === selected ? " selected" : ""}>${esc(`${row.name} (${scopeLabel(row)}, ${environmentToolLabel(row.tool)})`)}</option>`
+      `<option value="${esc(row.id)}"${row.id === chosen ? " selected" : ""}>${esc(`${row.name} (${scopeLabel(row)}, ${environmentToolLabel(row.tool)})`)}</option>`
     ).join("");
     return control + rows;
   };

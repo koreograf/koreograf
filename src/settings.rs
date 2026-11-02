@@ -250,7 +250,20 @@ pub fn load(state: &Shared) -> AppResult<Effective> {
     if rows.get(SAVED).map(String::as_str) == Some("1") {
         return from_saved(state, &rows);
     }
-    Ok(from_env(state))
+    let mut effective = from_env(state);
+    effective.default_environment_ansible = rows
+        .get(DEFAULT_ENVIRONMENT_KEYS[0])
+        .cloned()
+        .unwrap_or_default();
+    effective.default_environment_opentofu = rows
+        .get(DEFAULT_ENVIRONMENT_KEYS[1])
+        .cloned()
+        .unwrap_or_default();
+    effective.default_environment_shell = rows
+        .get(DEFAULT_ENVIRONMENT_KEYS[2])
+        .cloned()
+        .unwrap_or_default();
+    Ok(effective)
 }
 
 pub fn view(state: &Shared) -> AppResult<Value> {
