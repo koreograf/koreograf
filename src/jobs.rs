@@ -46,7 +46,13 @@ pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
         if template.team_id != req.team_id {
             return Err(ApiError::Forbidden);
         }
-        let parameters = parameters_for_launch(state, &db, &template, &req)?;
+        let parameters = parameters_for_launch(
+            state,
+            &db,
+            &template,
+            &req,
+            settings.default_environment(&template.tool),
+        )?;
         let parsed = db::json_object(&parameters);
         {
             let workflow_id = workflow_definition_id(&db, req.workflow_job_id.as_deref())?;
@@ -151,6 +157,7 @@ pub fn relaunch(
     launched_by: &str,
     only_failed_hosts: bool,
 ) -> AppResult<String> {
+    let settings = crate::settings::load(state)?;
     let (team_id, template_id, extra, parameters, workflow_job_id) = {
         let db = state.db()?;
         let job = db::job(&db, source_id)?.ok_or(ApiError::NotFound)?;
@@ -175,7 +182,13 @@ pub fn relaunch(
         {
             job.parameters.clone()
         } else {
-            capture_parameters(&db, &template, &db::json_object(&job.extra_vars), None)
+            capture_parameters(
+                &db,
+                &template,
+                &db::json_object(&job.extra_vars),
+                None,
+                settings.default_environment(&template.tool),
+            )
         };
         if only_failed_hosts {
             if job.tool != "ansible" {
@@ -274,8 +287,15 @@ fn parameters_for_node(
     template: &db::Template,
     node: &workflow::GraphNode,
     workflow_extra: &Value,
+    default_environment: &str,
 ) -> AppResult<String> {
-    let mut params = db::json_object(&capture_parameters(db, template, workflow_extra, None));
+    let mut params = db::json_object(&capture_parameters(
+        db,
+        template,
+        workflow_extra,
+        None,
+        default_environment,
+    ));
     let had_extra = node.overrides.extra_vars.is_some();
     let had_spec = node.overrides.spec.is_some();
     {
@@ -419,6 +439,7 @@ fn parameters_for_launch(
     db: &rusqlite::Connection,
     template: &db::Template,
     req: &LaunchRequest,
+    default_environment: &str,
 ) -> AppResult<String> {
     if let Some(raw) = &req.parameters_override {
         return stored_parameters(raw);
@@ -437,7 +458,13 @@ fn parameters_for_launch(
         || req.overrides.credential_ids.is_some()
         || spec_overlay.is_some();
     if !asked {
-        return Ok(capture_parameters(db, template, &req.extra_vars, None));
+        return Ok(capture_parameters(
+            db,
+            template,
+            &req.extra_vars,
+            None,
+            default_environment,
+        ));
     }
     if !template.prompt_on_launch && !req.overrides.launch_with_options {
         return Err(ApiError::bad("prompt_on_launch_is_off"));
@@ -466,6 +493,7 @@ fn parameters_for_launch(
         &effective,
         &req.extra_vars,
         credential_ids.as_deref(),
+        default_environment,
     ));
     if let Some(spec) = spec_overlay {
         if template.tool != "ansible" {
@@ -547,6 +575,7 @@ fn capture_parameters(
     template: &db::Template,
     request_extra: &Value,
     credential_override: Option<&[String]>,
+    default_environment: &str,
 ) -> String {
     let project_name = template
         .project_id
@@ -582,8 +611,8 @@ fn capture_parameters(
         .filter_map(|id| db::credential(db, id).ok().flatten())
         .map(|item| credential_entry(&item))
         .collect::<Vec<_>>();
-    let environment = template
-        .environment_id
+    let environment_id = runner::resolved_environment_id(template, default_environment);
+    let environment = environment_id
         .as_deref()
         .and_then(|id| db::environment(db, id).ok().flatten())
         .map(|item| (item.name, item.image));
@@ -600,7 +629,8 @@ fn capture_parameters(
         "credential_name": credential.as_ref().map(|(name, _)| name),
         "credential_kind": credential.as_ref().map(|(_, kind)| kind),
         "credentials": credentials,
-        "environment_id": template.environment_id,
+        "environment_id": environment_id,
+        "no_environment": template.no_environment,
         "environment_name": environment.as_ref().map(|(name, _)| name),
         "environment_image": environment.as_ref().map(|(_, image)| image),
         "extra_vars": runner::merge_vars(&db::json_object(&template.extra_vars), request_extra),
@@ -851,11 +881,16 @@ fn apply_step(
                 return Ok(());
             };
             let prepared = {
+                let settings = crate::settings::load(state)?;
                 let db = state.db()?;
                 match db::template(&db, &node.template_id)? {
-                    Some(template) if template.team_id == team_id => {
-                        parameters_for_node(&db, &template, node, extra)
-                    }
+                    Some(template) if template.team_id == team_id => parameters_for_node(
+                        &db,
+                        &template,
+                        node,
+                        extra,
+                        settings.default_environment(&template.tool),
+                    ),
                     Some(_) => Err(ApiError::Forbidden),
                     None => Err(ApiError::NotFound),
                 }
@@ -951,7 +986,13 @@ fn workflow_hook_refuses_local_run(
         if template.team_id != team_id {
             continue;
         }
-        let parameters = match parameters_for_node(&db, &template, node, extra) {
+        let parameters = match parameters_for_node(
+            &db,
+            &template,
+            node,
+            extra,
+            settings.default_environment(&template.tool),
+        ) {
             Ok(parameters) => parameters,
             Err(_) => continue,
         };
@@ -1536,6 +1577,7 @@ mod tests {
                 inventory_id: inventory_id.map(str::to_string),
                 credential_id: None,
                 environment_id: None,
+                no_environment: true,
                 entrypoint: String::new(),
                 extra_vars: "{}".into(),
                 spec: json!({"script": script}).to_string(),

@@ -752,6 +752,12 @@ function selectOptions(items, selected, allowEmpty, label) {
   return empty + options;
 }
 
+const NO_ENVIRONMENT = "__no_environment__";
+
+function environmentToolLabel(tool) {
+  return !tool || tool === "any" ? t("any_tool_legacy") : t(tool);
+}
+
 function verbosityLabel(level) {
   return [
     "0_normal",
@@ -1228,8 +1234,23 @@ async function pageTemplateForm(id) {
     name: "", description: "", tool: "ansible", project_id: "", inventory_id: "",
     credential_id: "", credential_ids: [], environment_id: "", entrypoint: "", extra_vars: {}, spec: {},
   };
-  const environmentsFor = (tool) => environments.filter((row) => !row.tool || row.tool === "any" || row.tool === tool);
-  const environmentOptions = (tool, selected) => selectOptions(environmentsFor(tool), selected, true, (row) => `${row.name} (${scopeLabel(row)})`);
+  const environmentsFor = (tool) => {
+    const matching = environments.filter((row) => row.tool === tool);
+    const legacy = environments.filter((row) => !row.tool || row.tool === "any");
+    return [...matching, ...legacy];
+  };
+  const environmentDefault = (tool) => runner[`default_environment_${tool}`] || "";
+  const environmentOptions = (tool, selected) => {
+    const defaultId = environmentDefault(tool);
+    const defaultName = environments.find((row) => row.id === defaultId)?.name;
+    const label = defaultName ? t("default_environment_named", { name: defaultName }) : t("default_environment_none");
+    const control = `<option value="">${esc(label)}</option>
+      <option value="${NO_ENVIRONMENT}"${selected === NO_ENVIRONMENT ? " selected" : ""}>${h("no_environment_run_on_the_controller")}</option>`;
+    const rows = environmentsFor(tool).map((row) =>
+      `<option value="${esc(row.id)}"${row.id === selected ? " selected" : ""}>${esc(`${row.name} (${scopeLabel(row)}, ${environmentToolLabel(row.tool)})`)}</option>`
+    ).join("");
+    return control + rows;
+  };
   const verbosity = Number(spec.verbosity) || 0;
   shell(id ? t("edit_template") : t("new_template"), `
     <form class="card form" id="template-form">
@@ -1259,7 +1280,7 @@ async function pageTemplateForm(id) {
             <p class="small muted">${h("off_uses_the_checkout_from_the_last_sync")}</p>
           </div>
           <label class="field" id="inventory-field"${item.tool === "ansible" ? "" : " hidden"}><span>${h("inventory")}</span><select name="inventory_id">${selectOptions(inventories, item.inventory_id, true, (row) => row.name)}</select></label>
-          <label class="field"><span>${h("execution_environment")}</span><select name="environment_id">${environmentOptions(item.tool, item.environment_id)}</select></label>
+          <label class="field"><span>${h("execution_environment")}</span><select name="environment_id">${environmentOptions(item.tool, item.no_environment ? NO_ENVIRONMENT : item.environment_id)}</select></label>
         </div>
         <p class="banner warn" id="environment-runtime-warning" hidden></p>
         ${templateCredentialFields(credentials, selectedCredentialIds(item))}
@@ -1322,13 +1343,18 @@ async function pageTemplateForm(id) {
     </form>
     ${id ? `<section class="card" id="schedule-card" data-kind="template" data-target="${esc(id)}"></section>` : ""}`);
   const form = document.querySelector("#template-form");
+  const chosenEnvironment = () => {
+    const value = form.environment_id.value;
+    if (value === NO_ENVIRONMENT) return "";
+    return value || environmentDefault(form.tool.value);
+  };
   const showEnvironmentWarning = () => {
     const warning = document.querySelector("#environment-runtime-warning");
     if (!warning) return;
     const key = environmentRuntimeWarning(
       runner.runner_mode,
       runner.runtime,
-      form.environment_id.value,
+      chosenEnvironment(),
     );
     warning.hidden = !key;
     if (key) warning.textContent = t(key);
@@ -1392,7 +1418,8 @@ async function pageTemplateForm(id) {
           ...[...form.querySelectorAll("[data-credential-kind]")].map((select) => select.value).filter(Boolean),
           ...[...form.querySelectorAll("#vault-pills [data-vault-id]")].map((node) => node.dataset.vaultId),
         ],
-        environment_id: form.environment_id.value || null,
+        environment_id: form.environment_id.value && form.environment_id.value !== NO_ENVIRONMENT ? form.environment_id.value : null,
+        no_environment: form.environment_id.value === NO_ENVIRONMENT,
         update_on_launch: selectedProject && selectedProject.source_type === "git" ? form.update_on_launch.checked : true,
         entrypoint: chosenEntrypoint(),
         extra_vars: jsonObject(form.extra_vars.value, "extra_variables"),
@@ -1443,8 +1470,8 @@ async function pageTemplateForm(id) {
     const tool = form.tool.value;
     const available = environmentsFor(tool);
     const selected = form.environment_id.value;
-    form.environment_id.innerHTML = selectOptions(available, selected, true, (row) => `${row.name} (${scopeLabel(row)})`);
-    const incompatible = selected && !available.some((row) => row.id === selected);
+    form.environment_id.innerHTML = environmentOptions(tool, selected);
+    const incompatible = selected && selected !== NO_ENVIRONMENT && !available.some((row) => row.id === selected);
     if (incompatible) {
       form.environment_id.value = "";
       const warning = document.querySelector("#environment-runtime-warning");
@@ -3400,7 +3427,7 @@ async function pageRuntime() {
   const drawEnvironments = () => {
     const needle = document.querySelector("#environment-search").value.trim().toLowerCase();
     const rows = environments.filter((item) => !needle || `${item.name} ${item.tool || ""} ${item.image} ${item.pull_policy} ${item.scope || ""} ${scopeLabel(item)}`.toLowerCase().includes(needle)).map((item) =>
-      `<tr><td><a href="#/environments/${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(scopeLabel(item))}</td><td>${esc(t(item.tool || "any"))}</td><td class="mono">${esc(item.image)}</td><td>${esc(item.pull_policy)}</td><td>${canManageEnvironment(item) ? `<button class="btn danger" type="button" data-env="${esc(item.id)}">${h("delete")}</button>` : ""}</td></tr>`
+      `<tr><td><a href="#/environments/${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(scopeLabel(item))}</td><td>${esc(environmentToolLabel(item.tool))}</td><td class="mono">${esc(item.image)}</td><td>${esc(item.pull_policy)}</td><td>${canManageEnvironment(item) ? `<button class="btn danger" type="button" data-env="${esc(item.id)}">${h("delete")}</button>` : ""}</td></tr>`
     );
     document.querySelector("#environment-table").innerHTML = table([t("name"), t("applies_to"), t("tool"), t("image"), t("pull"), ""], rows);
     document.querySelectorAll("[data-env]").forEach((button) => {
@@ -3451,12 +3478,13 @@ function environmentImagePlaceholder(tool) {
 function environmentForm(item) {
   const policy = item ? item.pull_policy : "if_not_present";
   const scope = item && item.scope ? item.scope : "team";
-  const tool = item && item.tool ? item.tool : "any";
+  const current = item && item.tool ? item.tool : "";
+  const tool = ["ansible", "opentofu", "shell"].includes(current) ? current : "ansible";
   const option = (value) => `<option value="${value}"${policy === value ? " selected" : ""}>${value}</option>`;
   const toolOption = (value) => `<option value="${value}"${tool === value ? " selected" : ""}>${h(value)}</option>`;
   return `<form class="card form" id="env-form">
     <label class="field"><span>${h("name")}</span><input name="name" required value="${item ? esc(item.name) : ""}"></label>
-    <label class="field"><span>${h("tool")}</span><select class="fit" name="tool">${toolOption("any")}${toolOption("ansible")}${toolOption("opentofu")}${toolOption("shell")}</select></label>
+    <label class="field"><span>${h("tool")}</span><select class="fit" name="tool">${toolOption("ansible")}${toolOption("opentofu")}${toolOption("shell")}</select></label>
     <label class="field"><span>${h("image")}</span><input name="image" required value="${item ? esc(item.image) : ""}" placeholder="${esc(environmentImagePlaceholder(tool))}"></label>
     <label class="field"><span>${h("network")}</span><input name="network" value="${item ? esc(item.network || "") : ""}" placeholder="koreograf_default"></label>
     <p class="small muted">${h("the_network_is_passed_to_the_container_run_an_empty")}</p>
@@ -3516,7 +3544,7 @@ async function pageEnvironment(id) {
     shell(item.name, `<section class="card"><dl class="kv">
       ${paramRow("name", item.name)}
       ${paramRow("applies_to", scopeLabel(item))}
-      ${paramRow("tool", t(item.tool || "any"))}
+      ${paramRow("tool", environmentToolLabel(item.tool))}
       ${paramRow("image", item.image)}
       ${paramRow("pull", item.pull_policy)}
       ${paramRow("description", item.description)}
@@ -5920,6 +5948,9 @@ function settingsBody(form) {
     runner: form.runner.value,
     job_timeout_secs: Number(form.job_timeout_secs.value),
     job_output_lines: Number(form.job_output_lines.value),
+    default_environment_ansible: form.default_environment_ansible.value,
+    default_environment_opentofu: form.default_environment_opentofu.value,
+    default_environment_shell: form.default_environment_shell.value,
     clear,
   };
 }
@@ -5941,10 +5972,13 @@ async function pageSettings(notice) {
     return;
   }
   const item = await api("GET", "/api/settings");
+  const environments = teamId ? await api("GET", "/api/environments") : [];
   const ldap = item.ldap || {};
   const proxy = item.proxy || {};
   const mode = ldap.mode === "ad" ? "ad" : "ldap";
   const runner = ["auto", "docker", "local"].includes(item.runner) ? item.runner : "auto";
+  const defaultsFor = (tool) => environments.filter((row) => row.scope === "global" && (!row.tool || row.tool === "any" || row.tool === tool));
+  const defaultOptions = (tool, selected) => selectOptions(defaultsFor(tool), selected || "", true, (row) => `${row.name} (${environmentToolLabel(row.tool)})`);
   const source = item.source === "saved"
     ? "these_values_are_saved_and_apply_immediately"
     : "nothing_is_saved_yet_the_environment_variables_from";
@@ -6010,6 +6044,12 @@ async function pageSettings(notice) {
       </div>
       <p class="small muted">${h("the_log_keeps_the_first_three_quarters_and_the_last")}</p>
       <p class="small muted">${h("automatic_uses_an_execution_environment_when_docker_or")}</p>
+      <p class="small muted">${h("a_template_without_an_environment_uses_the_default")}</p>
+      <div class="field-grid">
+        <label class="field"><span>${h("default_environment_ansible")}</span><select name="default_environment_ansible">${defaultOptions("ansible", item.default_environment_ansible)}</select></label>
+        <label class="field"><span>${h("default_environment_opentofu")}</span><select name="default_environment_opentofu">${defaultOptions("opentofu", item.default_environment_opentofu)}</select></label>
+        <label class="field"><span>${h("default_environment_shell")}</span><select name="default_environment_shell">${defaultOptions("shell", item.default_environment_shell)}</select></label>
+      </div>
     </section>
     <p class="small muted">${h("saving_replaces_the_environment_variables_an_empty_password")}</p>
     <div class="choice-row">

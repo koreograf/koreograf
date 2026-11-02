@@ -25,6 +25,12 @@ const PROXY_ENV: &[&str] = &[
     "NO_PROXY",
 ];
 
+pub(crate) const DEFAULT_ENVIRONMENT_KEYS: [&str; 3] = [
+    "default_environment_ansible",
+    "default_environment_opentofu",
+    "default_environment_shell",
+];
+
 #[derive(Clone)]
 pub struct ProxySettings {
     pub url: String,
@@ -134,6 +140,9 @@ pub struct Effective {
     pub runner: RunnerMode,
     pub job_timeout_secs: u64,
     pub job_output_lines: u64,
+    pub default_environment_ansible: String,
+    pub default_environment_opentofu: String,
+    pub default_environment_shell: String,
     pub saved: bool,
     pub unsupported_proxy: bool,
 }
@@ -147,8 +156,18 @@ impl Effective {
             Some(&self.ldap)
         }
     }
+
+    pub fn default_environment(&self, tool: &str) -> &str {
+        match tool {
+            "ansible" => &self.default_environment_ansible,
+            "opentofu" => &self.default_environment_opentofu,
+            "shell" => &self.default_environment_shell,
+            _ => "",
+        }
+    }
 }
 
+#[derive(Clone)]
 pub struct SettingsWrite {
     pub ldap_url: String,
     pub ldap_mode: String,
@@ -169,6 +188,9 @@ pub struct SettingsWrite {
     pub runner: String,
     pub job_timeout_secs: u64,
     pub job_output_lines: u64,
+    pub default_environment_ansible: String,
+    pub default_environment_opentofu: String,
+    pub default_environment_shell: String,
     pub clear_ldap_password: bool,
     pub clear_proxy_password: bool,
     pub reset: bool,
@@ -194,6 +216,9 @@ struct Draft {
     runner: RunnerMode,
     job_timeout_secs: u64,
     job_output_lines: u64,
+    default_environment_ansible: String,
+    default_environment_opentofu: String,
+    default_environment_shell: String,
 }
 
 pub fn load(state: &Shared) -> AppResult<Effective> {
@@ -221,7 +246,10 @@ pub fn save(state: &Shared, input: &SettingsWrite) -> AppResult<Value> {
         return Ok(public_json(&effective));
     }
     let current = load(state)?;
-    let draft = validate(input, &current)?;
+    let draft = {
+        let db = state.db()?;
+        validate(input, &current, &db)?
+    };
     let ldap_secret = encrypt_secret(state, &draft.ldap_bind_password)?;
     let proxy_secret = encrypt_secret(state, &draft.proxy_password)?;
     let mut db = state.db()?;
@@ -246,6 +274,18 @@ pub fn save(state: &Shared, input: &SettingsWrite) -> AppResult<Value> {
         ("runner", draft.runner.as_str().to_string()),
         ("job_timeout_secs", draft.job_timeout_secs.to_string()),
         ("job_output_lines", draft.job_output_lines.to_string()),
+        (
+            DEFAULT_ENVIRONMENT_KEYS[0],
+            draft.default_environment_ansible.clone(),
+        ),
+        (
+            DEFAULT_ENVIRONMENT_KEYS[1],
+            draft.default_environment_opentofu.clone(),
+        ),
+        (
+            DEFAULT_ENVIRONMENT_KEYS[2],
+            draft.default_environment_shell.clone(),
+        ),
     ];
     if let Some(secret) = ldap_secret {
         pairs.push((LDAP_PASSWORD, secret));
@@ -275,6 +315,9 @@ pub fn save(state: &Shared, input: &SettingsWrite) -> AppResult<Value> {
     effective.runner = draft.runner;
     effective.job_timeout_secs = draft.job_timeout_secs;
     effective.job_output_lines = draft.job_output_lines;
+    effective.default_environment_ansible = draft.default_environment_ansible;
+    effective.default_environment_opentofu = draft.default_environment_opentofu;
+    effective.default_environment_shell = draft.default_environment_shell;
     crate::tls::warn_directory(&effective.ldap);
     Ok(public_json(&effective))
 }
@@ -307,6 +350,9 @@ fn public_json(effective: &Effective) -> Value {
         "runner": effective.runner.as_str(),
         "job_timeout_secs": effective.job_timeout_secs,
         "job_output_lines": effective.job_output_lines,
+        "default_environment_ansible": effective.default_environment_ansible,
+        "default_environment_opentofu": effective.default_environment_opentofu,
+        "default_environment_shell": effective.default_environment_shell,
     })
 }
 
@@ -319,6 +365,9 @@ fn from_env(state: &Shared) -> Effective {
         runner: state.cfg.runner,
         job_timeout_secs: state.cfg.job_timeout_secs,
         job_output_lines: state.cfg.job_output_lines,
+        default_environment_ansible: String::new(),
+        default_environment_opentofu: String::new(),
+        default_environment_shell: String::new(),
         saved: false,
         unsupported_proxy,
     }
@@ -390,6 +439,18 @@ fn from_saved(state: &Shared, rows: &HashMap<String, String>) -> AppResult<Effec
         runner,
         job_timeout_secs,
         job_output_lines,
+        default_environment_ansible: rows
+            .get(DEFAULT_ENVIRONMENT_KEYS[0])
+            .cloned()
+            .unwrap_or_default(),
+        default_environment_opentofu: rows
+            .get(DEFAULT_ENVIRONMENT_KEYS[1])
+            .cloned()
+            .unwrap_or_default(),
+        default_environment_shell: rows
+            .get(DEFAULT_ENVIRONMENT_KEYS[2])
+            .cloned()
+            .unwrap_or_default(),
         saved: true,
         unsupported_proxy: false,
     })
@@ -429,7 +490,7 @@ fn empty_ldap() -> LdapConfig {
     }
 }
 
-fn validate(input: &SettingsWrite, current: &Effective) -> AppResult<Draft> {
+fn validate(input: &SettingsWrite, current: &Effective, db: &Connection) -> AppResult<Draft> {
     let ldap_mode = match input.ldap_mode.trim().to_ascii_lowercase().as_str() {
         "ldap" => "ldap",
         "ad" => "ad",
@@ -514,6 +575,12 @@ fn validate(input: &SettingsWrite, current: &Effective) -> AppResult<Draft> {
     } else {
         input.job_output_lines
     };
+    let default_environment_ansible =
+        validate_default_environment(db, "ansible", &input.default_environment_ansible)?;
+    let default_environment_opentofu =
+        validate_default_environment(db, "opentofu", &input.default_environment_opentofu)?;
+    let default_environment_shell =
+        validate_default_environment(db, "shell", &input.default_environment_shell)?;
     Ok(Draft {
         ldap_url,
         ldap_mode: ldap_mode.to_string(),
@@ -534,7 +601,26 @@ fn validate(input: &SettingsWrite, current: &Effective) -> AppResult<Draft> {
         runner,
         job_timeout_secs: input.job_timeout_secs,
         job_output_lines,
+        default_environment_ansible,
+        default_environment_opentofu,
+        default_environment_shell,
     })
+}
+
+fn validate_default_environment(db: &Connection, tool: &str, raw: &str) -> AppResult<String> {
+    let id = raw.trim();
+    if id.is_empty() {
+        return Ok(String::new());
+    }
+    let environment = crate::db::environment(db, id)?
+        .ok_or_else(|| ApiError::bad("the_default_environment_is_missing"))?;
+    if environment.scope != "global" {
+        return Err(ApiError::bad("the_default_environment_must_be_global"));
+    }
+    if !crate::runner::environment_fits_tool(tool, &environment.tool) {
+        return Err(ApiError::bad("the_default_environment_is_for_another_tool"));
+    }
+    Ok(id.to_string())
 }
 
 fn resolve_secret(incoming: &str, clear: bool, current: &str) -> AppResult<String> {
@@ -867,6 +953,9 @@ mod tests {
             runner: "docker".into(),
             job_timeout_secs: 120,
             job_output_lines: 4_000,
+            default_environment_ansible: String::new(),
+            default_environment_opentofu: String::new(),
+            default_environment_shell: String::new(),
             clear_ldap_password: false,
             clear_proxy_password: false,
             reset: false,
@@ -982,6 +1071,74 @@ mod tests {
             "put_the_credentials_in_their_own_fields_not"
         );
         assert_eq!(load(&state).unwrap().proxy.url, "http://proxy.example:3128");
+    }
+
+    fn environment(id: &str, tool: &str, scope: &str) -> crate::db::Environment {
+        crate::db::Environment {
+            id: id.into(),
+            team_id: (scope == "team").then(|| "team".to_string()),
+            organization_id: (scope == "organization").then(|| "org".to_string()),
+            name: id.into(),
+            tool: tool.into(),
+            image: "quay.io/example/ee:1".into(),
+            pull_policy: "if_not_present".into(),
+            network: String::new(),
+            description: String::new(),
+            created_at: crate::db::now(),
+            scope: String::new(),
+            organization_name: String::new(),
+            team_name: String::new(),
+        }
+    }
+
+    #[test]
+    fn default_environments_must_exist_be_global_and_match_their_tool() {
+        let state = state();
+        {
+            let db = state.db().unwrap();
+            crate::db::insert_environment(&db, &environment("ansible-ee", "ansible", "global"))
+                .unwrap();
+            crate::db::insert_environment(&db, &environment("tofu-ee", "opentofu", "global"))
+                .unwrap();
+            crate::db::insert_environment(&db, &environment("team-ee", "ansible", "organization"))
+                .unwrap();
+        }
+        let mut write = sample("bind-secret");
+        write.default_environment_ansible = "ansible-ee".into();
+        write.default_environment_opentofu = "tofu-ee".into();
+        let saved = save(&state, &write).unwrap();
+        assert_eq!(saved["default_environment_ansible"], "ansible-ee");
+        assert_eq!(saved["default_environment_opentofu"], "tofu-ee");
+        assert_eq!(saved["default_environment_shell"], "");
+
+        let mut wrong_tool = write.clone();
+        wrong_tool.default_environment_ansible = "tofu-ee".into();
+        assert_eq!(
+            save(&state, &wrong_tool).unwrap_err().to_string(),
+            "the_default_environment_is_for_another_tool"
+        );
+        let mut not_global = write.clone();
+        not_global.default_environment_shell = "team-ee".into();
+        assert_eq!(
+            save(&state, &not_global).unwrap_err().to_string(),
+            "the_default_environment_must_be_global"
+        );
+        let mut missing = write.clone();
+        missing.default_environment_shell = "gone".into();
+        assert_eq!(
+            save(&state, &missing).unwrap_err().to_string(),
+            "the_default_environment_is_missing"
+        );
+        assert_eq!(
+            load(&state).unwrap().default_environment_ansible,
+            "ansible-ee"
+        );
+
+        {
+            let db = state.db().unwrap();
+            crate::db::delete_environment(&db, "ansible-ee").unwrap();
+        }
+        assert_eq!(load(&state).unwrap().default_environment_ansible, "");
     }
 
     #[test]

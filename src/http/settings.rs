@@ -20,6 +20,12 @@ pub(super) struct SettingsBody {
     #[serde(default)]
     job_output_lines: u64,
     #[serde(default)]
+    default_environment_ansible: String,
+    #[serde(default)]
+    default_environment_opentofu: String,
+    #[serde(default)]
+    default_environment_shell: String,
+    #[serde(default)]
     clear: Vec<String>,
 }
 
@@ -103,6 +109,9 @@ pub async fn put_settings(
         runner: body.runner.unwrap_or_default(),
         job_timeout_secs: body.job_timeout_secs.unwrap_or_default(),
         job_output_lines: body.job_output_lines,
+        default_environment_ansible: body.default_environment_ansible,
+        default_environment_opentofu: body.default_environment_opentofu,
+        default_environment_shell: body.default_environment_shell,
         clear_ldap_password,
         clear_proxy_password,
         reset: body.reset,

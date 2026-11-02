@@ -82,6 +82,22 @@ pub fn environment_fits_tool(tool: &str, environment_tool: &str) -> bool {
     environment_tool == "any" || environment_tool == tool
 }
 
+/// The environment a job uses: its own choice, otherwise the tool default,
+/// unless the template explicitly runs on the controller.
+pub fn resolved_environment_id(template: &Template, default_id: &str) -> Option<String> {
+    if let Some(id) = template
+        .environment_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+    {
+        return Some(id.to_string());
+    }
+    if template.no_environment || default_id.is_empty() {
+        return None;
+    }
+    Some(default_id.to_string())
+}
+
 pub fn check_ansible_spec(spec: &Value) -> Result<(), String> {
     if !spec.is_object() {
         return Err("spec_must_be_an_object".into());
@@ -3584,6 +3600,46 @@ mod tests {
         assert!(environment_fits_tool("shell", "shell"));
         assert!(!environment_fits_tool("ansible", "opentofu"));
         assert!(!environment_fits_tool("shell", "ansible"));
+    }
+
+    fn environment_template(environment_id: Option<&str>, no_environment: bool) -> Template {
+        Template {
+            id: "template".into(),
+            team_id: "team".into(),
+            name: "Run".into(),
+            description: String::new(),
+            tool: "opentofu".into(),
+            project_id: None,
+            inventory_id: None,
+            credential_id: None,
+            environment_id: environment_id.map(str::to_string),
+            no_environment,
+            entrypoint: "module".into(),
+            extra_vars: "{}".into(),
+            spec: "{}".into(),
+            created_at: String::new(),
+            update_on_launch: false,
+            admin_saved: true,
+            prompt_on_launch: false,
+        }
+    }
+
+    #[test]
+    fn an_own_environment_beats_the_tool_default_and_none_stays_on_the_controller() {
+        let own = environment_template(Some("own"), false);
+        assert_eq!(
+            resolved_environment_id(&own, "default").as_deref(),
+            Some("own")
+        );
+        let inherited = environment_template(None, false);
+        assert_eq!(
+            resolved_environment_id(&inherited, "default").as_deref(),
+            Some("default")
+        );
+        let explicit = environment_template(None, true);
+        assert_eq!(resolved_environment_id(&explicit, "default"), None);
+        let no_default = environment_template(None, false);
+        assert_eq!(resolved_environment_id(&no_default, ""), None);
     }
 
     #[tokio::test]
