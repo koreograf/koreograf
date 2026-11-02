@@ -82,6 +82,18 @@ pub fn router(state: Shared) -> Router {
             "/inventories/{id}/hosts",
             get(catalog::list_inventory_hosts),
         )
+        .route(
+            "/inventories/{id}/hosts/{name}",
+            get(catalog::get_inventory_host),
+        )
+        .route(
+            "/inventories/{id}/groups",
+            get(catalog::list_inventory_groups),
+        )
+        .route(
+            "/inventories/{id}/groups/{name}",
+            get(catalog::get_inventory_group),
+        )
         .route("/inventories/{id}/sources", post(sources::add_source))
         .route(
             "/inventories/{id}/sources/{source_id}",

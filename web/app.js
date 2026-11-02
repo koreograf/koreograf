@@ -957,7 +957,7 @@ function makeModal(overlay, close) {
   return dismiss;
 }
 
-async function openLaunchPrompt(item, launchWithOptions = false) {
+async function openLaunchPrompt(item, launchWithOptions = false, preset = {}) {
   const previous = document.querySelector("#launch-prompt");
   if (previous) previous.remove();
   const spec = item.spec || {};
@@ -967,8 +967,10 @@ async function openLaunchPrompt(item, launchWithOptions = false) {
     api("GET", "/api/credentials"),
   ]);
   const verbosity = Number(spec.verbosity) || 0;
+  const inventoryId = preset.inventoryId || item.inventory_id;
+  const limit = preset.limit === undefined ? (spec.limit || "") : preset.limit;
   const inventory = ansible
-    ? `<label class="field"><span>${h("inventory")}</span><select name="inventory_id">${selectOptions(inventories, item.inventory_id, true, (row) => row.name)}</select></label>`
+    ? `<label class="field"><span>${h("inventory")}</span><select name="inventory_id">${selectOptions(inventories, inventoryId, true, (row) => row.name)}</select></label>`
     : "";
   const ansibleFields = ansible ? `
     <div class="field-row">
@@ -988,7 +990,7 @@ async function openLaunchPrompt(item, launchWithOptions = false) {
       ${chipBox("tags", "tags", spec.tags)}
       ${chipBox("skip_tags", "skip_tags", spec.skip_tags)}
     </div>
-    <label class="field"><span>${h("limit")}</span><input class="fit" name="limit" value="${esc(spec.limit || "")}"></label>` : "";
+    <label class="field"><span>${h("limit")}</span><input class="fit" name="limit" value="${esc(limit)}"></label>` : "";
   document.querySelector(".main").insertAdjacentHTML("beforeend", `
     <div class="overlay" id="launch-prompt">
       <div class="overlay-card launch-prompt" role="dialog" aria-modal="true" aria-labelledby="launch-prompt-title">
@@ -3936,6 +3938,7 @@ function inventoryHostState() {
     group: params.get("group") || "",
     size: [25, 50, 100].includes(size) ? size : 50,
     sort: params.get("sort") || "name",
+    tab: params.get("tab") === "groups" ? "groups" : "hosts",
   };
 }
 
@@ -3946,6 +3949,7 @@ function inventoryHostHash(id, state) {
   if (state.group) params.set("group", state.group);
   if (state.size !== 50) params.set("size", String(state.size));
   if (state.sort && state.sort !== "name") params.set("sort", state.sort);
+  if (state.tab === "groups") params.set("tab", "groups");
   const query = params.toString();
   return `#/inventories/${encodeURIComponent(id)}${query ? `?${query}` : ""}`;
 }
@@ -3961,7 +3965,7 @@ function inventoryHostUrl(id, state) {
   return `/api/inventories/${encodeURIComponent(id)}/hosts?${params}`;
 }
 
-function inventoryHostTable(hosts, state) {
+function inventoryHostTable(hosts, state, id) {
   const head = (label, field) => {
     const active = state.sort === field || state.sort === `-${field}`;
     const descending = active && state.sort.startsWith("-");
@@ -3971,18 +3975,31 @@ function inventoryHostTable(hosts, state) {
   };
   const rows = hosts.map((host) => {
     const vars = Object.entries(host.vars || {}).map(([key, value]) => `${key}=${value}`).join(" ");
-    return `<tr><td class="mono">${esc(host.name)}</td><td class="mono">${esc((host.vars || {}).ansible_host || "")}</td><td>${esc((host.groups || []).join(", "))}</td><td class="mono">${esc(vars)}</td></tr>`;
+    const link = id
+      ? `<a class="mono" href="#/inventories/${encodeURIComponent(id)}/hosts/${encodeURIComponent(host.name)}">${esc(host.name)}</a>`
+      : `<span class="mono">${esc(host.name)}</span>`;
+    return `<tr><td>${link}</td><td class="mono">${esc((host.vars || {}).ansible_host || "")}</td><td>${esc((host.groups || []).join(", "))}</td><td class="mono">${esc(vars)}</td></tr>`;
   });
   return `<div class="table-wrap inventory-hosts-table"><table class="table"><thead><tr>${head("name", "name")}${head("address", "address")}${head("groups", "groups")}<th>${h("variables")}</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+}
+
+function inventoryGroupTable(groups, id) {
+  const rows = groups.map((group) => {
+    const link = `<a href="#/inventories/${encodeURIComponent(id)}/groups/${encodeURIComponent(group.name)}">${esc(group.name)}</a>`;
+    const vars = Object.entries(group.vars || {}).map(([key, value]) => `${key}=${value}`).join(" ");
+    return `<tr><td>${link}</td><td>${esc(group.host_count)}</td><td>${esc((group.children || []).join(", "))}</td><td class="mono">${esc(vars)}</td></tr>`;
+  });
+  return `<div class="table-wrap inventory-groups-table"><table class="table"><thead><tr><th>${h("name")}</th><th>${h("hosts")}</th><th>${h("groups")}</th><th>${h("variables")}</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
 }
 
 async function pageInventory(id) {
   if (!needTeam()) return;
   const view = inventoryHostState();
-  const [item, projects, firstPage] = await Promise.all([
+  const [item, projects, firstPage, groupPage] = await Promise.all([
     api("GET", `/api/inventories/${encodeURIComponent(id)}`),
     can("operator") ? api("GET", "/api/projects") : Promise.resolve([]),
     api("GET", inventoryHostUrl(id, view)),
+    api("GET", `/api/inventories/${encodeURIComponent(id)}/groups`),
   ]);
   let page = firstPage;
   const pages = () => Math.max(1, Math.ceil(Number(page.total) / view.size));
@@ -4026,14 +4043,24 @@ async function pageInventory(id) {
         <h2>${h("hosts")}</h2>
         ${external && can("operator") ? `<button class="btn" id="sync-inventory" type="button">${h("refresh_all_sources")}</button>` : ""}
       </div>
-      <div class="row">
-        <input class="search" id="host-search" type="search" value="${esc(view.search)}" placeholder="${h("search_hosts")}" aria-label="${h("search_hosts")}" autocomplete="off">
-        <label class="field"><span>${h("group")}</span><select id="host-group" aria-label="${h("group")}">${groupOptions}</select></label>
-        <label class="field"><span>${h("page_size")}</span><select id="host-size" aria-label="${h("page_size")}">${[25, 50, 100].map((size) => `<option value="${size}"${size === view.size ? " selected" : ""}>${size}</option>`).join("")}</select></label>
+      <div class="row" id="inventory-tabs">
+        <button class="btn pill${view.tab === "hosts" ? " primary" : ""}" type="button" data-inventory-tab="hosts">${h("hosts")}</button>
+        <button class="btn pill${view.tab === "groups" ? " primary" : ""}" type="button" data-inventory-tab="groups">${h("groups")}</button>
       </div>
-      <p class="small muted" id="host-total" tabindex="-1" aria-live="polite"></p>
-      <div id="host-table"></div>
-      <div class="row" id="host-pager" tabindex="-1"></div>
+      <div id="host-view"${view.tab === "groups" ? " hidden" : ""}>
+        <div class="row">
+          <input class="search" id="host-search" type="search" value="${esc(view.search)}" placeholder="${h("search_hosts")}" aria-label="${h("search_hosts")}" autocomplete="off">
+          <label class="field"><span>${h("group")}</span><select id="host-group" aria-label="${h("group")}">${groupOptions}</select></label>
+          <label class="field"><span>${h("page_size")}</span><select id="host-size" aria-label="${h("page_size")}">${[25, 50, 100].map((size) => `<option value="${size}"${size === view.size ? " selected" : ""}>${size}</option>`).join("")}</select></label>
+        </div>
+        <p class="small muted" id="host-total" tabindex="-1" aria-live="polite"></p>
+        <div id="host-table"></div>
+        <div class="row" id="host-pager" tabindex="-1"></div>
+      </div>
+      <div id="group-view"${view.tab === "hosts" ? " hidden" : ""}>
+        <p class="small muted" id="group-total" tabindex="-1" aria-live="polite"></p>
+        <div id="group-table"></div>
+      </div>
     </section>
     <section>
       <h2>${h("sources")}</h2>
@@ -4064,6 +4091,17 @@ async function pageInventory(id) {
   const hostTable = document.querySelector("#host-table");
   const hostTotal = document.querySelector("#host-total");
   const hostPager = document.querySelector("#host-pager");
+  const groupTotal = document.querySelector("#group-total");
+  const groupTable = document.querySelector("#group-table");
+  const drawGroups = (data) => {
+    const groups = data.groups || [];
+    groupTotal.textContent = groups.length
+      ? t("groups_shown", { count: groups.length })
+      : t("no_groups_yet");
+    groupTable.innerHTML = groups.length
+      ? inventoryGroupTable(groups, id)
+      : `<p class="small muted">${h("no_groups_yet")}</p>`;
+  };
   const rememberHash = (push = false) => {
     const next = inventoryHostHash(id, view);
     if (push) history.pushState(null, "", next);
@@ -4079,7 +4117,7 @@ async function pageInventory(id) {
         ? `<p class="small muted">${h("no_hosts_match")}</p><button class="btn" id="clear-host-filter" type="button">${h("clear_filter")}</button>`
         : `<p class="small muted">${h("no_hosts_yet")}</p>${can("operator") ? `<button class="btn" id="host-add-source" type="button">${h("add_source")}</button>` : ""}`;
     } else {
-      hostTable.innerHTML = inventoryHostTable(hosts, view);
+      hostTable.innerHTML = inventoryHostTable(hosts, view, id);
     }
     hostTotal.textContent = total
       ? t("hosts_shown_of_total", { shown: hosts.length, total })
@@ -4168,6 +4206,15 @@ async function pageInventory(id) {
     loadHosts(`[data-host-page="${view.page}"]`);
   });
   drawHosts(page);
+  drawGroups(groupPage);
+  document.querySelectorAll("[data-inventory-tab]").forEach((button) => {
+    button.addEventListener("click", () => {
+      view.tab = button.dataset.inventoryTab === "groups" ? "groups" : "hosts";
+      view.page = 1;
+      rememberHash(true);
+      route();
+    });
+  });
   document.querySelectorAll("[data-raw-source]").forEach((button) => {
     button.addEventListener("click", async () => {
       const panel = document.getElementById(`source-raw-${button.dataset.rawSource}`);
@@ -4326,6 +4373,131 @@ async function pageInventory(id) {
     || document.querySelector("#source-edit [data-dirty]") !== null
     || document.querySelector("#source-drafts [data-kind]") !== null;
 }
+function looksSecretVar(name) {
+  return /(pass(word|phrase)?|secret|token|api[-_]?key|private[-_]?key|access[-_]?key|auth[-_]?key|credential|vault)/i.test(name);
+}
+
+function effectiveVariablesYaml(vars) {
+  if (!vars.length) return t("no_variables");
+  return vars.map((item) => {
+    const value = looksSecretVar(item.name) ? '"••••••"' : JSON.stringify(String(item.value));
+    const origin = item.origin === "host" ? t("host") : item.origin;
+    return `${item.name}: ${value} # ${origin}`;
+  }).join("\n");
+}
+
+function inventoryLaunchCard(title, templates, buttonLabel, buttonId, selectId) {
+  if (!templates.length) {
+    return `<section class="card"><h2>${h(title)}</h2><p class="small muted">${h("no_ansible_templates")}</p></section>`;
+  }
+  return `<section class="card">
+    <h2>${h(title)}</h2>
+    <div class="row">
+      <label class="field"><span>${h("template")}</span><select id="${selectId}">${templates.map((item) => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join("")}</select></label>
+      <button class="btn pill primary" id="${buttonId}" type="button">${h(buttonLabel)}</button>
+    </div>
+  </section>`;
+}
+
+function bindInventoryLaunch(buttonId, selectId, templates, preset) {
+  const button = document.querySelector(`#${buttonId}`);
+  if (!button) return;
+  button.addEventListener("click", async () => {
+    const item = templates.find((row) => row.id === document.querySelector(`#${selectId}`).value);
+    if (!item) return;
+    try {
+      await openLaunchPrompt(item, !item.prompt_on_launch, preset);
+    } catch (error) {
+      handle(error);
+    }
+  });
+}
+
+async function pageInventoryHost(id, name) {
+  if (!needTeam()) return;
+  const [item, host, templates] = await Promise.all([
+    api("GET", `/api/inventories/${encodeURIComponent(id)}`),
+    api("GET", `/api/inventories/${encodeURIComponent(id)}/hosts/${encodeURIComponent(name)}`),
+    can("operator") ? api("GET", "/api/templates") : Promise.resolve([]),
+  ]);
+  const ansibleTemplates = (templates || []).filter((item) => item.tool === "ansible");
+  const groupLinks = (host.groups || []).map((group) => `<a href="#/inventories/${encodeURIComponent(id)}/groups/${encodeURIComponent(group)}">${esc(group)}</a>`).join(", ");
+  const source = host.source || {};
+  const netbox = host.netbox_url
+    ? `<p><a href="${esc(host.netbox_url)}" target="_blank" rel="noopener">${h("open_in_netbox")}</a></p>`
+    : "";
+  const launch = can("operator") ? inventoryLaunchCard("run_a_template_on_this_host", ansibleTemplates, "run_a_template_on_this_host", "host-launch", "host-template") : "";
+  shell(host.name, `
+    <p class="small muted"><a href="#/inventories/${encodeURIComponent(id)}">${h("back_to_inventory")}</a> · ${esc(item.name)}</p>
+    <section class="card">
+      <h2>${h("host")}</h2>
+      <p><strong>${esc(host.name)}</strong></p>
+      <p>${h("groups")}: ${groupLinks || `<span class="small muted">${h("no_child_groups")}</span>`}</p>
+      <p>${h("source")}: ${esc(source.name || "")} <span class="small muted">${esc(sourceKindLabel(source.kind || ""))}</span></p>
+      ${netbox}
+    </section>
+    <section class="card">
+      <h2>${h("effective_variables")}</h2>
+      <p class="small muted">${h("secret_looking_variables_are_masked")}</p>
+      <pre class="mono">${esc(effectiveVariablesYaml(host.vars || []))}</pre>
+    </section>
+    ${launch}`);
+  bindInventoryLaunch("host-launch", "host-template", ansibleTemplates, { inventoryId: id, limit: host.name });
+}
+
+async function pageInventoryGroup(id, name) {
+  if (!needTeam()) return;
+  const params = new URLSearchParams((location.hash || "").split("?")[1] || "");
+  const page = Math.max(1, Number(params.get("page")) || 1);
+  const size = 50;
+  const [item, group, templates] = await Promise.all([
+    api("GET", `/api/inventories/${encodeURIComponent(id)}`),
+    api("GET", `/api/inventories/${encodeURIComponent(id)}/groups/${encodeURIComponent(name)}?page=${page}&page_size=${size}`),
+    can("operator") ? api("GET", "/api/templates") : Promise.resolve([]),
+  ]);
+  const ansibleTemplates = (templates || []).filter((item) => item.tool === "ansible");
+  const link = (groupName) => `<a href="#/inventories/${encodeURIComponent(id)}/groups/${encodeURIComponent(groupName)}">${esc(groupName)}</a>`;
+  const children = (group.children || []).map(link).join(", ") || `<span class="small muted">${h("no_child_groups")}</span>`;
+  const parents = (group.parents || []).map(link).join(", ") || `<span class="small muted">${h("no_parent_groups")}</span>`;
+  const vars = Object.entries(group.vars || {}).map(([key, value]) => ({ name: key, value, origin: group.name }));
+  const totalPages = Math.max(1, Math.ceil(Number(group.total) / size));
+  const base = `#/inventories/${encodeURIComponent(id)}/groups/${encodeURIComponent(name)}`;
+  const pager = totalPages > 1
+    ? `<div class="row" id="group-pager"><button class="btn" type="button" data-group-page="${page - 1}"${page <= 1 ? " disabled" : ""}>${h("previous_page")}</button><span class="small muted">${h("page_of_pages", { page, pages: totalPages })}</span><button class="btn" type="button" data-group-page="${page + 1}"${page >= totalPages ? " disabled" : ""}>${h("next_page")}</button></div>`
+    : "";
+  const hosts = group.hosts && group.hosts.length
+    ? inventoryHostTable(group.hosts, { sort: "name" }, id)
+    : `<p class="small muted">${h("no_hosts_yet")}</p>`;
+  const launch = can("operator") ? inventoryLaunchCard("use_as_limit", ansibleTemplates, "use_as_limit", "group-launch", "group-template") : "";
+  shell(group.name, `
+    <p class="small muted"><a href="#/inventories/${encodeURIComponent(id)}">${h("back_to_inventory")}</a> · ${esc(item.name)}</p>
+    <section class="card">
+      <h2>${h("group")}</h2>
+      <p><strong>${esc(group.name)}</strong></p>
+      <p>${h("child_groups")}: ${children}</p>
+      <p>${h("parent_groups")}: ${parents}</p>
+    </section>
+    <section class="card">
+      <h2>${h("group_variables")}</h2>
+      <p class="small muted">${h("secret_looking_variables_are_masked")}</p>
+      <pre class="mono">${esc(effectiveVariablesYaml(vars))}</pre>
+    </section>
+    <section class="card">
+      <h2>${h("hosts")}</h2>
+      <p class="small muted">${h("hosts_shown_of_total", { shown: (group.hosts || []).length, total: group.total })}</p>
+      ${hosts}
+      ${pager}
+    </section>
+    ${launch}`);
+  document.querySelectorAll("[data-group-page]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (button.disabled) return;
+      go(Number(button.dataset.groupPage) > 1 ? `${base}?page=${button.dataset.groupPage}` : base);
+    });
+  });
+  bindInventoryLaunch("group-launch", "group-template", ansibleTemplates, { inventoryId: id, limit: group.name });
+}
+
 const CREDENTIAL_KINDS = [
   ["ssh", "machine_ssh", "a_key_or_a_password_or_both"],
   ["vault", "ansible_vault", ""],
@@ -5687,6 +5859,8 @@ async function route() {
     else if (parts[0] === "projects" && parts[1]) await pageProject(parts[1]);
     else if (parts[0] === "projects") await pageProjects();
     else if (parts[0] === "inventories" && parts[1] === "new") await pageInventoryNew();
+    else if (parts[0] === "inventories" && parts[1] && parts[2] === "hosts" && parts[3]) await pageInventoryHost(parts[1], decodeURIComponent(parts[3]));
+    else if (parts[0] === "inventories" && parts[1] && parts[2] === "groups" && parts[3]) await pageInventoryGroup(parts[1], decodeURIComponent(parts[3]));
     else if (parts[0] === "inventories" && parts[1]) await pageInventory(parts[1]);
     else if (parts[0] === "inventories") await pageInventories();
     else if (parts[0] === "credentials" && parts[1] === "new") await pageCredentialNew();
