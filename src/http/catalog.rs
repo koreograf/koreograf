@@ -51,10 +51,14 @@ pub struct ProjectBody {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProjectAssignBody {
-    organization_id: String,
+pub struct ProjectUpdateBody {
+    name: Option<String>,
+    source_type: Option<String>,
+    source: Option<String>,
+    revision: Option<String>,
+    organization_id: Option<String>,
     #[serde(default)]
-    team_ids: Vec<String>,
+    team_ids: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -335,30 +339,63 @@ pub async fn update_project(
     headers: HeaderMap,
     user: AuthUser,
     Path(id): Path<String>,
-    ApiJson(body): ApiJson<ProjectAssignBody>,
+    ApiJson(body): ApiJson<ProjectUpdateBody>,
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let db = state.db()?;
-    if !db::project_visible(&db, &id, &team)? {
-        return Err(ApiError::NotFound);
+    let (updated, sync_changed, discard_checkout) = {
+        let db = state.db()?;
+        if !db::project_visible(&db, &id, &team)? {
+            return Err(ApiError::NotFound);
+        }
+        let project = db::project(&db, &id)?.ok_or(ApiError::NotFound)?;
+        let name = match body.name {
+            Some(name) => require_name(&name)?,
+            None => project.name.clone(),
+        };
+        let source_type = body
+            .source_type
+            .unwrap_or_else(|| project.source_type.clone());
+        let source = body.source.unwrap_or_else(|| project.source.clone());
+        let revision = body.revision.unwrap_or_else(|| project.revision.clone());
+        let (source, revision) =
+            validate_project_source(&state, &user, &source_type, &source, &revision)?;
+        let team_row = db::team_by_id(&db, &team)?.ok_or(ApiError::NotFound)?;
+        let organization_id = match blank(body.organization_id) {
+            Some(organization_id) => {
+                if !user.is_admin && organization_id != team_row.organization_id {
+                    return Err(ApiError::bad("a_project_stays_in_the_organization_of_the"));
+                }
+                db::organization(&db, &organization_id)?
+                    .ok_or_else(|| ApiError::bad("organization_is_missing"))?;
+                organization_id
+            }
+            None => project.organization_id.clone(),
+        };
+        let team_ids = body.team_ids.unwrap_or_else(|| project.team_ids.clone());
+        check_team_ids(&db, &organization_id, &team_ids)?;
+        db::set_project_details(&db, &id, &name, &source_type, &source, &revision)?;
+        db::set_project_organization(&db, &id, &organization_id)?;
+        db::replace_project_teams(&db, &id, &team_ids)?;
+        db::set_project_admin_saved(&db, &id, user.is_admin)?;
+        let changed = project.source_type != source_type
+            || project.source != source
+            || project.revision != revision;
+        let discard = changed && (project.source_type == "git" || source_type == "git");
+        let updated = db::project(&db, &id)?.ok_or(ApiError::NotFound)?;
+        (updated, changed && source_type == "git", discard)
+    };
+    let mut value = json!(updated);
+    if discard_checkout {
+        jobs::discard_project_checkout(&state, &updated);
     }
-    let organization_id = body.organization_id.trim();
-    if organization_id.is_empty() {
-        return Err(ApiError::bad("organization_is_missing"));
+    if sync_changed {
+        let sync = sync_json(jobs::sync_project(&state, &updated).await);
+        let db = state.db()?;
+        value = json!(db::project(&db, &id)?.ok_or(ApiError::NotFound)?);
+        value["sync"] = sync;
     }
-    let current = db::team_by_id(&db, &team)?.ok_or(ApiError::NotFound)?;
-    if !user.is_admin && current.organization_id != organization_id {
-        return Err(ApiError::bad("a_project_stays_in_the_organization_of_the"));
-    }
-    db::organization(&db, organization_id)?
-        .ok_or_else(|| ApiError::bad("organization_is_missing"))?;
-    check_team_ids(&db, organization_id, &body.team_ids)?;
-    db::set_project_organization(&db, &id, organization_id)?;
-    db::replace_project_teams(&db, &id, &body.team_ids)?;
-    db::set_project_admin_saved(&db, &id, user.is_admin)?;
-    let project = db::project(&db, &id)?.ok_or(ApiError::NotFound)?;
-    Ok(Json(json!(project)))
+    Ok(Json(value))
 }
 
 pub async fn create_project(
@@ -370,7 +407,13 @@ pub async fn create_project(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let name = require_name(&body.name)?;
-    let source = body.source.trim();
+    let (source, revision) = validate_project_source(
+        &state,
+        &user,
+        &body.source_type,
+        &body.source,
+        &body.revision,
+    )?;
     let db = state.db()?;
     let current = db::team_by_id(&db, &team)?.ok_or(ApiError::NotFound)?;
     let organization_id = match blank(body.organization_id) {
@@ -385,13 +428,42 @@ pub async fn create_project(
         None => current.organization_id,
     };
     check_team_ids(&db, &organization_id, &body.team_ids)?;
-    let revision = body.revision.trim();
+    let project = Project {
+        id: Uuid::new_v4().to_string(),
+        team_id: team,
+        organization_id,
+        organization_name: String::new(),
+        name,
+        source_type: body.source_type,
+        source,
+        revision,
+        created_at: db::now(),
+        team_ids: body.team_ids,
+        last_sync_at: String::new(),
+        last_sync_commit: String::new(),
+        last_sync_status: String::new(),
+        admin_saved: user.is_admin,
+    };
+    db::insert_project(&db, &project)?;
+    let stored = db::project(&db, &project.id)?.ok_or(ApiError::NotFound)?;
+    Ok(created(json!(stored)))
+}
+
+fn validate_project_source(
+    state: &Shared,
+    user: &AuthUser,
+    source_type: &str,
+    source: &str,
+    revision: &str,
+) -> AppResult<(String, String)> {
+    let source = source.trim();
+    let revision = revision.trim();
     if !runner::valid_revision(revision) {
         return Err(ApiError::bad(
             "revision_may_contain_only_letters_digits_dot_slash",
         ));
     }
-    match body.source_type.as_str() {
+    match source_type {
         "path" => {
             runner::authorize_project_source(
                 "path",
@@ -419,22 +491,17 @@ pub async fn create_project(
         }
         _ => return Err(ApiError::bad("source_is_path_or_git")),
     }
-    let project = Project {
-        id: Uuid::new_v4().to_string(),
-        team_id: team,
-        organization_id,
-        organization_name: String::new(),
-        name,
-        source_type: body.source_type,
-        source: source.to_string(),
-        revision: revision.to_string(),
-        created_at: db::now(),
-        team_ids: body.team_ids,
-        admin_saved: user.is_admin,
-    };
-    db::insert_project(&db, &project)?;
-    let stored = db::project(&db, &project.id)?.ok_or(ApiError::NotFound)?;
-    Ok(created(json!(stored)))
+    Ok((source.to_string(), revision.to_string()))
+}
+
+fn sync_json(result: AppResult<String>) -> Value {
+    match result {
+        Ok(path) => json!({"ok": true, "path": path}),
+        Err(ApiError::BadRequest(message)) => {
+            json!({"ok": false, "error": message.key, "vars": message.vars})
+        }
+        Err(err) => json!({"ok": false, "error": err.to_string()}),
+    }
 }
 
 fn project_path_error(err: runner::ProjectPathError) -> ApiError {

@@ -1962,6 +1962,25 @@ fn hex_digit(byte: u8) -> Option<u8> {
     }
 }
 
+pub async fn head_commit(path: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let commit = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if commit.is_empty() {
+        None
+    } else {
+        Some(commit)
+    }
+}
+
 pub async fn materialize_project(
     project: &Project,
     data_dir: &Path,
@@ -3324,6 +3343,9 @@ mod tests {
             revision: String::new(),
             created_at: String::new(),
             team_ids: Vec::new(),
+            last_sync_at: String::new(),
+            last_sync_commit: String::new(),
+            last_sync_status: String::new(),
             admin_saved: true,
         };
         let proxy = crate::settings::ProxySettings::inherit();
@@ -4801,6 +4823,9 @@ exit 0
             revision: String::new(),
             created_at: String::new(),
             team_ids: Vec::new(),
+            last_sync_at: String::new(),
+            last_sync_commit: String::new(),
+            last_sync_status: String::new(),
             admin_saved: true,
         };
         let proxy = crate::settings::ProxySettings::inherit();

@@ -25,6 +25,14 @@ let runKey = null;
 let navOpen = false;
 let navKey = null;
 let navToken = null;
+let leaveGuard = null;
+let shownHash = null;
+
+window.addEventListener("beforeunload", (event) => {
+  if (!leaveGuard || !leaveGuard()) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
 document.documentElement.lang = lang;
 
 
@@ -67,6 +75,8 @@ function h(text, vars) {
 }
 
 async function setLang(next) {
+  if (leaveGuard && leaveGuard() && !confirm(t("discard_unsaved_changes"))) return;
+  leaveGuard = null;
   lang = languageId(next);
   localStorage.setItem("koreograf.lang", lang);
   document.documentElement.lang = lang;
@@ -363,6 +373,12 @@ const ERROR_FIELD = {
   name_is_missing_or_too_long: "name",
   description_is_too_long: "description",
   limit_contains_an_invalid_character: "limit",
+  revision_may_contain_only_letters_digits_dot_slash: "revision",
+  the_git_address_must_be_http_s_ssh: "source",
+  source_is_path_or_git: "source_type",
+  the_project_path_is_not_a_directory: "source",
+  the_project_path_is_not_allowed: "source",
+  path_projects_are_limited_to_administrators: "source",
 };
 
 let flashKey = "";
@@ -549,6 +565,11 @@ function shell(title, body, actions) {
     </div>`;
   const select = document.querySelector("#team-select");
   select.addEventListener("change", () => {
+    if (leaveGuard && leaveGuard() && !confirm(t("discard_unsaved_changes"))) {
+      select.value = teamId;
+      return;
+    }
+    leaveGuard = null;
     teamId = select.value;
     localStorage.setItem("koreograf.team", teamId);
     route();
@@ -3511,76 +3532,134 @@ async function pageProjectNew() {
   });
 }
 
+function projectSyncText(project) {
+  const status = { success: t("success"), failed: t("failed") }[project.last_sync_status] || t("never");
+  return t("last_synced_value", {
+    time: project.last_sync_at ? when(project.last_sync_at) : t("never"),
+    commit: project.last_sync_commit || "—",
+    status,
+  });
+}
+
 async function pageProject(id) {
   if (!needTeam()) return;
   const project = await api("GET", `/api/projects/${encodeURIComponent(id)}`);
+  if (!can("operator")) {
+    shell(project.name, `<section class="card">
+      <dl class="kv">
+        ${paramRow("name", project.name)}
+        ${paramRow("source_2", `${project.source_type} · ${project.source}`)}
+        ${paramRow("revision", project.revision)}
+        ${paramRow("organization", project.organization_name)}
+        ${paramRow("visibility", grantLabel(project))}
+      </dl>
+      ${project.source_type === "git" ? `<p class="small muted" id="last-sync">${esc(projectSyncText(project))}</p>` : ""}
+    </section>`);
+    return;
+  }
   const organizations = await api("GET", "/api/organizations");
   const org = await api("GET", `/api/organizations/${encodeURIComponent(project.organization_id)}`);
-  shell(project.name, `
-    <section class="card" style="margin-bottom:14px">
-      <p class="muted">${h("source_source", { source: `${project.source_type} · ${project.source}` })}</p>
-      ${project.revision ? `<p class="small">${h("revision_revision", { revision: project.revision })}</p>` : ""}
-      ${can("operator") && project.source_type === "git" ? `<div class="row"><button class="btn" id="sync" type="button">${h("sync")}</button></div><p class="small" id="sync-note"></p>` : ""}
-    </section>
-    <section class="card">
-      <h2>${h("assignment")}</h2>
-      <p class="small muted">${h("with_no_team_checked_every_team_in_the")}</p>
-      ${can("operator") ? `<form class="form" id="assign-form">
+  shell(t("edit_project"), `
+    <form class="card form" id="project-form">
+      <p class="small muted">${h("fields_marked_with_a_star_are_required")}</p>
+      <div class="form-section">
+        <h2>${h("general")}</h2>
+        <label class="field required"><span>${h("name")}</span><input name="name" required value="${esc(project.name)}"></label>
+      </div>
+      <div class="form-section">
+        <h2>${h("source_2")}</h2>
+        <div class="field-row">
+          <label class="field"><span>${h("type")}</span><select class="fit" name="source_type">
+            <option value="path"${project.source_type === "path" ? " selected" : ""}>${h("path")}</option>
+            <option value="git"${project.source_type === "git" ? " selected" : ""}>Git</option>
+          </select></label>
+          <label class="field"><span>${h("revision")}</span><input class="fit" name="revision" value="${esc(project.revision)}" placeholder="${h("branch_tag_or_commit")}"></label>
+        </div>
+        <label class="field required"><span>${h("source_2")}</span><input name="source" required value="${esc(project.source)}" placeholder="${h("https_or_file")}"></label>
+        ${project.source_type === "git" ? `<p class="small muted" id="last-sync">${esc(projectSyncText(project))}</p>
+        <div class="row"><button class="btn" id="sync" type="button">${h("sync")}</button></div>` : ""}
+      </div>
+      <div class="form-section">
+        <h2>${h("assignment")}</h2>
+        <p class="small muted">${h("with_no_team_checked_every_team_in_the")}</p>
         <label class="field"><span>${h("organization")}</span><select name="organization_id"${me.is_admin ? "" : " disabled"}>${orgOptions(organizations, project.organization_id)}</select></label>
         <div class="stack" id="team-boxes">${teamBoxes(org.teams || [], project.team_ids)}</div>
-        <button class="btn pill primary" type="submit">${h("save_assignment")}</button>
-      </form>` : `<p>${h("organization_name_visibility_grant", { name: project.organization_name || "", grant: grantLabel(project) })}</p>`}
-    </section>`,
-    can("operator") ? `<button class="btn danger" id="delete-project" type="button">${h("delete")}</button>` : "");
+      </div>
+      <div class="row"><button class="btn pill primary" type="submit">${h("save")}</button></div>
+    </form>
+    <section class="card danger-zone" style="margin-top:14px">
+      <h2>${h("danger_zone")}</h2>
+      <p class="small muted">${h("deleting_cannot_be_undone")}</p>
+      <button class="btn danger" id="delete-project" type="button">${h("delete")}</button>
+    </section>`);
+  const form = document.querySelector("#project-form");
+  const chosenTeams = () => [...form.querySelectorAll("input[name=team_ids]:checked")].map((input) => input.value).sort();
+  const snapshot = () => JSON.stringify({
+    name: form.name.value,
+    source_type: form.source_type.value,
+    source: form.source.value,
+    revision: form.revision.value,
+    organization_id: form.organization_id.value,
+    team_ids: chosenTeams(),
+  });
+  let initial = snapshot();
+  leaveGuard = () => snapshot() !== initial;
+  form.organization_id.addEventListener("change", async () => {
+    const box = document.querySelector("#team-boxes");
+    box.innerHTML = `<p class="small muted">${h("loading_teams")}</p>`;
+    try {
+      const next = await api("GET", `/api/organizations/${encodeURIComponent(form.organization_id.value)}`);
+      box.innerHTML = teamBoxes(next.teams || [], []);
+    } catch (error) { handle(error); }
+  });
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!form.reportValidity()) return;
+    try {
+      const saved = await api("PUT", `/api/projects/${encodeURIComponent(id)}`, {
+        name: form.name.value,
+        source_type: form.source_type.value,
+        source: form.source.value,
+        revision: form.revision.value,
+        organization_id: form.organization_id.value,
+        team_ids: chosenTeams(),
+      });
+      initial = snapshot();
+      leaveGuard = null;
+      markSaved();
+      await route();
+      if (saved.sync && !saved.sync.ok) {
+        handle({ message: saved.sync.error || "sync_failed", vars: saved.sync.vars });
+      }
+    } catch (error) { handle(error); }
+  });
   const sync = document.querySelector("#sync");
   if (sync) {
     sync.addEventListener("click", async () => {
       sync.disabled = true;
-      const note = document.querySelector("#sync-note");
       try {
-        const result = await api("POST", `/api/projects/${encodeURIComponent(id)}/sync`, {});
-        note.textContent = t("checkout_path", { path: result.path });
+        await api("POST", `/api/projects/${encodeURIComponent(id)}/sync`, {});
+        const fresh = await api("GET", `/api/projects/${encodeURIComponent(id)}`);
+        const note = document.querySelector("#last-sync");
+        if (note) note.textContent = projectSyncText(fresh);
         sync.textContent = t("synced");
       } catch (error) {
+        const fresh = await api("GET", `/api/projects/${encodeURIComponent(id)}`).catch(() => null);
+        const note = document.querySelector("#last-sync");
+        if (note && fresh) note.textContent = projectSyncText(fresh);
         sync.disabled = false;
-        if (note) note.textContent = t(error.message || "sync_failed", error.vars);
         handle(error);
       }
     });
   }
-  const form = document.querySelector("#assign-form");
-  if (form) {
-    form.organization_id.addEventListener("change", async () => {
-      const box = document.querySelector("#team-boxes");
-      box.innerHTML = `<p class="small muted">${h("loading_teams")}</p>`;
-      try {
-        const next = await api("GET", `/api/organizations/${encodeURIComponent(form.organization_id.value)}`);
-        box.innerHTML = teamBoxes(next.teams || [], []);
-      } catch (error) { handle(error); }
-    });
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      try {
-        const teamIds = [...form.querySelectorAll("input[name=team_ids]:checked")].map((input) => input.value);
-        await api("PUT", `/api/projects/${encodeURIComponent(id)}`, {
-          organization_id: form.organization_id.value,
-          team_ids: teamIds,
-        });
-        markSaved();
-        route();
-      } catch (error) { handle(error); }
-    });
-  }
-  const remove = document.querySelector("#delete-project");
-  if (remove) {
-    remove.addEventListener("click", async () => {
-      if (!confirm(t("delete_this_project", { name: project.name }))) return;
-      try {
-        await api("DELETE", `/api/projects/${encodeURIComponent(id)}`);
-        go("#/projects");
-      } catch (error) { handle(error); }
-    });
-  }
+  document.querySelector("#delete-project").addEventListener("click", async () => {
+    if (!confirm(t("delete_this_project", { name: project.name }))) return;
+    try {
+      await api("DELETE", `/api/projects/${encodeURIComponent(id)}`);
+      leaveGuard = null;
+      go("#/projects");
+    } catch (error) { handle(error); }
+  });
 }
 
 function sourceKindLabel(kind) {
@@ -5241,6 +5320,15 @@ async function pageBackup() {
 }
 
 async function route() {
+  const nextHash = location.hash || "#/";
+  if (leaveGuard && shownHash !== null && nextHash !== shownHash) {
+    if (!leaveGuard() || !confirm(t("discard_unsaved_changes"))) {
+      history.replaceState(null, "", shownHash);
+      return;
+    }
+  }
+  leaveGuard = null;
+  shownHash = nextHash;
   closeLive();
   if (navToken) navToken.abort();
   const hash = location.hash || "#/";

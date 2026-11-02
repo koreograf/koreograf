@@ -58,6 +58,9 @@ CREATE TABLE IF NOT EXISTS projects (
   revision TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   admin_saved INTEGER NOT NULL DEFAULT 1,
+  last_sync_at TEXT NOT NULL DEFAULT '',
+  last_sync_commit TEXT NOT NULL DEFAULT '',
+  last_sync_status TEXT NOT NULL DEFAULT '',
   UNIQUE (team_id, name)
 );
 CREATE TABLE IF NOT EXISTS inventories (
@@ -411,6 +414,14 @@ fn migrate(c: &Connection) -> AppResult<()> {
             [],
         )?;
     }
+    for column in ["last_sync_at", "last_sync_commit", "last_sync_status"] {
+        if !column_exists(c, "projects", column)? {
+            c.execute(
+                &format!("ALTER TABLE projects ADD COLUMN {column} TEXT NOT NULL DEFAULT ''"),
+                [],
+            )?;
+        }
+    }
     if !column_exists(c, "templates", "admin_saved")? {
         c.execute(
             "ALTER TABLE templates ADD COLUMN admin_saved INTEGER NOT NULL DEFAULT 1",
@@ -550,6 +561,9 @@ pub struct Project {
     pub revision: String,
     pub created_at: String,
     pub team_ids: Vec<String>,
+    pub last_sync_at: String,
+    pub last_sync_commit: String,
+    pub last_sync_status: String,
     /// True when an administrator last saved this project.
     #[serde(skip)]
     pub admin_saved: bool,
@@ -1227,7 +1241,8 @@ pub fn list_members(c: &Connection, team_id: &str) -> AppResult<Vec<Member>> {
 
 const PROJECT_SELECT: &str =
     "p.id, p.team_id, COALESCE(p.organization_id, ''), COALESCE(o.name, ''), \
-     p.name, p.source_type, p.source, p.revision, p.created_at, p.admin_saved";
+     p.name, p.source_type, p.source, p.revision, p.created_at, p.admin_saved, \
+     p.last_sync_at, p.last_sync_commit, p.last_sync_status";
 
 pub fn insert_project(c: &Connection, project: &Project) -> AppResult<()> {
     c.execute(
@@ -1364,6 +1379,48 @@ pub fn set_project_organization(c: &Connection, id: &str, organization_id: &str)
     Ok(())
 }
 
+pub fn set_project_details(
+    c: &Connection,
+    id: &str,
+    name: &str,
+    source_type: &str,
+    source: &str,
+    revision: &str,
+) -> AppResult<()> {
+    let n = c.execute(
+        "UPDATE projects SET name = ?2, source_type = ?3, source = ?4, revision = ?5
+         WHERE id = ?1",
+        params![id, name, source_type, source, revision],
+    )?;
+    if n == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(())
+}
+
+pub fn set_project_sync_success(c: &Connection, id: &str, at: &str, commit: &str) -> AppResult<()> {
+    let n = c.execute(
+        "UPDATE projects SET last_sync_at = ?2, last_sync_commit = ?3, last_sync_status = 'success'
+         WHERE id = ?1",
+        params![id, at, commit],
+    )?;
+    if n == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(())
+}
+
+pub fn set_project_sync_failed(c: &Connection, id: &str) -> AppResult<()> {
+    let n = c.execute(
+        "UPDATE projects SET last_sync_status = 'failed' WHERE id = ?1",
+        [id],
+    )?;
+    if n == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(())
+}
+
 pub fn set_project_admin_saved(c: &Connection, id: &str, admin_saved: bool) -> AppResult<()> {
     let n = c.execute(
         "UPDATE projects SET admin_saved = ?2 WHERE id = ?1",
@@ -1388,6 +1445,9 @@ fn map_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
         created_at: row.get(8)?,
         team_ids: Vec::new(),
         admin_saved: flag(row.get(9)?),
+        last_sync_at: row.get(10)?,
+        last_sync_commit: row.get(11)?,
+        last_sync_status: row.get(12)?,
     })
 }
 
