@@ -7787,6 +7787,169 @@ async fn an_environment_tool_limits_the_templates_that_can_use_it() {
 }
 
 #[tokio::test]
+async fn editing_an_environment_clears_a_tool_default_it_no_longer_fits() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-env-default-edit-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap();
+
+    let (status, environment, _) = call(
+        &app,
+        "POST",
+        "/api/environments",
+        Some(&cookie),
+        Some(team),
+        Some(json!({
+            "name": "Default EE",
+            "image": "quay.io/ansible/awx-ee:latest",
+            "tool": "ansible",
+            "scope": "global"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{environment}");
+    let id = environment["id"].as_str().unwrap();
+
+    let settings_body = |ansible: &str, opentofu: &str| {
+        json!({
+            "ldap": {"url": "", "mode": "ldap"},
+            "proxy": {"url": ""},
+            "runner": "local",
+            "job_timeout_secs": 60,
+            "default_environment_ansible": ansible,
+            "default_environment_opentofu": opentofu
+        })
+    };
+
+    let (status, settings, _) = call(
+        &app,
+        "PUT",
+        "/api/settings",
+        Some(&cookie),
+        Some(team),
+        Some(settings_body(id, "")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{settings}");
+    assert_eq!(settings["default_environment_ansible"], id);
+
+    let (status, renamed, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/environments/{id}"),
+        Some(&cookie),
+        Some(team),
+        Some(json!({
+            "name": "Default EE renamed",
+            "image": "quay.io/ansible/awx-ee:latest",
+            "tool": "ansible",
+            "scope": "global"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{renamed}");
+    assert_eq!(renamed["name"], "Default EE renamed");
+    let (status, kept, _) = call(
+        &app,
+        "GET",
+        "/api/settings",
+        Some(&cookie),
+        Some(team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{kept}");
+    assert_eq!(kept["default_environment_ansible"], id);
+
+    let (status, changed, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/environments/{id}"),
+        Some(&cookie),
+        Some(team),
+        Some(json!({
+            "name": "Default EE renamed",
+            "image": "ghcr.io/opentofu/opentofu:latest",
+            "tool": "opentofu",
+            "scope": "global"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    assert_eq!(changed["tool"], "opentofu");
+    let (status, cleared, _) = call(
+        &app,
+        "GET",
+        "/api/settings",
+        Some(&cookie),
+        Some(team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{cleared}");
+    assert_eq!(cleared["default_environment_ansible"], "");
+
+    let (status, again, _) = call(
+        &app,
+        "PUT",
+        "/api/settings",
+        Some(&cookie),
+        Some(team),
+        Some(settings_body("", id)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["default_environment_opentofu"], id);
+
+    let (status, moved, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/environments/{id}"),
+        Some(&cookie),
+        Some(team),
+        Some(json!({
+            "name": "Default EE renamed",
+            "image": "ghcr.io/opentofu/opentofu:latest",
+            "tool": "opentofu",
+            "scope": "team"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{moved}");
+    assert_eq!(moved["scope"], "team");
+    let (status, cleared, _) = call(
+        &app,
+        "GET",
+        "/api/settings",
+        Some(&cookie),
+        Some(team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{cleared}");
+    assert_eq!(cleared["default_environment_opentofu"], "");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn an_opentofu_template_without_an_environment_uses_the_tool_default() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

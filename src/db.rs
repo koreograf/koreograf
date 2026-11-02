@@ -2136,6 +2136,17 @@ pub fn update_environment(c: &Connection, item: &Environment) -> AppResult<()> {
     if n == 0 {
         return Err(ApiError::NotFound);
     }
+    let global = item.team_id.is_none() && item.organization_id.is_none();
+    for key in crate::settings::DEFAULT_ENVIRONMENT_KEYS {
+        let tool = key.trim_start_matches("default_environment_");
+        if global && crate::runner::environment_fits_tool(tool, &item.tool) {
+            continue;
+        }
+        c.execute(
+            "DELETE FROM settings WHERE key = ?1 AND value = ?2",
+            params![key, item.id],
+        )?;
+    }
     Ok(())
 }
 
