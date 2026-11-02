@@ -13658,6 +13658,128 @@ check(replaced === 2 && location.hash === "#/templates" && shownHash === "#/temp
 }
 
 #[test]
+fn workflow_create_uses_the_edit_overlay() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let workflows = extract_braced_function(&script, "async function pageWorkflows");
+    assert!(workflows.contains("#/workflows?new=1"));
+    assert!(workflows.contains("const request = editQuery();"));
+    assert!(workflows.contains("if (request.create !== null) {"));
+    assert!(workflows.contains("if (can(\"operator\")) openWorkflowDialog();"));
+    assert!(script.contains("addLink(\"#/workflows?new=1\", \"workflow_2\")"));
+    assert!(!script.contains("addLink(\"#/workflows/new\""));
+    assert!(!script.contains("async function pageWorkflowNew"));
+    assert!(!script.contains("id=\"workflow-new\""));
+    let dialog = extract_braced_function(&script, "function openWorkflowDialog");
+    assert!(dialog.contains("openEditDialog({"));
+    assert!(dialog.contains("title: t(\"new_workflow\")"));
+    assert!(dialog.contains("class=\"field required\""));
+    assert!(dialog.contains("name=\"name\" required"));
+    assert!(dialog.contains("maxlength=\"1000\""));
+    assert!(dialog.contains("submit: t(\"create_and_open\")"));
+    assert!(dialog.contains("api(\"POST\", \"/api/workflows\""));
+    assert!(dialog.contains("graph: { nodes: [], edges: [] }"));
+    assert!(dialog.contains("markSaved();"));
+    assert!(dialog.contains("close();"));
+    assert!(dialog.contains("go(`#/workflows/${created.id}`);"));
+    assert!(!dialog.contains("handle(error)"));
+}
+
+#[test]
+fn workflow_create_overlay_submits_and_keeps_errors() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let dialog = extract_braced_function(&script, "function openWorkflowDialog");
+    let probe = format!(
+        r##"{dialog}
+function t(key) {{ return key; }}
+function h(key) {{ return key; }}
+let captured = null;
+let posted = null;
+let saved = 0;
+let closed = 0;
+let navigated = "";
+let fail = false;
+function markSaved() {{ saved += 1; }}
+function go(hash) {{ navigated = hash; }}
+function openEditDialog(options) {{ captured = options; }}
+function api(method, path, body) {{
+  posted = {{ method, path, body }};
+  if (fail) return Promise.reject(new Error("workflow_error"));
+  return Promise.resolve({{ id: "w1" }});
+}}
+function check(ok, message) {{
+  if (!ok) {{ console.error(message); process.exit(1); }}
+}}
+function submit() {{
+  return captured.onSubmit({{
+    form: {{ name: {{ value: "Heal" }}, description: {{ value: "restart" }} }},
+    close: () => {{ closed += 1; }},
+  }});
+}}
+openWorkflowDialog();
+check(captured.title === "new_workflow", "workflow overlay title is missing");
+submit().then(async () => {{
+  check(posted.method === "POST" && posted.path === "/api/workflows", "workflow create did not post");
+  check(posted.body.name === "Heal" && posted.body.description === "restart", "workflow body is wrong");
+  check(posted.body.graph.nodes.length === 0 && posted.body.graph.edges.length === 0, "workflow graph is not empty");
+  check(saved === 1 && closed === 1 && navigated === "#/workflows/w1", "workflow create did not open the editor");
+  fail = true;
+  try {{
+    await submit();
+    console.error("workflow error was swallowed");
+    process.exit(1);
+  }} catch (error) {{
+    check(error.message === "workflow_error", "workflow error changed");
+  }}
+  check(closed === 1 && navigated === "#/workflows/w1", "workflow error closed the overlay or navigated");
+}}).catch((error) => {{ console.error(error); process.exit(1); }});
+"##
+    );
+    run_node_probe("workflow-create", &probe);
+}
+
+#[test]
+fn workflow_overlay_addresses_round_trip_and_old_pages_redirect() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    assert!(script.contains("location.replace(\"#/workflows?new=1\")"));
+    assert!(!script.contains("await pageWorkflowNew();"));
+    let functions = format!(
+        "{}\n{}\n{}\n{}",
+        extract_braced_function(&script, "function editQuery"),
+        extract_braced_function(&script, "function editAddress"),
+        extract_braced_function(&script, "function rememberEditHash"),
+        extract_braced_function(&script, "function clearEditHash")
+    );
+    let probe = format!(
+        r##"{functions}
+let location = {{ hash: "#/workflows" }};
+let shownHash = null;
+let pushed = 0;
+let replaced = 0;
+const history = {{
+  pushState(_state, _title, url) {{ pushed += 1; location.hash = url; }},
+  replaceState(_state, _title, url) {{ replaced += 1; location.hash = url; }},
+}};
+function check(ok, message) {{
+  if (!ok) {{ console.error(message); process.exit(1); }}
+}}
+const create = editQuery("#/workflows?new=1");
+check(create.create === "1" && create.edit === "" && create.tab === "", "workflow new was not read");
+check(editQuery("#/workflows").create === null, "workflow list was read as new");
+check(editAddress({{ create: "1" }}, "#/workflows") === "#/workflows?new=1", "workflow new address was not built");
+check(editAddress({{ create: "1" }}, "#/workflows?page=2") === "#/workflows?page=2&new=1", "workflow new address dropped the query");
+rememberEditHash({{ create: "1" }});
+check(pushed === 1 && location.hash === "#/workflows?new=1" && shownHash === location.hash, "workflow open did not push the address");
+clearEditHash();
+check(replaced === 1 && location.hash === "#/workflows" && shownHash === "#/workflows", "workflow close did not clear the address");
+"##
+    );
+    run_node_probe("workflow-address", &probe);
+}
+
+#[test]
 fn template_tool_switch_changes_options_and_environments() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
