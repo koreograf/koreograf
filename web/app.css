@@ -358,8 +358,31 @@ textarea.secret-mask { -webkit-text-security: disc; }
 .advanced-fieldset summary { cursor: pointer; font-weight: 600; }
 .preview-result { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 8px; }
 .preview-result h3 { margin: 8px 0 4px; }
-.vault-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.vault-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
 .vault-row .chips { flex: 1 1 16rem; }
+.vault-picker { display: grid; gap: 4px; flex: 0 1 16rem; }
+.vault-picker .search { width: 100%; margin: 0; }
+.vault-options {
+  display: grid;
+  gap: 2px;
+  max-height: 12rem;
+  overflow: auto;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+.vault-option {
+  border: 0;
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.vault-option:hover,
+.vault-option.selected { background: var(--accent-soft); }
 .overlay-card.dialog { width: min(40rem, 100%); max-height: min(90vh, 860px); padding: 0; gap: 0; overflow: hidden; }
 .overlay-card.dialog.wide { width: min(920px, 100%); }
 .dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 16px 8px; flex: none; }
@@ -480,19 +503,6 @@ textarea.secret-mask { -webkit-text-security: disc; }
   border-radius: 10px;
   padding: 8px 10px;
 }
-.vault-choices { display: grid; gap: 6px; overflow: auto; }
-.vault-choice {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: white;
-  cursor: pointer;
-}
-.vault-choice.selected { border-color: var(--accent); background: var(--accent-soft); }
-.vault-choice input { width: 1.15rem; height: 1.15rem; padding: 0; }
 textarea { min-height: 88px; resize: vertical; }
 /* Author display rules would otherwise beat the user-agent [hidden] style. */
 [hidden] { display: none !important; }
