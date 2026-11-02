@@ -1,4 +1,6 @@
-use axum::extract::{Path, State};
+use std::collections::BTreeSet;
+
+use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use rusqlite::Connection;
@@ -8,7 +10,7 @@ use uuid::Uuid;
 
 use crate::auth::{AuthUser, Role};
 use crate::cacheinfo;
-use crate::db::{self, Credential, Environment, Inventory, Project};
+use crate::db::{self, Credential, Environment, Inventory, InventorySource, Project};
 use crate::error::{ApiError, ApiJson, AppResult};
 use crate::jobs;
 use crate::runner;
@@ -576,7 +578,7 @@ pub async fn list_inventories(
     let items = db::list_inventories(&db, &team)?;
     let mut rows = Vec::with_capacity(items.len());
     for item in &items {
-        rows.push(inventory_json(&db, item)?);
+        rows.push(inventory_summary_json(&db, item)?);
     }
     Ok(Json(json!(rows)))
 }
@@ -590,11 +592,141 @@ pub async fn get_inventory(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     let db = state.db()?;
-    let item = db::inventory(&db, &id)?.ok_or(ApiError::NotFound)?;
+    let item = visible_inventory(&db, &id, &team)?;
+    Ok(Json(inventory_summary_json(&db, &item)?))
+}
+
+const HOST_PAGE_SIZE: usize = 50;
+const HOST_PAGE_SIZE_MAX: usize = 200;
+
+#[derive(Deserialize)]
+pub struct HostQuery {
+    #[serde(default)]
+    page: Option<usize>,
+    #[serde(default)]
+    page_size: Option<usize>,
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    offset: Option<usize>,
+    #[serde(default)]
+    search: String,
+    #[serde(default)]
+    group: String,
+    #[serde(default)]
+    sort: String,
+}
+
+pub async fn list_inventory_hosts(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Path(id): Path<String>,
+    Query(query): Query<HostQuery>,
+) -> AppResult<Json<Value>> {
+    let team = team_header(&headers)?;
+    gate(&state, &user, &team, Role::Viewer)?;
+    let db = state.db()?;
+    let item = visible_inventory(&db, &id, &team)?;
+    let sources = db::list_inventory_sources(&db, &item.id)?;
+    let hosts = inventory_hosts(&item, &sources);
+    let groups = host_groups(&hosts);
+    let needle = query.search.trim().to_lowercase();
+    let group = query.group.trim().to_lowercase();
+    let mut shown: Vec<_> = hosts
+        .into_iter()
+        .filter(|host| matches_host(host, &needle, &group))
+        .collect();
+    sort_hosts(&mut shown, &query.sort);
+    let total = shown.len();
+    let page_size = query
+        .page_size
+        .or(query.limit)
+        .unwrap_or(HOST_PAGE_SIZE)
+        .clamp(1, HOST_PAGE_SIZE_MAX);
+    let offset = query
+        .offset
+        .unwrap_or_else(|| query.page.unwrap_or(1).saturating_sub(1) * page_size);
+    let page = offset / page_size + 1;
+    let items: Vec<_> = shown.into_iter().skip(offset).take(page_size).collect();
+    Ok(Json(json!({
+        "id": item.id,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "groups": groups,
+        "hosts": items,
+    })))
+}
+
+fn visible_inventory(c: &Connection, id: &str, team: &str) -> AppResult<Inventory> {
+    let item = db::inventory(c, id)?.ok_or(ApiError::NotFound)?;
     if item.team_id != team {
         return Err(ApiError::NotFound);
     }
-    Ok(Json(inventory_json(&db, &item)?))
+    Ok(item)
+}
+
+fn inventory_hosts(
+    item: &Inventory,
+    sources: &[InventorySource],
+) -> Vec<crate::inventory::InventoryHost> {
+    if sources.is_empty() {
+        crate::inventory::parse_hosts(&item.body)
+    } else {
+        let bodies: Vec<&str> = sources.iter().map(|source| source.body.as_str()).collect();
+        crate::inventory::merge_hosts(&bodies)
+    }
+}
+
+fn host_groups(hosts: &[crate::inventory::InventoryHost]) -> Vec<String> {
+    let groups: BTreeSet<String> = hosts
+        .iter()
+        .flat_map(|host| host.groups.iter().cloned())
+        .collect();
+    groups.into_iter().collect()
+}
+
+fn matches_host(host: &crate::inventory::InventoryHost, needle: &str, group: &str) -> bool {
+    if !group.is_empty() && !host.groups.iter().any(|item| item.to_lowercase() == group) {
+        return false;
+    }
+    needle.is_empty()
+        || host.name.to_lowercase().contains(needle)
+        || host
+            .groups
+            .iter()
+            .any(|item| item.to_lowercase().contains(needle))
+        || host.vars.iter().any(|(key, value)| {
+            key.to_lowercase().contains(needle) || value.to_lowercase().contains(needle)
+        })
+}
+
+fn sort_hosts(hosts: &mut [crate::inventory::InventoryHost], sort: &str) {
+    let (field, reverse) = match sort.trim().strip_prefix('-') {
+        Some(field) => (field, true),
+        None => (sort.trim(), false),
+    };
+    hosts.sort_by(|left, right| {
+        let key = |host: &crate::inventory::InventoryHost| match field {
+            "address" => host
+                .vars
+                .get("ansible_host")
+                .cloned()
+                .unwrap_or_default()
+                .to_lowercase(),
+            "groups" => host.groups.join(",").to_lowercase(),
+            _ => host.name.to_lowercase(),
+        };
+        let order = key(left)
+            .cmp(&key(right))
+            .then_with(|| left.name.cmp(&right.name));
+        if reverse {
+            order.reverse()
+        } else {
+            order
+        }
+    });
 }
 
 pub async fn update_inventory(
@@ -690,14 +822,38 @@ pub async fn create_inventory(
     Ok(created(inventory_json(&db, &item)?))
 }
 
+fn source_json(source: &InventorySource) -> Value {
+    json!({
+        "id": source.id,
+        "name": source.name,
+        "kind": source.kind,
+        "source": db::json_object(&source.source_json),
+        "credential_id": source.credential_id,
+        "host_count": crate::inventory::parse_hosts(&source.body).len(),
+    })
+}
+
+pub(super) fn inventory_summary_json(c: &Connection, item: &Inventory) -> AppResult<Value> {
+    let sources = db::list_inventory_sources(c, &item.id)?;
+    let hosts = inventory_hosts(item, &sources);
+    Ok(json!({
+        "id": item.id,
+        "team_id": item.team_id,
+        "name": item.name,
+        "created_at": item.created_at,
+        "source_kind": item.source_kind,
+        "source": db::json_object(&item.source_json),
+        "credential_id": item.credential_id,
+        "source_count": sources.len(),
+        "sources": sources.iter().map(source_json).collect::<Vec<_>>(),
+        "host_count": hosts.len(),
+        "group_count": host_groups(&hosts).len(),
+    }))
+}
+
 pub(super) fn inventory_json(c: &Connection, item: &Inventory) -> AppResult<Value> {
     let sources = db::list_inventory_sources(c, &item.id)?;
-    let hosts = if sources.is_empty() {
-        crate::inventory::parse_hosts(&item.body)
-    } else {
-        let bodies: Vec<&str> = sources.iter().map(|source| source.body.as_str()).collect();
-        crate::inventory::merge_hosts(&bodies)
-    };
+    let hosts = inventory_hosts(item, &sources);
     Ok(json!({
         "id": item.id,
         "team_id": item.team_id,
@@ -708,16 +864,13 @@ pub(super) fn inventory_json(c: &Connection, item: &Inventory) -> AppResult<Valu
         "source": db::json_object(&item.source_json),
         "credential_id": item.credential_id,
         "source_count": sources.len(),
-        "sources": sources.iter().map(|source| json!({
-            "id": source.id,
-            "name": source.name,
-            "kind": source.kind,
-            "source": db::json_object(&source.source_json),
-            "credential_id": source.credential_id,
-            "host_count": crate::inventory::parse_hosts(&source.body).len(),
-            "body": source.body,
-        })).collect::<Vec<_>>(),
+        "sources": sources.iter().map(|source| {
+            let mut value = source_json(source);
+            value["body"] = json!(source.body);
+            value
+        }).collect::<Vec<_>>(),
         "host_count": hosts.len(),
+        "group_count": host_groups(&hosts).len(),
         "hosts": hosts,
     }))
 }

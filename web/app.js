@@ -3927,18 +3927,78 @@ async function pageInventoryNew() {
   });
 }
 
+function inventoryHostState() {
+  const params = new URLSearchParams((location.hash || "").split("?")[1] || "");
+  const size = Number(params.get("size"));
+  return {
+    page: Math.max(1, Number(params.get("page")) || 1),
+    search: params.get("q") || "",
+    group: params.get("group") || "",
+    size: [25, 50, 100].includes(size) ? size : 50,
+    sort: params.get("sort") || "name",
+  };
+}
+
+function inventoryHostHash(id, state) {
+  const params = new URLSearchParams();
+  if (state.page > 1) params.set("page", String(state.page));
+  if (state.search) params.set("q", state.search);
+  if (state.group) params.set("group", state.group);
+  if (state.size !== 50) params.set("size", String(state.size));
+  if (state.sort && state.sort !== "name") params.set("sort", state.sort);
+  const query = params.toString();
+  return `#/inventories/${encodeURIComponent(id)}${query ? `?${query}` : ""}`;
+}
+
+function inventoryHostUrl(id, state) {
+  const params = new URLSearchParams({
+    page: String(state.page),
+    page_size: String(state.size),
+  });
+  if (state.search) params.set("search", state.search);
+  if (state.group) params.set("group", state.group);
+  if (state.sort) params.set("sort", state.sort);
+  return `/api/inventories/${encodeURIComponent(id)}/hosts?${params}`;
+}
+
+function inventoryHostTable(hosts, state) {
+  const head = (label, field) => {
+    const active = state.sort === field || state.sort === `-${field}`;
+    const descending = active && state.sort.startsWith("-");
+    const next = active && !descending ? `-${field}` : field;
+    const aria = active ? (descending ? "descending" : "ascending") : "none";
+    return `<th aria-sort="${aria}"><button class="btn compact" type="button" data-host-sort="${next}">${h(label)}${active ? (descending ? " ↓" : " ↑") : ""}</button></th>`;
+  };
+  const rows = hosts.map((host) => {
+    const vars = Object.entries(host.vars || {}).map(([key, value]) => `${key}=${value}`).join(" ");
+    return `<tr><td class="mono">${esc(host.name)}</td><td class="mono">${esc((host.vars || {}).ansible_host || "")}</td><td>${esc((host.groups || []).join(", "))}</td><td class="mono">${esc(vars)}</td></tr>`;
+  });
+  return `<div class="table-wrap inventory-hosts-table"><table class="table"><thead><tr>${head("name", "name")}${head("address", "address")}${head("groups", "groups")}<th>${h("variables")}</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+}
+
 async function pageInventory(id) {
   if (!needTeam()) return;
-  const [item, projects] = await Promise.all([
+  const view = inventoryHostState();
+  const [item, projects, firstPage] = await Promise.all([
     api("GET", `/api/inventories/${encodeURIComponent(id)}`),
     can("operator") ? api("GET", "/api/projects") : Promise.resolve([]),
+    api("GET", inventoryHostUrl(id, view)),
   ]);
+  let page = firstPage;
+  const pages = () => Math.max(1, Math.ceil(Number(page.total) / view.size));
+  if (view.page > pages()) {
+    view.page = pages();
+    shownHash = inventoryHostHash(id, view);
+    history.replaceState(null, "", shownHash);
+    page = await api("GET", inventoryHostUrl(id, view));
+  }
   const notice = sourceNotice && sourceNotice.inventoryId === id ? sourceNotice : null;
-  const rows = (item.hosts || []).map((host) => {
-    const vars = Object.entries(host.vars || {}).map(([key, value]) => `${key}=${value}`).join(" ");
-    return `<tr><td class="mono">${esc(host.name)}</td><td>${esc((host.groups || []).join(", "))}</td><td class="mono">${esc(vars)}</td></tr>`;
-  });
   const external = (item.sources || []).some((source) => source.kind === "project" || source.kind === "netbox");
+  const groups = page.groups || [];
+  const groupOptions = [
+    `<option value="">${h("all_groups")}</option>`,
+    ...groups.map((group) => `<option value="${esc(group)}"${group === view.group ? " selected" : ""}>${esc(group)}</option>`),
+  ].join("");
   const sourceCards = (item.sources || []).map((source) => `
     <section class="card" style="margin-top:10px">
       <div class="spread">
@@ -3951,7 +4011,8 @@ async function pageInventory(id) {
         </div>
       </div>
       <p class="small muted">${h("count_hosts", { count: source.host_count })}</p>
-      <pre class="mono">${esc(source.body || "")}</pre>
+      <button class="btn" type="button" data-raw-source="${esc(source.id)}" aria-expanded="false" aria-controls="source-raw-${esc(source.id)}">${h("show_raw_data")}</button>
+      <div class="source-raw" id="source-raw-${esc(source.id)}" hidden><pre class="mono" data-raw-body></pre></div>
     </section>`).join("");
   shell(item.name, `
     <form class="card form" id="inventory-name-form" style="margin-bottom:14px">
@@ -3965,13 +4026,20 @@ async function pageInventory(id) {
         <h2>${h("hosts")}</h2>
         ${external && can("operator") ? `<button class="btn" id="sync-inventory" type="button">${h("refresh_all_sources")}</button>` : ""}
       </div>
-      ${table([t("name"), t("groups"), t("variables")], rows)}
+      <div class="row">
+        <input class="search" id="host-search" type="search" value="${esc(view.search)}" placeholder="${h("search_hosts")}" aria-label="${h("search_hosts")}" autocomplete="off">
+        <label class="field"><span>${h("group")}</span><select id="host-group" aria-label="${h("group")}">${groupOptions}</select></label>
+        <label class="field"><span>${h("page_size")}</span><select id="host-size" aria-label="${h("page_size")}">${[25, 50, 100].map((size) => `<option value="${size}"${size === view.size ? " selected" : ""}>${size}</option>`).join("")}</select></label>
+      </div>
+      <p class="small muted" id="host-total" tabindex="-1" aria-live="polite"></p>
+      <div id="host-table"></div>
+      <div class="row" id="host-pager" tabindex="-1"></div>
     </section>
     <section>
       <h2>${h("sources")}</h2>
       ${sourceCards || `<p class="small muted">${h("no_source_yet")}</p>`}
       <div id="source-edit"></div>
-      ${can("operator") ? `<div class="card" style="margin-top:14px">
+      ${can("operator") ? `<div class="card" id="add-source-card" style="margin-top:14px">
         <h2>${h("add_source")}</h2>
         <p class="small muted">${h("an_inventory_can_have_several_sources_they_are")}</p>
         <div class="choice-row">
@@ -3990,6 +4058,139 @@ async function pageInventory(id) {
     </section>` : ""}`,
     can("operator") ? `<a class="btn pill" href="#/inventories/new">${h("inventory_2")}</a>` : "");
   if (notice) sourceNotice = null;
+  const hostSearch = document.querySelector("#host-search");
+  const hostGroup = document.querySelector("#host-group");
+  const hostSize = document.querySelector("#host-size");
+  const hostTable = document.querySelector("#host-table");
+  const hostTotal = document.querySelector("#host-total");
+  const hostPager = document.querySelector("#host-pager");
+  const rememberHash = (push = false) => {
+    const next = inventoryHostHash(id, view);
+    if (push) history.pushState(null, "", next);
+    else history.replaceState(null, "", next);
+    shownHash = next;
+  };
+  const drawHosts = (data) => {
+    view.page = Math.max(1, Number(data.page) || view.page);
+    const hosts = data.hosts || [];
+    const total = Number(data.total) || 0;
+    if (!hosts.length) {
+      hostTable.innerHTML = view.search || view.group
+        ? `<p class="small muted">${h("no_hosts_match")}</p><button class="btn" id="clear-host-filter" type="button">${h("clear_filter")}</button>`
+        : `<p class="small muted">${h("no_hosts_yet")}</p>${can("operator") ? `<button class="btn" id="host-add-source" type="button">${h("add_source")}</button>` : ""}`;
+    } else {
+      hostTable.innerHTML = inventoryHostTable(hosts, view);
+    }
+    hostTotal.textContent = total
+      ? t("hosts_shown_of_total", { shown: hosts.length, total })
+      : view.search || view.group ? t("no_hosts_match") : t("no_hosts_yet");
+    const totalPages = Math.max(1, Math.ceil(total / view.size));
+    hostPager.innerHTML = totalPages > 1
+      ? `<button class="btn" type="button" data-host-page="${view.page - 1}"${view.page <= 1 ? " disabled" : ""}>${h("previous_page")}</button>
+        <span class="small muted">${h("page_of_pages", { page: view.page, pages: totalPages })}</span>
+        <button class="btn" type="button" data-host-page="${view.page + 1}"${view.page >= totalPages ? " disabled" : ""}>${h("next_page")}</button>`
+      : "";
+  };
+  const focusHost = (selector) => {
+    const target = selector ? document.querySelector(selector) : null;
+    (target || hostPager).focus();
+  };
+  const loadHosts = async (focus) => {
+    hostTotal.textContent = t("loading");
+    try {
+      const data = await api("GET", inventoryHostUrl(id, view));
+      const totalPages = Math.max(1, Math.ceil(Number(data.total) / view.size));
+      if (view.page > totalPages) {
+        view.page = totalPages;
+        rememberHash();
+        return loadHosts(focus);
+      }
+      page = data;
+      drawHosts(data);
+      focusHost(focus);
+    } catch (error) {
+      hostTotal.textContent = "";
+      handle(error);
+    }
+  };
+  hostSearch.addEventListener("input", () => {
+    if (hostSearch.hostTimer) clearTimeout(hostSearch.hostTimer);
+    hostSearch.hostTimer = setTimeout(() => {
+      view.search = hostSearch.value.trim();
+      view.page = 1;
+      rememberHash();
+      loadHosts("#host-search");
+    }, 200);
+  });
+  hostGroup.addEventListener("change", () => {
+    view.group = hostGroup.value;
+    view.page = 1;
+    rememberHash(true);
+    loadHosts("#host-group");
+  });
+  hostSize.addEventListener("change", () => {
+    view.size = Number(hostSize.value) || 50;
+    view.page = 1;
+    rememberHash(true);
+    loadHosts("#host-size");
+  });
+  hostTable.addEventListener("click", (event) => {
+    const clear = event.target.closest("#clear-host-filter");
+    if (clear) {
+      view.search = "";
+      view.group = "";
+      view.page = 1;
+      hostSearch.value = "";
+      hostGroup.value = "";
+      rememberHash();
+      loadHosts("#host-search");
+      return;
+    }
+    const add = event.target.closest("#host-add-source");
+    if (add) {
+      document.querySelector("#add-source-card")?.scrollIntoView({ block: "start" });
+      document.querySelector("#add-source-card [data-add-kind]")?.focus();
+      return;
+    }
+    const sort = event.target.closest("[data-host-sort]");
+    if (sort) {
+      view.sort = sort.dataset.hostSort;
+      view.page = 1;
+      rememberHash(true);
+      loadHosts(`[data-host-sort="${view.sort}"]`);
+    }
+  });
+  hostPager.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-host-page]");
+    if (!button || button.disabled) return;
+    view.page = Number(button.dataset.hostPage);
+    rememberHash(true);
+    loadHosts(`[data-host-page="${view.page}"]`);
+  });
+  drawHosts(page);
+  document.querySelectorAll("[data-raw-source]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const panel = document.getElementById(`source-raw-${button.dataset.rawSource}`);
+      if (!panel) return;
+      const show = panel.hidden;
+      if (show && !button.dataset.loaded) {
+        button.disabled = true;
+        try {
+          const source = await api("GET", `/api/inventories/${encodeURIComponent(id)}/sources/${encodeURIComponent(button.dataset.rawSource)}`);
+          panel.querySelector("[data-raw-body]").textContent = source.body || "";
+          button.dataset.loaded = "1";
+        } catch (error) {
+          handle(error);
+          button.disabled = false;
+          return;
+        }
+        button.disabled = false;
+      }
+      panel.hidden = !show;
+      button.textContent = t(show ? "hide_raw_data" : "show_raw_data");
+      button.setAttribute("aria-expanded", String(show));
+    });
+  });
   const nameForm = document.querySelector("#inventory-name-form");
   const nameInput = nameForm.querySelector("[name=name]");
   const nameError = nameForm.querySelector("[data-inventory-name-error]");
@@ -4028,39 +4229,46 @@ async function pageInventory(id) {
     });
   }
   document.querySelectorAll("[data-edit-source]").forEach((button) => {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", async () => {
       const target = document.querySelector("#source-edit");
-      const source = (item.sources || []).find((row) => row.id === button.dataset.editSource);
-      if (!target || !source) return;
-      target.innerHTML = "";
-      const card = mountSourceDraft(target, projects, source.kind, {
-        ...(source.source || {}),
-        name: source.name,
-        body: source.body,
-      }, { editing: source.id });
-      const errorNote = card.querySelector("[data-source-error]");
-      card.querySelector("[data-save-draft]").addEventListener("click", async () => {
-        const invalid = [...card.querySelectorAll("input, select, textarea")].find((control) => !control.checkValidity());
-        if (invalid) {
-          invalid.reportValidity();
-          return;
-        }
-        errorNote.textContent = "";
-        const button = card.querySelector("[data-save-draft]");
-        button.disabled = true;
-        try {
-          const saved = await api("PUT", `/api/inventories/${encodeURIComponent(id)}/sources/${encodeURIComponent(source.id)}`, readSourceUpdate(card));
-          sourceNotice = saved.sync && saved.sync.ok
-            ? { inventoryId: id, sourceId: source.id, text: t("hosts_before_after", { before: saved.sync.before, after: saved.sync.after }) }
-            : null;
-          markSaved();
-          route();
-        } catch (error) {
-          button.disabled = false;
-          errorNote.textContent = t(error.message || "error.generic", error.vars);
-          handle(error);
-        }
-      });
+      const summary = (item.sources || []).find((row) => row.id === button.dataset.editSource);
+      if (!target || !summary) return;
+      target.innerHTML = `<p class="small muted">${h("loading")}</p>`;
+      try {
+        const source = await api("GET", `/api/inventories/${encodeURIComponent(id)}/sources/${encodeURIComponent(summary.id)}`);
+        target.innerHTML = "";
+        const card = mountSourceDraft(target, projects, source.kind, {
+          ...(source.source || {}),
+          name: source.name,
+          body: source.body,
+        }, { editing: source.id });
+        const errorNote = card.querySelector("[data-source-error]");
+        card.querySelector("[data-save-draft]").addEventListener("click", async () => {
+          const invalid = [...card.querySelectorAll("input, select, textarea")].find((control) => !control.checkValidity());
+          if (invalid) {
+            invalid.reportValidity();
+            return;
+          }
+          errorNote.textContent = "";
+          const save = card.querySelector("[data-save-draft]");
+          save.disabled = true;
+          try {
+            const saved = await api("PUT", `/api/inventories/${encodeURIComponent(id)}/sources/${encodeURIComponent(source.id)}`, readSourceUpdate(card));
+            sourceNotice = saved.sync && saved.sync.ok
+              ? { inventoryId: id, sourceId: source.id, text: t("hosts_before_after", { before: saved.sync.before, after: saved.sync.after }) }
+              : null;
+            markSaved();
+            route();
+          } catch (error) {
+            save.disabled = false;
+            errorNote.textContent = t(error.message || "error.generic", error.vars);
+            handle(error);
+          }
+        });
+      } catch (error) {
+        target.innerHTML = "";
+        handle(error);
+      }
     });
   });
   document.querySelectorAll("[data-sync-source]").forEach((button) => {
@@ -5445,18 +5653,19 @@ async function route() {
   closeLive();
   if (navToken) navToken.abort();
   const hash = location.hash || "#/";
+  const hashPath = hash.split("?")[0];
   const token = new AbortController();
   navToken = token;
   if (!me) {
-    if (hash !== "#/login") location.hash = "#/login";
+    if (hashPath !== "#/login") location.hash = "#/login";
     renderLogin("");
     return;
   }
-  if (hash === "#/login") {
+  if (hashPath === "#/login") {
     location.hash = "#/";
     return;
   }
-  const parts = hash.slice(1).split("/").filter(Boolean);
+  const parts = hashPath.slice(1).split("/").filter(Boolean);
   try {
     if (parts.length === 0) await pageDashboard();
     else if (parts[0] === "templates" && parts[1] === "new") await pageTemplateForm(null);
@@ -5524,6 +5733,9 @@ async function boot() {
     me = null;
   }
   window.addEventListener("hashchange", route);
+  window.addEventListener("popstate", () => {
+    if ((location.hash || "#/") !== shownHash) route();
+  });
   route();
 }
 

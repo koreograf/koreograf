@@ -78,10 +78,16 @@ pub fn router(state: Shared) -> Router {
         .route("/inventories/netbox", post(sources::create_netbox))
         .route("/inventories/netbox/test", post(sources::test_netbox))
         .route("/inventories/{id}/sync", post(sources::sync_inventory))
+        .route(
+            "/inventories/{id}/hosts",
+            get(catalog::list_inventory_hosts),
+        )
         .route("/inventories/{id}/sources", post(sources::add_source))
         .route(
             "/inventories/{id}/sources/{source_id}",
-            put(sources::update_source).delete(sources::delete_source),
+            get(sources::get_source)
+                .put(sources::update_source)
+                .delete(sources::delete_source),
         )
         .route(
             "/inventories/{id}/sources/{source_id}/sync",
