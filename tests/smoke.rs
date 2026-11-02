@@ -13572,12 +13572,41 @@ fn viewers_open_templates_in_a_read_only_overlay() {
     assert!(dialog.contains("const readOnly = !can(\"operator\");"));
     assert!(dialog.contains("title: readOnly ? t(\"read_only_template\", { name: item.name })"));
     assert!(dialog.contains("hint: readOnly ? \"read_only_template_hint\" : undefined"));
+    assert!(dialog.contains("form: true"));
     assert!(dialog.contains("submit: readOnly ? undefined : editing ? t(\"save\") : t(\"create\")"));
     assert!(dialog.contains("onSubmit: readOnly ? undefined : async"));
     assert!(dialog.contains("!readOnly && editing"));
     assert!(dialog.contains("if (readOnly) {"));
     assert!(dialog.contains("control.disabled = true;"));
     assert!(dialog.contains("button.hasAttribute(\"data-dialog-cancel\")"));
+    assert!(dialog.contains("button.classList.contains(\"dialog-close\")"));
+    let helper = extract_function_with_destructured_params(&script, "function openEditDialog");
+    assert!(helper.contains("form = Boolean(onSubmit)"));
+    assert!(helper.contains("    form,\n    actions,"));
+    let probe = format!(
+        r#"{helper}
+let editSerial = 0;
+let leaveGuard = null;
+function clearEditHash() {{}}
+function h(value) {{ return value; }}
+let captured = null;
+function openDialog(options) {{
+  captured = options;
+  return {{
+    overlay: {{ setAttribute() {{}}, querySelectorAll() {{ return []; }} }},
+    form: {{ addEventListener() {{}} }},
+    dirty() {{ return false; }},
+  }};
+}}
+openEditDialog({{ title: "read only", body: "" }});
+if (captured.form !== false) {{ console.error("missing submit dialog defaulted to a form"); process.exit(1); }}
+openEditDialog({{ title: "read only", body: "", form: true }});
+if (captured.form !== true) {{ console.error("explicit form was not forwarded"); process.exit(1); }}
+openEditDialog({{ title: "edit", body: "", onSubmit: async () => {{}} }});
+if (captured.form !== true) {{ console.error("submit dialog did not default to a form"); process.exit(1); }}
+"#
+    );
+    run_node_probe("edit-dialog-form", &probe);
 }
 
 #[test]

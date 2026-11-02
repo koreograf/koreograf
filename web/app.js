@@ -1121,6 +1121,7 @@ function openEditDialog({
   submit,
   onSubmit,
   danger,
+  form = Boolean(onSubmit),
   actions = true,
   wide = false,
   initialTab = "",
@@ -1148,6 +1149,7 @@ function openEditDialog({
     submit,
     onSubmit,
     danger,
+    form,
     actions,
     wide,
     onClose: () => {
@@ -1536,6 +1538,7 @@ async function openTemplateDialog(existing, initialTab = "") {
     ],
     initialTab,
     wide: true,
+    form: true,
     submit: readOnly ? undefined : editing ? t("save") : t("create"),
     danger: !readOnly && editing ? `<button class="btn danger" id="delete-template" type="button">${h("delete")}</button>` : "",
     onSubmit: readOnly ? undefined : async ({ form, close }) => {
@@ -1587,7 +1590,7 @@ async function openTemplateDialog(existing, initialTab = "") {
       control.disabled = true;
     });
     form.querySelectorAll("button").forEach((button) => {
-      if (button.dataset.dialogTab !== undefined || button.hasAttribute("data-dialog-cancel")) return;
+      if (button.dataset.dialogTab !== undefined || button.hasAttribute("data-dialog-cancel") || button.classList.contains("dialog-close")) return;
       button.disabled = true;
     });
   }
