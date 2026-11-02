@@ -22,11 +22,15 @@ RUN case "$TARGETARCH" in \
     && cp "target/$target/release/koreograf" /koreograf
 
 FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS tools
-# Renovate updates DOCKER_VERSION only. Copy DOCKER_SHA256_AMD64 and
-# DOCKER_SHA256_ARM64 from the release download. A stale checksum fails the build.
+# Renovate updates DOCKER_VERSION and TINI_VERSION but not the checksums.
+# Copy DOCKER_SHA256_* and TINI_SHA256_* from the release download. A stale
+# checksum fails the build.
 ARG DOCKER_VERSION=29.9.2
 ARG DOCKER_SHA256_AMD64=9ac225999fd5e863f7694c728ef23d480616b1e5639328fa309befd4243d69eb
 ARG DOCKER_SHA256_ARM64=873b3e0207857c3b2f28392fb922f3ea6efe37620c16d4d4aaf2fef409c90b73
+ARG TINI_VERSION=0.19.0
+ARG TINI_SHA256_AMD64=c5b0666b4cb676901f90dfcb37106783c5fe2077b04590973b885950611b30ee
+ARG TINI_SHA256_ARM64=eae1d3aa50c48fb23b8cbdf4e369d0910dfc538566bfd09df89a774aa84a48b9
 ARG TARGETARCH
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # hadolint ignore=DL3008 # Bookworm package names stay unpinned so security updates still apply.
@@ -34,8 +38,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl git openssh-client \
     && rm -rf /var/lib/apt/lists/* \
     && case "$TARGETARCH" in \
-        amd64) arch=x86_64; sum=$DOCKER_SHA256_AMD64 ;; \
-        arm64) arch=aarch64; sum=$DOCKER_SHA256_ARM64 ;; \
+        amd64) arch=x86_64; sum=$DOCKER_SHA256_AMD64; tini_arch=amd64; tini_sum=$TINI_SHA256_AMD64 ;; \
+        arm64) arch=aarch64; sum=$DOCKER_SHA256_ARM64; tini_arch=arm64; tini_sum=$TINI_SHA256_ARM64 ;; \
         *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
     esac \
     && curl -fsSL -o /tmp/docker.tgz \
@@ -43,7 +47,11 @@ RUN apt-get update \
     && printf '%s  %s\n' "$sum" /tmp/docker.tgz | sha256sum -c - \
     && tar -xzf /tmp/docker.tgz -C /tmp \
     && install -D -m 755 /tmp/docker/docker /out/usr/local/bin/docker \
-    && rm -rf /tmp/docker /tmp/docker.tgz \
+    && curl -fsSL -o /tmp/tini-static \
+        "https://github.com/krallin/tini/releases/download/v$TINI_VERSION/tini-static-$tini_arch" \
+    && printf '%s  %s\n' "$tini_sum" /tmp/tini-static | sha256sum -c - \
+    && install -D -m 755 /tmp/tini-static /out/sbin/tini \
+    && rm -rf /tmp/docker /tmp/docker.tgz /tmp/tini-static \
     && mkdir -p /out/usr/bin /out/usr/lib /out/usr/share \
     && cp -a /usr/bin/git /usr/bin/ssh /out/usr/bin/ \
     && cp -a /usr/lib/git-core /out/usr/lib/ \
@@ -104,5 +112,5 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 \
     CMD ["/usr/local/bin/koreograf", "healthcheck"]
 USER 10001:10001
-ENTRYPOINT ["/usr/local/bin/koreograf", "entrypoint"]
+ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/koreograf", "entrypoint"]
 CMD ["koreograf"]

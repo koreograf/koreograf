@@ -55,7 +55,7 @@ It does not compile. Build this checkout without replacing that published tag:
 docker compose -f docker-compose.yml -f docker-compose.build.yml up --build -d
 ```
 
-The local image is tagged `koreograf:local`. buildx is only for publishing a multi-architecture image. The published image holds the server binary, `git`, an SSH client, the static Docker CLI, and CA certificates. Ansible, OpenTofu, and shell jobs run in the execution environments the first start seeds, so the image has no `ansible-playbook`, `tofu`, `python3`, or shell. The image sets `KOREOGRAF_CONTAINER_IMAGE=1`, and its runner preflight checks only the container CLI and socket. A saved `local` runner mode runs in a container there; the image has no local mode.
+The local image is tagged `koreograf:local`. buildx is only for publishing a multi-architecture image. The published image holds the server binary, `git`, an SSH client, the static Docker CLI, a static `tini`, and CA certificates. Ansible, OpenTofu, and shell jobs run in the execution environments the first start seeds, so the image has no `ansible-playbook`, `tofu`, `python3`, or shell. The image sets `KOREOGRAF_CONTAINER_IMAGE=1`, and its runner preflight checks only the container CLI and socket. A saved `local` runner mode runs in a container there; the image has no local mode.
 
 The process starts as uid 10001. A fresh named volume inherits the ownership of `/var/lib/koreograf` from the image. An older volume that is still owned by root needs a one-time ownership fix, and that is the only step that needs root:
 
@@ -63,9 +63,11 @@ The process starts as uid 10001. A fresh named volume inherits the ownership of 
 docker compose run --rm -T --user 0 koreograf koreograf --version
 ```
 
-The entrypoint in the binary creates the data directory, gives an existing volume and its files to uid 10001, joins the Docker socket group, sets `no_new_privs`, and drops to uid 10001 before it starts the server. It needs no shell, `setpriv`, `find`, `chown`, or `tini`. A mounted `/var/run/docker.sock` changes nothing about the volume ownership: the process still runs as uid 10001 and needs the socket's group through `group_add`.
+`docker-compose.yml` sets `user: "10001:10001"`, so the entrypoint never starts as root and cannot fix an older root-owned volume on its own. Run the command above once after upgrading such a volume.
 
-PID 1 is the Koreograf binary itself. It waits for each job process and the container stops when the server exits. A custom image command, Compose `entrypoint`, or Helm `command` replaces it; start the binary with `entrypoint` when a command should still fix the volume.
+The entrypoint in the binary creates the data directory, gives an existing volume and its files to uid 10001, joins the Docker socket group, sets `no_new_privs`, and drops to uid 10001 before it starts the server. It needs no shell, `setpriv`, `find`, or `chown`. A mounted `/var/run/docker.sock` changes nothing about the volume ownership: the process still runs as uid 10001 and needs the socket's group through `group_add`.
+
+`/sbin/tini` is PID 1 and starts `/usr/local/bin/koreograf entrypoint`. It forwards SIGTERM, so `docker stop` returns promptly, and it reaps orphaned processes. The server runs as its child, and the container stops when the server exits. A custom image command, Compose `entrypoint`, or Helm `command` replaces the tini entrypoint; start the binary with `entrypoint` when a command should still fix the volume.
 
 The UI is published on `127.0.0.1` only. To listen on every interface, change the port mapping to `8080:8080`. Use a reverse proxy with TLS when other machines should open the UI.
 

@@ -5,6 +5,9 @@ IMAGE=${1:-koreograf:ci}
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/../../.." && pwd)
 HELPER=debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
 VOLUME=koreograf-entrypoint-check
+STOP_NAME=koreograf-entrypoint-stop
+ORPHAN_NAME=koreograf-entrypoint-orphan
+ORPHAN_VOLUME=koreograf-entrypoint-orphan
 SOCKET_DIR=$(mktemp -d)
 SOCKET_PID=
 
@@ -16,8 +19,8 @@ cleanup() {
         wait "$SOCKET_PID" 2>/dev/null || true
     fi
     rm -rf "$SOCKET_DIR"
-    docker rm -f "$VOLUME" >/dev/null 2>&1 || true
-    docker volume rm "$VOLUME" >/dev/null 2>&1 || true
+    docker rm -f "$VOLUME" "$STOP_NAME" "$ORPHAN_NAME" >/dev/null 2>&1 || true
+    docker volume rm "$VOLUME" "$ORPHAN_VOLUME" >/dev/null 2>&1 || true
     exit "$status"
 }
 trap cleanup EXIT INT TERM
@@ -66,5 +69,41 @@ if docker run --rm --user 0 -v "$SOCKET_DIR/docker.sock:/var/run/docker.sock" \
     exit 1
 fi
 grep -q 'with group' "$SOCKET_DIR/root-out"
+
+docker run -d --name "$STOP_NAME" "$IMAGE" >/dev/null
+sleep 1
+start=$(date +%s)
+docker stop -t 30 "$STOP_NAME" >/dev/null
+elapsed=$(( $(date +%s) - start ))
+code=$(docker inspect --format '{{.State.ExitCode}}' "$STOP_NAME")
+if [ "$elapsed" -gt 10 ]; then
+    printf 'docker stop took %s seconds\n' "$elapsed" >&2
+    exit 1
+fi
+case "$code" in
+    0|143) ;;
+    *)
+        printf 'docker stop ended with exit code %s\n' "$code" >&2
+        exit 1
+        ;;
+esac
+docker rm -f "$STOP_NAME" >/dev/null
+
+docker volume create "$ORPHAN_VOLUME" >/dev/null
+docker run --rm -v "$ORPHAN_VOLUME":/test "$HELPER" cp /bin/sh /bin/sleep /test/
+docker run -d --name "$ORPHAN_NAME" -v "$ORPHAN_VOLUME":/test \
+    --entrypoint /sbin/tini "$IMAGE" -- /test/sh -c \
+    '/test/sleep 1 & exec /test/sleep 5' >/dev/null
+sleep 2
+if docker top "$ORPHAN_NAME" -eo pid,ppid,stat,cmd \
+    | awk 'NR > 1 && $3 ~ /^Z/ { found = 1 } END { exit !found }'; then
+    printf 'a zombie process remained under PID 1\n' >&2
+    docker top "$ORPHAN_NAME" -eo pid,ppid,stat,cmd >&2 || true
+    exit 1
+fi
+docker top "$ORPHAN_NAME" -eo pid,ppid,stat,cmd | grep -q '/sbin/tini'
+docker stop -t 30 "$ORPHAN_NAME" >/dev/null
+docker rm -f "$ORPHAN_NAME" >/dev/null
+docker volume rm "$ORPHAN_VOLUME" >/dev/null
 
 printf 'entrypoint checks passed\n'

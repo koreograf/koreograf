@@ -8,8 +8,8 @@ where
     S: AsRef<str>,
 {
     args.into_iter()
-        .skip(1)
-        .any(|arg| arg.as_ref() == "healthcheck")
+        .nth(1)
+        .is_some_and(|arg| arg.as_ref() == "healthcheck")
 }
 
 pub async fn healthcheck() -> anyhow::Result<i32> {
@@ -57,6 +57,7 @@ mod tests {
         assert!(healthcheck_requested(["koreograf", "healthcheck"]));
         assert!(!healthcheck_requested(["koreograf"]));
         assert!(!healthcheck_requested(["koreograf", "--version"]));
+        assert!(!healthcheck_requested(["koreograf", "run", "healthcheck"]));
     }
 
     #[test]

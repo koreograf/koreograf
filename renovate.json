@@ -36,6 +36,18 @@
     },
     {
       "customType": "regex",
+      "description": "Static tini in the image. TINI_SHA256_AMD64 and TINI_SHA256_ARM64 are not updated; copy them from the release download or the image build fails.",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": [
+        "ARG TINI_VERSION=(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "tini",
+      "packageNameTemplate": "krallin/tini",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v?(?<version>\\d+\\.\\d+\\.\\d+)$"
+    },
+    {
+      "customType": "regex",
       "description": "Curated execution environment images in the first-run seed",
       "managerFilePatterns": ["/^src/seed\\.rs$/"],
       "matchStrings": [
@@ -118,6 +130,11 @@
     {
       "description": "Static Docker CLI in the image is runtime",
       "matchPackageNames": ["docker/docker"],
+      "semanticCommitType": "fix"
+    },
+    {
+      "description": "Static tini in the image is runtime",
+      "matchPackageNames": ["krallin/tini"],
       "semanticCommitType": "fix"
     },
     {

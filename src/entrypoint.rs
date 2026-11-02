@@ -8,8 +8,8 @@ where
     S: AsRef<str>,
 {
     args.into_iter()
-        .skip(1)
-        .any(|arg| arg.as_ref() == "entrypoint")
+        .nth(1)
+        .is_some_and(|arg| arg.as_ref() == "entrypoint")
 }
 
 const TARGET_UID: u32 = 10001;
@@ -207,6 +207,7 @@ mod tests {
         ]));
         assert!(!entrypoint_requested(["koreograf"]));
         assert!(!entrypoint_requested(["koreograf", "healthcheck"]));
+        assert!(!entrypoint_requested(["koreograf", "run", "entrypoint"]));
     }
 
     #[test]
