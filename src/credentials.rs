@@ -581,7 +581,10 @@ fn check_netbox(secret: &Value) -> Result<(), String> {
     one_line(token, "token")?;
     let url = text(secret, "url");
     require(url, "netbox_needs_an_address")?;
-    one_line(url, "address")
+    if !crate::netbox::valid_endpoint(url) {
+        return Err("the_netbox_address_must_be_http_or_https".into());
+    }
+    Ok(())
 }
 
 pub(crate) fn backfill_netbox_urls(state: &crate::Shared) -> Result<(), crate::error::ApiError> {
