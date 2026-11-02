@@ -6266,8 +6266,9 @@ async function pageTeam() {
   if (request.create !== null) {
     if (me.is_admin) openTeamDialog(null, organizations, current && current.organization_id);
   } else if (request.edit) {
-    const item = teams.find((team) => team.id === request.edit) || current;
-    if (item && can("owner")) openTeamDialog(item, organizations);
+    const item = teams.find((team) => team.id === request.edit);
+    if (!item) clearEditHash();
+    else if (item.role === "owner") openTeamDialog(item, organizations);
   }
   document.querySelectorAll("[data-member-role]").forEach((select) => {
     select.addEventListener("change", async () => {
@@ -6577,8 +6578,14 @@ function openUserDialog(item, teams, initialTab = "") {
     });
   }
   dialog.overlay.querySelectorAll("[data-role]").forEach((select) => {
-    select.addEventListener("change", async () => {
+    select.addEventListener("input", (event) => event.stopPropagation());
+    select.addEventListener("change", async (event) => {
+      event.stopPropagation();
       const next = select.value;
+      if (dialog.dirty() && !confirm(t("discard_unsaved_changes"))) {
+        select.value = select.dataset.current;
+        return;
+      }
       try {
         await api("POST", `/api/teams/${encodeURIComponent(select.dataset.role)}/members`, {
           username: item.username,
@@ -6595,6 +6602,7 @@ function openUserDialog(item, teams, initialTab = "") {
   });
   dialog.overlay.querySelectorAll("[data-leave]").forEach((button) => {
     button.addEventListener("click", async () => {
+      if (dialog.dirty() && !confirm(t("discard_unsaved_changes"))) return;
       try {
         await api("DELETE", `/api/teams/${encodeURIComponent(button.dataset.leave)}/members/${encodeURIComponent(item.id)}`);
         dialog.clean();
@@ -6604,9 +6612,14 @@ function openUserDialog(item, teams, initialTab = "") {
   });
   const grant = dialog.overlay.querySelector("[data-user-grant]");
   if (grant) {
+    dialog.overlay.querySelectorAll("[name=grant_team], [name=grant_role]").forEach((field) => {
+      field.addEventListener("input", (event) => event.stopPropagation());
+      field.addEventListener("change", (event) => event.stopPropagation());
+    });
     grant.addEventListener("click", async () => {
       const team = dialog.overlay.querySelector("[name=grant_team]");
       const role = dialog.overlay.querySelector("[name=grant_role]");
+      if (dialog.dirty() && !confirm(t("discard_unsaved_changes"))) return;
       try {
         await api("POST", `/api/teams/${encodeURIComponent(team.value)}/members`, {
           username: item.username,
