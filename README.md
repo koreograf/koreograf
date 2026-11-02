@@ -89,6 +89,8 @@ tests/harness/scripts/down.sh
 
 `down.sh -v` removes the volumes. The next `up.sh` creates the directory entries and the devices again. Without `-v`, a second start keeps the data and the seed scripts leave existing entries in place.
 
+Run `down.sh -v` once after the harness moved from Postgres 16 to 18. Postgres 18 stores its data under a different path inside the volume, and the newer image refuses to start on the old layout. The seed scripts rebuild the lab data, so no `pg_upgrade` is needed.
+
 `tests/harness/scripts/ldap-groups.sh` is a smaller check for the LDAP group search. It is not part of `cargo test`, and CI does not start it. The script needs the tools above plus Cargo. It starts only OpenLDAP, on `127.0.0.1:1389`, and runs this checkout with `cargo run`. Only the service account can read `ou=groups`. The lab user is a `groupOfNames` member, and the team `Plattform` stores that group's DN. Sign-in returns the team. The script then sends sign-in through a proxy on `127.0.0.1:1390` that drops the service re-bind. Sign-in still succeeds, the team is no longer listed, and the warning in the log does not contain the password. `tests/harness/scripts/ldap-groups.sh down` stops that OpenLDAP. Add `-v` to remove its volumes. The full harness above is unchanged.
 
 `tests/harness/scripts/ee-socket.sh` checks execution environments with the Docker socket mounted. It is not part of `cargo test`, and CI does not start it. The script builds this checkout, mounts the socket and a named volume, runs a shell job in that image, cancels a second job and checks that its container is gone, then sets a wrong `KOREOGRAF_DATA_HOST` and checks that the job fails before a container starts. `tests/harness/scripts/ee-socket.sh down` removes that stack.

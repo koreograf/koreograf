@@ -38,13 +38,13 @@ services:
       start_period: 15s
 
   postgres:
-    image: postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
+    image: postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5
     environment:
       POSTGRES_DB: netbox
       POSTGRES_USER: netbox
       POSTGRES_PASSWORD: ${NETBOX_DB_PASSWORD}
     volumes:
-      - netbox-postgres:/var/lib/postgresql/data
+      - netbox-postgres:/var/lib/postgresql
     networks:
       - lab
     healthcheck:
