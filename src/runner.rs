@@ -801,12 +801,18 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
     }
     let project = load_project(state, &template).await?;
     if let Some(project) = &project {
+        let credential = if project.source_type == "git" {
+            project_credential_secret(state, project)?
+        } else {
+            None
+        };
         let source = materialize_project(
             project,
             &state.cfg.data_dir,
             &settings.proxy,
             template.update_on_launch,
             &state.cfg.project_roots,
+            credential.as_ref(),
         )
         .await
         .map_err(sync_log_line)?;
@@ -1987,6 +1993,7 @@ pub async fn materialize_project(
     proxy: &crate::settings::ProxySettings,
     update: bool,
     roots: &[PathBuf],
+    credential: Option<&Value>,
 ) -> Result<PathBuf, String> {
     match project.source_type.as_str() {
         "path" => {
@@ -2006,7 +2013,19 @@ pub async fn materialize_project(
                 };
             }
             let allow_file = file_clone_allowed(&project.source, data_dir, roots)?;
-            git_sync(&project.source, &project.revision, &dest, proxy, allow_file).await?;
+            let auth = match credential {
+                Some(secret) => git_auth_material(secret, &project.source)?,
+                None => None,
+            };
+            git_sync(
+                &project.source,
+                &project.revision,
+                &dest,
+                proxy,
+                allow_file,
+                auth.as_ref(),
+            )
+            .await?;
             Ok(dest)
         }
         other => Err(crate::error::message(
@@ -2014,6 +2033,66 @@ pub async fn materialize_project(
             &[("source", other)],
         )),
     }
+}
+
+pub fn project_credential_secret(
+    state: &Shared,
+    project: &Project,
+) -> Result<Option<Value>, String> {
+    let Some(id) = project.credential_id.as_deref() else {
+        return Ok(None);
+    };
+    let credential = {
+        let db = state.db().map_err(|err| err.to_string())?;
+        db::credential(&db, id)
+            .map_err(|err| err.to_string())?
+            .ok_or_else(|| "Source control credential is missing.".to_string())?
+    };
+    if credential.kind != "scm" {
+        return Err("The credential is not a source control credential.".into());
+    }
+    if credential.disabled {
+        return Err("The source control credential is disabled.".into());
+    }
+    if credential.team_id != project.team_id {
+        return Err("The credential belongs to another team.".into());
+    }
+    let plain = state
+        .decrypt(&credential.secret_blob)
+        .map_err(|_| "Credentials cannot be read.".to_string())?;
+    serde_json::from_str(&plain)
+        .map(Some)
+        .map_err(|_| "Credentials are not JSON.".to_string())
+}
+
+pub(crate) fn git_address_has_credentials(url: &str) -> bool {
+    let Some(scheme_end) = url.find("://") else {
+        return false;
+    };
+    let rest = &url[scheme_end + 3..];
+    let Some(at) = rest.find('@') else {
+        return false;
+    };
+    let userinfo = &rest[..at];
+    if userinfo.is_empty() || userinfo.contains('/') {
+        return false;
+    }
+    let scheme = url[..scheme_end].to_ascii_lowercase();
+    userinfo.contains(':') || scheme.starts_with("http")
+}
+
+pub(crate) fn mask_git_url(url: &str) -> String {
+    if !git_address_has_credentials(url) {
+        return url.to_string();
+    }
+    let Some(scheme_end) = url.find("://") else {
+        return url.to_string();
+    };
+    let rest = &url[scheme_end + 3..];
+    let Some(at) = rest.find('@') else {
+        return url.to_string();
+    };
+    format!("{}://[redacted]@{}", &url[..scheme_end], &rest[at + 1..])
 }
 
 pub fn valid_git(url: &str) -> bool {
@@ -2037,7 +2116,147 @@ pub fn valid_revision(revision: &str) -> bool {
                 .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-')))
 }
 
-fn git_cmd(proxy: &crate::settings::ProxySettings, allow_file: bool) -> Command {
+struct GitAuth {
+    dir: PathBuf,
+    env: Vec<(String, String)>,
+}
+
+impl GitAuth {
+    fn apply(&self, cmd: &mut Command) {
+        for (key, value) in &self.env {
+            cmd.env(key, value);
+        }
+    }
+}
+
+impl Drop for GitAuth {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.dir);
+    }
+}
+
+fn auth_text<'a>(secret: &'a Value, key: &str) -> &'a str {
+    secret
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("")
+}
+
+fn default_git_username(url: &str) -> &'static str {
+    if url.to_ascii_lowercase().contains("github") {
+        "x-access-token"
+    } else {
+        "oauth2"
+    }
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn private_temp_dir() -> Result<PathBuf, String> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_nanos())
+        .unwrap_or_default();
+    let dir = std::env::temp_dir().join(format!("koreograf-git-{}-{nanos}", std::process::id()));
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(&dir).map_err(|err| err.to_string())?;
+    Ok(dir)
+}
+
+fn set_executable(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+            .map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+fn git_auth_material(secret: &Value, url: &str) -> Result<Option<GitAuth>, String> {
+    let username = auth_text(secret, "username");
+    let password = auth_text(secret, "password");
+    let key = auth_text(secret, "private_key");
+    let passphrase = auth_text(secret, "passphrase");
+    if password.is_empty() && key.is_empty() {
+        return Ok(None);
+    }
+    let dir = private_temp_dir()?;
+    let built = (|| -> Result<Vec<(String, String)>, String> {
+        let mut env = Vec::new();
+        if !password.is_empty() {
+            let password_file = dir.join("git.pass");
+            write_secret(&password_file, password)?;
+            let askpass = dir.join("git-askpass");
+            write_secret(
+                &askpass,
+                "#!/bin/sh\ncase \"$1\" in\n  *sername*) printf '%s\\n' \"${KOREOGRAF_GIT_USERNAME:-oauth2}\" ;;\n  *) cat \"$KOREOGRAF_GIT_PASSWORD_FILE\" ;;\nesac\n",
+            )?;
+            set_executable(&askpass)?;
+            env.push(("GIT_ASKPASS".into(), askpass.display().to_string()));
+            env.push((
+                "KOREOGRAF_GIT_PASSWORD_FILE".into(),
+                password_file.display().to_string(),
+            ));
+            env.push(("GIT_TERMINAL_PROMPT".into(), "0".into()));
+            env.push((
+                "KOREOGRAF_GIT_USERNAME".into(),
+                if username.is_empty() {
+                    default_git_username(url).to_string()
+                } else {
+                    username.to_string()
+                },
+            ));
+        }
+        if !key.is_empty() {
+            let key_file = dir.join("git_key");
+            write_secret(&key_file, key)?;
+            let command = format!(
+                "ssh -i {} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new",
+                shell_quote(&key_file.display().to_string())
+            );
+            if !passphrase.is_empty() {
+                let passphrase_file = dir.join("key.pass");
+                write_secret(&passphrase_file, passphrase)?;
+                let askpass = dir.join("ssh-askpass");
+                write_secret(
+                    &askpass,
+                    &format!(
+                        "#!/bin/sh\ncat {}\n",
+                        shell_quote(&passphrase_file.display().to_string())
+                    ),
+                )?;
+                set_executable(&askpass)?;
+                env.push(("SSH_ASKPASS".into(), askpass.display().to_string()));
+                env.push(("SSH_ASKPASS_REQUIRE".into(), "force".into()));
+                env.push(("DISPLAY".into(), ":0".into()));
+            }
+            env.push(("GIT_SSH_COMMAND".into(), command));
+        }
+        Ok(env)
+    })();
+    match built {
+        Ok(env) => Ok(Some(GitAuth { dir, env })),
+        Err(err) => {
+            let _ = fs::remove_dir_all(&dir);
+            Err(err)
+        }
+    }
+}
+
+fn git_cmd(
+    proxy: &crate::settings::ProxySettings,
+    allow_file: bool,
+    auth: Option<&GitAuth>,
+) -> Command {
     let mut cmd = Command::new("git");
     if allow_file {
         cmd.arg("-c").arg("protocol.file.allow=always");
@@ -2046,6 +2265,9 @@ fn git_cmd(proxy: &crate::settings::ProxySettings, allow_file: bool) -> Command 
         .env("GCM_INTERACTIVE", "never")
         .stdin(Stdio::null())
         .kill_on_drop(true);
+    if let Some(auth) = auth {
+        auth.apply(&mut cmd);
+    }
     proxy.apply_command(&mut cmd);
     cmd
 }
@@ -2072,7 +2294,7 @@ fn git_text(output: &std::process::Output) -> String {
     if joined.is_empty() {
         format!("Git failed with status {}.", output.status)
     } else {
-        format!("Git:\n{joined}")
+        format!("Git:\n{}", mask_pull_credentials(&joined))
     }
 }
 
@@ -2106,8 +2328,9 @@ async fn git_clone(
     dest: &Path,
     proxy: &crate::settings::ProxySettings,
     allow_file: bool,
+    auth: Option<&GitAuth>,
 ) -> Result<(), String> {
-    let mut cmd = git_cmd(proxy, allow_file);
+    let mut cmd = git_cmd(proxy, allow_file, auth);
     cmd.arg("clone").arg("--depth").arg("1");
     if !revision.is_empty() {
         cmd.arg("--branch").arg(revision);
@@ -2121,15 +2344,16 @@ async fn git_checkout(
     dest: &Path,
     proxy: &crate::settings::ProxySettings,
     allow_file: bool,
+    auth: Option<&GitAuth>,
 ) -> Result<(), String> {
-    let mut fetch = git_cmd(proxy, allow_file);
+    let mut fetch = git_cmd(proxy, allow_file, auth);
     fetch
         .arg("-C")
         .arg(dest)
         .args(["fetch", "--depth", "1", "origin"])
         .arg(revision);
     git_run(fetch).await?;
-    let mut checkout = git_cmd(proxy, allow_file);
+    let mut checkout = git_cmd(proxy, allow_file, auth);
     checkout
         .arg("-C")
         .arg(dest)
@@ -2142,13 +2366,14 @@ async fn git_update(
     dest: &Path,
     proxy: &crate::settings::ProxySettings,
     allow_file: bool,
+    auth: Option<&GitAuth>,
 ) -> Result<(), String> {
     if revision.is_empty() {
-        let mut cmd = git_cmd(proxy, allow_file);
+        let mut cmd = git_cmd(proxy, allow_file, auth);
         cmd.arg("-C").arg(dest).args(["pull", "--ff-only"]);
         return git_run(cmd).await;
     }
-    git_checkout(revision, dest, proxy, allow_file).await
+    git_checkout(revision, dest, proxy, allow_file, auth).await
 }
 
 async fn git_sync(
@@ -2157,6 +2382,7 @@ async fn git_sync(
     dest: &Path,
     proxy: &crate::settings::ProxySettings,
     allow_file: bool,
+    auth: Option<&GitAuth>,
 ) -> Result<(), String> {
     if !valid_revision(revision) {
         return Err("revision_is_invalid".into());
@@ -2166,19 +2392,19 @@ async fn git_sync(
             .map_err(|err| format!("Incomplete checkout cannot be removed: {err}"))?;
     }
     if dest.join(".git").is_dir() {
-        return git_update(revision, dest, proxy, allow_file).await;
+        return git_update(revision, dest, proxy, allow_file, auth).await;
     }
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
-    match git_clone(url, revision, dest, proxy, allow_file).await {
+    match git_clone(url, revision, dest, proxy, allow_file, auth).await {
         Ok(()) => Ok(()),
         Err(err) if !revision.is_empty() && missing_revision(&err) => {
             if dest.exists() {
                 fs::remove_dir_all(dest).map_err(|remove| remove.to_string())?;
             }
-            git_clone(url, "", dest, proxy, allow_file).await?;
-            git_checkout(revision, dest, proxy, allow_file).await
+            git_clone(url, "", dest, proxy, allow_file, auth).await?;
+            git_checkout(revision, dest, proxy, allow_file, auth).await
         }
         Err(err) => {
             if dest.exists() {
@@ -2816,6 +3042,10 @@ const SECRET_KEYS: &[&str] = &[
 ];
 
 fn mask_pull_credentials(line: &str) -> String {
+    mask_secret_assignments(&mask_git_credentials(line))
+}
+
+fn mask_git_credentials(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
     let mut rest = line;
     while let Some(index) = rest.find('@') {
@@ -2834,7 +3064,7 @@ fn mask_pull_credentials(line: &str) -> String {
         rest = after;
     }
     out.push_str(rest);
-    mask_secret_assignments(&out)
+    out
 }
 
 fn userinfo_len(out: &str) -> Option<usize> {
@@ -2847,11 +3077,14 @@ fn userinfo_len(out: &str) -> Option<usize> {
             None => 0,
         };
     let token = &out[start..];
-    let userinfo = match token.rfind("://") {
-        Some(scheme) => &token[scheme + 3..],
-        None => token,
+    let (userinfo, web) = match token.rfind("://") {
+        Some(scheme) => (
+            &token[scheme + 3..],
+            token[..scheme].to_ascii_lowercase().starts_with("http"),
+        ),
+        None => (token, false),
     };
-    if userinfo.is_empty() || userinfo.contains('/') || !userinfo.contains(':') {
+    if userinfo.is_empty() || userinfo.contains('/') || (!web && !userinfo.contains(':')) {
         return None;
     }
     Some(userinfo.len())
@@ -3341,6 +3574,7 @@ mod tests {
             source_type: "git".into(),
             source: "https://example.invalid/offline.git".into(),
             revision: String::new(),
+            credential_id: None,
             created_at: String::new(),
             team_ids: Vec::new(),
             last_sync_at: String::new(),
@@ -3349,7 +3583,7 @@ mod tests {
             admin_saved: true,
         };
         let proxy = crate::settings::ProxySettings::inherit();
-        let path = materialize_project(&project, &dir, &proxy, false, &[])
+        let path = materialize_project(&project, &dir, &proxy, false, &[], None)
             .await
             .unwrap();
         assert_eq!(path, checkout);
@@ -3357,7 +3591,7 @@ mod tests {
             id: "absent".into(),
             ..project
         };
-        let err = materialize_project(&missing, &dir, &proxy, false, &[])
+        let err = materialize_project(&missing, &dir, &proxy, false, &[], None)
             .await
             .unwrap_err();
         assert_eq!(err, "sync_the_git_project_first");
@@ -3792,6 +4026,141 @@ mod tests {
         assert_eq!(
             pull_failure("app:missing", " \n"),
             "Image app:missing could not be pulled."
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_auth_material_writes_private_files_and_removes_them() {
+        use std::os::unix::fs::PermissionsExt;
+        let secret = serde_json::json!({
+            "username": "",
+            "password": "token-value",
+            "private_key": "test-key-material",
+            "passphrase": "key-phrase"
+        });
+        let auth = git_auth_material(&secret, "https://gitlab.example.com/group/repo.git")
+            .unwrap()
+            .expect("material");
+        let dir = auth.dir.clone();
+        let env: std::collections::HashMap<String, String> = auth.env.iter().cloned().collect();
+        assert_eq!(
+            env.get("KOREOGRAF_GIT_USERNAME").map(String::as_str),
+            Some("oauth2")
+        );
+        let password = PathBuf::from(env.get("KOREOGRAF_GIT_PASSWORD_FILE").unwrap());
+        assert_eq!(
+            std::fs::read_to_string(&password).unwrap().trim(),
+            "token-value"
+        );
+        assert_eq!(
+            std::fs::metadata(&password).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let askpass = PathBuf::from(env.get("GIT_ASKPASS").unwrap());
+        assert_eq!(
+            std::fs::metadata(&askpass).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let command = env.get("GIT_SSH_COMMAND").unwrap();
+        assert!(command.contains("IdentitiesOnly=yes"), "{command}");
+        assert!(
+            command.contains("StrictHostKeyChecking=accept-new"),
+            "{command}"
+        );
+        assert_eq!(
+            env.get("SSH_ASKPASS_REQUIRE").map(String::as_str),
+            Some("force")
+        );
+        for name in ["git_key", "key.pass"] {
+            assert_eq!(
+                std::fs::metadata(dir.join(name))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600,
+                "{name}"
+            );
+        }
+        let ssh_askpass = PathBuf::from(env.get("SSH_ASKPASS").unwrap());
+        assert_eq!(
+            std::fs::metadata(&ssh_askpass)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        drop(auth);
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn token_only_git_credentials_choose_the_provider_user() {
+        let github = git_auth_material(
+            &serde_json::json!({"password": "token-value"}),
+            "https://github.com/example/repo.git",
+        )
+        .unwrap()
+        .expect("material");
+        let env: std::collections::HashMap<String, String> = github.env.iter().cloned().collect();
+        assert_eq!(
+            env.get("KOREOGRAF_GIT_USERNAME").map(String::as_str),
+            Some("x-access-token")
+        );
+        let dir = github.dir.clone();
+        drop(github);
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn git_output_masks_embedded_credentials() {
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(
+                "printf '%s\\n' \"fatal: Authentication failed for 'https://robot:s3cret-token@gitlab.example/repo.git/'\" 'password=hunter2' >&2; exit 1",
+            )
+            .output()
+            .expect("shell");
+        let text = git_text(&output);
+        assert!(!text.contains("s3cret-token"), "{text}");
+        assert!(!text.contains("hunter2"), "{text}");
+        assert!(
+            text.contains("https://[redacted]@gitlab.example/repo.git"),
+            "{text}"
+        );
+        assert!(text.contains("password=[redacted]"), "{text}");
+    }
+
+    #[test]
+    fn git_addresses_with_userinfo_are_credentials() {
+        assert!(git_address_has_credentials(
+            "https://user:secret@example.com/repo.git"
+        ));
+        assert!(git_address_has_credentials(
+            "https://token@example.com/repo.git"
+        ));
+        assert!(git_address_has_credentials(
+            "ssh://user:secret@example.com/repo.git"
+        ));
+        assert!(!git_address_has_credentials(
+            "ssh://git@example.com/repo.git"
+        ));
+        assert!(!git_address_has_credentials(
+            "git@example.com:group/repo.git"
+        ));
+        assert_eq!(
+            mask_git_url("https://user:secret@example.com/repo.git"),
+            "https://[redacted]@example.com/repo.git"
+        );
+        assert_eq!(
+            mask_git_url("https://token@example.com/repo.git"),
+            "https://[redacted]@example.com/repo.git"
+        );
+        assert_eq!(
+            mask_git_url("ssh://git@example.com/repo.git"),
+            "ssh://git@example.com/repo.git"
         );
     }
 
@@ -4821,6 +5190,7 @@ exit 0
             source_type: "path".into(),
             source: link.display().to_string(),
             revision: String::new(),
+            credential_id: None,
             created_at: String::new(),
             team_ids: Vec::new(),
             last_sync_at: String::new(),
@@ -4829,7 +5199,7 @@ exit 0
             admin_saved: true,
         };
         let proxy = crate::settings::ProxySettings::inherit();
-        let err = materialize_project(&project, &data, &proxy, true, &roots)
+        let err = materialize_project(&project, &data, &proxy, true, &roots, None)
             .await
             .unwrap_err();
         assert_eq!(err, "the_project_path_is_not_allowed");
@@ -4838,11 +5208,11 @@ exit 0
         assert_eq!(file_err, "the_project_path_is_not_allowed");
         std::fs::remove_file(&link).unwrap();
         std::os::unix::fs::symlink(&inside, &link).unwrap();
-        let outside_roots = materialize_project(&project, &data, &proxy, true, &[])
+        let outside_roots = materialize_project(&project, &data, &proxy, true, &[], None)
             .await
             .unwrap_err();
         assert_eq!(outside_roots, "the_project_path_is_not_allowed");
-        let path = materialize_project(&project, &data, &proxy, true, &roots)
+        let path = materialize_project(&project, &data, &proxy, true, &roots, None)
             .await
             .unwrap();
         assert_eq!(path, inside.canonicalize().unwrap());

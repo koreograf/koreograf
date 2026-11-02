@@ -620,12 +620,15 @@ pub async fn sync_project(state: &Shared, project: &db::Project) -> AppResult<St
         return Ok(project.source.clone());
     }
     let proxy = crate::settings::load(state)?.proxy;
+    let credential = runner::project_credential_secret(state, project)
+        .map_err(|_| ApiError::bad("the_source_control_credential_cannot_be_read"))?;
     let result = runner::materialize_project(
         project,
         &state.cfg.data_dir,
         &proxy,
         true,
         &state.cfg.project_roots,
+        credential.as_ref(),
     )
     .await;
     match result {

@@ -94,8 +94,9 @@ Names are at most 120 characters. Empty optional strings are omitted.
 | `revision` | no | Branch, tag, or commit. Empty follows the default branch |
 | `organization_id` | no | Defaults to the organization of `X-Team-Id` |
 | `team_ids` | no | Empty gives the project to every team in the organization |
+| `credential_id` | no | One `scm` credential of the same team or of an assigned team. Git projects use it for Sync and update on launch |
 
-`PUT /api/projects/{id}` accepts `name`, `source_type`, `source`, `revision`, `organization_id`, and `team_ids`. An omitted field keeps its value. The name, source type, source, and revision use the same validation as `POST`. Only an administrator can move a project to another organization. When `source_type`, `source`, or `revision` changes, the old checkout is discarded and a git project is synced again. That response is the project plus `sync`: `{"ok": true, "path": "..."}` or `{"ok": false, "error": "...", "vars": {...}}`. A failed sync keeps the new values and answers 200; the error is in `sync`. Path projects are described in [Jobs](jobs.md#path-projects).
+`PUT /api/projects/{id}` accepts `name`, `source_type`, `source`, `revision`, `organization_id`, `team_ids`, and `credential_id`. An omitted field keeps its value; an empty `credential_id` clears it. The name, source type, source, and revision use the same validation as `POST`. Only an administrator can move a project to another organization. When `source_type`, `source`, or `revision` changes, the old checkout is discarded and a git project is synced again. That response is the project plus `sync`: `{"ok": true, "path": "..."}` or `{"ok": false, "error": "...", "vars": {...}}`. A failed sync keeps the new values and answers 200; the error is in `sync`. Path projects are described in [Jobs](jobs.md#path-projects).
 
 ### Inventories
 
@@ -127,7 +128,7 @@ Every inventory source that uses a NetBox credential uses the same credential ro
 | --- | --- |
 | `ssh` | `private_key` or `password`, one of them required. Optional `username`, `passphrase`, `become_method` (`sudo`, `su`, `pbrun`, `pfexec`, `doas`, `dzdo`, `ksu`, `runas`), `become_username`, `become_password` |
 | `vault` | `password` required. Optional `vault_id` |
-| `scm` | `private_key` or `password`. Optional `username`, `passphrase`. Not used by project Sync |
+| `scm` | `private_key` or `password`. Optional `username`, `passphrase`. Used by a project that selects it. Without a username, a token uses `oauth2` for GitLab and `x-access-token` for GitHub |
 | `net` | `username` or `password`. Optional `private_key`, `authorize_password` |
 | `aws` | `access_key`, `secret_key`. Optional `security_token` |
 | `azure` | `subscription_id`, `client_id`, `secret`, `tenant` |
@@ -142,7 +143,7 @@ Every inventory source that uses a NetBox credential uses the same credential ro
 | `env` | An object of variable names to values |
 | `netbox` | `token`. Optional `url` |
 
-`PUT /api/credentials/{id}` takes `name`, an optional `secret` object, and optional `clear` (names of secret fields to drop). Omitting a stored secret keeps it. `GET /api/credentials` and `GET /api/credentials/{id}` include `usages`, a list of `{inventory_id, inventory_name, source_id, source_name}` for the inventory sources that reference the credential. `DELETE /api/credentials/{id}` answers 409 `credential_is_in_use` with the names in `vars.names` while any source still uses it.
+`PUT /api/credentials/{id}` takes `name`, an optional `secret` object, and optional `clear` (names of secret fields to drop). Omitting a stored secret keeps it. `GET /api/credentials` and `GET /api/credentials/{id}` include `usages`, a list of `{inventory_id, inventory_name, source_id, source_name}` for inventory sources and `{project_id, project_name}` for projects that reference the credential. `DELETE /api/credentials/{id}` answers 409 `credential_is_in_use` with the names in `vars.names` while any source or project still uses it.
 
 ### Templates
 

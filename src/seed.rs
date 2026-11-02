@@ -110,6 +110,7 @@ fn seed_demo(conn: &Connection, cfg: &Config) -> AppResult<()> {
             source_type: "path".into(),
             source: source.display().to_string(),
             revision: String::new(),
+            credential_id: None,
             created_at: db::now(),
             team_ids: Vec::new(),
             last_sync_at: String::new(),

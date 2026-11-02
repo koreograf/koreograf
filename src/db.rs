@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS projects (
   source_type TEXT NOT NULL,
   source TEXT NOT NULL,
   revision TEXT NOT NULL DEFAULT '',
+  credential_id TEXT,
   created_at TEXT NOT NULL,
   admin_saved INTEGER NOT NULL DEFAULT 1,
   last_sync_at TEXT NOT NULL DEFAULT '',
@@ -422,6 +423,9 @@ fn migrate(c: &Connection) -> AppResult<()> {
             [],
         )?;
     }
+    if !column_exists(c, "projects", "credential_id")? {
+        c.execute("ALTER TABLE projects ADD COLUMN credential_id TEXT", [])?;
+    }
     for column in ["last_sync_at", "last_sync_commit", "last_sync_status"] {
         if !column_exists(c, "projects", column)? {
             c.execute(
@@ -565,8 +569,10 @@ pub struct Project {
     pub organization_name: String,
     pub name: String,
     pub source_type: String,
+    #[serde(serialize_with = "serialize_source")]
     pub source: String,
     pub revision: String,
+    pub credential_id: Option<String>,
     pub created_at: String,
     pub team_ids: Vec<String>,
     pub last_sync_at: String,
@@ -575,6 +581,13 @@ pub struct Project {
     /// True when an administrator last saved this project.
     #[serde(skip)]
     pub admin_saved: bool,
+}
+
+fn serialize_source<S>(source: &str, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&crate::runner::mask_git_url(source))
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1250,15 +1263,15 @@ pub fn list_members(c: &Connection, team_id: &str) -> AppResult<Vec<Member>> {
 
 const PROJECT_SELECT: &str =
     "p.id, p.team_id, COALESCE(p.organization_id, ''), COALESCE(o.name, ''), \
-     p.name, p.source_type, p.source, p.revision, p.created_at, p.admin_saved, \
+     p.name, p.source_type, p.source, p.revision, p.credential_id, p.created_at, p.admin_saved, \
      p.last_sync_at, p.last_sync_commit, p.last_sync_status";
 
 pub fn insert_project(c: &Connection, project: &Project) -> AppResult<()> {
     c.execute(
         "INSERT INTO projects (
-            id, team_id, organization_id, name, source_type, source, revision, created_at,
-            admin_saved
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            id, team_id, organization_id, name, source_type, source, revision, credential_id,
+            created_at, admin_saved
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             project.id,
             project.team_id,
@@ -1267,6 +1280,7 @@ pub fn insert_project(c: &Connection, project: &Project) -> AppResult<()> {
             project.source_type,
             project.source,
             project.revision,
+            project.credential_id,
             project.created_at,
             project.admin_saved as i64
         ],
@@ -1407,6 +1421,21 @@ pub fn set_project_details(
     Ok(())
 }
 
+pub fn set_project_credential(
+    c: &Connection,
+    id: &str,
+    credential_id: Option<&str>,
+) -> AppResult<()> {
+    let n = c.execute(
+        "UPDATE projects SET credential_id = ?2 WHERE id = ?1",
+        params![id, credential_id],
+    )?;
+    if n == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(())
+}
+
 pub fn set_project_sync_success(c: &Connection, id: &str, at: &str, commit: &str) -> AppResult<()> {
     let n = c.execute(
         "UPDATE projects SET last_sync_at = ?2, last_sync_commit = ?3, last_sync_status = 'success'
@@ -1451,12 +1480,13 @@ fn map_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
         source_type: row.get(5)?,
         source: row.get(6)?,
         revision: row.get(7)?,
-        created_at: row.get(8)?,
+        credential_id: row.get(8)?,
+        created_at: row.get(9)?,
         team_ids: Vec::new(),
-        admin_saved: flag(row.get(9)?),
-        last_sync_at: row.get(10)?,
-        last_sync_commit: row.get(11)?,
-        last_sync_status: row.get(12)?,
+        admin_saved: flag(row.get(10)?),
+        last_sync_at: row.get(11)?,
+        last_sync_commit: row.get(12)?,
+        last_sync_status: row.get(13)?,
     })
 }
 
@@ -1837,10 +1867,12 @@ pub fn netbox_credentials(c: &Connection) -> AppResult<Vec<Credential>> {
 }
 
 pub struct CredentialUsage {
-    pub inventory_id: String,
-    pub inventory_name: String,
-    pub source_id: String,
-    pub source_name: String,
+    pub inventory_id: Option<String>,
+    pub inventory_name: Option<String>,
+    pub source_id: Option<String>,
+    pub source_name: Option<String>,
+    pub project_id: Option<String>,
+    pub project_name: Option<String>,
 }
 
 pub fn credential_usages(
@@ -1849,11 +1881,21 @@ pub fn credential_usages(
     team_id: &str,
 ) -> AppResult<Vec<CredentialUsage>> {
     let mut stmt = c.prepare(
-        "SELECT i.id, i.name, s.id, s.name
+        "SELECT i.id, i.name, s.id, s.name, NULL, NULL
          FROM inventory_sources s
          JOIN inventories i ON i.id = s.inventory_id
          WHERE s.credential_id = ?1 AND i.team_id = ?2
-         ORDER BY i.name, s.position",
+         UNION ALL
+         SELECT NULL, NULL, NULL, NULL, p.id, p.name
+         FROM projects p
+         WHERE p.credential_id = ?1
+           AND (
+             p.team_id = ?2
+             OR EXISTS (
+               SELECT 1 FROM project_teams pt WHERE pt.project_id = p.id AND pt.team_id = ?2
+             )
+           )
+         ORDER BY 2, 4, 6",
     )?;
     let rows = stmt.query_map(params![credential_id, team_id], |row| {
         Ok(CredentialUsage {
@@ -1861,6 +1903,8 @@ pub fn credential_usages(
             inventory_name: row.get(1)?,
             source_id: row.get(2)?,
             source_name: row.get(3)?,
+            project_id: row.get(4)?,
+            project_name: row.get(5)?,
         })
     })?;
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
