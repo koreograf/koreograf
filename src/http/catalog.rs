@@ -12,6 +12,7 @@ use crate::auth::{AuthUser, Role};
 use crate::cacheinfo;
 use crate::db::{self, Credential, Environment, Inventory, InventorySource, Project};
 use crate::error::{ApiError, ApiJson, AppResult};
+use crate::inventory::{self, InventoryData, InventoryHost};
 use crate::jobs;
 use crate::runner;
 use crate::Shared;
@@ -629,16 +630,36 @@ pub async fn list_inventory_hosts(
     let db = state.db()?;
     let item = visible_inventory(&db, &id, &team)?;
     let sources = db::list_inventory_sources(&db, &item.id)?;
-    let hosts = inventory_hosts(&item, &sources);
-    let groups = host_groups(&hosts);
+    let data = inventory_data(&item, &sources);
+    let groups = group_names(&data);
     let needle = query.search.trim().to_lowercase();
     let group = query.group.trim().to_lowercase();
-    let mut shown: Vec<_> = hosts
+    let shown: Vec<_> = data
+        .hosts
         .into_iter()
         .filter(|host| matches_host(host, &needle, &group))
         .collect();
-    sort_hosts(&mut shown, &query.sort);
-    let total = shown.len();
+    let page = page_hosts(shown, &query);
+    Ok(Json(json!({
+        "id": item.id,
+        "total": page.total,
+        "page": page.page,
+        "page_size": page.page_size,
+        "groups": groups,
+        "hosts": page.hosts,
+    })))
+}
+
+struct HostPage {
+    total: usize,
+    page: usize,
+    page_size: usize,
+    hosts: Vec<InventoryHost>,
+}
+
+fn page_hosts(mut hosts: Vec<InventoryHost>, query: &HostQuery) -> HostPage {
+    sort_hosts(&mut hosts, &query.sort);
+    let total = hosts.len();
     let page_size = query
         .page_size
         .or(query.limit)
@@ -652,14 +673,133 @@ pub async fn list_inventory_hosts(
             .saturating_mul(page_size)
     });
     let page = offset / page_size + 1;
-    let items: Vec<_> = shown.into_iter().skip(offset).take(page_size).collect();
+    let hosts = hosts.into_iter().skip(offset).take(page_size).collect();
+    HostPage {
+        total,
+        page,
+        page_size,
+        hosts,
+    }
+}
+
+pub async fn get_inventory_host(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Path((id, name)): Path<(String, String)>,
+) -> AppResult<Json<Value>> {
+    let team = team_header(&headers)?;
+    gate(&state, &user, &team, Role::Viewer)?;
+    let db = state.db()?;
+    let item = visible_inventory(&db, &id, &team)?;
+    let sources = db::list_inventory_sources(&db, &item.id)?;
+    let data = inventory_data(&item, &sources);
+    let Some(host) = data.hosts.iter().find(|host| host.name == name) else {
+        return Err(ApiError::NotFound);
+    };
+    let vars = inventory::effective_vars(&data, &name);
+    let netbox_id = vars
+        .iter()
+        .find(|item| item.name == "netbox_id")
+        .map(|item| item.value.clone());
+    let source = host_source(&sources, &name);
+    let source_json = match source {
+        Some(source) => json!({
+            "id": source.id,
+            "name": source.name,
+            "kind": source.kind,
+        }),
+        None => json!({
+            "id": Value::Null,
+            "name": item.name,
+            "kind": item.source_kind,
+        }),
+    };
     Ok(Json(json!({
         "id": item.id,
-        "total": total,
-        "page": page,
-        "page_size": page_size,
+        "name": host.name,
+        "groups": inventory::host_groups(&data, &name),
+        "source": source_json,
+        "vars": vars,
+        "netbox_id": netbox_id,
+        "netbox_url": netbox_url(source, netbox_id.as_deref()),
+    })))
+}
+
+pub async fn list_inventory_groups(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Json<Value>> {
+    let team = team_header(&headers)?;
+    gate(&state, &user, &team, Role::Viewer)?;
+    let db = state.db()?;
+    let item = visible_inventory(&db, &id, &team)?;
+    let sources = db::list_inventory_sources(&db, &item.id)?;
+    let data = inventory_data(&item, &sources);
+    let groups: Vec<Value> = data
+        .groups
+        .iter()
+        .map(|group| {
+            json!({
+                "name": group.name,
+                "host_count": inventory::group_hosts(&data, &group.name).len(),
+                "children": group.children,
+                "vars": group.vars,
+            })
+        })
+        .collect();
+    Ok(Json(json!({
+        "id": item.id,
+        "total": groups.len(),
         "groups": groups,
-        "hosts": items,
+    })))
+}
+
+pub async fn get_inventory_group(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Path((id, name)): Path<(String, String)>,
+    Query(query): Query<HostQuery>,
+) -> AppResult<Json<Value>> {
+    let team = team_header(&headers)?;
+    gate(&state, &user, &team, Role::Viewer)?;
+    let db = state.db()?;
+    let item = visible_inventory(&db, &id, &team)?;
+    let sources = db::list_inventory_sources(&db, &item.id)?;
+    let data = inventory_data(&item, &sources);
+    let Some(group) = data.groups.iter().find(|group| group.name == name).cloned() else {
+        return Err(ApiError::NotFound);
+    };
+    let hosts: Vec<InventoryHost> = inventory::group_hosts(&data, &name)
+        .into_iter()
+        .cloned()
+        .collect();
+    let needle = query.search.trim().to_lowercase();
+    let shown: Vec<_> = hosts
+        .into_iter()
+        .filter(|host| matches_host(host, &needle, ""))
+        .collect();
+    let page = page_hosts(shown, &query);
+    let parents: Vec<&str> = data
+        .groups
+        .iter()
+        .filter(|item| item.children.iter().any(|child| child == &name))
+        .map(|item| item.name.as_str())
+        .collect();
+    Ok(Json(json!({
+        "id": item.id,
+        "name": group.name,
+        "children": group.children,
+        "parents": parents,
+        "vars": group.vars,
+        "host_count": page.total,
+        "total": page.total,
+        "page": page.page,
+        "page_size": page.page_size,
+        "hosts": page.hosts,
     })))
 }
 
@@ -671,24 +811,49 @@ fn visible_inventory(c: &Connection, id: &str, team: &str) -> AppResult<Inventor
     Ok(item)
 }
 
-fn inventory_hosts(
-    item: &Inventory,
-    sources: &[InventorySource],
-) -> Vec<crate::inventory::InventoryHost> {
+fn inventory_data(item: &Inventory, sources: &[InventorySource]) -> InventoryData {
     if sources.is_empty() {
-        crate::inventory::parse_hosts(&item.body)
+        inventory::parse_inventory(&item.body)
     } else {
         let bodies: Vec<&str> = sources.iter().map(|source| source.body.as_str()).collect();
-        crate::inventory::merge_hosts(&bodies)
+        inventory::merge_inventory(&bodies)
     }
 }
 
-fn host_groups(hosts: &[crate::inventory::InventoryHost]) -> Vec<String> {
-    let groups: BTreeSet<String> = hosts
+fn group_names(data: &InventoryData) -> Vec<String> {
+    data.groups
         .iter()
-        .flat_map(|host| host.groups.iter().cloned())
-        .collect();
-    groups.into_iter().collect()
+        .map(|group| group.name.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn group_count(data: &InventoryData) -> usize {
+    data.groups
+        .iter()
+        .filter(|group| group.name != "all" && group.name != "ungrouped")
+        .filter(|group| !inventory::group_hosts(data, &group.name).is_empty())
+        .count()
+}
+
+fn host_source<'a>(sources: &'a [InventorySource], name: &str) -> Option<&'a InventorySource> {
+    sources.iter().rev().find(|source| {
+        inventory::parse_hosts(&source.body)
+            .iter()
+            .any(|host| host.name == name)
+    })
+}
+
+fn netbox_url(source: Option<&InventorySource>, netbox_id: Option<&str>) -> Option<String> {
+    let source = source?;
+    let id = netbox_id?;
+    if !id.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    let value: Value = serde_json::from_str(&source.source_json).ok()?;
+    let endpoint = value.get("api_endpoint")?.as_str()?.trim_end_matches('/');
+    Some(format!("{endpoint}/dcim/devices/{id}/"))
 }
 
 fn matches_host(host: &crate::inventory::InventoryHost, needle: &str, group: &str) -> bool {
@@ -839,7 +1004,7 @@ fn source_json(source: &InventorySource) -> Value {
 
 pub(super) fn inventory_summary_json(c: &Connection, item: &Inventory) -> AppResult<Value> {
     let sources = db::list_inventory_sources(c, &item.id)?;
-    let hosts = inventory_hosts(item, &sources);
+    let data = inventory_data(item, &sources);
     Ok(json!({
         "id": item.id,
         "team_id": item.team_id,
@@ -850,14 +1015,14 @@ pub(super) fn inventory_summary_json(c: &Connection, item: &Inventory) -> AppRes
         "credential_id": item.credential_id,
         "source_count": sources.len(),
         "sources": sources.iter().map(source_json).collect::<Vec<_>>(),
-        "host_count": hosts.len(),
-        "group_count": host_groups(&hosts).len(),
+        "host_count": data.hosts.len(),
+        "group_count": group_count(&data),
     }))
 }
 
 pub(super) fn inventory_json(c: &Connection, item: &Inventory) -> AppResult<Value> {
     let sources = db::list_inventory_sources(c, &item.id)?;
-    let hosts = inventory_hosts(item, &sources);
+    let data = inventory_data(item, &sources);
     Ok(json!({
         "id": item.id,
         "team_id": item.team_id,
@@ -873,9 +1038,9 @@ pub(super) fn inventory_json(c: &Connection, item: &Inventory) -> AppResult<Valu
             value["body"] = json!(source.body);
             value
         }).collect::<Vec<_>>(),
-        "host_count": hosts.len(),
-        "group_count": host_groups(&hosts).len(),
-        "hosts": hosts,
+        "host_count": data.hosts.len(),
+        "group_count": group_count(&data),
+        "hosts": data.hosts,
     }))
 }
 

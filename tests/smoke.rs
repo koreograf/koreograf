@@ -2961,6 +2961,201 @@ cache-01 ansible_host=10.0.0.42 role=cache\n";
 }
 
 #[tokio::test]
+async fn inventory_host_and_group_details_include_effective_variables() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-host-details-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let body = "\
+[all:vars]\n\
+ansible_user=ansible\n\
+\n\
+[app:children]\n\
+web\n\
+\n\
+[app:vars]\n\
+app_port=1\n\
+\n\
+[web:vars]\n\
+http_port=8080\n\
+\n\
+[web]\n\
+web-01 ansible_host=10.0.0.1\n\
+web-02 ansible_host=10.0.0.2\n";
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Host details", "body": body})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let id = created["id"].as_str().unwrap().to_string();
+    let source_id = created["sources"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, groups, _) = call(
+        &app,
+        "GET",
+        &format!("/api/inventories/{id}/groups"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{groups}");
+    assert_eq!(groups["total"], 3);
+    assert_eq!(groups["groups"][0]["name"], "all");
+    assert_eq!(groups["groups"][0]["host_count"], 2);
+    let app_group = groups["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|group| group["name"] == "app")
+        .unwrap();
+    assert_eq!(app_group["children"], json!(["web"]));
+    assert_eq!(app_group["vars"]["app_port"], "1");
+    assert_eq!(app_group["host_count"], 2);
+    let web_group = groups["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|group| group["name"] == "web")
+        .unwrap();
+    assert_eq!(web_group["vars"]["http_port"], "8080");
+    assert_eq!(web_group["host_count"], 2);
+
+    let (status, group, _) = call(
+        &app,
+        "GET",
+        &format!("/api/inventories/{id}/groups/web?page=2&page_size=1"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{group}");
+    assert_eq!(group["name"], "web");
+    assert_eq!(group["parents"], json!(["app"]));
+    assert_eq!(group["total"], 2);
+    assert_eq!(group["page"], 2);
+    assert_eq!(group["hosts"].as_array().unwrap().len(), 1);
+    assert_eq!(group["hosts"][0]["name"], "web-02");
+
+    let (status, host, _) = call(
+        &app,
+        "GET",
+        &format!("/api/inventories/{id}/hosts/web-01"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{host}");
+    assert_eq!(host["name"], "web-01");
+    assert_eq!(host["groups"], json!(["all", "app", "web"]));
+    assert_eq!(host["source"]["id"], source_id);
+    assert_eq!(host["source"]["kind"], "ini");
+    let vars = host["vars"].as_array().unwrap();
+    let find = |name: &str| vars.iter().find(|item| item["name"] == name).unwrap();
+    assert_eq!(find("ansible_host")["value"], "10.0.0.1");
+    assert_eq!(find("ansible_host")["origin"], "host");
+    assert_eq!(find("http_port")["origin"], "web");
+    assert_eq!(find("app_port")["origin"], "app");
+    assert_eq!(find("ansible_user")["value"], "ansible");
+    assert_eq!(find("ansible_user")["origin"], "all");
+    assert!(host["netbox_id"].is_null());
+    assert!(host["netbox_url"].is_null());
+
+    let (status, missing_host, _) = call(
+        &app,
+        "GET",
+        &format!("/api/inventories/{id}/hosts/missing"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{missing_host}");
+    let (status, missing_group, _) = call(
+        &app,
+        "GET",
+        &format!("/api/inventories/{id}/groups/missing"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{missing_group}");
+
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        None,
+        Some(json!({
+            "username": "detail-viewer",
+            "password": "viewer-pass",
+            "display_name": "Detail viewer"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{team}/members"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"username": "detail-viewer", "role": "viewer"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _, viewer_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "detail-viewer", "password": "viewer-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let viewer_cookie = viewer_cookie.expect("viewer cookie");
+    for path in [
+        format!("/api/inventories/{id}/hosts/web-01"),
+        format!("/api/inventories/{id}/groups"),
+        format!("/api/inventories/{id}/groups/web"),
+    ] {
+        let (status, body, _) =
+            call(&app, "GET", &path, Some(&viewer_cookie), Some(&team), None).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {body}");
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn inventory_sources_can_be_edited_and_inventories_renamed() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -10443,6 +10638,37 @@ fn template_form_saves_the_visible_playbook_path() {
     assert!(css.contains(".field.required"));
     assert_chosen_entrypoint_cases(&script);
     assert_playbook_choice_cases(&script);
+}
+
+#[test]
+fn inventory_tables_mask_secret_variables() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    assert!(script.contains("const vars = formatVars(host.vars);"));
+    assert!(script.contains("const vars = formatVars(group.vars);"));
+    let function = format!(
+        "{}\n{}",
+        extract_braced_function(&script, "function looksSecretVar"),
+        extract_braced_function(&script, "function formatVars")
+    );
+    let probe = format!(
+        r#"{function}
+const vars = formatVars({{ ansible_become_password: "s3cret", db_password: "hunter2", ansible_host: "10.0.0.1" }});
+if (!vars.includes("ansible_become_password=••••••")) {{
+  console.error(vars);
+  process.exit(1);
+}}
+if (!vars.includes("db_password=••••••")) {{
+  console.error(vars);
+  process.exit(1);
+}}
+if (!vars.includes("ansible_host=10.0.0.1")) {{
+  console.error(vars);
+  process.exit(1);
+}}
+"#
+    );
+    run_node_probe("inventory-vars-mask", &probe);
 }
 
 fn extract_braced_function(script: &str, needle: &str) -> String {
