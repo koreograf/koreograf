@@ -525,6 +525,8 @@
   "pull": "Pull",
   "pull_policy_is_if_not_present_always_or": "Pull policy is if_not_present, always, or never.",
   "put_the_credentials_in_their_own_fields_not": "Put the credentials in their own fields, not in the proxy address.",
+  "read_only_template": "{name} (read only)",
+  "read_only_template_hint": "This template is read only.",
   "recent_jobs": "Recent jobs",
   "red_hat_insights": "Red Hat Insights",
   "refresh": "Refresh",

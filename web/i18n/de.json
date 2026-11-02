@@ -525,6 +525,8 @@
   "pull": "Pull",
   "pull_policy_is_if_not_present_always_or": "Pull-Policy ist if_not_present, always oder never.",
   "put_the_credentials_in_their_own_fields_not": "Zugangsdaten gehören in die eigenen Felder, nicht in die Proxy-Adresse.",
+  "read_only_template": "{name} (schreibgeschützt)",
+  "read_only_template_hint": "Diese Vorlage ist schreibgeschützt.",
   "recent_jobs": "Letzte Aufträge",
   "red_hat_insights": "Red Hat Insights",
   "refresh": "Aktualisieren",

@@ -1333,7 +1333,7 @@ async function pageTemplates() {
     });
     const rows = shown.map((item) => `
       <tr>
-        <td>${can("operator") ? `<a href="#/templates?edit=${esc(item.id)}">${esc(item.name)}</a>` : `<strong>${esc(item.name)}</strong>`}<div class="small muted">${esc(item.description)}</div></td>
+        <td><a href="#/templates?edit=${esc(item.id)}">${esc(item.name)}</a><div class="small muted">${esc(item.description)}</div></td>
         <td class="tool">${esc(item.tool)}</td>
         <td class="mono">${esc(item.entrypoint || "—")}</td>
         <td class="small">${esc(templateOptionLine(item))}</td>
@@ -1398,7 +1398,7 @@ async function pageTemplates() {
     clearEditHash();
     return;
   }
-  if (can("operator")) await openTemplateDialog(item, request.tab);
+  await openTemplateDialog(item, request.tab);
 }
 
 function environmentRuntimeWarning(mode, runtime, environmentId) {
@@ -1425,6 +1425,7 @@ async function openTemplateDialog(existing, initialTab = "") {
     api("GET", "/api/runner"),
   ]);
   const editing = Boolean(existing);
+  const readOnly = !can("operator");
   const spec = (existing && existing.spec) || {};
   const item = existing || {
     name: "", description: "", tool: "ansible", project_id: "", inventory_id: "",
@@ -1525,7 +1526,8 @@ async function openTemplateDialog(existing, initialTab = "") {
   const variables = `<label class="field"><span>${h("extra_variables_json")}</span><textarea name="extra_vars">${esc(JSON.stringify(item.extra_vars || {}, null, 2))}</textarea></label>`;
   const dialog = openEditDialog({
     id: "template-dialog",
-    title: editing ? t("edit_template") : t("new_template"),
+    title: readOnly ? t("read_only_template", { name: item.name }) : editing ? t("edit_template") : t("new_template"),
+    hint: readOnly ? "read_only_template_hint" : undefined,
     tabs: [
       { id: "general", label: t("general"), body: general },
       { id: "target", label: t("target"), body: target },
@@ -1534,9 +1536,9 @@ async function openTemplateDialog(existing, initialTab = "") {
     ],
     initialTab,
     wide: true,
-    submit: editing ? t("save") : t("create"),
-    danger: editing && can("operator") ? `<button class="btn danger" id="delete-template" type="button">${h("delete")}</button>` : "",
-    onSubmit: async ({ form, close }) => {
+    submit: readOnly ? undefined : editing ? t("save") : t("create"),
+    danger: !readOnly && editing ? `<button class="btn danger" id="delete-template" type="button">${h("delete")}</button>` : "",
+    onSubmit: readOnly ? undefined : async ({ form, close }) => {
       if (!flushChips(form)) return;
       const missing = entrypointProblem();
       if (missing) {
@@ -1580,6 +1582,15 @@ async function openTemplateDialog(existing, initialTab = "") {
     onTab: (tab) => rememberEditHash(editing ? { edit: item.id, tab } : { create: "1", tab }, false),
   });
   const form = dialog.form;
+  if (readOnly) {
+    form.querySelectorAll("input, select, textarea").forEach((control) => {
+      control.disabled = true;
+    });
+    form.querySelectorAll("button").forEach((button) => {
+      if (button.dataset.dialogTab !== undefined || button.hasAttribute("data-dialog-cancel")) return;
+      button.disabled = true;
+    });
+  }
   const chosenEnvironment = () => {
     const value = form.environment_id.value;
     if (value === NO_ENVIRONMENT) return "";

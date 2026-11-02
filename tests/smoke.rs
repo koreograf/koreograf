@@ -13536,7 +13536,9 @@ fn template_create_and_edit_use_the_tabbed_overlay() {
     assert!(dialog.contains("await route();"));
     assert!(dialog.contains("onTab: (tab) => rememberEditHash("));
     assert!(!dialog.contains("handle(error)"));
-    let submit = dialog.find("onSubmit: async").expect("template submit");
+    let submit = dialog
+        .find("onSubmit: readOnly ? undefined : async")
+        .expect("template submit");
     let tab = dialog[submit..].find("onTab:").expect("template tab") + submit;
     assert!(dialog[submit..tab].contains("throw error"));
     assert!(!dialog[submit..tab].contains("handle(error)"));
@@ -13554,6 +13556,28 @@ fn template_create_and_edit_use_the_tabbed_overlay() {
     let helper = extract_function_with_destructured_params(&script, "function openEditDialog");
     assert!(helper.contains("panel.hidden = panel.dataset.dialogPanel !== current;"));
     assert!(!helper.contains("panel.innerHTML ="));
+}
+
+#[test]
+fn viewers_open_templates_in_a_read_only_overlay() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let templates = extract_braced_function(&script, "async function pageTemplates");
+    assert!(templates.contains("await openTemplateDialog(item, request.tab);"));
+    assert!(
+        !templates.contains("if (can(\"operator\")) await openTemplateDialog(item, request.tab);")
+    );
+    assert!(templates.contains("<a href=\"#/templates?edit=${esc(item.id)}\">"));
+    let dialog = extract_braced_function(&script, "async function openTemplateDialog");
+    assert!(dialog.contains("const readOnly = !can(\"operator\");"));
+    assert!(dialog.contains("title: readOnly ? t(\"read_only_template\", { name: item.name })"));
+    assert!(dialog.contains("hint: readOnly ? \"read_only_template_hint\" : undefined"));
+    assert!(dialog.contains("submit: readOnly ? undefined : editing ? t(\"save\") : t(\"create\")"));
+    assert!(dialog.contains("onSubmit: readOnly ? undefined : async"));
+    assert!(dialog.contains("!readOnly && editing"));
+    assert!(dialog.contains("if (readOnly) {"));
+    assert!(dialog.contains("control.disabled = true;"));
+    assert!(dialog.contains("button.hasAttribute(\"data-dialog-cancel\")"));
 }
 
 #[test]
