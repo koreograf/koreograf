@@ -10640,6 +10640,37 @@ fn template_form_saves_the_visible_playbook_path() {
     assert_playbook_choice_cases(&script);
 }
 
+#[test]
+fn inventory_tables_mask_secret_variables() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    assert!(script.contains("const vars = formatVars(host.vars);"));
+    assert!(script.contains("const vars = formatVars(group.vars);"));
+    let function = format!(
+        "{}\n{}",
+        extract_braced_function(&script, "function looksSecretVar"),
+        extract_braced_function(&script, "function formatVars")
+    );
+    let probe = format!(
+        r#"{function}
+const vars = formatVars({{ ansible_become_password: "s3cret", db_password: "hunter2", ansible_host: "10.0.0.1" }});
+if (!vars.includes("ansible_become_password=••••••")) {{
+  console.error(vars);
+  process.exit(1);
+}}
+if (!vars.includes("db_password=••••••")) {{
+  console.error(vars);
+  process.exit(1);
+}}
+if (!vars.includes("ansible_host=10.0.0.1")) {{
+  console.error(vars);
+  process.exit(1);
+}}
+"#
+    );
+    run_node_probe("inventory-vars-mask", &probe);
+}
+
 fn extract_braced_function(script: &str, needle: &str) -> String {
     let start = script
         .find(needle)

@@ -117,7 +117,7 @@ pub fn group_hosts<'a>(data: &'a InventoryData, group_name: &str) -> Vec<&'a Inv
 
 /// Effective variables of a host in Ansible precedence order.
 ///
-/// `all` is lowest, a parent group overrides its children, and host variables
+/// `all` is lowest, a child group overrides its parent groups, and host variables
 /// override every group. Variables of unrelated groups merge by name.
 pub fn effective_vars(data: &InventoryData, host_name: &str) -> Vec<EffectiveVar> {
     let Some(host) = data.hosts.iter().find(|host| host.name == host_name) else {
@@ -653,6 +653,28 @@ web-1 ansible_user=web-user shared=host
         assert_eq!(find("app_port").origin, "app");
         assert_eq!(host_groups(&data, "web-1"), vec!["all", "app", "web"]);
         assert_eq!(group_hosts(&data, "app").len(), 1);
+    }
+
+    #[test]
+    fn child_group_overrides_its_parent() {
+        let body = "\
+[app:children]
+web
+
+[app:vars]
+shared=app
+
+[web:vars]
+shared=web
+
+[web]
+web-1
+";
+        let data = parse_inventory(body);
+        let vars = effective_vars(&data, "web-1");
+        let shared = vars.iter().find(|item| item.name == "shared").unwrap();
+        assert_eq!(shared.value, "web");
+        assert_eq!(shared.origin, "web");
     }
 
     #[test]

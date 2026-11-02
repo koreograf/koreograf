@@ -829,6 +829,14 @@ fn group_names(data: &InventoryData) -> Vec<String> {
         .collect()
 }
 
+fn group_count(data: &InventoryData) -> usize {
+    data.groups
+        .iter()
+        .filter(|group| group.name != "all" && group.name != "ungrouped")
+        .filter(|group| !inventory::group_hosts(data, &group.name).is_empty())
+        .count()
+}
+
 fn host_source<'a>(sources: &'a [InventorySource], name: &str) -> Option<&'a InventorySource> {
     sources.iter().rev().find(|source| {
         inventory::parse_hosts(&source.body)
@@ -1008,7 +1016,7 @@ pub(super) fn inventory_summary_json(c: &Connection, item: &Inventory) -> AppRes
         "source_count": sources.len(),
         "sources": sources.iter().map(source_json).collect::<Vec<_>>(),
         "host_count": data.hosts.len(),
-        "group_count": data.groups.len(),
+        "group_count": group_count(&data),
     }))
 }
 
@@ -1031,7 +1039,7 @@ pub(super) fn inventory_json(c: &Connection, item: &Inventory) -> AppResult<Valu
             value
         }).collect::<Vec<_>>(),
         "host_count": data.hosts.len(),
-        "group_count": data.groups.len(),
+        "group_count": group_count(&data),
         "hosts": data.hosts,
     }))
 }
