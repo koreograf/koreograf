@@ -94,6 +94,7 @@ CREATE TABLE IF NOT EXISTS credentials (
   secret_blob TEXT NOT NULL,
   created_at TEXT NOT NULL,
   auto INTEGER NOT NULL DEFAULT 0,
+  disabled INTEGER NOT NULL DEFAULT 0,
   UNIQUE (team_id, name)
 );
 CREATE TABLE IF NOT EXISTS environments (
@@ -343,6 +344,13 @@ fn migrate(c: &Connection) -> AppResult<()> {
             [],
         )?;
     }
+    if !column_exists(c, "credentials", "disabled")? {
+        c.execute(
+            "ALTER TABLE credentials ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    c.execute("UPDATE credentials SET auto = 0 WHERE auto = 1", [])?;
     c.execute(
         "INSERT INTO inventory_sources (
             id, inventory_id, name, kind, source_json, credential_id, body, position, created_at
@@ -606,6 +614,7 @@ pub struct Credential {
     pub secret_blob: String,
     pub created_at: String,
     pub auto: bool,
+    pub disabled: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1634,11 +1643,14 @@ pub fn update_inventory_source(
     id: &str,
     name: &str,
     source_json: &str,
+    credential_id: Option<&str>,
     body: &str,
 ) -> AppResult<()> {
     let n = c.execute(
-        "UPDATE inventory_sources SET name = ?2, source_json = ?3, body = ?4 WHERE id = ?1",
-        params![id, name, source_json, body],
+        "UPDATE inventory_sources
+         SET name = ?2, source_json = ?3, credential_id = ?4, body = ?5
+         WHERE id = ?1",
+        params![id, name, source_json, credential_id, body],
     )?;
     if n == 0 {
         return Err(ApiError::NotFound);
@@ -1790,8 +1802,8 @@ pub fn delete_inventory(c: &mut Connection, id: &str, team_id: &str) -> AppResul
 
 pub fn insert_credential(c: &Connection, item: &Credential) -> AppResult<()> {
     c.execute(
-        "INSERT INTO credentials (id, team_id, name, kind, secret_blob, created_at, auto)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO credentials (id, team_id, name, kind, secret_blob, created_at, auto, disabled)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             item.id,
             item.team_id,
@@ -1799,7 +1811,8 @@ pub fn insert_credential(c: &Connection, item: &Credential) -> AppResult<()> {
             item.kind,
             item.secret_blob,
             item.created_at,
-            item.auto
+            item.auto,
+            item.disabled
         ],
     )?;
     Ok(())
@@ -1807,16 +1820,67 @@ pub fn insert_credential(c: &Connection, item: &Credential) -> AppResult<()> {
 
 pub fn list_credentials(c: &Connection, team_id: &str) -> AppResult<Vec<Credential>> {
     let mut stmt = c.prepare(
-        "SELECT id, team_id, name, kind, '' AS secret_blob, created_at, auto
-         FROM credentials WHERE team_id = ?1 ORDER BY name",
+        "SELECT id, team_id, name, kind, '' AS secret_blob, created_at, auto, disabled
+         FROM credentials WHERE team_id = ?1 AND disabled = 0 ORDER BY name",
     )?;
     let rows = stmt.query_map([team_id], map_credential)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
 }
 
+pub fn netbox_credentials(c: &Connection) -> AppResult<Vec<Credential>> {
+    let mut stmt = c.prepare(
+        "SELECT id, team_id, name, kind, secret_blob, created_at, auto, disabled
+         FROM credentials WHERE kind = 'netbox'",
+    )?;
+    let rows = stmt.query_map([], map_credential)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+pub struct CredentialUsage {
+    pub inventory_id: String,
+    pub inventory_name: String,
+    pub source_id: String,
+    pub source_name: String,
+}
+
+pub fn credential_usages(
+    c: &Connection,
+    credential_id: &str,
+    team_id: &str,
+) -> AppResult<Vec<CredentialUsage>> {
+    let mut stmt = c.prepare(
+        "SELECT i.id, i.name, s.id, s.name
+         FROM inventory_sources s
+         JOIN inventories i ON i.id = s.inventory_id
+         WHERE s.credential_id = ?1 AND i.team_id = ?2
+         ORDER BY i.name, s.position",
+    )?;
+    let rows = stmt.query_map(params![credential_id, team_id], |row| {
+        Ok(CredentialUsage {
+            inventory_id: row.get(0)?,
+            inventory_name: row.get(1)?,
+            source_id: row.get(2)?,
+            source_name: row.get(3)?,
+        })
+    })?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+pub fn netbox_credential_endpoints(c: &Connection) -> AppResult<Vec<(String, String)>> {
+    let mut stmt = c.prepare(
+        "SELECT credential_id, source_json FROM inventory_sources
+         WHERE credential_id IS NOT NULL AND kind = 'netbox'
+         ORDER BY created_at",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
 pub fn credential(c: &Connection, id: &str) -> AppResult<Option<Credential>> {
     c.query_row(
-        "SELECT id, team_id, name, kind, secret_blob, created_at, auto
+        "SELECT id, team_id, name, kind, secret_blob, created_at, auto, disabled
          FROM credentials WHERE id = ?1",
         [id],
         map_credential,
@@ -1834,13 +1898,21 @@ fn map_credential(row: &rusqlite::Row<'_>) -> rusqlite::Result<Credential> {
         secret_blob: row.get(4)?,
         created_at: row.get(5)?,
         auto: row.get::<_, i64>(6)? != 0,
+        disabled: row.get::<_, i64>(7)? != 0,
     })
 }
 
 pub fn update_credential(c: &Connection, item: &Credential) -> AppResult<()> {
     let n = c.execute(
-        "UPDATE credentials SET name = ?3, secret_blob = ?4 WHERE id = ?1 AND team_id = ?2",
-        params![item.id, item.team_id, item.name, item.secret_blob],
+        "UPDATE credentials SET name = ?3, secret_blob = ?4, disabled = ?5
+         WHERE id = ?1 AND team_id = ?2",
+        params![
+            item.id,
+            item.team_id,
+            item.name,
+            item.secret_blob,
+            item.disabled
+        ],
     )?;
     if n == 0 {
         return Err(ApiError::NotFound);

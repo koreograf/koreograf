@@ -111,15 +111,17 @@ A source has `kind` `ini`, `project`, or `netbox`.
 | --- | --- |
 | `ini` | `name`, `body` (the inventory text) |
 | `project` | `name`, `project_id`, `path` relative to that project |
-| `netbox` | `name`, `api_endpoint`, `token`, and optionally `validate_certs` (default true), `ca_file` (absolute PEM path, empty uses the system CAs), `group_by`, `query_filters`, `virtual_machines` (default true) |
+| `netbox` | `name`, optional `credential_id` (a NetBox credential of the same team), optional `api_endpoint` (defaults to the credential's `url` and must match it), and optionally `validate_certs` (default true), `ca_file` (absolute PEM path, empty uses the system CAs), `group_by`, `query_filters`, `virtual_machines` (default true). A NetBox credential needs a `url`; one without it is rejected with 400 `netbox_needs_an_address`. A mismatched `api_endpoint` answers 400 `netbox_endpoint_must_match_credential`. With a credential, only an owner may change `validate_certs` or `ca_file`. `token` is still accepted as a shortcut and creates a normal, visible NetBox credential named `<name> Token` |
 
-`PUT /api/inventories/{id}/sources/{source_id}` takes the fields of the stored kind. An omitted field keeps its value. For `ini` that is `name` and `body`. For `project` that is `name`, `project_id`, and `path`. For `netbox` that is `name`, `api_endpoint`, `token`, `validate_certs`, `ca_file`, `group_by`, `query_filters`, and `virtual_machines`. An empty or omitted `token` keeps the stored token, and the token is never returned. A field of another kind or an unknown field answers 400. The source keeps its id and position. A changed project or NetBox source is fetched again before the response; its `sync` carries `ok`, `before`, and `after` host counts. A failed fetch keeps the previous contents and answers with the error. `PUT /api/inventories/{id}` changes the name and may replace the body of a single static source.
+`PUT /api/inventories/{id}/sources/{source_id}` takes the fields of the stored kind. An omitted field keeps its value. For `ini` that is `name` and `body`. For `project` that is `name`, `project_id`, and `path`. For `netbox` that is `name`, `credential_id`, `api_endpoint`, `token`, `validate_certs`, `ca_file`, `group_by`, `query_filters`, and `virtual_machines`. An empty or omitted `token` keeps the stored credential, a non-empty `credential_id` switches the source to that credential, and an empty `api_endpoint` uses the credential's URL. A non-empty `token` creates a new visible, source-private NetBox credential bound to the endpoint; the previous credential stays unchanged. A used credential pins the source to its URL, so a mismatched `api_endpoint` answers 400 `netbox_endpoint_must_match_credential`; only an owner may change `validate_certs` or `ca_file` then. The token is never returned. A field of another kind or an unknown field answers 400. The source keeps its id and position. A changed project or NetBox source is fetched again before the response; its `sync` carries `ok`, `before`, and `after` host counts. A failed fetch keeps the previous contents and answers with the error. `PUT /api/inventories/{id}` changes the name and may replace the body of a single static source.
 
 `POST /api/inventories/import` takes `project_id`, `path`, and an optional `name`. `POST /api/inventories/netbox` takes the same NetBox fields as a source, with `name` required.
 
+Every inventory source that uses a NetBox credential uses the same credential row. A token change in `PUT /api/credentials/{id}` applies to every source that references it on the next sync.
+
 ### Credentials
 
-`POST /api/credentials` takes `name`, `kind`, and `secret`. One credential of each kind can be attached to a template. Vault may repeat when each `vault_id` is unique, and only one vault credential may omit the id. `credential_ids` on a template is the list. `credential_id` is the single-id form.
+`POST /api/credentials` takes `name`, `kind`, and `secret`. A NetBox credential needs a `token` and a `url`. One credential of each kind can be attached to a template. Vault may repeat when each `vault_id` is unique, and only one vault credential may omit the id. `credential_ids` on a template is the list. `credential_id` is the single-id form.
 
 | Kind | `secret` fields |
 | --- | --- |
@@ -140,7 +142,7 @@ A source has `kind` `ini`, `project`, or `netbox`.
 | `env` | An object of variable names to values |
 | `netbox` | `token`. Optional `url` |
 
-`PUT /api/credentials/{id}` takes `name`, an optional `secret` object, and optional `clear` (names of secret fields to drop). Omitting a stored secret keeps it.
+`PUT /api/credentials/{id}` takes `name`, an optional `secret` object, and optional `clear` (names of secret fields to drop). Omitting a stored secret keeps it. `GET /api/credentials` and `GET /api/credentials/{id}` include `usages`, a list of `{inventory_id, inventory_name, source_id, source_name}` for the inventory sources that reference the credential. `DELETE /api/credentials/{id}` answers 409 `credential_is_in_use` with the names in `vars.names` while any source still uses it.
 
 ### Templates
 

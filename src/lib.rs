@@ -158,7 +158,7 @@ pub fn boot(mut cfg: Config) -> anyhow::Result<Shared> {
     let cipher = crypto::load_cipher(&cfg.data_dir)?;
     seed::seed(&conn, &cfg)?;
     cfg.admin_password = None;
-    Ok(Arc::new(AppState {
+    let state = Arc::new(AppState {
         conn: Mutex::new(conn),
         cfg,
         cipher: Mutex::new(cipher),
@@ -166,7 +166,9 @@ pub fn boot(mut cfg: Config) -> anyhow::Result<Shared> {
         maintenance: Mutex::new(()),
         procs: Mutex::new(HashMap::new()),
         canceled: Mutex::new(HashSet::new()),
-    }))
+    });
+    credentials::backfill_netbox_urls(&state)?;
+    Ok(state)
 }
 
 /// Bind the HTTP server and serve until it stops.

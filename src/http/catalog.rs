@@ -951,8 +951,15 @@ pub async fn create_inventory(
     gate(&state, &user, &team, Role::Operator)?;
     let name = require_name(&body.name)?;
     if !body.sources.is_empty() {
-        return super::sources::create_with_sources(state, team, name, body.sources, user.is_admin)
-            .await;
+        return super::sources::create_with_sources(
+            state,
+            team,
+            name,
+            body.sources,
+            user.is_admin,
+            &user,
+        )
+        .await;
     }
     check_static_ini(&body.body)?;
     let item = Inventory {
@@ -1073,16 +1080,17 @@ pub async fn list_credentials(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     let db = state.db()?;
-    let items = db::list_credentials(&db, &team)?;
-    Ok(Json(json!(items
-        .into_iter()
-        .map(|item| json!({
+    let mut items = Vec::new();
+    for item in db::list_credentials(&db, &team)? {
+        items.push(json!({
             "id": item.id,
             "name": item.name,
             "kind": item.kind,
             "created_at": item.created_at,
-        }))
-        .collect::<Vec<_>>())))
+            "usages": usage_json(&db, &item.id, &team)?,
+        }));
+    }
+    Ok(Json(json!(items)))
 }
 
 pub async fn create_credential(
@@ -1111,6 +1119,7 @@ pub async fn create_credential(
         secret_blob: blob,
         created_at: db::now(),
         auto: false,
+        disabled: false,
     };
     let db = state.db()?;
     db::insert_credential(&db, &item)?;
@@ -1130,8 +1139,30 @@ pub async fn delete_credential(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Owner)?;
     let db = state.db()?;
+    let names = db::credential_usages(&db, &id, &team)?
+        .into_iter()
+        .map(|usage| format!("{} / {}", usage.inventory_name, usage.source_name))
+        .collect::<Vec<_>>();
+    if !names.is_empty() {
+        return Err(ApiError::conflict_vars(
+            "credential_is_in_use",
+            [("names", names.join(", "))],
+        ));
+    }
     db::delete_credential(&db, &id, &team)?;
     Ok(no_content())
+}
+
+fn usage_json(c: &Connection, id: &str, team: &str) -> AppResult<Value> {
+    Ok(json!(db::credential_usages(c, id, team)?
+        .into_iter()
+        .map(|usage| json!({
+            "inventory_id": usage.inventory_id,
+            "inventory_name": usage.inventory_name,
+            "source_id": usage.source_id,
+            "source_name": usage.source_name,
+        }))
+        .collect::<Vec<_>>()))
 }
 
 fn open_credential(state: &Shared, id: &str, team: &str) -> AppResult<(Credential, Value)> {
@@ -1149,7 +1180,7 @@ fn open_credential(state: &Shared, id: &str, team: &str) -> AppResult<(Credentia
     Ok((item, secret))
 }
 
-fn credential_json(item: &Credential, secret: &Value) -> Value {
+fn credential_json(item: &Credential, secret: &Value, usages: Value) -> Value {
     let (fields, set) = crate::credentials::describe(&item.kind, secret);
     json!({
         "id": item.id,
@@ -1158,6 +1189,7 @@ fn credential_json(item: &Credential, secret: &Value) -> Value {
         "created_at": item.created_at,
         "fields": fields,
         "set": set,
+        "usages": usages,
     })
 }
 
@@ -1170,7 +1202,11 @@ pub async fn get_credential(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     let (item, secret) = open_credential(&state, &id, &team)?;
-    Ok(Json(credential_json(&item, &secret)))
+    let usages = {
+        let db = state.db()?;
+        usage_json(&db, &item.id, &team)?
+    };
+    Ok(Json(credential_json(&item, &secret, usages)))
 }
 
 pub async fn update_credential(
@@ -1194,9 +1230,11 @@ pub async fn update_credential(
     }
     item.name = require_name(&body.name)?;
     item.secret_blob = state.encrypt(&raw)?;
+    item.disabled = false;
     let db = state.db()?;
     db::update_credential(&db, &item)?;
-    Ok(Json(credential_json(&item, &secret)))
+    let usages = usage_json(&db, &item.id, &team)?;
+    Ok(Json(credential_json(&item, &secret, usages)))
 }
 
 pub async fn list_environments(
