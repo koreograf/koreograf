@@ -25,7 +25,7 @@ docker compose up -d
 ```
 
 Compose pulls `ghcr.io/koreograf/koreograf:0.1.0-alpha.7`. <!-- x-release-please-version -->
-It does not compile. Build this checkout without replacing that published tag:
+It does not compile. This quick start describes that release. Features merged into `main` after it are not in the published image until the next release; use the build path below for those. Build this checkout without replacing that published tag:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.build.yml up --build -d
