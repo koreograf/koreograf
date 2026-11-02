@@ -385,6 +385,20 @@ const ERROR_FIELD = {
   name_is_missing_or_too_long: "name",
   description_is_too_long: "description",
   limit_contains_an_invalid_character: "limit",
+  forks_is_a_number_from_1_to_50: "forks",
+  tool_is_ansible_opentofu_or_shell: "tool",
+  project_is_missing: "project_id",
+  inventory_is_missing: "inventory_id",
+  execution_environment_is_missing: "environment_id",
+  the_execution_environment_is_for_another_tool: "environment_id",
+  the_execution_environment_is_not_visible_to_this: "environment_id",
+  action_is_plan_or_apply: "action",
+  ansible_needs_a_playbook_as_the_entry: "entrypoint",
+  opentofu_needs_a_module_directory: "entrypoint",
+  shell_needs_a_path_or_spec_script: "entrypoint",
+  the_entry_path_must_be_relative_and_must: "entrypoint",
+  extra_variables_must_be_a_json_object: "extra_vars",
+  "template.vars_not_objects": "extra_vars",
   revision_may_contain_only_letters_digits_dot_slash: "revision",
   the_git_address_must_be_http_s_ssh: "source",
   the_git_address_contains_credentials: "credential_id",
@@ -1146,7 +1160,10 @@ function openEditDialog({
       const fieldName = (error.vars && error.vars.field) || ERROR_FIELD[error.message] || "";
       const control = fieldName ? fieldControl(fieldName) : document.activeElement;
       const panel = control && control.closest ? control.closest("[data-dialog-panel]") : null;
-      if (panel) choose(panel.dataset.dialogPanel, false);
+      if (panel) {
+        mark(panel.dataset.dialogPanel);
+        choose(panel.dataset.dialogPanel, false);
+      }
     },
   });
   dialog.overlay.setAttribute("data-edit-overlay", "");
@@ -1300,7 +1317,7 @@ async function pageTemplates() {
       </div>
       <div id="template-table"></div>
     </section>`,
-    can("operator") ? addLink("#/templates/new", "template_2") : "");
+    can("operator") ? addLink("#/templates?new=1", "template_2") : "");
   let tool = "all";
   let query = "";
   const draw = () => {
@@ -1316,7 +1333,7 @@ async function pageTemplates() {
     });
     const rows = shown.map((item) => `
       <tr>
-        <td><a href="#/templates/${esc(item.id)}">${esc(item.name)}</a><div class="small muted">${esc(item.description)}</div></td>
+        <td>${can("operator") ? `<a href="#/templates?edit=${esc(item.id)}">${esc(item.name)}</a>` : `<strong>${esc(item.name)}</strong>`}<div class="small muted">${esc(item.description)}</div></td>
         <td class="tool">${esc(item.tool)}</td>
         <td class="mono">${esc(item.entrypoint || "—")}</td>
         <td class="small">${esc(templateOptionLine(item))}</td>
@@ -1370,6 +1387,18 @@ async function pageTemplates() {
     });
   });
   draw();
+  const request = editQuery();
+  if (request.create !== null) {
+    if (can("operator")) await openTemplateDialog(null, request.tab);
+    return;
+  }
+  if (!request.edit) return;
+  const item = items.find((row) => row.id === request.edit);
+  if (!item) {
+    clearEditHash();
+    return;
+  }
+  if (can("operator")) await openTemplateDialog(item, request.tab);
 }
 
 function environmentRuntimeWarning(mode, runtime, environmentId) {
@@ -1386,21 +1415,16 @@ function playbookChoice(books, entrypoint) {
   return "";
 }
 
-async function pageTemplateForm(id) {
+async function openTemplateDialog(existing, initialTab = "") {
   if (!needTeam()) return;
-  const [projects, inventories, credentials, environments, templates, runner] = await Promise.all([
+  const [projects, inventories, credentials, environments, runner] = await Promise.all([
     api("GET", "/api/projects"),
     api("GET", "/api/inventories"),
     api("GET", "/api/credentials"),
     api("GET", "/api/environments"),
-    api("GET", "/api/templates"),
     api("GET", "/api/runner"),
   ]);
-  const existing = id ? templates.find((item) => item.id === id) : null;
-  if (id && !existing) {
-    shell(t("template"), `<div class="card">${h("this_template_does_not_exist")}</div>`);
-    return;
-  }
+  const editing = Boolean(existing);
   const spec = (existing && existing.spec) || {};
   const item = existing || {
     name: "", description: "", tool: "ansible", project_id: "", inventory_id: "",
@@ -1424,104 +1448,145 @@ async function pageTemplateForm(id) {
     return control + rows;
   };
   const verbosity = Number(spec.verbosity) || 0;
-  shell(id ? t("edit_template") : t("new_template"), `
-    <form class="card form" id="template-form">
-      <p class="small muted">${h("fields_marked_with_a_star_are_required")}</p>
-      <div class="form-section">
-        <h2>${h("general")}</h2>
-        <label class="field required"><span>${h("name")}</span><input name="name" required value="${esc(item.name)}"></label>
-        <label class="field"><span>${h("description")}</span><input name="description" maxlength="1000" value="${esc(item.description)}"></label>
-        <label class="field check"><span>${h("prompt_on_launch")}</span><input name="prompt_on_launch" type="checkbox"${item.prompt_on_launch ? " checked" : ""}></label>
-        <p class="small muted">${h("the_launch_dialog_starts_from_the_template")}</p>
-        <div class="field-row">
-          <label class="field"><span>${h("tool")}</span>
-            <select class="fit" name="tool">
-              <option value="ansible"${item.tool === "ansible" ? " selected" : ""}>Ansible</option>
-              <option value="opentofu"${item.tool === "opentofu" ? " selected" : ""}>OpenTofu</option>
-              <option value="shell"${item.tool === "shell" ? " selected" : ""}>Shell</option>
-            </select>
-          </label>
-        </div>
+  const general = `
+    <label class="field required"><span>${h("name")}</span><input name="name" required value="${esc(item.name)}"></label>
+    <label class="field"><span>${h("description")}</span><input name="description" maxlength="1000" value="${esc(item.description)}"></label>
+    <label class="field check"><span>${h("prompt_on_launch")}</span><input name="prompt_on_launch" type="checkbox"${item.prompt_on_launch ? " checked" : ""}></label>
+    <p class="small muted">${h("the_launch_dialog_starts_from_the_template")}</p>
+    <div class="field-row">
+      <label class="field"><span>${h("tool")}</span>
+        <select class="fit" name="tool">
+          <option value="ansible"${item.tool === "ansible" ? " selected" : ""}>Ansible</option>
+          <option value="opentofu"${item.tool === "opentofu" ? " selected" : ""}>OpenTofu</option>
+          <option value="shell"${item.tool === "shell" ? " selected" : ""}>Shell</option>
+        </select>
+      </label>
+    </div>`;
+  const target = `
+    <div class="field-grid">
+      <label class="field"><span>${h("project")}</span><select name="project_id">${selectOptions(projects, item.project_id, true, (row) => row.name)}</select></label>
+      <div id="update-on-launch" hidden>
+        <label class="field check"><span>${h("update_the_project_on_launch")}</span><input name="update_on_launch" type="checkbox"${item.update_on_launch === false ? "" : " checked"}></label>
+        <p class="small muted">${h("off_uses_the_checkout_from_the_last_sync")}</p>
       </div>
-      <div class="form-section">
-        <h2>${h("target")}</h2>
-        <div class="field-grid">
-          <label class="field"><span>${h("project")}</span><select name="project_id">${selectOptions(projects, item.project_id, true, (row) => row.name)}</select></label>
-          <div id="update-on-launch" hidden>
-            <label class="field check"><span>${h("update_the_project_on_launch")}</span><input name="update_on_launch" type="checkbox"${item.update_on_launch === false ? "" : " checked"}></label>
-            <p class="small muted">${h("off_uses_the_checkout_from_the_last_sync")}</p>
-          </div>
-          <label class="field" id="inventory-field"${item.tool === "ansible" ? "" : " hidden"}><span>${h("inventory")}</span><select name="inventory_id">${selectOptions(inventories, item.inventory_id, true, (row) => row.name)}</select></label>
-          <label class="field"><span>${h("execution_environment")}</span><select name="environment_id">${environmentOptions(item.tool, item.no_environment ? NO_ENVIRONMENT : item.environment_id)}</select></label>
-        </div>
-        <p class="banner warn" id="environment-runtime-warning" hidden></p>
-        ${templateCredentialFields(credentials, selectedCredentialIds(item))}
-        <label class="field" id="playbook-field" hidden><span>${h("playbook_from_the_project")}</span><select name="playbook"><option value="">${h("other_path")}</option></select></label>
-        <p class="small muted" id="entrypoint-note"></p>
-        <label class="field" id="entrypoint-field"><span id="entrypoint-label">${h("entry_path")}</span><input name="entrypoint" value="${esc(item.entrypoint)}" placeholder="${h("for_example_site_yml")}"><span class="field-error" id="entrypoint-error" aria-live="polite"></span></label>
-        <p class="small muted">${h("without_an_execution_environment_the_template_runs_on")}</p>
+      <label class="field" id="inventory-field"${item.tool === "ansible" ? "" : " hidden"}><span>${h("inventory")}</span><select name="inventory_id">${selectOptions(inventories, item.inventory_id, true, (row) => row.name)}</select></label>
+      <label class="field"><span>${h("execution_environment")}</span><select name="environment_id">${environmentOptions(item.tool, item.no_environment ? NO_ENVIRONMENT : item.environment_id)}</select></label>
+    </div>
+    <p class="banner warn" id="environment-runtime-warning" hidden></p>
+    ${templateCredentialFields(credentials, selectedCredentialIds(item), true)}
+    <label class="field" id="playbook-field" hidden><span>${h("playbook_from_the_project")}</span><select name="playbook"><option value="">${h("other_path")}</option></select></label>
+    <p class="small muted" id="entrypoint-note"></p>
+    <label class="field" id="entrypoint-field"><span id="entrypoint-label">${h("entry_path")}</span><input name="entrypoint" value="${esc(item.entrypoint)}" placeholder="${h("for_example_site_yml")}"><span class="field-error" id="entrypoint-error" aria-live="polite"></span></label>
+    <p class="small muted">${h("without_an_execution_environment_the_template_runs_on")}</p>`;
+  const options = `
+    <div class="form-section" id="ansible-options"${item.tool === "ansible" ? "" : " hidden"}>
+      <h2>Ansible</h2>
+      <div class="field-row">
+        <label class="field"><span>${h("type")}</span>
+          <select class="fit" name="job_type">
+            <option value="run"${spec.job_type === "check" ? "" : " selected"}>${h("run_2")}</option>
+            <option value="check"${spec.job_type === "check" ? " selected" : ""}>${h("check_dry_run")}</option>
+          </select>
+        </label>
+        <label class="field"><span>${h("verbosity")}</span>
+          <select class="fit" name="verbosity">
+            ${[0, 1, 2, 3, 4].map((level) => `<option value="${level}"${verbosity === level ? " selected" : ""}>${h(verbosityLabel(level))}</option>`).join("")}
+          </select>
+        </label>
+        <label class="field"><span>${h("forks")}</span><input class="tiny" name="forks" inputmode="numeric" value="${esc(spec.forks || "")}" placeholder="5"></label>
+        <label class="field check"><span>${h("diff")}</span><input name="diff" type="checkbox"${spec.diff ? " checked" : ""}></label>
       </div>
-      <div class="form-section" id="ansible-options"${item.tool === "ansible" ? "" : " hidden"}>
-        <h2>Ansible</h2>
-        <div class="field-row">
-          <label class="field"><span>${h("type")}</span>
-            <select class="fit" name="job_type">
-              <option value="run"${spec.job_type === "check" ? "" : " selected"}>${h("run_2")}</option>
-              <option value="check"${spec.job_type === "check" ? " selected" : ""}>${h("check_dry_run")}</option>
-            </select>
-          </label>
-          <label class="field"><span>${h("verbosity")}</span>
-            <select class="fit" name="verbosity">
-              ${[0, 1, 2, 3, 4].map((level) => `<option value="${level}"${verbosity === level ? " selected" : ""}>${h(verbosityLabel(level))}</option>`).join("")}
-            </select>
-          </label>
-          <label class="field"><span>${h("forks")}</span><input class="tiny" name="forks" inputmode="numeric" value="${esc(spec.forks || "")}" placeholder="5"></label>
-          <label class="field check"><span>${h("diff")}</span><input name="diff" type="checkbox"${spec.diff ? " checked" : ""}></label>
-        </div>
-        <div class="field-row">
-          ${chipBox("tags", "tags", spec.tags)}
-          ${chipBox("skip_tags", "skip_tags", spec.skip_tags)}
-        </div>
-        <p class="small muted">${h("a_comma_or_a_space_turns_the_typed")}</p>
-        <div class="field-row">
-          <label class="field"><span>${h("limit")}</span><input class="fit" name="limit" value="${esc(spec.limit || "")}" placeholder="web:&db"></label>
-        </div>
-        <p class="small muted">${h("check_starts_ansible_playbook_with_check_tags_skipped")}</p>
+      <div class="field-row">
+        ${chipBox("tags", "tags", spec.tags)}
+        ${chipBox("skip_tags", "skip_tags", spec.skip_tags)}
       </div>
-      <div class="form-section" id="tofu-options"${item.tool === "opentofu" ? "" : " hidden"}>
-        <h2>OpenTofu</h2>
-        <div class="field-row">
-          <label class="field"><span>${h("action")}</span>
-            <select class="fit" name="action">
-              <option value="plan"${spec.action === "apply" ? "" : " selected"}>plan</option>
-              <option value="apply"${spec.action === "apply" ? " selected" : ""}>apply</option>
-            </select>
-          </label>
-        </div>
-        <p class="small muted">${h("opentofu_plan_reads_state_apply_keeps_it")}</p>
+      <p class="small muted">${h("a_comma_or_a_space_turns_the_typed")}</p>
+      <div class="field-row">
+        <label class="field"><span>${h("limit")}</span><input class="fit" name="limit" value="${esc(spec.limit || "")}" placeholder="web:&db"></label>
       </div>
-      <div class="form-section" id="shell-options"${item.tool === "shell" ? "" : " hidden"}>
-        <h2>Shell</h2>
-        <label class="field"><span>${h("script_when_no_entry_path_is_set")}</span><textarea name="script">${esc(spec.script || "")}</textarea></label>
+      <p class="small muted">${h("check_starts_ansible_playbook_with_check_tags_skipped")}</p>
+    </div>
+    <div class="form-section" id="tofu-options"${item.tool === "opentofu" ? "" : " hidden"}>
+      <h2>OpenTofu</h2>
+      <div class="field-row">
+        <label class="field"><span>${h("action")}</span>
+          <select class="fit" name="action">
+            <option value="plan"${spec.action === "apply" ? "" : " selected"}>plan</option>
+            <option value="apply"${spec.action === "apply" ? " selected" : ""}>apply</option>
+          </select>
+        </label>
       </div>
-      <div class="form-section">
-        <h2>${h("variables")}</h2>
-        <label class="field"><span>${h("extra_variables_json")}</span><textarea name="extra_vars">${esc(JSON.stringify(item.extra_vars || {}, null, 2))}</textarea></label>
-      </div>
-      <div class="row">
-        <button class="btn pill primary" type="submit">${id ? h("save") : h("create")}</button>
-        ${id && can("operator") ? `<button class="btn danger" id="delete-template" type="button">${h("delete")}</button>` : ""}
-      </div>
-    </form>
-    ${id ? `<section class="card" id="schedule-card" data-kind="template" data-target="${esc(id)}"></section>` : ""}`);
-  const form = document.querySelector("#template-form");
+      <p class="small muted">${h("opentofu_plan_reads_state_apply_keeps_it")}</p>
+    </div>
+    <div class="form-section" id="shell-options"${item.tool === "shell" ? "" : " hidden"}>
+      <h2>Shell</h2>
+      <label class="field"><span>${h("script_when_no_entry_path_is_set")}</span><textarea name="script">${esc(spec.script || "")}</textarea></label>
+    </div>`;
+  const variables = `<label class="field"><span>${h("extra_variables_json")}</span><textarea name="extra_vars">${esc(JSON.stringify(item.extra_vars || {}, null, 2))}</textarea></label>`;
+  const dialog = openEditDialog({
+    id: "template-dialog",
+    title: editing ? t("edit_template") : t("new_template"),
+    tabs: [
+      { id: "general", label: t("general"), body: general },
+      { id: "target", label: t("target"), body: target },
+      { id: "options", label: t("options"), body: options },
+      { id: "variables", label: t("variables"), body: variables },
+    ],
+    initialTab,
+    wide: true,
+    submit: editing ? t("save") : t("create"),
+    danger: editing && can("operator") ? `<button class="btn danger" id="delete-template" type="button">${h("delete")}</button>` : "",
+    onSubmit: async ({ form, close }) => {
+      if (!flushChips(form)) return;
+      const missing = entrypointProblem();
+      if (missing) {
+        showEntrypointError(missing);
+        form.entrypoint.reportValidity();
+        return;
+      }
+      clearEntrypointError();
+      try {
+        const selectedProject = projects.find((item) => item.id === form.project_id.value);
+        const body = {
+          name: form.name.value,
+          description: form.description.value,
+          tool: form.tool.value,
+          project_id: form.project_id.value || null,
+          inventory_id: form.inventory_id.value || null,
+          credential_ids: [
+            ...[...form.querySelectorAll("[data-credential-kind]")].map((select) => select.value).filter(Boolean),
+            ...[...form.querySelectorAll("input[name=vault_ids]:checked")].map((input) => input.value),
+          ],
+          environment_id: form.environment_id.value && form.environment_id.value !== NO_ENVIRONMENT ? form.environment_id.value : null,
+          no_environment: form.environment_id.value === NO_ENVIRONMENT,
+          update_on_launch: selectedProject && selectedProject.source_type === "git" ? form.update_on_launch.checked : true,
+          entrypoint: chosenEntrypoint(),
+          extra_vars: jsonObject(form.extra_vars.value, "extra_variables"),
+          spec: templateSpec(form),
+          prompt_on_launch: form.prompt_on_launch.checked,
+        };
+        if (editing) await api("PUT", `/api/templates/${encodeURIComponent(item.id)}`, body);
+        else await api("POST", "/api/templates", body);
+        markSaved();
+        close();
+        await route();
+      } catch (error) {
+        if (error && entrypointErrors.has(error.message)) {
+          showEntrypointError(error.message, error.vars);
+        }
+        throw error;
+      }
+    },
+    onTab: (tab) => rememberEditHash(editing ? { edit: item.id, tab } : { create: "1", tab }, false),
+  });
+  const form = dialog.form;
   const chosenEnvironment = () => {
     const value = form.environment_id.value;
     if (value === NO_ENVIRONMENT) return "";
     return value || environmentDefault(form.tool.value);
   };
   const showEnvironmentWarning = () => {
-    const warning = document.querySelector("#environment-runtime-warning");
+    const warning = dialog.overlay.querySelector("#environment-runtime-warning");
     if (!warning) return;
     const key = environmentRuntimeWarning(
       runner.runner_mode,
@@ -1534,7 +1599,7 @@ async function pageTemplateForm(id) {
   form.environment_id.addEventListener("change", showEnvironmentWarning);
   showEnvironmentWarning();
   bindChips(form);
-  bindVaultPicker(form, credentials, selectedCredentialIds(item));
+  bindVaultChoices(form);
   const entrypointErrors = new Set([
     "ansible_needs_a_playbook_as_the_entry",
     "opentofu_needs_a_module_directory",
@@ -1545,11 +1610,9 @@ async function pageTemplateForm(id) {
     return form.entrypoint.value.trim();
   };
   const showEntrypointError = (key, vars) => {
-    const node = document.querySelector("#entrypoint-error");
+    const node = dialog.overlay.querySelector("#entrypoint-error");
     const message = t(key, vars);
     if (node) node.textContent = message;
-    // A shell entry may stay empty when the script is set, so that
-    // pair must not stick as a validity error on the path field.
     if (key === "shell_needs_a_path_or_spec_script") {
       form.entrypoint.setCustomValidity("");
       return;
@@ -1557,7 +1620,7 @@ async function pageTemplateForm(id) {
     form.entrypoint.setCustomValidity(message);
   };
   const clearEntrypointError = () => {
-    const node = document.querySelector("#entrypoint-error");
+    const node = dialog.overlay.querySelector("#entrypoint-error");
     if (node) node.textContent = "";
     form.entrypoint.setCustomValidity("");
   };
@@ -1567,53 +1630,9 @@ async function pageTemplateForm(id) {
     if (form.tool.value === "opentofu" && !entry) return "opentofu_needs_a_module_directory";
     return "";
   };
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    if (!flushChips(form)) return;
-    const missing = entrypointProblem();
-    if (missing) {
-      showEntrypointError(missing);
-      form.entrypoint.reportValidity();
-      form.entrypoint.focus();
-      return;
-    }
-    clearEntrypointError();
-    try {
-      const selectedProject = projects.find((item) => item.id === form.project_id.value);
-      const body = {
-        name: form.name.value,
-        description: form.description.value,
-        tool: form.tool.value,
-        project_id: form.project_id.value || null,
-        inventory_id: form.inventory_id.value || null,
-        credential_ids: [
-          ...[...form.querySelectorAll("[data-credential-kind]")].map((select) => select.value).filter(Boolean),
-          ...[...form.querySelectorAll("#vault-pills [data-vault-id]")].map((node) => node.dataset.vaultId),
-        ],
-        environment_id: form.environment_id.value && form.environment_id.value !== NO_ENVIRONMENT ? form.environment_id.value : null,
-        no_environment: form.environment_id.value === NO_ENVIRONMENT,
-        update_on_launch: selectedProject && selectedProject.source_type === "git" ? form.update_on_launch.checked : true,
-        entrypoint: chosenEntrypoint(),
-        extra_vars: jsonObject(form.extra_vars.value, "extra_variables"),
-        spec: templateSpec(form),
-        prompt_on_launch: form.prompt_on_launch.checked,
-      };
-      if (id) await api("PUT", `/api/templates/${encodeURIComponent(id)}`, body);
-      else await api("POST", "/api/templates", body);
-      markSaved();
-      go("#/templates");
-    } catch (error) {
-      if (error && entrypointErrors.has(error.message)) {
-        showEntrypointError(error.message, error.vars);
-        form.entrypoint.reportValidity();
-        form.entrypoint.focus();
-      }
-      handle(error);
-    }
-  });
   const loadPlaybooks = async () => {
-    const field = document.querySelector("#playbook-field");
-    const note = document.querySelector("#entrypoint-note");
+    const field = dialog.overlay.querySelector("#playbook-field");
+    const note = dialog.overlay.querySelector("#entrypoint-note");
     const select = form.playbook;
     const ansible = form.tool.value === "ansible" && form.project_id.value;
     field.hidden = !ansible;
@@ -1646,17 +1665,17 @@ async function pageTemplateForm(id) {
     const incompatible = selected && selected !== NO_ENVIRONMENT && !available.some((row) => row.id === selected);
     if (incompatible) {
       form.environment_id.value = "";
-      const warning = document.querySelector("#environment-runtime-warning");
+      const warning = dialog.overlay.querySelector("#environment-runtime-warning");
       if (warning) {
         warning.hidden = false;
         warning.textContent = t("the_execution_environment_is_for_another_tool");
       }
     }
-    document.querySelector("#ansible-options").hidden = tool !== "ansible";
-    document.querySelector("#tofu-options").hidden = tool !== "opentofu";
-    document.querySelector("#shell-options").hidden = tool !== "shell";
-    document.querySelector("#inventory-field").hidden = tool !== "ansible";
-    const label = document.querySelector("#entrypoint-label");
+    dialog.overlay.querySelector("#ansible-options").hidden = tool !== "ansible";
+    dialog.overlay.querySelector("#tofu-options").hidden = tool !== "opentofu";
+    dialog.overlay.querySelector("#shell-options").hidden = tool !== "shell";
+    dialog.overlay.querySelector("#inventory-field").hidden = tool !== "ansible";
+    const label = dialog.overlay.querySelector("#entrypoint-label");
     if (tool === "ansible") {
       label.textContent = t("playbook_path");
       form.entrypoint.placeholder = t("for_example_site_yml");
@@ -1668,7 +1687,7 @@ async function pageTemplateForm(id) {
       form.entrypoint.placeholder = t("for_example_scripts_run_sh");
     }
     form.entrypoint.setAttribute("aria-required", tool === "shell" ? "false" : "true");
-    document.querySelector("#entrypoint-field").classList.toggle("required", tool !== "shell");
+    dialog.overlay.querySelector("#entrypoint-field").classList.toggle("required", tool !== "shell");
     if (!incompatible) showEnvironmentWarning();
   };
   form.tool.addEventListener("change", () => {
@@ -1679,7 +1698,7 @@ async function pageTemplateForm(id) {
   showToolSections();
   const showProjectUpdate = () => {
     const row = projects.find((item) => item.id === form.project_id.value);
-    const box = document.querySelector("#update-on-launch");
+    const box = dialog.overlay.querySelector("#update-on-launch");
     if (box) box.hidden = !(row && row.source_type === "git");
   };
   form.project_id.addEventListener("change", () => {
@@ -1704,19 +1723,22 @@ async function pageTemplateForm(id) {
     if (form.tool.value === "shell") clearEntrypointError();
   });
   loadPlaybooks();
-  const remove = document.querySelector("#delete-template");
+  const remove = dialog.overlay.querySelector("#delete-template");
   if (remove) {
-    remove.addEventListener("click", async () => {
-      if (!confirm(t("delete_this_template", { name: item.name }))) return;
-      try {
-        await api("DELETE", `/api/templates/${encodeURIComponent(id)}`);
-        go("#/templates");
-      } catch (error) {
-        handle(error);
-      }
-    });
+    remove.addEventListener("click", () => deleteTemplate(item, dialog));
   }
-  if (id) mountSchedules(document.querySelector("#schedule-card"));
+}
+
+async function deleteTemplate(item, dialog) {
+  if (!confirm(t("delete_this_template", { name: item.name }))) return;
+  try {
+    await api("DELETE", `/api/templates/${encodeURIComponent(item.id)}`);
+    markSaved();
+    dialog.close();
+    await route();
+  } catch (error) {
+    handle(error);
+  }
 }
 
 const SCHEDULE_ZONES = [
@@ -2086,7 +2108,7 @@ function scheduleSwitch(item) {
 function scheduleTarget(item) {
   if (!item.target_id) return "";
   const workflow = item.target_kind === "workflow";
-  const href = workflow ? `#/workflows/${encodeURIComponent(item.target_id)}` : `#/templates/${encodeURIComponent(item.target_id)}`;
+  const href = workflow ? `#/workflows/${encodeURIComponent(item.target_id)}` : `#/templates?edit=${encodeURIComponent(item.target_id)}`;
   const label = workflow ? t("workflow") : t("template");
   const name = item.target_name || label;
   return `<a href="${href}">${esc(name)}</a><div class="small muted">${esc(label)}</div>`;
@@ -2850,7 +2872,7 @@ function jobParameters(job) {
   const templateId = params.template_id || job.template_id;
   const templateName = params.template_name || job.name;
   const template = templateId
-    ? `<a href="#/templates/${esc(templateId)}">${esc(templateName)}</a>`
+    ? `<a href="#/templates?edit=${esc(templateId)}">${esc(templateName)}</a>`
     : esc(templateName);
   const credential = credentialSummary(params);
   const environment = [params.environment_name, params.environment_image].filter(Boolean).join(" · ");
@@ -5556,7 +5578,7 @@ function credentialUsageCard(item) {
     : `<p class="small muted">${h("not_used")}</p>`}</section>`;
 }
 
-function templateCredentialFields(credentials, selectedIds) {
+function templateCredentialFields(credentials, selectedIds, inlineVault = false) {
   const selected = new Set(selectedIds || []);
   const present = new Set(credentials.map((row) => row.kind));
   const selects = CREDENTIAL_KINDS
@@ -5570,14 +5592,30 @@ function templateCredentialFields(credentials, selectedIds) {
     .join("");
   const grid = selects ? `<div class="field-grid">${selects}</div>` : "";
   const empty = credentials.length ? "" : `<p class="small muted">${h("no_credentials_in_this_team")}</p>`;
-  return `${empty}<p class="small muted">${h("one_credential_of_each_kind_choose_vault_credentials")}</p>${grid}
-    <div class="field">
+  const vaults = credentials
+    .filter((row) => row.kind === "vault")
+    .slice()
+    .sort((left, right) => left.name.localeCompare(right.name, "de"));
+  const vault = inlineVault
+    ? `<div class="field"><span>${esc(credentialKindLabel("vault"))}</span>${vaults.length
+      ? `<div class="vault-choices">${vaults.map((row) => `<label class="vault-choice${selected.has(row.id) ? " selected" : ""}"><input type="checkbox" name="vault_ids" value="${esc(row.id)}"${selected.has(row.id) ? " checked" : ""}><span>${esc(row.name)}</span></label>`).join("")}</div>`
+      : `<p class="small muted">${h("no_vault_credentials_in_this_team")}</p>`}</div>`
+    : `<div class="field">
       <span>${esc(credentialKindLabel("vault"))}</span>
       <div class="vault-row">
         <div class="chips" id="vault-pills"></div>
         <button class="btn pill" id="vault-add" type="button">${h("select")}</button>
       </div>
     </div>`;
+  return `${empty}<p class="small muted">${h("one_credential_of_each_kind_choose_vault_credentials")}</p>${grid}${vault}`;
+}
+
+function bindVaultChoices(form) {
+  form.querySelectorAll(".vault-choice input").forEach((input) => {
+    input.addEventListener("change", () => {
+      input.closest(".vault-choice").classList.toggle("selected", input.checked);
+    });
+  });
 }
 
 function renderVaultPills(box, credentials, ids) {
@@ -6884,8 +6922,8 @@ async function route() {
   const parts = hashPath.slice(1).split("/").filter(Boolean);
   try {
     if (parts.length === 0) await pageDashboard();
-    else if (parts[0] === "templates" && parts[1] === "new") await pageTemplateForm(null);
-    else if (parts[0] === "templates" && parts[1]) await pageTemplateForm(parts[1]);
+    else if (parts[0] === "templates" && parts[1] === "new") { location.replace("#/templates?new=1"); return; }
+    else if (parts[0] === "templates" && parts[1]) { location.replace(`#/templates?edit=${encodeURIComponent(parts[1])}`); return; }
     else if (parts[0] === "templates") await pageTemplates();
     else if (parts[0] === "jobs" && parts[1]) await pageJob(parts[1]);
     else if (parts[0] === "jobs") await pageJobs();

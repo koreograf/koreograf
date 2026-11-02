@@ -460,6 +460,7 @@
   "opentofu_needs_a_module_directory": "OpenTofu needs a module directory.",
   "opentofu_plan_reads_state_apply_keeps_it": "plan reads the saved state and does not change resources. apply keeps that state for this team and template on the controller. A remote backend is what to use when the state should leave this machine.",
   "operator": "Operator",
+  "options": "Options",
   "organization": "Organization",
   "organization_2": "+ Organization",
   "organization_is_missing": "Organization is missing.",
