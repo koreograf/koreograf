@@ -800,7 +800,7 @@ pub async fn get_inventory_host(
         "source": source_json,
         "vars": vars,
         "netbox_id": netbox_id,
-        "netbox_url": netbox_url(source, netbox_id.as_deref()),
+        "netbox_url": netbox_url(&state, &db, source, netbox_id.as_deref()),
     })))
 }
 
@@ -923,14 +923,28 @@ fn host_source<'a>(sources: &'a [InventorySource], name: &str) -> Option<&'a Inv
     })
 }
 
-fn netbox_url(source: Option<&InventorySource>, netbox_id: Option<&str>) -> Option<String> {
-    let source = source?;
+fn netbox_url(
+    state: &Shared,
+    db: &Connection,
+    source: Option<&InventorySource>,
+    netbox_id: Option<&str>,
+) -> Option<String> {
+    let source = source.filter(|item| item.kind == "netbox")?;
     let id = netbox_id?;
     if !id.chars().all(|ch| ch.is_ascii_digit()) {
         return None;
     }
-    let value: Value = serde_json::from_str(&source.source_json).ok()?;
-    let endpoint = value.get("api_endpoint")?.as_str()?.trim_end_matches('/');
+    let credential_id = source.credential_id.as_deref()?;
+    let credential = db::credential(db, credential_id).ok()??;
+    let plain = state.decrypt(&credential.secret_blob).ok()?;
+    let value: Value = serde_json::from_str(&plain).ok()?;
+    let endpoint = value
+        .get("url")
+        .and_then(Value::as_str)?
+        .trim_end_matches('/');
+    if endpoint.is_empty() {
+        return None;
+    }
     Some(format!("{endpoint}/dcim/devices/{id}/"))
 }
 

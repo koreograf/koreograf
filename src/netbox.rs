@@ -55,7 +55,6 @@ pub fn valid_endpoint(url: &str) -> bool {
 
 pub fn source_json(source: &NetboxSource) -> Value {
     json!({
-        "api_endpoint": source.api_endpoint,
         "validate_certs": source.validate_certs,
         "ca_file": source.ca_file,
         "group_by": source.group_by,

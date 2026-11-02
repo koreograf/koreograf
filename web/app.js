@@ -394,13 +394,14 @@ const ERROR_FIELD = {
   the_project_path_is_not_a_directory: "source",
   the_project_path_is_not_allowed: "source",
   path_projects_are_limited_to_administrators: "source",
-  the_netbox_address_must_be_http_or_https: "api_endpoint",
-  the_netbox_token_is_invalid: "token",
-  the_netbox_token_is_missing: "token",
+  the_netbox_address_must_be_http_or_https: "credential_id",
+  the_netbox_token_is_invalid: "credential_id",
+  the_netbox_token_is_missing: "credential_id",
   the_netbox_token_belongs_to_another_team: "credential_id",
   netbox_credential_has_the_wrong_kind: "credential_id",
-  netbox_endpoint_must_match_credential: "api_endpoint",
-  netbox_token_required_for_endpoint_change: "token",
+  netbox_credential_is_required: "credential_id",
+  netbox_endpoint_must_match_credential: "credential_id",
+  netbox_token_needs_a_credential: "credential_id",
   path_is_missing: "path",
   the_file_is_not_an_inventory: "path",
   file_is_missing_from_the_project: "path",
@@ -4398,9 +4399,12 @@ function sourceTitle(source) {
   return name;
 }
 
-function sourceSummary(item) {
+function sourceSummary(item, credentials = []) {
   const data = item.source || {};
-  if (item.kind === "netbox") return data.api_endpoint || t("netbox");
+  if (item.kind === "netbox") {
+    const credential = credentials.find((row) => row.id === item.credential_id);
+    return (credential && credential.name) || data.api_endpoint || t("netbox");
+  }
   if (item.kind === "project") return data.path || t("project");
   return t("text");
 }
@@ -4496,19 +4500,14 @@ function mountSourceDraft(container, projects, kind, preset, options = {}) {
     const maxHosts = Number(data.max_hosts) > 0 ? Number(data.max_hosts) : 2000;
     const netboxCredentials = credentials.filter((item) => item.kind === "netbox");
     const selectedCredential = String(data.credential_id || "");
-    const credentialPick = `<label class="field"><span>${h("netbox_credential")}</span>
+    const credentialPick = `<label class="field required"><span>${h("netbox_credential")}</span>
       <div class="row">
-        <select class="fit" name="credential_id">${selectOptions(netboxCredentials, selectedCredential, true, (row) => row.name)}</select>
+        <select class="fit" name="credential_id" required>${selectOptions(netboxCredentials, selectedCredential, true, (row) => row.name)}</select>
         ${can("owner") ? `<button class="btn pill" type="button" data-new-netbox-credential>${h("credential")}</button>` : ""}
       </div>
-    </label>`;
+    </label>
+    <p class="small muted"><span>${h("api_address")}: </span><span class="mono" data-netbox-address></span></p>`;
     fields = `${credentialPick}
-      <label class="field"><span>${h("api_address")}</span><input name="api_endpoint" value="${esc(data.api_endpoint || "")}" placeholder="https://netbox.example.com"></label>
-      <p class="small muted">${h("netbox_address_from_credential")}</p>
-      <div data-token-box${selectedCredential ? " hidden" : ""}>
-        <label class="field${editing ? "" : " required"}"><span>${h("token")}</span><input name="token" type="password"${editing ? "" : " required"} autocomplete="off" placeholder="${editing ? h("leave_empty_to_keep_the_stored_value") : ""}"></label>
-        ${editing ? `<p class="small muted" data-token-hint hidden>${h("netbox_token_required_for_endpoint_change")}</p>` : `<p class="small muted">${h("netbox_token_becomes_a_credential", { name: data.name || title })}</p>`}
-      </div>
       <div class="field"><span>${h("grouping")}</span>${netboxGroupingFields(selectedGroups)}</div>
       <p class="small muted">${h("netbox_collision_note")}</p>
       <div class="field"><span>${h("filters")}</span>
@@ -4538,24 +4537,30 @@ function mountSourceDraft(container, projects, kind, preset, options = {}) {
     </div>`;
   container.appendChild(card);
   if (kind === "netbox") {
-    const refreshCredential = () => {
+    let addressToken = 0;
+    const refreshCredential = async () => {
       const select = card.querySelector("[name=credential_id]");
-      const box = card.querySelector("[data-token-box]");
-      const token = box.querySelector("[name=token]");
-      const endpoint = card.querySelector("[name=api_endpoint]");
-      const chosen = Boolean(select.value);
-      box.hidden = chosen;
-      token.required = !chosen && !editing;
-      endpoint.required = !chosen;
-      const hint = card.querySelector("[data-token-hint]");
-      if (hint) {
-        const current = String(data.api_endpoint || "").trim().replace(/\/+$/, "");
-        const changed = endpoint.value.trim().replace(/\/+$/, "") !== current;
-        hint.hidden = chosen || !changed || Boolean(token.value.trim());
+      const address = card.querySelector("[data-netbox-address]");
+      const token = ++addressToken;
+      const selected = select.value;
+      address.textContent = "";
+      if (!selected) {
+        address.textContent = t("netbox_credential_is_required");
+        return;
+      }
+      try {
+        const item = await api("GET", `/api/credentials/${encodeURIComponent(selected)}`);
+        if (token !== addressToken) return;
+        address.textContent = item.fields && item.fields.url
+          ? item.fields.url
+          : t("netbox_credential_has_no_address");
+      } catch (error) {
+        if (token !== addressToken) return;
+        address.textContent = t(error.message || "error.generic", error.vars);
       }
     };
-    card.addEventListener("input", () => { card.dataset.dirty = "1"; refreshCredential(); });
-    card.addEventListener("change", () => { card.dataset.dirty = "1"; refreshCredential(); });
+    card.addEventListener("input", () => { card.dataset.dirty = "1"; });
+    card.addEventListener("change", () => { card.dataset.dirty = "1"; });
     card.querySelector("[name=credential_id]").addEventListener("change", refreshCredential);
     const create = card.querySelector("[data-new-netbox-credential]");
     if (create) {
@@ -4604,9 +4609,7 @@ function mountSourceDraft(container, projects, kind, preset, options = {}) {
       status.textContent = t("testing");
       try {
         const result = await api("POST", "/api/inventories/netbox/test", {
-          api_endpoint: draft.api_endpoint,
           credential_id: draft.credential_id,
-          token: draft.token,
           validate_certs: draft.validate_certs,
           ca_file: draft.ca_file,
         });
@@ -4628,9 +4631,7 @@ function mountSourceDraft(container, projects, kind, preset, options = {}) {
       resultBox.hidden = true;
       try {
         const result = await api("POST", "/api/inventories/netbox/preview", {
-          api_endpoint: draft.api_endpoint,
           credential_id: draft.credential_id,
-          token: draft.token,
           validate_certs: draft.validate_certs,
           ca_file: draft.ca_file,
           group_by: draft.group_by,
@@ -4716,9 +4717,7 @@ function readSourceDraft(card) {
   return {
     kind,
     name,
-    api_endpoint: card.querySelector("[name=api_endpoint]").value,
     credential_id: card.querySelector("[name=credential_id]").value,
-    token: card.querySelector("[name=token]").value,
     group_by: [...card.querySelectorAll("[name=group_by]:checked")].map((input) => input.value),
     group_names_raw: card.querySelector("[name=group_names_raw]").checked,
     load_config_context: card.querySelector("[name=load_config_context]").checked,
@@ -4746,7 +4745,10 @@ function bindSourcePicks(projects, credentials) {
 
 async function pageInventories() {
   if (!needTeam()) return;
-  const items = await api("GET", "/api/inventories");
+  const [items, credentials] = await Promise.all([
+    api("GET", "/api/inventories"),
+    api("GET", "/api/credentials"),
+  ]);
   shell(t("inventories"), `
     <section class="card">
       <input class="search" id="inventory-search" placeholder="${h("search_inventories")}" autocomplete="off">
@@ -4757,7 +4759,7 @@ async function pageInventories() {
     const needle = document.querySelector("#inventory-search").value.trim().toLowerCase();
     const shown = items.filter((item) => {
       if (!needle) return true;
-      const kinds = (item.sources || []).map((source) => `${source.name} ${sourceKindLabel(source.kind)} ${sourceSummary(source)}`).join(" ");
+      const kinds = (item.sources || []).map((source) => `${source.name} ${sourceKindLabel(source.kind)} ${sourceSummary(source, credentials)}`).join(" ");
       return `${item.name} ${kinds}`.toLowerCase().includes(needle);
     });
     const rows = shown.map((item) => {
@@ -4878,7 +4880,7 @@ async function pageInventory(id) {
   const [item, projects, credentials, firstPage, groupPage] = await Promise.all([
     api("GET", `/api/inventories/${encodeURIComponent(id)}`),
     can("operator") ? api("GET", "/api/projects") : Promise.resolve([]),
-    can("operator") ? api("GET", "/api/credentials") : Promise.resolve([]),
+    api("GET", "/api/credentials"),
     api("GET", inventoryHostUrl(id, view)),
     api("GET", `/api/inventories/${encodeURIComponent(id)}/groups`),
   ]);
@@ -4900,7 +4902,7 @@ async function pageInventory(id) {
   const sourceCards = (item.sources || []).map((source) => `
     <section class="card" style="margin-top:10px">
       <div class="spread">
-        <div><strong>${esc(sourceTitle(source))}</strong>${certificateBadge(certificateCheckOff(source))} <span class="small muted">${esc(sourceKindLabel(source.kind))} · ${esc(sourceSummary(source))}</span></div>
+        <div><strong>${esc(sourceTitle(source))}</strong>${certificateBadge(certificateCheckOff(source))} <span class="small muted">${esc(sourceKindLabel(source.kind))} · ${esc(sourceSummary(source, credentials))}</span></div>
         <div class="row">
           ${can("operator") ? `<span class="small muted" data-source-status="${esc(source.id)}" aria-live="polite">${notice && notice.sourceId === source.id ? esc(notice.text) : ""}</span>` : ""}
           ${can("operator") ? `<button class="btn" type="button" data-edit-source="${esc(source.id)}">${h("edit")}</button>` : ""}
@@ -5413,7 +5415,7 @@ const CREDENTIAL_KINDS = [
   ["kubernetes", "kubernetes", ""],
   ["insights", "red_hat_insights", ""],
   ["env", "environment_variables", ""],
-  ["netbox", "netbox", ""],
+  ["netbox", "netbox", "netbox_credential_address_hint"],
 ];
 
 function credentialKindLabel(kind) {
@@ -5732,7 +5734,7 @@ function credentialFields(kind, current) {
     return [text("username", "user"), secretInput("password", "password", "password", has("password"))].join("");
   }
   if (kind === "netbox") {
-    return [text("url", "api_address"), secretInput("token", "token", "password", has("token"))].join("");
+    return [credHint(hint), text("url", "api_address"), secretInput("token", "token", "password", has("token"))].join("");
   }
   const listed = [...stored].map((name) =>
     `<label class="field check"><input type="checkbox" data-clear="${esc(name)}"><span>${esc(name)} ${h("remove")}</span></label>`
