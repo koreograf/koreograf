@@ -73,7 +73,7 @@ If `admin.password` is empty, the first password is in the volume at `/var/lib/k
 
 A local Docker stack runs the demo workflow, an Ansible ping, an LDAP sign-in, and a NetBox inventory against this checkout. Run it on a machine with Docker. The CI workflow does not start this stack, and `cargo test` does not need Docker.
 
-The stack builds Koreograf from the current source. It also starts OpenLDAP, NetBox 4.7 with its own PostgreSQL and Redis, and SSH targets for Debian, Ubuntu, Rocky Linux, and AlmaLinux. One more container is that Debian image without `sshd`, and the ping inventory names it as an unreachable host. The containers share a private bridge. Published ports listen on `127.0.0.1` only. The harness compose file is `tests/harness/compose.yml`. The published image stays in `docker-compose.yml`.
+The stack builds Koreograf from the current source. It also starts OpenLDAP, NetBox 4.7 with its own PostgreSQL and Valkey, and SSH targets for Debian, Ubuntu, Rocky Linux, and AlmaLinux. One more container is that Debian image without `sshd`, and the ping inventory names it as an unreachable host. The containers share a private bridge. Published ports listen on `127.0.0.1` only. The harness compose file is `tests/harness/compose.yml`. The published image stays in `docker-compose.yml`.
 
 You need Docker Engine 20.10 or newer, Docker Compose v2, Python 3, `openssl`, and `ssh-keygen`. The first start compiles the release binary and pulls the lab images. Plan for about 4 GB of RAM, several GB of disk, and a long first build. NetBox migrations take a few minutes after that.
 
@@ -90,6 +90,8 @@ tests/harness/scripts/down.sh
 `down.sh -v` removes the volumes. The next `up.sh` creates the directory entries and the devices again. Without `-v`, a second start keeps the data and the seed scripts leave existing entries in place.
 
 Run `down.sh -v` once after the harness moved from Postgres 16 to 18. Postgres 18 stores its data under a different path inside the volume, and the newer image refuses to start on the old layout. The seed scripts rebuild the lab data, so no `pg_upgrade` is needed.
+
+Run `down.sh -v` once after the harness replaced Redis with Valkey. The cache volume is now `netbox-valkey`, and the old `netbox-redis` volume would stay behind unused. NetBox keeps no state that the seed scripts do not recreate.
 
 `tests/harness/scripts/ldap-groups.sh` is a smaller check for the LDAP group search. It is not part of `cargo test`, and CI does not start it. The script needs the tools above plus Cargo. It starts only OpenLDAP, on `127.0.0.1:1389`, and runs this checkout with `cargo run`. Only the service account can read `ou=groups`. The lab user is a `groupOfNames` member, and the team `Plattform` stores that group's DN. Sign-in returns the team. The script then sends sign-in through a proxy on `127.0.0.1:1390` that drops the service re-bind. Sign-in still succeeds, the team is no longer listed, and the warning in the log does not contain the password. `tests/harness/scripts/ldap-groups.sh down` stops that OpenLDAP. Add `-v` to remove its volumes. The full harness above is unchanged.
 

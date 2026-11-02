@@ -11,7 +11,7 @@ volumes:
   ldap-data:
   ldap-config:
   netbox-postgres:
-  netbox-redis:
+  netbox-valkey:
   netbox-media:
 
 services:
@@ -53,17 +53,17 @@ services:
       timeout: 3s
       retries: 20
 
-  redis:
-    image: redis:8-alpine@sha256:21090af93f8324db2f0f0f4f38a7c60369d47d917e000c3423d89d2ae2883537
-    command: ["redis-server", "--requirepass", "${NETBOX_REDIS_PASSWORD}"]
+  valkey:
+    image: valkey/valkey:9.1.3-alpine@sha256:bf09d58e96d6b4524a15396b65b242bbe18beebbcc15a04d8ee75ddac62fae0b
+    command: ["valkey-server", "--requirepass", "${NETBOX_REDIS_PASSWORD}"]
     volumes:
-      - netbox-redis:/data
+      - netbox-valkey:/data
     networks:
       - lab
     healthcheck:
       test:
         - CMD-SHELL
-        - redis-cli -a "$$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG
+        - valkey-cli -a "$$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG
       interval: 5s
       timeout: 3s
       retries: 20
@@ -75,17 +75,17 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
+      valkey:
         condition: service_healthy
     environment:
       DB_HOST: postgres
       DB_NAME: netbox
       DB_USER: netbox
       DB_PASSWORD: ${NETBOX_DB_PASSWORD}
-      REDIS_HOST: redis
+      REDIS_HOST: valkey
       REDIS_PASSWORD: ${NETBOX_REDIS_PASSWORD}
       REDIS_DATABASE: "0"
-      REDIS_CACHE_HOST: redis
+      REDIS_CACHE_HOST: valkey
       REDIS_CACHE_PASSWORD: ${NETBOX_REDIS_PASSWORD}
       REDIS_CACHE_DATABASE: "1"
       SECRET_KEY: ${NETBOX_SECRET_KEY}
