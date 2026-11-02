@@ -1476,7 +1476,7 @@ async function openTemplateDialog(existing, initialTab = "") {
       <label class="field"><span>${h("execution_environment")}</span><select name="environment_id">${environmentOptions(item.tool, item.no_environment ? NO_ENVIRONMENT : item.environment_id)}</select></label>
     </div>
     <p class="banner warn" id="environment-runtime-warning" hidden></p>
-    ${templateCredentialFields(credentials, selectedCredentialIds(item), true)}
+    ${templateCredentialFields(credentials, selectedCredentialIds(item), true, item.tool)}
     <label class="field" id="playbook-field" hidden><span>${h("playbook_from_the_project")}</span><select name="playbook"><option value="">${h("other_path")}</option></select></label>
     <p class="small muted" id="entrypoint-note"></p>
     <label class="field" id="entrypoint-field"><span id="entrypoint-label">${h("entry_path")}</span><input name="entrypoint" value="${esc(item.entrypoint)}" placeholder="${h("for_example_site_yml")}"><span class="field-error" id="entrypoint-error" aria-live="polite"></span></label>
@@ -1552,16 +1552,27 @@ async function openTemplateDialog(existing, initialTab = "") {
       clearEntrypointError();
       try {
         const selectedProject = projects.find((item) => item.id === form.project_id.value);
+        const offeredKinds = new Set(TOOL_CREDENTIAL_KINDS[form.tool.value] || []);
+        const legacyBox = form.querySelector("#template-legacy-credentials");
+        const credentialIds = [
+          ...[...form.querySelectorAll("[data-credential-field]")]
+            .filter((field) => !field.hidden)
+            .map((field) => field.querySelector("select[data-credential-kind]").value)
+            .filter(Boolean),
+          ...(offeredKinds.has("vault")
+            ? [...form.querySelectorAll("input[name=vault_ids]:checked")].map((input) => input.value)
+            : []),
+          ...(legacyBox && !legacyBox.hidden
+            ? [...legacyBox.querySelectorAll("[data-legacy-credential-id]")].map((node) => node.dataset.legacyCredentialId)
+            : []),
+        ];
         const body = {
           name: form.name.value,
           description: form.description.value,
           tool: form.tool.value,
           project_id: form.project_id.value || null,
           inventory_id: form.inventory_id.value || null,
-          credential_ids: [
-            ...[...form.querySelectorAll("[data-credential-kind]")].map((select) => select.value).filter(Boolean),
-            ...[...form.querySelectorAll("input[name=vault_ids]:checked")].map((input) => input.value),
-          ],
+          credential_ids: credentialIds,
           environment_id: form.environment_id.value && form.environment_id.value !== NO_ENVIRONMENT ? form.environment_id.value : null,
           no_environment: form.environment_id.value === NO_ENVIRONMENT,
           update_on_launch: selectedProject && selectedProject.source_type === "git" ? form.update_on_launch.checked : true,
@@ -1585,6 +1596,64 @@ async function openTemplateDialog(existing, initialTab = "") {
     onTab: (tab) => rememberEditHash(editing ? { edit: item.id, tab } : { create: "1", tab }, false),
   });
   const form = dialog.form;
+  const initialCredentialIds = new Set(selectedCredentialIds(item));
+  const toolKinds = new Set(Object.values(TOOL_CREDENTIAL_KINDS).flat());
+  const legacyCredentialIds = new Set([...initialCredentialIds].filter((id) => {
+    const row = credentials.find((credential) => credential.id === id);
+    return row && !toolKinds.has(row.kind);
+  }));
+  const drawLegacyCredentials = () => {
+    const fieldset = form.querySelector("#template-legacy-credentials");
+    const box = form.querySelector("#legacy-pills");
+    if (!fieldset || !box) return;
+    if (form.tool.value !== item.tool) {
+      box.innerHTML = "";
+      fieldset.hidden = true;
+      return;
+    }
+    const offered = new Set(TOOL_CREDENTIAL_KINDS[form.tool.value] || []);
+    const ids = new Set(legacyCredentialIds);
+    form.querySelectorAll("[data-credential-field]").forEach((field) => {
+      if (offered.has(field.dataset.credentialField)) return;
+      const select = field.querySelector("select[data-credential-kind]");
+      if (select && initialCredentialIds.has(select.value)) ids.add(select.value);
+    });
+    if (!offered.has("vault")) {
+      form.querySelectorAll("input[name=vault_ids]:checked, #vault-pills [data-vault-id]").forEach((node) => {
+        const id = node.value || node.dataset.vaultId;
+        if (initialCredentialIds.has(id)) ids.add(id);
+      });
+    }
+    const rows = [...ids].map((id) => credentials.find((row) => row.id === id)).filter(Boolean);
+    box.innerHTML = rows.map((row) => `<span class="chip" data-legacy-credential-id="${esc(row.id)}" data-legacy-kind="${esc(row.kind)}"><span class="chip-text">${esc(`${credentialKindLabel(row.kind)} · ${row.name}`)}</span><button class="chip-remove" type="button"${readOnly ? " disabled" : ""} aria-label="${h("remove_credential_name", { name: row.name })}">×</button></span>`).join("");
+    fieldset.hidden = rows.length === 0;
+    box.querySelectorAll(".chip-remove").forEach((button) => {
+      button.addEventListener("click", () => {
+        if (readOnly) return;
+        const chip = button.closest(".chip");
+        if (!chip) return;
+        const id = chip.dataset.legacyCredentialId;
+        const select = form.querySelector(`select[data-credential-kind="${chip.dataset.legacyKind}"]`);
+        legacyCredentialIds.delete(id);
+        if (select && select.value === id) select.value = "";
+        form.querySelectorAll(`input[name="vault_ids"][value="${id}"]`).forEach((input) => {
+          input.checked = false;
+          const choice = input.closest(".vault-choice");
+          if (choice) choice.classList.remove("selected");
+        });
+        drawLegacyCredentials();
+      });
+    });
+  };
+  const showCredentialKinds = () => {
+    const offered = new Set(TOOL_CREDENTIAL_KINDS[form.tool.value] || []);
+    form.querySelectorAll("[data-credential-field]").forEach((field) => {
+      field.hidden = !offered.has(field.dataset.credentialField);
+    });
+    const vaultField = form.querySelector("#template-vault-field");
+    if (vaultField) vaultField.hidden = !offered.has("vault");
+    drawLegacyCredentials();
+  };
   if (readOnly) {
     form.querySelectorAll("input, select, textarea").forEach((control) => {
       control.disabled = true;
@@ -1689,6 +1758,7 @@ async function openTemplateDialog(existing, initialTab = "") {
     dialog.overlay.querySelector("#tofu-options").hidden = tool !== "opentofu";
     dialog.overlay.querySelector("#shell-options").hidden = tool !== "shell";
     dialog.overlay.querySelector("#inventory-field").hidden = tool !== "ansible";
+    showCredentialKinds();
     const label = dialog.overlay.querySelector("#entrypoint-label");
     if (tool === "ansible") {
       label.textContent = t("playbook_path");
@@ -5548,6 +5618,12 @@ async function pageInventoryGroup(id, name) {
   bindInventoryLaunch("group-launch", "group-template", ansibleTemplates, { inventoryId: id, limit: group.name });
 }
 
+const TOOL_CREDENTIAL_KINDS = {
+  ansible: ["ssh", "vault"],
+  opentofu: ["aws", "azure", "gce", "vmware", "openstack", "kubernetes", "env"],
+  shell: ["ssh", "env"],
+};
+
 const CREDENTIAL_KINDS = [
   ["ssh", "machine_ssh", "a_key_or_a_password_or_both"],
   ["vault", "ansible_vault", ""],
@@ -5589,16 +5665,20 @@ function credentialUsageCard(item) {
     : `<p class="small muted">${h("not_used")}</p>`}</section>`;
 }
 
-function templateCredentialFields(credentials, selectedIds, inlineVault = false) {
+function templateCredentialFields(credentials, selectedIds, inlineVault = false, tool = "") {
   const selected = new Set(selectedIds || []);
   const present = new Set(credentials.map((row) => row.kind));
+  const offered = tool ? new Set(TOOL_CREDENTIAL_KINDS[tool] || []) : null;
+  const toolKinds = new Set(Object.values(TOOL_CREDENTIAL_KINDS).flat());
   const selects = CREDENTIAL_KINDS
     .map((row) => row[0])
     .filter((kind) => kind !== "vault" && present.has(kind))
+    .filter((kind) => !offered || toolKinds.has(kind))
     .map((kind) => {
       const rows = credentials.filter((row) => row.kind === kind);
       const current = rows.find((row) => selected.has(row.id));
-      return `<label class="field"><span>${esc(credentialKindLabel(kind))}</span><select class="fit" data-credential-kind="${esc(kind)}">${selectOptions(rows, current ? current.id : "", true, (row) => row.name)}</select></label>`;
+      const hidden = offered && !offered.has(kind) ? " hidden" : "";
+      return `<div data-credential-field="${esc(kind)}"${hidden}><label class="field"><span>${esc(credentialKindLabel(kind))}</span><select class="fit" data-credential-kind="${esc(kind)}">${selectOptions(rows, current ? current.id : "", true, (row) => row.name)}</select></label></div>`;
     })
     .join("");
   const grid = selects ? `<div class="field-grid">${selects}</div>` : "";
@@ -5607,18 +5687,22 @@ function templateCredentialFields(credentials, selectedIds, inlineVault = false)
     .filter((row) => row.kind === "vault")
     .slice()
     .sort((left, right) => left.name.localeCompare(right.name, "de"));
+  const vaultHidden = offered && !offered.has("vault") ? " hidden" : "";
   const vault = inlineVault
-    ? `<div class="field"><span>${esc(credentialKindLabel("vault"))}</span>${vaults.length
+    ? `<div class="field" id="template-vault-field"${vaultHidden}><span>${esc(credentialKindLabel("vault"))}</span>${vaults.length
       ? `<div class="vault-choices">${vaults.map((row) => `<label class="vault-choice${selected.has(row.id) ? " selected" : ""}"><input type="checkbox" name="vault_ids" value="${esc(row.id)}"${selected.has(row.id) ? " checked" : ""}><span>${esc(row.name)}</span></label>`).join("")}</div>`
       : `<p class="small muted">${h("no_vault_credentials_in_this_team")}</p>`}</div>`
-    : `<div class="field">
+    : `<div class="field" id="template-vault-field"${vaultHidden}>
       <span>${esc(credentialKindLabel("vault"))}</span>
       <div class="vault-row">
         <div class="chips" id="vault-pills"></div>
         <button class="btn pill" id="vault-add" type="button">${h("select")}</button>
       </div>
     </div>`;
-  return `${empty}<p class="small muted">${h("one_credential_of_each_kind_choose_vault_credentials")}</p>${grid}${vault}`;
+  const legacy = tool
+    ? `<div class="field" id="template-legacy-credentials" hidden><span>${h("other_credentials")}</span><div class="chips" id="legacy-pills"></div></div>`
+    : "";
+  return `${empty}<p class="small muted">${h("one_credential_of_each_kind_choose_vault_credentials")}</p>${grid}${vault}${legacy}`;
 }
 
 function bindVaultChoices(form) {

@@ -8774,6 +8774,16 @@ fn shell_with_credentials(name: &str, credential_ids: Value) -> Value {
     })
 }
 
+fn ansible_with_credentials(name: &str, credential_ids: Value, inventory_id: &str) -> Value {
+    json!({
+        "name": name,
+        "tool": "ansible",
+        "entrypoint": "site.yml",
+        "inventory_id": inventory_id,
+        "credential_ids": credential_ids
+    })
+}
+
 fn assert_no_secrets(body: &Value) {
     let rendered = body.to_string();
     for secret in [
@@ -8914,15 +8924,28 @@ async fn template_accepts_one_credential_per_kind_and_many_vaults() {
     )
     .await;
 
+    let (status, inventory, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Vault hosts", "body": "[web]\nweb-1\n"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{inventory}");
+    let inventory_id = inventory["id"].as_str().unwrap().to_string();
+
     let (status, created, _) = call(
         &app,
         "POST",
         "/api/templates",
         Some(&cookie),
         Some(&team),
-        Some(shell_with_credentials(
+        Some(ansible_with_credentials(
             "Vault-Zuordnung",
             json!([ssh, vault_prod, vault_stage]),
+            &inventory_id,
         )),
     )
     .await;
@@ -8967,9 +8990,10 @@ async fn template_accepts_one_credential_per_kind_and_many_vaults() {
         &format!("/api/templates/{template_id}"),
         Some(&cookie),
         Some(&team),
-        Some(shell_with_credentials(
+        Some(ansible_with_credentials(
             "Vault-Zuordnung",
             json!([ssh, ssh_other]),
+            &inventory_id,
         )),
     )
     .await;
@@ -8985,9 +9009,10 @@ async fn template_accepts_one_credential_per_kind_and_many_vaults() {
         &format!("/api/templates/{template_id}"),
         Some(&cookie),
         Some(&team),
-        Some(shell_with_credentials(
+        Some(ansible_with_credentials(
             "Vault-Zuordnung",
             json!([vault_prod, vault_prod_again]),
+            &inventory_id,
         )),
     )
     .await;
@@ -9000,9 +9025,10 @@ async fn template_accepts_one_credential_per_kind_and_many_vaults() {
         &format!("/api/templates/{template_id}"),
         Some(&cookie),
         Some(&team),
-        Some(shell_with_credentials(
+        Some(ansible_with_credentials(
             "Vault-Zuordnung",
             json!([vault_plain, vault_plain_two]),
+            &inventory_id,
         )),
     )
     .await;
@@ -9147,6 +9173,271 @@ async fn template_accepts_one_credential_per_kind_and_many_vaults() {
             .count(),
         2
     );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn template_credential_kinds_follow_the_tool() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-tool-credentials-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let db_state = state.clone();
+    let app = koreograf::router(state);
+
+    let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let script = script.as_str().unwrap_or("");
+    assert!(script.contains("const TOOL_CREDENTIAL_KINDS = {"));
+    assert!(script.contains("ansible: [\"ssh\", \"vault\"]"));
+    assert!(script.contains("opentofu: [\"aws\", \"azure\", \"gce\", \"vmware\", \"openstack\", \"kubernetes\", \"env\"]"));
+    assert!(script.contains("shell: [\"ssh\", \"env\"]"));
+    assert!(script.contains("data-credential-field"));
+    assert!(script.contains("template-legacy-credentials"));
+    assert!(script.contains("legacy-pills"));
+    assert!(script.contains("remove_credential_name"));
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let ssh = create_credential(
+        &app,
+        &cookie,
+        &team,
+        "SSH",
+        "ssh",
+        json!({"username": "deploy", "password": "tool-ssh-geheim"}),
+    )
+    .await;
+    let vault = create_credential(
+        &app,
+        &cookie,
+        &team,
+        "Vault",
+        "vault",
+        json!({"password": "tool-vault-geheim"}),
+    )
+    .await;
+    let netbox = create_credential(
+        &app,
+        &cookie,
+        &team,
+        "NetBox",
+        "netbox",
+        json!({"token": "tool-netbox-geheim", "url": "https://netbox.example.com"}),
+    )
+    .await;
+    let aws = create_credential(
+        &app,
+        &cookie,
+        &team,
+        "AWS",
+        "aws",
+        json!({"access_key": "AKIAEXAMPLE", "secret_key": "tool-aws-geheim"}),
+    )
+    .await;
+    let (status, inventory, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Tool hosts", "body": "[web]\nweb-1\n"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{inventory}");
+    let inventory_id = inventory["id"].as_str().unwrap().to_string();
+
+    let (status, refused, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(ansible_with_credentials(
+            "NetBox-Ansible",
+            json!([netbox]),
+            &inventory_id,
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(
+        refused["error"],
+        "this_credential_kind_does_not_fit_the_tool"
+    );
+
+    let (status, refused, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "SSH-OpenTofu",
+            "tool": "opentofu",
+            "entrypoint": ".",
+            "credential_ids": [ssh]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(
+        refused["error"],
+        "this_credential_kind_does_not_fit_the_tool"
+    );
+
+    let (status, refused, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(shell_with_credentials("Vault-Shell", json!([vault]))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(
+        refused["error"],
+        "this_credential_kind_does_not_fit_the_tool"
+    );
+
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(ansible_with_credentials(
+            "SSH-Ansible",
+            json!([ssh, vault]),
+            &inventory_id,
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let template_id = created["id"].as_str().unwrap().to_string();
+
+    let (status, unchanged, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/templates/{template_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(ansible_with_credentials(
+            "SSH-Ansible",
+            json!([ssh, vault]),
+            &inventory_id,
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{unchanged}");
+    assert_eq!(unchanged["credential_ids"], json!([ssh, vault]));
+
+    let (status, tofu, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "AWS-OpenTofu",
+            "tool": "opentofu",
+            "entrypoint": ".",
+            "credential_ids": [aws]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{tofu}");
+    assert_eq!(tofu["credential_ids"], json!([aws]));
+
+    let (status, plain, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(ansible_with_credentials(
+            "Alt-NetBox",
+            json!([]),
+            &inventory_id,
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{plain}");
+    let legacy_id = plain["id"].as_str().unwrap().to_string();
+    {
+        let db = db_state.db().unwrap();
+        db.execute(
+            "INSERT INTO template_credentials (template_id, credential_id, position) VALUES (?1, ?2, 0)",
+            rusqlite::params![legacy_id, netbox],
+        )
+        .unwrap();
+    }
+    let (status, legacy, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/templates/{legacy_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(ansible_with_credentials(
+            "Alt-NetBox",
+            json!([netbox]),
+            &inventory_id,
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{legacy}");
+    assert_eq!(legacy["credential_ids"], json!([netbox]));
+
+    let (status, refused, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/templates/{legacy_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(ansible_with_credentials(
+            "Alt-NetBox",
+            json!([netbox, aws]),
+            &inventory_id,
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(
+        refused["error"],
+        "this_credential_kind_does_not_fit_the_tool"
+    );
+
+    let (status, removed, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/templates/{legacy_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(ansible_with_credentials(
+            "Alt-NetBox",
+            json!([]),
+            &inventory_id,
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    assert!(removed["credential_ids"].as_array().unwrap().is_empty());
 
     let _ = std::fs::remove_dir_all(&dir);
 }

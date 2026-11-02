@@ -50,7 +50,7 @@ The registry lives in `runner::tools()`. Another CLI tool needs an entry there a
 | `opentofu` | `tofu init`, then `plan` or `apply` |
 | `shell` | a script from the project, or `spec.script` written as `inline.sh` |
 
-A template stores one credential of each kind. Ansible Vault is the exception: several vault credentials can be attached, each with its own vault id, and only one of them may omit the id. The kinds follow the built-in types in AWX and the two useful Semaphore key-store types (SSH, and login with password). Semaphore's empty "None" type is left out. There is no custom credential-type designer, and no external lookup such as CyberArk, HashiCorp Vault, or a cloud secret manager.
+A template stores one credential of each kind its tool uses. Ansible Vault is the exception: several vault credentials can be attached, each with its own vault id, and only one of them may omit the id. The kinds follow the built-in types in AWX and the two useful Semaphore key-store types (SSH, and login with password). Semaphore's empty "None" type is left out. There is no custom credential-type designer, and no external lookup such as CyberArk, HashiCorp Vault, or a cloud secret manager.
 
 | Kind | What the job receives |
 | --- | --- |
@@ -63,6 +63,16 @@ A template stores one credential of each kind. Ansible Vault is the exception: s
 | `github`, `gitlab`, `galaxy`, `kubernetes`, `insights` | A token, or a username and password, for that service. |
 | `env` | Extra environment variables as `KEY=value` lines. |
 | `netbox` | An API address and a token. Inventory sources take both from this credential and never store the address. |
+
+The template form offers only the kinds the selected tool uses:
+
+| Tool | Kinds |
+| --- | --- |
+| `ansible` | `ssh`, `vault` |
+| `opentofu` | `aws`, `azure`, `gce`, `vmware`, `openstack`, `kubernetes`, `env` |
+| `shell` | `ssh`, `env` |
+
+The runner writes every prepared credential into the job environment, but these are the kinds each tool reads. `scm`, `net`, `registry`, `github`, `gitlab`, `galaxy`, `insights`, and `netbox` belong to projects, inventory sources, or other services and are never offered in a template. The API rejects a newly added kind that the tool does not use. A template from an older release keeps an assignment of another kind on save; the form shows it as a pill with a remove button until someone removes it. Switching the tool in the form hides the kinds the new tool does not use and leaves them out of the save.
 
 Secrets are stored with AES-GCM. The list API returns the name and the kind, never the secret. Opening one credential returns public fields such as the username and the names of stored secrets, still without the secret values. An owner can change the name and the secret. A stored password, private key, passphrase, or become password is shown with the usual password dots. Replacing those dots stores the new value. Leaving them, or leaving the field empty, keeps the stored value. `clear` removes named secret fields. The kind stays as it was created. Files written for the job, including the container environment file, use mode `0600`.
 

@@ -801,7 +801,7 @@ fn build_template(
     let inventory_id = blank(body.inventory_id);
     let environment_id = blank(body.environment_id);
     let no_environment = environment_id.is_none() && body.no_environment;
-    let (created_at, loaded) = {
+    let (created_at, loaded, previous_ids) = {
         let db = state.db()?;
         if let Some(project_id) = &project_id {
             db::project(&db, project_id)?.ok_or_else(|| ApiError::bad("project_is_missing"))?;
@@ -844,9 +844,20 @@ fn build_template(
                 .ok_or_else(|| ApiError::bad("credential_is_missing"))?;
             loaded.push(credential);
         }
-        (created_at, loaded)
+        let previous_ids = match &id {
+            Some(id) => db::template_credential_ids(&db, id)?,
+            None => Vec::new(),
+        };
+        (created_at, loaded, previous_ids)
     };
     let chosen = credentials::assign_loaded(state, team, &loaded).map_err(ApiError::bad)?;
+    for credential in &loaded {
+        if !credentials::kind_fits_tool(&body.tool, &credential.kind)
+            && !previous_ids.iter().any(|id| id == &credential.id)
+        {
+            return Err(ApiError::bad("this_credential_kind_does_not_fit_the_tool"));
+        }
+    }
     let credential_ids = chosen.ids;
     let credential_id = chosen.primary_id;
     Ok((
