@@ -5470,6 +5470,17 @@ exit 0
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         assert!(!grandchild.is_empty(), "detached child did not start");
+        let mut started = false;
+        for _ in 0..100 {
+            if let Ok(text) = std::fs::read_to_string(format!("/proc/{grandchild}/cmdline")) {
+                if text.contains("sleep") {
+                    started = true;
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(started, "detached child did not exec sleep");
         assert!(
             signal_process_group(pid, false),
             "the group did not accept SIGTERM"
