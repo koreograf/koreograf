@@ -6107,11 +6107,9 @@ async function pageBackup() {
 
 async function route() {
   const nextHash = location.hash || "#/";
-  if (leaveGuard && shownHash !== null && nextHash !== shownHash) {
-    if (!leaveGuard() || !confirm(t("discard_unsaved_changes"))) {
-      history.replaceState(null, "", shownHash);
-      return;
-    }
+  if (leaveGuard && shownHash !== null && nextHash !== shownHash && leaveGuard() && !confirm(t("discard_unsaved_changes"))) {
+    history.replaceState(null, "", shownHash);
+    return;
   }
   leaveGuard = null;
   shownHash = nextHash;
