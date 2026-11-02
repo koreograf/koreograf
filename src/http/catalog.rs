@@ -14,6 +14,7 @@ use crate::db::{self, Credential, Environment, Inventory, InventorySource, Proje
 use crate::error::{ApiError, ApiJson, AppResult};
 use crate::inventory::{self, InventoryData, InventoryHost};
 use crate::jobs;
+use crate::migration;
 use crate::runner;
 use crate::Shared;
 
@@ -204,10 +205,16 @@ pub async fn overview(
     let workflow = db::first_workflow(&db, &team)?;
     let hook = db::first_hook(&db, &team)?;
     let cache = cacheinfo::team_cache(&state.cfg.data_dir, &team);
+    let import = if user.is_admin {
+        migration::report(&db)?
+    } else {
+        None
+    };
     Ok(Json(json!({
         "runner_mode": effective.runner.as_str(),
         "runtime": runtime,
         "preflight": preflight.as_ref().map(|report| report.json()),
+        "import": import,
         "ldap": effective.directory().is_some(),
         "cache_bytes": cache.collections_bytes + cache.roles_bytes + cache.tofu_bytes,
         "jobs": jobs.iter().map(|job| super::job_json(job, None)).collect::<Vec<_>>(),

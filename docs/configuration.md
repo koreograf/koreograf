@@ -32,6 +32,10 @@ See `.env.example`. Comments in that file are English. Copy it to `.env` before 
 | `KOREOGRAF_COOKIE_SECURE` | `auto`. `true` sets `Secure` on the session cookie |
 | `KOREOGRAF_TRUSTED_PROXY` | false. When true, `auto` reads `X-Forwarded-Proto` |
 | `KOREOGRAF_DATABASE_URL` | empty, SQLite. `postgres://` is rejected |
+| `KOREOGRAF_RESTORE_FROM` | empty. A mounted zip restored before the port opens when the data directory is empty |
+| `KOREOGRAF_IMPORT_FROM` | empty. An old data directory copied on first start when the data directory is empty |
+| `KOREOGRAF_PATH_MAP` | empty. Comma-separated `OLD=NEW` absolute prefixes applied once during an import |
+| `KOREOGRAF_IMPORT_CACHE` | off. With an import, copy the rest of the cache as well |
 | `KOREOGRAF_LDAP_BIND_DN` | empty. Required when `KOREOGRAF_LDAP_URL` is set |
 | `KOREOGRAF_LDAP_BIND_PASSWORD` | empty. Required when `KOREOGRAF_LDAP_URL` is set |
 | `KOREOGRAF_LDAP_USER_BASE` | empty. Required when `KOREOGRAF_LDAP_URL` is set |
@@ -70,6 +74,6 @@ What the database file holds, and why a `postgres://` URL stops startup, is in [
 | `KOREOGRAF_WEB` | `/opt/koreograf/web` |
 | `KOREOGRAF_EXAMPLES` | `/opt/koreograf/examples` |
 
-Compose forwards the other names from `.env` into the container. That includes `KOREOGRAF_DATA_HOST`, `KOREOGRAF_LOG_FORMAT`, `KOREOGRAF_HSTS`, `KOREOGRAF_COOKIE_SECURE`, `KOREOGRAF_TRUSTED_PROXY`, `KOREOGRAF_DATABASE_URL`, `KOREOGRAF_SEED_ENVIRONMENTS`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, and the lowercase `http_proxy`, `https_proxy`, and `no_proxy`. Log format and the database URL are passed through even when they are empty. A proxy name is passed only when `.env` or the shell sets it. An unset proxy is left out of the container. An empty `https_proxy` would turn off `HTTPS_PROXY` for git and for Python, so do not set a proxy name to an empty string.
+Compose forwards the other names from `.env` into the container. That includes `KOREOGRAF_DATA_HOST`, `KOREOGRAF_LOG_FORMAT`, `KOREOGRAF_HSTS`, `KOREOGRAF_COOKIE_SECURE`, `KOREOGRAF_TRUSTED_PROXY`, `KOREOGRAF_DATABASE_URL`, `KOREOGRAF_RESTORE_FROM`, `KOREOGRAF_IMPORT_FROM`, `KOREOGRAF_PATH_MAP`, `KOREOGRAF_IMPORT_CACHE`, `KOREOGRAF_SEED_ENVIRONMENTS`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, and the lowercase `http_proxy`, `https_proxy`, and `no_proxy`. Log format and the database URL are passed through even when they are empty. A proxy name is passed only when `.env` or the shell sets it. An unset proxy is left out of the container. An empty `https_proxy` would turn off `HTTPS_PROXY` for git and for Python, so do not set a proxy name to an empty string.
 
 Compose also reads the shell. A proxy exported in the shell is forwarded even when the line in `.env` is commented out. Leave those variables unset in the shell when the container should not use them. The container does not copy a proxy that is configured only on the Docker daemon.

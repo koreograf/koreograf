@@ -118,7 +118,7 @@ The named volume in the file is `koreograf-data`. Compose prefixes the project n
 
 Copy `.env.example` to `.env` when a forwarded variable should change. Compose reads `.env` for substitution and ignores `KOREOGRAF_BIND`, `KOREOGRAF_DATA`, `KOREOGRAF_WEB`, and `KOREOGRAF_EXAMPLES` from that file. Those four are fixed in `docker-compose.yml`. Log format and the database URL are forwarded. A proxy variable is forwarded only when it is set. A value already exported in the shell is used for that substitution too. The two lists are in [Configuration](configuration.md#docker-compose).
 
-A path project is a directory inside the container, not a path on your laptop. Mount it and allow that directory. The stock compose file does not forward `KOREOGRAF_PROJECT_ROOTS`. Add the variable to the existing `environment` map, and add the mount next to `koreograf-data`:
+A path project is a directory inside the container, not a path on your laptop. The migration variables are in [Move from a binary or systemd install](#move-from-a-binary-or-systemd-install). Mount it and allow that directory. The stock compose file does not forward `KOREOGRAF_PROJECT_ROOTS`. Add the variable to the existing `environment` map, and add the mount next to `koreograf-data`:
 
 ```yaml
 environment:
@@ -128,6 +128,69 @@ volumes:
 ```
 
 Use `/srv/projects/my-project` as `source` with `source_type` `path`. The examples directory in the image is already allowed, so the seeded Demo project needs no extra mount. Details are in [Jobs](jobs.md#path-projects).
+
+## Move from a binary or systemd install
+
+Koreograf keeps the database and `secret.key` in one data directory (`KOREOGRAF_DATA`, default `./data`). The container keeps the same directory in the `koreograf-data` volume. Both paths below need an empty volume on the new host. Keep the old installation running until the checks pass.
+
+### Preferred: backup, then restore on start
+
+On the old host, sign in as an administrator, open **Backup**, enable **Include OpenTofu state** when jobs use OpenTofu, and download `koreograf-backup.zip`. The zip contains the database, `secret.key`, and optionally the OpenTofu state. Keep it safe: it can read every credential.
+
+Copy the file to the new Docker host and start with an empty volume:
+
+```bash
+mkdir -p /srv/koreograf/restore
+cp koreograf-backup.zip /srv/koreograf/restore/
+```
+
+Add the file and the variable to the service in `docker-compose.yml`:
+
+```yaml
+environment:
+  KOREOGRAF_RESTORE_FROM: /restore/koreograf-backup.zip
+volumes:
+  - /srv/koreograf/restore:/restore
+```
+
+Then start the stack:
+
+```bash
+docker compose up -d
+docker compose logs -f koreograf
+```
+
+The log says that the installation was restored and names the marker file. The file is renamed so the next start does not restore it again. Remove the two lines and run `docker compose up -d` again after the restore, or leave them: a non-empty data directory ignores the variable with a warning.
+
+Check the sign-in, the credentials, and an OpenTofu `plan` before you switch DNS or the reverse proxy to the new host. `secret.key` is inside the backup; without it the restored credentials cannot be decrypted. Do not delete or replace it afterwards.
+
+### Existing data directory
+
+This path copies the directory over without a zip. Mount the old directory read-only:
+
+```yaml
+environment:
+  KOREOGRAF_IMPORT_FROM: /import
+  # Only when path projects move. Comma-separate several mappings; do not guess.
+  KOREOGRAF_PATH_MAP: /home/user/projects=/projects
+  # Copy the rest of the cache too. The OpenTofu state is always copied.
+  KOREOGRAF_IMPORT_CACHE: "1"
+volumes:
+  - /srv/koreograf/old-data:/import:ro
+```
+
+Start with an empty `koreograf-data` volume:
+
+```bash
+docker compose up -d
+docker compose logs -f koreograf
+```
+
+Koreograf validates `koreograf.db` and `secret.key`, copies the database with the SQLite backup API (consistent while the old service still runs and writes its WAL), copies the key and the OpenTofu state, and writes a report. It never writes to `/import`. If the volume already has data, it logs a warning and imports nothing.
+
+The log and **Overview** list stored paths that do not exist in the container, for example `/home/user/projects/demo`. Mount them at the same path or map the prefix with `KOREOGRAF_PATH_MAP=OLD=NEW`. A mapping is applied once during the import and stored in the database; a later start does not apply it again. Paths that are not mapped stay unchanged.
+
+The new files belong to uid 10001. Check sign-in, credentials, path projects, and an OpenTofu `plan` before switching DNS or the reverse proxy. Remove the import lines afterwards so the next start does not read the old directory.
 
 ## Helm
 

@@ -132,6 +132,33 @@ fn chown(path: &Path) -> Result<(), String> {
 }
 
 #[cfg(unix)]
+pub(crate) fn own_tree(path: &Path, uid: u32, gid: u32) -> Result<(), String> {
+    use nix::fcntl::AtFlags;
+    use nix::unistd::{fchownat, Gid, Uid};
+
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|err| format!("Could not read {} ({err}).", path.display()))?;
+    fchownat(
+        nix::fcntl::AT_FDCWD,
+        path,
+        Some(Uid::from_raw(uid)),
+        Some(Gid::from_raw(gid)),
+        AtFlags::AT_SYMLINK_NOFOLLOW,
+    )
+    .map_err(|err| format!("Could not change the owner of {} ({err}).", path.display()))?;
+    if metadata.is_dir() {
+        let entries = fs::read_dir(path)
+            .map_err(|err| format!("Could not read {} ({err}).", path.display()))?;
+        for entry in entries {
+            let entry =
+                entry.map_err(|err| format!("Could not read {} ({err}).", path.display()))?;
+            own_tree(&entry.path(), uid, gid)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
 fn socket_group(path: &Path) -> Result<Option<u32>, String> {
     use std::os::unix::fs::{FileTypeExt, MetadataExt};
 

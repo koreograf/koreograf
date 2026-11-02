@@ -8,6 +8,8 @@ use serde_json::Value;
 
 use crate::error::{ApiError, AppResult};
 
+pub(crate) const SCHEMA_VERSION: u32 = 1;
+
 pub fn now() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
@@ -527,7 +529,12 @@ CREATE INDEX IF NOT EXISTS idx_schedules_target ON schedules(target_kind, target
         "CREATE INDEX IF NOT EXISTS idx_jobs_team_created ON jobs(team_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_team_status ON jobs(team_id, status, created_at DESC);",
     )?;
+    c.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
+}
+
+pub(crate) fn schema_version(c: &Connection) -> AppResult<u32> {
+    Ok(c.query_row("PRAGMA user_version", [], |row| row.get(0))?)
 }
 
 pub(crate) fn ensure_schema(c: &Connection) -> AppResult<()> {
@@ -540,6 +547,12 @@ pub fn open(path: &Path) -> AppResult<Connection> {
     }
     let conn = Connection::open(path)?;
     conn.busy_timeout(Duration::from_secs(5))?;
+    let found = schema_version(&conn)?;
+    if found > SCHEMA_VERSION {
+        return Err(ApiError::Internal(format!(
+            "The database uses schema {found}, but this build supports {SCHEMA_VERSION}. Upgrade Koreograf before opening it."
+        )));
+    }
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.execute_batch(SCHEMA)?;

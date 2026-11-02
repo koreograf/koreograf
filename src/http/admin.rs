@@ -1,8 +1,9 @@
 use axum::body::Bytes;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use serde::Deserialize;
 use serde_json::json;
 
 use crate::auth::{self, AuthUser};
@@ -10,11 +11,21 @@ use crate::backup;
 use crate::error::{ApiError, AppResult};
 use crate::Shared;
 
-pub async fn download(State(state): State<Shared>, user: AuthUser) -> AppResult<Response> {
+#[derive(Deserialize, Default)]
+pub struct DownloadQuery {
+    #[serde(default)]
+    tofu_state: bool,
+}
+
+pub async fn download(
+    State(state): State<Shared>,
+    Query(query): Query<DownloadQuery>,
+    user: AuthUser,
+) -> AppResult<Response> {
     if !user.is_admin {
         return Err(ApiError::Forbidden);
     }
-    let bytes = backup::export(&state)?;
+    let bytes = backup::export(&state, query.tofu_state)?;
     Ok((
         [
             (
