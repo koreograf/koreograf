@@ -4,6 +4,8 @@ Koreograf is an early prototype. Issues and pull requests are welcome. Read `SEC
 
 Visible copy lives in `web/i18n/de.json` and `web/i18n/en.json`. The API returns a message key. Logs stay English.
 
+Read `docs/ui-style-guide.md` before you change the browser UI. A UI pull request is reviewed against that guide and its pull request checklist.
+
 ## Commits
 
 Write commit messages in English. Use Conventional Commits. Keep the subject and each body line within 72 characters. On pull requests, commitlint checks the messages.
