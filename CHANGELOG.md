@@ -1,5 +1,58 @@
 # Changelog
 
+## [0.1.0-alpha.7](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.6...v0.1.0-alpha.7) (2026-11-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* page and search inventory hosts ([#163](https://github.com/koreograf/koreograf/issues/163))
+
+### Features
+
+* add an optional network to execution environments ([#191](https://github.com/koreograf/koreograf/issues/191)) ([9129e96](https://github.com/koreograf/koreograf/commit/9129e9602f6b2a01759ae42939abc68f286a36a2))
+* add launch with options for templates without prompts ([#189](https://github.com/koreograf/koreograf/issues/189)) ([ba99433](https://github.com/koreograf/koreograf/commit/ba99433dac724820cd41c855eaed1fb45c4c196d))
+* add plain NetBox groups, context and preview ([#162](https://github.com/koreograf/koreograf/issues/162)) ([#203](https://github.com/koreograf/koreograf/issues/203)) ([1030055](https://github.com/koreograf/koreograf/commit/1030055ba9dd1068c60117445b993c63a754819d))
+* edit a project name, source, and revision ([#195](https://github.com/koreograf/koreograf/issues/195)) ([6fc9241](https://github.com/koreograf/koreograf/commit/6fc92417621a6b8c3d97b85bf9537485353b1daf))
+* edit inventory sources and rename inventories ([#198](https://github.com/koreograf/koreograf/issues/198)) ([903cc0c](https://github.com/koreograf/koreograf/commit/903cc0c7dbc11331899dcf0a0684d58ca53ee78d))
+* explain NetBox errors and add a test connection ([#186](https://github.com/koreograf/koreograf/issues/186)) ([b1efcde](https://github.com/koreograf/koreograf/commit/b1efcdefe3cfc0dbcbcff76d00ae107a4c907615))
+* include the git commit in the reported version ([#166](https://github.com/koreograf/koreograf/issues/166)) ([237b613](https://github.com/koreograf/koreograf/commit/237b613f91a36a529ac4a2a634825344f05b104d))
+* page and search inventory hosts ([#163](https://github.com/koreograf/koreograf/issues/163)) ([afa5a99](https://github.com/koreograf/koreograf/commit/afa5a99ac996e747087429603546a7ef71f5295c))
+* scope execution environments to a tool ([#222](https://github.com/koreograf/koreograf/issues/222)) ([50d733f](https://github.com/koreograf/koreograf/commit/50d733fc3a989743e054c9ba7a7a7c97b4968676))
+* show inventory host and group details ([#201](https://github.com/koreograf/koreograf/issues/201)) ([daadd7d](https://github.com/koreograf/koreograf/commit/daadd7ded03927bf288e68ba6aecf25908c731f1))
+* use a source control credential for project sync ([#205](https://github.com/koreograf/koreograf/issues/205)) ([421effa](https://github.com/koreograf/koreograf/commit/421effa1a45b1b6401695f51a35b82295c75befc))
+* use NetBox credentials in inventory sources ([#161](https://github.com/koreograf/koreograf/issues/161)) ([#202](https://github.com/koreograf/koreograf/issues/202)) ([3daa187](https://github.com/koreograf/koreograf/commit/3daa187d3e8cc2034585c43ed84f76fc3aa09fb9))
+
+
+### Bug Fixes
+
+* add skip link, sign-in autofocus and restore language focus ([#180](https://github.com/koreograf/koreograf/issues/180)) ([2ce068d](https://github.com/koreograf/koreograf/commit/2ce068d57631daad190eda699b60eda064eb3b97))
+* correct workflow editor labels and keyboard support ([#190](https://github.com/koreograf/koreograf/issues/190)) ([7650bf8](https://github.com/koreograf/koreograf/commit/7650bf8334e8e4adb5bf0213ac64ed29c5db7a15))
+* delete auto-created netbox credentials with their inventory ([d271def](https://github.com/koreograf/koreograf/commit/d271defdc6736ab30bba6c53f04a07406882ccb4))
+* **deps:** pin dependencies ([#192](https://github.com/koreograf/koreograf/issues/192)) ([63bdb88](https://github.com/koreograf/koreograf/commit/63bdb88e230b4891dd4737672f669ac0dbd74da0))
+* **deps:** update cargo non-major ([#200](https://github.com/koreograf/koreograf/issues/200)) ([2dc7a32](https://github.com/koreograf/koreograf/commit/2dc7a329bde88a56b687fd3c94aa704d357b355c))
+* **deps:** update debian:bookworm-slim docker digest to 99c0b25 ([#193](https://github.com/koreograf/koreograf/issues/193)) ([0ae9cc1](https://github.com/koreograf/koreograf/commit/0ae9cc192fac02b753529e5ddf9c4b790214af47))
+* **deps:** update rust to v1.99.1 ([#217](https://github.com/koreograf/koreograf/issues/217)) ([47eb612](https://github.com/koreograf/koreograf/commit/47eb61241a4c2da29ab814239e47bf7d4dcacec6))
+* drop stale renders, preselect a useful team, align NetBox checks ([#185](https://github.com/koreograf/koreograf/issues/185)) ([563c27e](https://github.com/koreograf/koreograf/commit/563c27e5c682441246e24b065c9cf468360b53c3))
+* explain how webhook calls can start jobs on a default install ([02bbf89](https://github.com/koreograf/koreograf/commit/02bbf893b8537f22e90d3176e27e41869b5d3b53))
+* guard auto credential cleanup against json references ([51b3e6e](https://github.com/koreograf/koreograf/commit/51b3e6ede6176e9171acc24771bd1c10b337f85c))
+* keep git checkouts usable with the Docker socket ([#206](https://github.com/koreograf/koreograf/issues/206)) ([20af3b9](https://github.com/koreograf/koreograf/commit/20af3b94b1bc4155ea0783cc421fd7c54d8856f1))
+* let pages shrink on narrow windows without horizontal scroll ([#183](https://github.com/koreograf/koreograf/issues/183)) ([534baa2](https://github.com/koreograf/koreograf/commit/534baa29ebf3d30bdf571931e8bafc30a116ed56))
+* localize the job log gap and keep the duration current ([#188](https://github.com/koreograf/koreograf/issues/188)) ([dc67aea](https://github.com/koreograf/koreograf/commit/dc67aea0f23aa2d83c4f7d5b2d0cb452b0d112d9))
+* make overlay dialogs keyboard-modal with focus trap ([#181](https://github.com/koreograf/koreograf/issues/181)) ([bc382f0](https://github.com/koreograf/koreograf/commit/bc382f096ca72a88531a02e85cf185225f23ae13))
+* name deleted objects and separate danger buttons ([#150](https://github.com/koreograf/koreograf/issues/150)) ([#187](https://github.com/koreograf/koreograf/issues/187)) ([0006bbd](https://github.com/koreograf/koreograf/commit/0006bbd778044a871396d6854b976c6e7db489ff))
+* refuse to delete an inventory that templates still use ([81c6256](https://github.com/koreograf/koreograf/commit/81c6256134484f9061264599fc49a676bd6abe75))
+* reject launching an ansible template without an inventory ([e715520](https://github.com/koreograf/koreograf/commit/e715520103cf674b937c9c5dcebbae9ceb7be67f))
+* reject unknown JSON fields in request bodies ([#156](https://github.com/koreograf/koreograf/issues/156)) ([33feacd](https://github.com/koreograf/koreograf/commit/33feacd57adf81c52bf80d78f2319cac0b8012d3))
+* reject workflow hook deliveries when local runs are admin-only ([d9da27b](https://github.com/koreograf/koreograf/commit/d9da27bbfea3b79cbcb109460e0d97b22acd1ae5))
+* report LDAP outages as 503 and cap NetBox connect timeout ([ba3b6c0](https://github.com/koreograf/koreograf/commit/ba3b6c01a7f2c384e1d2303ce63cb121004cc991))
+* save the playbook path shown in the template form ([dfc3535](https://github.com/koreograf/koreograf/commit/dfc35357999c8ebd26b134b8f49029def248998e)), closes [#147](https://github.com/koreograf/koreograf/issues/147)
+* scope reference scan to team and cover guard with a test ([ef58d2a](https://github.com/koreograf/koreograf/commit/ef58d2ace2c687ba05120a86060f3b69a9a3c377))
+* shift schedule runs out of daylight saving gaps ([ca5e53d](https://github.com/koreograf/koreograf/commit/ca5e53d3e29f02bc6cce48bd32d77ff2561f7a03))
+* show errors next to their field and stop banner stacking ([#182](https://github.com/koreograf/koreograf/issues/182)) ([90f9af5](https://github.com/koreograf/koreograf/commit/90f9af50dde12ca8d38b3e3b92887a88c567a072))
+* tighten validation for inventories, settings, names, secret key ([#184](https://github.com/koreograf/koreograf/issues/184)) ([03af82e](https://github.com/koreograf/koreograf/commit/03af82eb3130cd818e92d88278d22062a0ff8544))
+* unblock navigation from unchanged forms ([#207](https://github.com/koreograf/koreograf/issues/207)) ([#208](https://github.com/koreograf/koreograf/issues/208)) ([d74444b](https://github.com/koreograf/koreograf/commit/d74444bb1096bd4bf88e056fb59d13d1032757e5))
+* unify overlay dialogs and guard unsaved changes ([#165](https://github.com/koreograf/koreograf/issues/165)) ([#204](https://github.com/koreograf/koreograf/issues/204)) ([7f89b40](https://github.com/koreograf/koreograf/commit/7f89b40c9398f296ce5d2e71216bc4e698c630a1))
+
 ## [0.1.0-alpha.6](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.5...v0.1.0-alpha.6) (2026-10-28)
 
 

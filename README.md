@@ -6,7 +6,7 @@ Koreograf is a prototype for team-scoped automation. One Rust binary serves the 
 
 ## Status
 
-Alpha [0.1.0-alpha.6](CHANGELOG.md). <!-- x-release-please-version -->
+Alpha [0.1.0-alpha.7](CHANGELOG.md). <!-- x-release-please-version -->
 `Cargo.toml` uses the same pre-release version.
 
 This is an early prototype, not a replacement for AWX and not a rebuild of Semaphore. There are no surveys, no Receptor, and no high-availability setup. A schedule can start a job or a workflow at a local clock time. The database today is one SQLite file with one writer. PostgreSQL is not connected yet.
@@ -24,7 +24,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-Compose pulls `ghcr.io/koreograf/koreograf:0.1.0-alpha.6`. <!-- x-release-please-version -->
+Compose pulls `ghcr.io/koreograf/koreograf:0.1.0-alpha.7`. <!-- x-release-please-version -->
 It does not compile. Build this checkout without replacing that published tag:
 
 ```bash
