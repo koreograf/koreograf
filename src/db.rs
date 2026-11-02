@@ -1629,11 +1629,20 @@ pub fn set_inventory_source_body(c: &Connection, id: &str, body: &str) -> AppRes
     Ok(())
 }
 
-pub fn rename_inventory_source(c: &Connection, id: &str, name: &str) -> AppResult<()> {
-    c.execute(
-        "UPDATE inventory_sources SET name = ?2 WHERE id = ?1",
-        params![id, name],
+pub fn update_inventory_source(
+    c: &Connection,
+    id: &str,
+    name: &str,
+    source_json: &str,
+    body: &str,
+) -> AppResult<()> {
+    let n = c.execute(
+        "UPDATE inventory_sources SET name = ?2, source_json = ?3, body = ?4 WHERE id = ?1",
+        params![id, name, source_json, body],
     )?;
+    if n == 0 {
+        return Err(ApiError::NotFound);
+    }
     Ok(())
 }
 

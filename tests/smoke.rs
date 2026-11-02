@@ -2655,6 +2655,469 @@ async fn playbooks_project_inventory_and_netbox() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[tokio::test]
+async fn inventory_sources_can_be_edited_and_inventories_renamed() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-source-edit-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let script = script.as_str().unwrap_or("");
+    assert!(script.contains("data-edit-source"));
+    assert!(script.contains("hosts_before_after"));
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        None,
+        Some(json!({
+            "username": "source-viewer",
+            "password": "viewer-pass",
+            "display_name": "Source viewer"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{team}/members"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"username": "source-viewer", "role": "viewer"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let mock = axum::Router::new().route("/api/dcim/devices/", axum::routing::get(nb_editable));
+    tokio::spawn(async move {
+        axum::serve(listener, mock).await.unwrap();
+    });
+
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/inventories/netbox",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "NetBox edit",
+            "api_endpoint": format!("http://{addr}"),
+            "token": "secret-token",
+            "group_by": ["sites"],
+            "query_filters": ["status=active"],
+            "virtual_machines": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let inventory_id = created["id"].as_str().unwrap().to_string();
+    let source_id = created["sources"][0]["id"].as_str().unwrap().to_string();
+    assert_eq!(created["host_count"], 1);
+    assert!(created["sources"][0]["body"]
+        .as_str()
+        .unwrap_or("")
+        .contains("sites_berlin"));
+
+    let (status, edited, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/inventories/{inventory_id}/sources/{source_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Edited NetBox",
+            "api_endpoint": format!("http://{addr}"),
+            "token": "",
+            "group_by": ["site"],
+            "query_filters": ["status=planned"],
+            "validate_certs": true,
+            "ca_file": "",
+            "virtual_machines": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    assert_eq!(edited["sources"][0]["id"], source_id);
+    assert_eq!(edited["sources"][0]["name"], "Edited NetBox");
+    assert_eq!(edited["sources"][0]["source"]["group_by"], json!(["site"]));
+    assert_eq!(
+        edited["sources"][0]["source"]["query"],
+        json!([["status", "planned"]])
+    );
+    assert!(edited["sources"][0]["body"]
+        .as_str()
+        .unwrap_or("")
+        .contains("site_berlin"));
+    assert!(edited["sources"][0]["body"]
+        .as_str()
+        .unwrap_or("")
+        .contains("web-2"));
+    assert_eq!(edited["host_count"], 2);
+    assert_eq!(edited["sync"]["ok"], true);
+    assert_eq!(edited["sync"]["before"], 1);
+    assert_eq!(edited["sync"]["after"], 2);
+    assert!(!edited.to_string().contains("secret-token"));
+
+    let (status, stored, _) = call(
+        &app,
+        "GET",
+        &format!("/api/inventories/{inventory_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{stored}");
+    assert_eq!(stored["sources"][0]["id"], source_id);
+    assert_eq!(stored["sources"][0]["name"], "Edited NetBox");
+    assert_eq!(stored["sources"][0]["source"]["group_by"], json!(["site"]));
+
+    let (status, foreign, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/inventories/{inventory_id}/sources/{source_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"path": "inventory/hosts.ini"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{foreign}");
+    assert_eq!(foreign["error"], "json_field_is_not_supported");
+    assert_eq!(foreign["vars"]["field"], "path");
+
+    let (status, renamed, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/inventories/{inventory_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Renamed inventory"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{renamed}");
+    assert_eq!(renamed["name"], "Renamed inventory");
+    assert_eq!(renamed["sources"][0]["id"], source_id);
+
+    let (status, _, viewer_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "source-viewer", "password": "viewer-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let viewer_cookie = viewer_cookie.expect("viewer cookie");
+    let (status, forbidden, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/inventories/{inventory_id}/sources/{source_id}"),
+        Some(&viewer_cookie),
+        Some(&team),
+        Some(json!({"name": "Not allowed"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{forbidden}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn netbox_endpoint_changes_require_a_new_token() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-netbox-token-edit-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "username": "operator",
+            "display_name": "operator",
+            "password": "operator-pass",
+            "is_admin": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{team}/members"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"username": "operator", "role": "operator"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, operator_me, operator_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "operator", "password": "operator-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{operator_me}");
+    let operator_cookie = operator_cookie.expect("operator cookie");
+
+    let (first, first_hits) = netbox_mock().await;
+    let (second, second_hits) = netbox_mock().await;
+    let (third, third_hits) = netbox_mock().await;
+
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/inventories/netbox",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Token edit",
+            "api_endpoint": first,
+            "token": "secret-token",
+            "virtual_machines": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let inventory_id = created["id"].as_str().unwrap().to_string();
+    let source_id = created["sources"][0]["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        first_hits.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "{created}"
+    );
+
+    let (status, denied, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/inventories/{inventory_id}/sources/{source_id}"),
+        Some(&operator_cookie),
+        Some(&team),
+        Some(json!({"api_endpoint": second, "token": ""})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{denied}");
+    assert_eq!(denied["error"], "netbox_token_required_for_endpoint_change");
+    assert_eq!(
+        second_hits.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "{denied}"
+    );
+
+    let (status, edited, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/inventories/{inventory_id}/sources/{source_id}"),
+        Some(&operator_cookie),
+        Some(&team),
+        Some(json!({"api_endpoint": second, "token": "operator-token"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    assert_eq!(edited["sources"][0]["source"]["api_endpoint"], second);
+    assert!(edited["sources"][0]["body"]
+        .as_str()
+        .unwrap_or("")
+        .contains("web-1"));
+    assert_eq!(edited["sync"]["ok"], true);
+    assert_eq!(
+        second_hits.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "{edited}"
+    );
+
+    let (status, relaxed, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/inventories/{inventory_id}/sources/{source_id}"),
+        Some(&operator_cookie),
+        Some(&team),
+        Some(json!({"validate_certs": false, "token": ""})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{relaxed}");
+    assert_eq!(
+        relaxed["error"],
+        "netbox_token_required_for_endpoint_change"
+    );
+
+    let (status, ca_changed, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/inventories/{inventory_id}/sources/{source_id}"),
+        Some(&operator_cookie),
+        Some(&team),
+        Some(json!({"ca_file": "/etc/ssl/certs/internal-ca.pem", "token": ""})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{ca_changed}");
+    assert_eq!(
+        ca_changed["error"],
+        "netbox_token_required_for_endpoint_change"
+    );
+    assert_eq!(
+        second_hits.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "{ca_changed}"
+    );
+
+    let (status, admin_denied, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/inventories/{inventory_id}/sources/{source_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"api_endpoint": third, "token": ""})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{admin_denied}");
+    assert_eq!(
+        admin_denied["error"],
+        "netbox_token_required_for_endpoint_change"
+    );
+    assert_eq!(
+        third_hits.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "{admin_denied}"
+    );
+
+    let (status, admin_edited, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/inventories/{inventory_id}/sources/{source_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"api_endpoint": third, "token": "admin-token"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{admin_edited}");
+    assert_eq!(admin_edited["sources"][0]["source"]["api_endpoint"], third);
+    assert_eq!(admin_edited["sync"]["ok"], true);
+    assert_eq!(
+        third_hits.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "{admin_edited}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+async fn netbox_mock() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = hits.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let mock = axum::Router::new().route(
+        "/api/dcim/devices/",
+        axum::routing::get(move || {
+            let count = count.clone();
+            async move {
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                axum::Json(json!({
+                    "next": null,
+                    "results": [{
+                        "id": 1,
+                        "name": "web-1",
+                        "primary_ip4": {"address": "10.0.0.8/24"},
+                        "site": {"slug": "berlin"}
+                    }]
+                }))
+            }
+        }),
+    );
+    tokio::spawn(async move {
+        axum::serve(listener, mock).await.unwrap();
+    });
+    (format!("http://{addr}"), hits)
+}
+
+async fn nb_editable(
+    headers: axum::http::HeaderMap,
+    request: axum::extract::Request,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    if headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        != Some("Token secret-token")
+    {
+        return (StatusCode::FORBIDDEN, "no").into_response();
+    }
+    let query = request.uri().query().unwrap_or("");
+    let results = if query.contains("status=planned") {
+        json!([
+            {
+                "id": 1,
+                "name": "web-1",
+                "primary_ip4": {"address": "10.0.0.8/24"},
+                "site": {"slug": "berlin"}
+            },
+            {
+                "id": 2,
+                "name": "web-2",
+                "primary_ip4": {"address": "10.0.0.9/24"},
+                "site": {"slug": "munich"}
+            }
+        ])
+    } else {
+        json!([{
+            "id": 1,
+            "name": "web-1",
+            "primary_ip4": {"address": "10.0.0.8/24"},
+            "site": {"slug": "berlin"}
+        }])
+    };
+    axum::Json(json!({"next": null, "results": results})).into_response()
+}
+
 async fn nb_devices(
     headers: axum::http::HeaderMap,
     request: axum::extract::Request,
