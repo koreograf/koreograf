@@ -395,14 +395,21 @@ textarea.secret-mask { -webkit-text-security: disc; }
 .schedule-preview .form-section { border: 0; margin: 0; padding-top: 0; }
 .schedule-preview ul { margin: 0; padding-left: 18px; }
 .schedule-pin { display: none; }
-#schedule-form input:not([type="checkbox"]):not([type="radio"]),
-#schedule-form select,
-#schedule-form textarea {
+.overlay-card.dialog input:not([type="checkbox"]):not([type="radio"]),
+.overlay-card.dialog select,
+.overlay-card.dialog textarea {
   background: white;
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 8px 10px;
   min-height: 38px;
+}
+.overlay-card.dialog .chips input.chip-entry {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 2px;
+  min-height: 0;
 }
 .weekday-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .weekday-row label {
