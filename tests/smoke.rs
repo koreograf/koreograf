@@ -8997,6 +8997,7 @@ async fn template_accepts_one_credential_per_kind_and_many_vaults() {
     assert!(script.contains("one_credential_of_each_kind_choose_vault_credentials"));
     assert!(script.contains("applies_only_to_this_node_the_template_stays"));
     assert!(script.contains("id=\"vault-pills\""));
+    assert!(!script.contains("name=\"vault_ids\""));
     assert!(script.contains("no_vault_credentials_in_this_team"));
     assert!(script.contains("remove_vault_credential_name"));
 
@@ -14149,8 +14150,12 @@ fn template_create_and_edit_use_the_tabbed_overlay() {
     assert!(dialog.contains("{ id: \"target\", label: t(\"target\")"));
     assert!(dialog.contains("{ id: \"options\", label: t(\"options\")"));
     assert!(dialog.contains("{ id: \"variables\", label: t(\"variables\")"));
-    assert!(dialog.contains("input[name=vault_ids]:checked"));
-    assert!(!dialog.contains("openVaultPicker("));
+    assert!(dialog.contains("vaultPicker.ids()"));
+    assert!(dialog
+        .contains("bindVaultPicker(form, credentials, selectedCredentialIds(item), readOnly)"));
+    assert!(!dialog.contains("input[name=vault_ids]"));
+    assert!(!script.contains("function bindVaultChoices"));
+    assert!(!script.contains("openVaultPicker("));
     assert!(dialog.contains("showToolSections"));
     assert!(dialog.contains("#ansible-options"));
     assert!(dialog.contains("#tofu-options"));
@@ -14175,14 +14180,98 @@ fn template_create_and_edit_use_the_tabbed_overlay() {
     assert!(remove.contains("dialog.close();"));
     assert!(remove.contains("await route();"));
     let fields = extract_braced_function(&script, "function templateCredentialFields");
-    assert!(fields.contains("inlineVault"));
-    assert!(fields.contains("name=\"vault_ids\""));
+    assert!(!fields.contains("inlineVault"));
+    assert!(!fields.contains("name=\"vault_ids\""));
     assert!(fields.contains("id=\"vault-pills\""));
-    let bind = extract_braced_function(&script, "function bindVaultChoices");
-    assert!(bind.contains("classList.toggle(\"selected\", input.checked)"));
+    assert!(fields.contains("id=\"vault-search\""));
+    assert!(fields.contains("role=\"combobox\""));
+    let bind = extract_braced_function(&script, "function bindVaultPicker");
+    assert!(bind.contains("data-vault-pick"));
+    assert!(bind.contains("event.key === \"Enter\""));
+    assert!(!bind.contains("Backspace"));
     let helper = extract_function_with_destructured_params(&script, "function openEditDialog");
     assert!(helper.contains("panel.hidden = panel.dataset.dialogPanel !== current;"));
     assert!(!helper.contains("panel.innerHTML ="));
+}
+
+#[test]
+fn template_vault_pills_add_by_search_remove_and_save() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let functions = format!(
+        "{}\n{}\n{}",
+        extract_braced_function(&script, "function vaultSuggestions"),
+        extract_braced_function(&script, "function renderVaultPills"),
+        extract_braced_function(&script, "function bindVaultPicker")
+    );
+    let probe = format!(
+        r##"{functions}
+function esc(value) {{ return String(value); }}
+function h(key, vars) {{ return vars ? `${{key}} ${{vars.name}}` : key; }}
+function element() {{
+  return {{
+    innerHTML: "",
+    hidden: false,
+    value: "",
+    handlers: {{}},
+    attributes: {{}},
+    addEventListener(type, handler) {{ this.handlers[type] = handler; }},
+    setAttribute(name, value) {{ this.attributes[name] = value; }},
+    focus() {{}},
+    fire(type, event) {{ if (this.handlers[type]) this.handlers[type](event || {{}}); }},
+  }};
+}}
+const box = element();
+const search = element();
+const options = element();
+const form = {{ querySelector(selector) {{
+  if (selector === "#vault-pills") return box;
+  if (selector === "#vault-search") return search;
+  if (selector === "#vault-options") return options;
+  return null;
+}} }};
+const credentials = Array.from({{ length: 30 }}, (_item, index) => ({{
+  id: `vault-${{index}}`,
+  kind: "vault",
+  name: index === 3 ? "Alpha vault" : index === 17 ? "Beta vault" : `Vault ${{index}}`,
+}}));
+const picker = bindVaultPicker(form, credentials, [], false);
+function check(ok, message) {{
+  if (!ok) {{ console.error(message); process.exit(1); }}
+}}
+check(picker.ids().length === 0, "pills did not start empty");
+search.value = "alpha";
+search.fire("input");
+search.fire("keydown", {{ key: "Enter", preventDefault() {{}} }});
+check(picker.ids().join(",") === "vault-3", "search did not add the highlighted vault");
+search.value = "beta";
+search.fire("input");
+search.fire("keydown", {{ key: "Enter", preventDefault() {{}} }});
+check(picker.ids().join(",") === "vault-3,vault-17", "second search did not append");
+const target = {{
+  dataset: {{ vaultId: "vault-3" }},
+  closest(selector) {{
+    if (selector === ".chip-remove") return target;
+    if (selector === ".chip") return {{ dataset: {{ vaultId: "vault-3" }} }};
+    return null;
+  }},
+}};
+box.fire("click", {{ target }});
+check(picker.ids().join(",") === "vault-17", "remove did not drop the first pill");
+search.value = "";
+const before = picker.ids().join(",");
+search.fire("keydown", {{ key: "Backspace" }});
+check(picker.ids().join(",") === before, "Backspace removed a pill");
+const body = {{ credential_ids: picker.ids() }};
+check(body.credential_ids.join(",") === "vault-17", "saved credential_ids changed");
+const readonlyBox = element();
+const readonly = bindVaultPicker({{ querySelector(selector) {{ return selector === "#vault-pills" ? readonlyBox : null; }} }}, credentials, ["vault-3"], true);
+check(readonly.ids().join(",") === "vault-3", "read-only picker lost the selected vault");
+check(readonlyBox.innerHTML.includes("Alpha vault"), "read-only pills are missing");
+check(!readonlyBox.innerHTML.includes("chip-remove"), "read-only pills have a remove button");
+"##
+    );
+    run_node_probe("template-vault-pills", &probe);
 }
 
 #[test]

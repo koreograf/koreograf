@@ -1544,7 +1544,7 @@ async function openTemplateDialog(existing, initialTab = "") {
       <label class="field"><span>${h("execution_environment")}</span><select name="environment_id">${environmentOptions(item.tool, item.no_environment ? NO_ENVIRONMENT : item.environment_id)}</select></label>
     </div>
     <p class="banner warn" id="environment-runtime-warning" hidden></p>
-    ${templateCredentialFields(credentials, selectedCredentialIds(item), true, item.tool)}
+    ${templateCredentialFields(credentials, selectedCredentialIds(item), item.tool, readOnly)}
     <label class="field" id="playbook-field" hidden><span>${h("playbook_from_the_project")}</span><select name="playbook"><option value="">${h("other_path")}</option></select></label>
     <p class="small muted" id="entrypoint-note"></p>
     <label class="field" id="entrypoint-field"><span id="entrypoint-label">${h("entry_path")}</span><input name="entrypoint" value="${esc(item.entrypoint)}" placeholder="${h("for_example_site_yml")}"><span class="field-error" id="entrypoint-error" aria-live="polite"></span></label>
@@ -1594,6 +1594,7 @@ async function openTemplateDialog(existing, initialTab = "") {
       <label class="field"><span>${h("script_when_no_entry_path_is_set")}</span><textarea name="script">${esc(spec.script || "")}</textarea></label>
     </div>`;
   const variables = `<label class="field"><span>${h("extra_variables_json")}</span><textarea name="extra_vars">${esc(JSON.stringify(item.extra_vars || {}, null, 2))}</textarea></label>`;
+  let vaultPicker = null;
   const dialog = openEditDialog({
     id: "template-dialog",
     title: readOnly ? t("read_only_template", { name: item.name }) : editing ? t("edit_template") : t("new_template"),
@@ -1627,9 +1628,7 @@ async function openTemplateDialog(existing, initialTab = "") {
             .filter((field) => !field.hidden)
             .map((field) => field.querySelector("select[data-credential-kind]").value)
             .filter(Boolean),
-          ...(offeredKinds.has("vault")
-            ? [...form.querySelectorAll("input[name=vault_ids]:checked")].map((input) => input.value)
-            : []),
+          ...(offeredKinds.has("vault") && vaultPicker ? vaultPicker.ids() : []),
           ...(legacyBox && !legacyBox.hidden
             ? [...legacyBox.querySelectorAll("[data-legacy-credential-id]")].map((node) => node.dataset.legacyCredentialId)
             : []),
@@ -1686,11 +1685,8 @@ async function openTemplateDialog(existing, initialTab = "") {
       const select = field.querySelector("select[data-credential-kind]");
       if (select && initialCredentialIds.has(select.value)) ids.add(select.value);
     });
-    if (!offered.has("vault")) {
-      form.querySelectorAll("input[name=vault_ids]:checked, #vault-pills [data-vault-id]").forEach((node) => {
-        const id = node.value || node.dataset.vaultId;
-        if (initialCredentialIds.has(id)) ids.add(id);
-      });
+    if (!offered.has("vault") && vaultPicker) {
+      vaultPicker.ids().forEach((id) => ids.add(id));
     }
     const rows = [...ids].map((id) => credentials.find((row) => row.id === id)).filter(Boolean);
     box.innerHTML = rows.map((row) => `<span class="chip" data-legacy-credential-id="${esc(row.id)}" data-legacy-kind="${esc(row.kind)}"><span class="chip-text">${esc(`${credentialKindLabel(row.kind)} · ${row.name}`)}</span><button class="chip-remove" type="button"${readOnly ? " disabled" : ""} aria-label="${h("remove_credential_name", { name: row.name })}">×</button></span>`).join("");
@@ -1704,11 +1700,7 @@ async function openTemplateDialog(existing, initialTab = "") {
         const select = form.querySelector(`select[data-credential-kind="${chip.dataset.legacyKind}"]`);
         legacyCredentialIds.delete(id);
         if (select && select.value === id) select.value = "";
-        form.querySelectorAll(`input[name="vault_ids"][value="${id}"]`).forEach((input) => {
-          input.checked = false;
-          const choice = input.closest(".vault-choice");
-          if (choice) choice.classList.remove("selected");
-        });
+        if (vaultPicker) vaultPicker.remove(id);
         drawLegacyCredentials();
       });
     });
@@ -1750,7 +1742,7 @@ async function openTemplateDialog(existing, initialTab = "") {
   form.environment_id.addEventListener("change", showEnvironmentWarning);
   showEnvironmentWarning();
   bindChips(form);
-  bindVaultChoices(form);
+  vaultPicker = bindVaultPicker(form, credentials, selectedCredentialIds(item), readOnly);
   const entrypointErrors = new Set([
     "ansible_needs_a_playbook_as_the_entry",
     "opentofu_needs_a_module_directory",
@@ -5733,7 +5725,7 @@ function credentialUsageCard(item) {
     : `<p class="small muted">${h("not_used")}</p>`}</section>`;
 }
 
-function templateCredentialFields(credentials, selectedIds, inlineVault = false, tool = "") {
+function templateCredentialFields(credentials, selectedIds, tool = "", readOnly = false) {
   const selected = new Set(selectedIds || []);
   const present = new Set(credentials.map((row) => row.kind));
   const offered = tool ? new Set(TOOL_CREDENTIAL_KINDS[tool] || []) : null;
@@ -5751,121 +5743,140 @@ function templateCredentialFields(credentials, selectedIds, inlineVault = false,
     .join("");
   const grid = selects ? `<div class="field-grid">${selects}</div>` : "";
   const empty = credentials.length ? "" : `<p class="small muted">${h("no_credentials_in_this_team")}</p>`;
-  const vaults = credentials
-    .filter((row) => row.kind === "vault")
-    .slice()
-    .sort((left, right) => left.name.localeCompare(right.name, "de"));
+  const vaults = credentials.filter((row) => row.kind === "vault");
   const vaultHidden = offered && !offered.has("vault") ? " hidden" : "";
-  const vault = inlineVault
-    ? `<div class="field" id="template-vault-field"${vaultHidden}><span>${esc(credentialKindLabel("vault"))}</span>${vaults.length
-      ? `<div class="vault-choices">${vaults.map((row) => `<label class="vault-choice${selected.has(row.id) ? " selected" : ""}"><input type="checkbox" name="vault_ids" value="${esc(row.id)}"${selected.has(row.id) ? " checked" : ""}><span>${esc(row.name)}</span></label>`).join("")}</div>`
-      : `<p class="small muted">${h("no_vault_credentials_in_this_team")}</p>`}</div>`
-    : `<div class="field" id="template-vault-field"${vaultHidden}>
-      <span>${esc(credentialKindLabel("vault"))}</span>
-      <div class="vault-row">
-        <div class="chips" id="vault-pills"></div>
-        <button class="btn pill" id="vault-add" type="button">${h("select")}</button>
-      </div>
-    </div>`;
+  const vaultPicker = vaults.length && !readOnly
+    ? `<div class="vault-picker">
+      <input class="search" id="vault-search" type="search" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="vault-options" placeholder="${h("search_vaults")}" aria-label="${h("search_vaults")}">
+      <div class="vault-options" id="vault-options" role="listbox" hidden></div>
+    </div>`
+    : "";
+  const vaultEmpty = vaults.length ? "" : `<p class="small muted">${h("no_vault_credentials_in_this_team")}</p>`;
+  const vault = `<div class="field" id="template-vault-field"${vaultHidden}>
+    <span>${esc(credentialKindLabel("vault"))}</span>
+    <div class="vault-row">
+      <div class="chips" id="vault-pills"></div>
+      ${vaultPicker}
+    </div>
+    ${vaultEmpty}
+  </div>`;
   const legacy = tool
     ? `<div class="field" id="template-legacy-credentials" hidden><span>${h("other_credentials")}</span><div class="chips" id="legacy-pills"></div></div>`
     : "";
   return `${empty}<p class="small muted">${h("one_credential_of_each_kind_choose_vault_credentials")}</p>${grid}${vault}${legacy}`;
 }
 
-function bindVaultChoices(form) {
-  form.querySelectorAll(".vault-choice input").forEach((input) => {
-    input.addEventListener("change", () => {
-      input.closest(".vault-choice").classList.toggle("selected", input.checked);
-    });
-  });
+function vaultSuggestions(credentials, chosen, query) {
+  const needle = String(query || "").trim().toLowerCase();
+  return credentials
+    .filter((row) => row.kind === "vault" && !chosen.includes(row.id))
+    .filter((row) => !needle || row.name.toLowerCase().includes(needle))
+    .slice()
+    .sort((left, right) => left.name.localeCompare(right.name, "de"));
 }
 
-function renderVaultPills(box, credentials, ids) {
+function renderVaultPills(box, credentials, ids, readOnly = false) {
   const byId = new Map(credentials.map((row) => [row.id, row]));
   box.innerHTML = ids.map((id) => {
     const row = byId.get(id);
     if (!row) return "";
-    return `<span class="chip" data-vault-id="${esc(id)}"><span class="chip-text">${esc(row.name)}</span><button class="chip-remove" type="button" aria-label="${h("remove_vault_credential_name", { name: row.name })}">×</button></span>`;
+    const remove = readOnly
+      ? ""
+      : `<button class="chip-remove" type="button" aria-label="${h("remove_vault_credential_name", { name: row.name })}">×</button>`;
+    return `<span class="chip" data-vault-id="${esc(id)}"><span class="chip-text">${esc(row.name)}</span>${remove}</span>`;
   }).join("");
-  box.querySelectorAll(".chip-remove").forEach((button) => {
-    button.addEventListener("click", () => {
-      const chip = button.closest(".chip");
-      const id = chip ? chip.dataset.vaultId : "";
-      const next = [...box.querySelectorAll("[data-vault-id]")]
-        .map((node) => node.dataset.vaultId)
-        .filter((item) => item !== id);
-      renderVaultPills(box, credentials, next);
-    });
-  });
 }
 
-function closeVaultPicker() {
-  const overlay = document.querySelector("#vault-picker");
-  if (overlay) overlay.remove();
-}
-
-function openVaultPicker(credentials, selected, onApply) {
-  closeVaultPicker();
-  const chosen = new Set(selected);
-  const vaults = credentials
-    .filter((row) => row.kind === "vault")
-    .slice()
-    .sort((left, right) => left.name.localeCompare(right.name, "de"));
-  const rows = vaults.map((row) => `
-    <label class="vault-choice${chosen.has(row.id) ? " selected" : ""}">
-      <input type="checkbox" value="${esc(row.id)}"${chosen.has(row.id) ? " checked" : ""}>
-      <span>${esc(row.name)}</span>
-    </label>`).join("");
-  const body = vaults.length
-    ? `<input class="search" id="vault-search" placeholder="${h("search_vaults")}" autocomplete="off">
-       <div class="vault-choices" id="vault-choices">${rows}</div>`
-    : `<p class="muted">${h("no_vault_credentials_in_this_team")}</p>`;
-  openDialog({
-    id: "vault-picker",
-    title: credentialKindLabel("vault"),
-    body,
-    submit: t("apply"),
-    actions: vaults.length > 0,
-    onSubmit: ({ close }) => {
-      const checked = [...document.querySelectorAll("#vault-choices input")]
-        .filter((input) => input.checked)
-        .map((input) => input.value);
-      const kept = selected.filter((id) => checked.includes(id));
-      const added = checked.filter((id) => !selected.includes(id));
-      onApply([...kept, ...added]);
-      close();
-    },
-  });
-  document.querySelectorAll(".vault-choice").forEach((label) => {
-    const input = label.querySelector("input");
-    input.addEventListener("change", () => label.classList.toggle("selected", input.checked));
-  });
-  const search = document.querySelector("#vault-search");
-  if (search) {
-    search.addEventListener("input", () => {
-      const query = search.value.trim().toLowerCase();
-      document.querySelectorAll(".vault-choice").forEach((label) => {
-        const name = label.querySelector("span").textContent.toLowerCase();
-        label.hidden = query !== "" && !name.includes(query);
-      });
-    });
-  }
-}
-
-function bindVaultPicker(form, credentials, selectedIds) {
+function bindVaultPicker(form, credentials, selectedIds, readOnly = false) {
   const box = form.querySelector("#vault-pills");
-  const open = form.querySelector("#vault-add");
-  if (!box || !open) return;
+  const search = form.querySelector("#vault-search");
+  const options = form.querySelector("#vault-options");
   const vaultIds = new Set(credentials.filter((row) => row.kind === "vault").map((row) => row.id));
-  renderVaultPills(box, credentials, (selectedIds || []).filter((id) => vaultIds.has(id)));
-  open.addEventListener("click", () => {
-    const current = [...box.querySelectorAll("[data-vault-id]")].map((node) => node.dataset.vaultId);
-    openVaultPicker(credentials, current, (ids) => {
-      renderVaultPills(box, credentials, ids);
-      box.dispatchEvent(new Event("change", { bubbles: true }));
-    });
+  let chosen = (selectedIds || []).filter((id) => vaultIds.has(id));
+  let open = false;
+  let active = 0;
+  const drawPills = () => {
+    if (box) renderVaultPills(box, credentials, chosen, readOnly);
+  };
+  const drawOptions = () => {
+    if (!search || !options) return;
+    const rows = open ? vaultSuggestions(credentials, chosen, search.value) : [];
+    if (active >= rows.length) active = Math.max(rows.length - 1, 0);
+    options.innerHTML = rows.map((row, index) =>
+      `<button class="vault-option${index === active ? " selected" : ""}" type="button" role="option" aria-selected="${index === active}" data-vault-pick="${esc(row.id)}">${esc(row.name)}</button>`
+    ).join("");
+    options.hidden = rows.length === 0;
+    search.setAttribute("aria-expanded", rows.length ? "true" : "false");
+  };
+  const pick = (id) => {
+    if (!vaultIds.has(id) || chosen.includes(id)) return;
+    chosen = [...chosen, id];
+    if (search) search.value = "";
+    open = false;
+    active = 0;
+    drawPills();
+    drawOptions();
+  };
+  const remove = (id) => {
+    chosen = chosen.filter((item) => item !== id);
+    drawPills();
+    drawOptions();
+  };
+  drawPills();
+  drawOptions();
+  if (!box || !search || !options || readOnly) {
+    return { ids: () => [...chosen], remove, suggest: (query) => vaultSuggestions(credentials, chosen, query) };
+  }
+  box.addEventListener("click", (event) => {
+    const button = event.target && event.target.closest ? event.target.closest(".chip-remove") : null;
+    if (!button) return;
+    const chip = button.closest(".chip");
+    if (!chip) return;
+    remove(chip.dataset.vaultId);
+    search.focus();
   });
+  options.addEventListener("mousedown", (event) => event.preventDefault());
+  options.addEventListener("click", (event) => {
+    const button = event.target && event.target.closest ? event.target.closest("[data-vault-pick]") : null;
+    if (!button) return;
+    pick(button.dataset.vaultPick);
+    search.focus();
+  });
+  search.addEventListener("focus", () => {
+    open = true;
+    active = 0;
+    drawOptions();
+  });
+  search.addEventListener("blur", () => {
+    open = false;
+    drawOptions();
+  });
+  search.addEventListener("input", () => {
+    open = true;
+    active = 0;
+    drawOptions();
+  });
+  search.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const rows = vaultSuggestions(credentials, chosen, search.value);
+      if (rows[active]) pick(rows[active].id);
+      return;
+    }
+    if (event.key === "Escape") {
+      open = false;
+      drawOptions();
+      return;
+    }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      const rows = vaultSuggestions(credentials, chosen, search.value);
+      if (!rows.length) return;
+      event.preventDefault();
+      active = (active + (event.key === "ArrowDown" ? 1 : -1) + rows.length) % rows.length;
+      drawOptions();
+    }
+  });
+  return { ids: () => [...chosen], remove, suggest: (query) => vaultSuggestions(credentials, chosen, query) };
 }
 
 function credText(name, label, type, value) {
