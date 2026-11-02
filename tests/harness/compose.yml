@@ -16,7 +16,7 @@ volumes:
 
 services:
   ldap:
-    image: osixia/openldap:1.5.0
+    image: osixia/openldap:1.5.0@sha256:18742e9c449c9c1afe129d3f2f3ee15fb34cc43e5f940a20f3399728f41d7c28
     environment:
       LDAP_ORGANISATION: Koreograf Lab
       LDAP_DOMAIN: example.com
@@ -38,7 +38,7 @@ services:
       start_period: 15s
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
     environment:
       POSTGRES_DB: netbox
       POSTGRES_USER: netbox
@@ -54,7 +54,7 @@ services:
       retries: 20
 
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:8da19c7399dca900c6822a1cf30f9d2285585e2c4b457ff4095b0f4500054d3f
     command: ["redis-server", "--requirepass", "${NETBOX_REDIS_PASSWORD}"]
     volumes:
       - netbox-redis:/data
@@ -71,7 +71,7 @@ services:
       REDIS_PASSWORD: ${NETBOX_REDIS_PASSWORD}
 
   netbox:
-    image: docker.io/netboxcommunity/netbox:v4.7.3-5.1.1
+    image: docker.io/netboxcommunity/netbox:v4.7.3-5.1.1@sha256:22cf3c61fc367fb74a5cf6de018e9d7e10a7da8d09a695eab30740793040de08
     depends_on:
       postgres:
         condition: service_healthy
