@@ -14484,7 +14484,7 @@ async fn runner_preflight_is_admin_only_and_leaks_no_secrets() {
     assert_eq!(report["mode"], "local");
     assert!(report["tools"]
         .as_array()
-        .is_some_and(|tools| tools.len() == 3));
+        .is_some_and(|tools| tools.len() == 5));
     assert!(report["runtime"].is_object());
     assert!(report["missing"].is_array());
     let body = report.to_string();
@@ -14584,7 +14584,10 @@ const cases = [
   [{{ok: false, missing: [{{kind: "tool", tool: "ansible-playbook", template_tool: "ansible", reason: "missing"}}]}}, ["preflight_tool_missing"]],
   [{{ok: false, missing: [{{kind: "runtime", tool: "docker/podman", template_tool: "", reason: "missing"}}, {{kind: "tool", tool: "ansible-playbook", template_tool: "ansible", reason: "missing"}}]}}, ["preflight_runtime_missing", "preflight_no_runtime_and_tool_missing"]],
   [{{ok: false, missing: [{{kind: "tool", tool: "tofu", template_tool: "opentofu", reason: "version", version: "1.5.0", minimum: "1.6"}}]}}, ["preflight_tool_too_old"]],
-  [{{ok: false, missing: [{{kind: "tool", tool: "sh", template_tool: "shell", reason: "timeout"}}]}}, ["preflight_tool_unusable"]]
+  [{{ok: false, missing: [{{kind: "tool", tool: "sh", template_tool: "shell", reason: "timeout"}}]}}, ["preflight_tool_unusable"]],
+  [{{ok: false, missing: [{{kind: "project", tool: "git", template_tool: "", reason: "missing"}}]}}, ["preflight_project_missing"]],
+  [{{ok: false, missing: [{{kind: "project", tool: "git", template_tool: "", reason: "failed"}}]}}, ["preflight_project_unusable"]],
+  [{{ok: false, missing: [{{kind: "tool", tool: "ssh", template_tool: "ansible", reason: "missing"}}]}}, ["preflight_tool_missing"]]
 ];
 for (const [report, want] of cases) {{
   const got = preflightNotices(report).map((item) => item.key);

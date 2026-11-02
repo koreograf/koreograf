@@ -575,7 +575,7 @@ async fn command_ok(bin: &str, args: &[&str], limit: Duration) -> bool {
 
 pub async fn detect_runtime() -> Option<String> {
     for bin in ["docker", "podman"] {
-        if command_ok(bin, &["version"], STOP_COMMAND_TIMEOUT).await {
+        if command_ok(bin, &["version"], crate::preflight::RUNTIME_TIMEOUT).await {
             return Some(bin.to_string());
         }
     }

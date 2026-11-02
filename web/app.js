@@ -745,6 +745,12 @@ function preflightNotices(report) {
       const reason = item.reason === "timeout" || item.reason === "not_answering" ? item.reason : "missing";
       return { key: `preflight_runtime_${reason}` };
     }
+    if (item.kind === "project") {
+      return {
+        key: item.reason === "timeout" || item.reason === "failed" ? "preflight_project_unusable" : "preflight_project_missing",
+        tool: item.tool,
+      };
+    }
     if (item.reason === "version") {
       return {
         key: "preflight_tool_too_old",
@@ -773,7 +779,13 @@ function preflightNoticeHtml(report) {
     const vars = {
       ...item,
       templates: template ? t(template) : "",
-      install: item.tool === "sh" ? t("preflight_install_shell") : (template ? t(template) : item.tool),
+      install: item.tool === "sh"
+        ? t("preflight_install_shell")
+        : item.tool === "ssh"
+          ? t("preflight_install_ssh")
+          : item.kind === "project"
+            ? t("preflight_install_git")
+            : (template ? t(template) : item.tool),
     };
     return `<p>${h(item.key, vars)}</p>`;
   }).join("");

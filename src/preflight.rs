@@ -15,11 +15,13 @@ use tokio::process::Command;
 use crate::config::RunnerMode;
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+pub(crate) const RUNTIME_TIMEOUT: Duration = Duration::from_secs(10);
 pub const ANSIBLE_MINIMUM: &str = "2.14";
 pub const TOFU_MINIMUM: &str = "1.6";
 
 struct ToolSpec {
     id: &'static str,
+    kind: &'static str,
     template_tool: &'static str,
     minimum: &'static str,
     args: &'static [&'static str],
@@ -28,27 +30,45 @@ struct ToolSpec {
 const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         id: "ansible-playbook",
+        kind: "tool",
         template_tool: "ansible",
         minimum: ANSIBLE_MINIMUM,
         args: &["--version"],
     },
     ToolSpec {
         id: "tofu",
+        kind: "tool",
         template_tool: "opentofu",
         minimum: TOFU_MINIMUM,
         args: &["version"],
     },
     ToolSpec {
         id: "sh",
+        kind: "tool",
         template_tool: "shell",
         minimum: "",
         args: &["-c", "true"],
+    },
+    ToolSpec {
+        id: "git",
+        kind: "project",
+        template_tool: "",
+        minimum: "",
+        args: &["--version"],
+    },
+    ToolSpec {
+        id: "ssh",
+        kind: "tool",
+        template_tool: "ansible",
+        minimum: "",
+        args: &["-V"],
     },
 ];
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ToolStatus {
     pub id: &'static str,
+    pub kind: &'static str,
     pub template_tool: &'static str,
     pub minimum: &'static str,
     pub required: bool,
@@ -119,8 +139,19 @@ impl Report {
         if item.kind == "runtime" {
             return self.runtime_message(item.reason);
         }
+        if item.kind == "project" {
+            let detail = match item.reason {
+                "timeout" => format!("{} did not answer", item.tool),
+                "failed" => format!("{} could not be checked", item.tool),
+                _ => format!("{} is missing", item.tool),
+            };
+            return format!(
+                "{detail}. Git projects cannot sync. Install {} on this machine.",
+                install_name(item.tool, item.template_tool)
+            );
+        }
         let label = template_label(item.template_tool);
-        let install = install_name(item.template_tool);
+        let install = install_name(item.tool, item.template_tool);
         let detail = match item.reason {
             "version" => format!(
                 "{} {} is older than {}",
@@ -245,11 +276,15 @@ fn template_label(template_tool: &str) -> &'static str {
     }
 }
 
-fn install_name(template_tool: &str) -> &'static str {
-    match template_tool {
-        "ansible" => "Ansible",
-        "opentofu" => "OpenTofu",
-        _ => "a POSIX shell (sh)",
+fn install_name(tool: &str, template_tool: &str) -> &'static str {
+    match tool {
+        "git" => "Git",
+        "ssh" => "OpenSSH (ssh)",
+        _ => match template_tool {
+            "ansible" => "Ansible",
+            "opentofu" => "OpenTofu",
+            _ => "a POSIX shell (sh)",
+        },
     }
 }
 
@@ -271,6 +306,7 @@ async fn check_with_paths(
         if container_image {
             tools.push(ToolStatus {
                 id: spec.id,
+                kind: spec.kind,
                 template_tool: spec.template_tool,
                 minimum: spec.minimum,
                 required: false,
@@ -284,14 +320,20 @@ async fn check_with_paths(
             tools.push(probe_tool(spec, paths, timeout).await);
         }
     }
-    let runtime = probe_runtime(paths, timeout).await;
-    let tool_missing = tools.iter().any(|tool| !tool.ready());
+    let runtime = probe_runtime(paths, RUNTIME_TIMEOUT).await;
+    let tool_missing = tools
+        .iter()
+        .any(|tool| tool.kind == "tool" && !tool.ready());
     let runtime_required =
         container_image || mode == RunnerMode::Docker || (mode == RunnerMode::Auto && tool_missing);
     let tools_required = !container_image
         && (mode == RunnerMode::Local || (mode == RunnerMode::Auto && !runtime.responding));
     for tool in &mut tools {
-        tool.required = tools_required;
+        tool.required = if tool.kind == "project" {
+            !container_image
+        } else {
+            tools_required
+        };
     }
     let mut missing = Vec::new();
     if runtime_required && !runtime.responding {
@@ -308,22 +350,20 @@ async fn check_with_paths(
             minimum: "",
         });
     }
-    if tools_required {
-        for tool in &tools {
-            if tool.ready() {
-                continue;
-            }
-            missing.push(Missing {
-                kind: "tool",
-                tool: tool.id,
-                template_tool: tool.template_tool,
-                reason: tool
-                    .reason
-                    .unwrap_or(if tool.found { "failed" } else { "missing" }),
-                version: tool.version.clone(),
-                minimum: tool.minimum,
-            });
+    for tool in &tools {
+        if !tool.required || tool.ready() {
+            continue;
         }
+        missing.push(Missing {
+            kind: tool.kind,
+            tool: tool.id,
+            template_tool: tool.template_tool,
+            reason: tool
+                .reason
+                .unwrap_or(if tool.found { "failed" } else { "missing" }),
+            version: tool.version.clone(),
+            minimum: tool.minimum,
+        });
     }
     Report {
         mode: mode.as_str(),
@@ -338,6 +378,7 @@ async fn probe_tool(spec: &ToolSpec, paths: &[PathBuf], timeout: Duration) -> To
     let Some(path) = find_binary(paths, spec.id) else {
         return ToolStatus {
             id: spec.id,
+            kind: spec.kind,
             template_tool: spec.template_tool,
             minimum: spec.minimum,
             required: false,
@@ -354,6 +395,7 @@ async fn probe_tool(spec: &ToolSpec, paths: &[PathBuf], timeout: Duration) -> To
             let meets = spec.minimum.is_empty() || version_meets(version.as_deref(), spec.minimum);
             ToolStatus {
                 id: spec.id,
+                kind: spec.kind,
                 template_tool: spec.template_tool,
                 minimum: spec.minimum,
                 required: false,
@@ -366,6 +408,7 @@ async fn probe_tool(spec: &ToolSpec, paths: &[PathBuf], timeout: Duration) -> To
         }
         Probe::Timeout => ToolStatus {
             id: spec.id,
+            kind: spec.kind,
             template_tool: spec.template_tool,
             minimum: spec.minimum,
             required: false,
@@ -377,6 +420,7 @@ async fn probe_tool(spec: &ToolSpec, paths: &[PathBuf], timeout: Duration) -> To
         },
         Probe::Failed => ToolStatus {
             id: spec.id,
+            kind: spec.kind,
             template_tool: spec.template_tool,
             minimum: spec.minimum,
             required: false,
@@ -466,15 +510,29 @@ async fn probe_version(path: &Path, args: &[&str], timeout: Duration) -> Probe {
 
 fn parse_version(text: &str) -> Option<String> {
     for token in text.split_whitespace() {
-        let candidate = token.trim_matches(|ch: char| !ch.is_ascii_digit() && ch != '.');
-        if !candidate.is_empty()
-            && candidate.contains('.')
-            && candidate.chars().all(|ch| ch.is_ascii_digit() || ch == '.')
-        {
-            return Some(candidate.trim_matches('.').to_string());
+        let mut run = String::new();
+        for ch in token.chars() {
+            if ch.is_ascii_digit() || ch == '.' {
+                run.push(ch);
+            } else if let Some(version) = version_run(&run) {
+                return Some(version);
+            } else {
+                run.clear();
+            }
+        }
+        if let Some(version) = version_run(&run) {
+            return Some(version);
         }
     }
     None
+}
+
+fn version_run(run: &str) -> Option<String> {
+    let candidate = run.trim_matches('.');
+    if candidate.is_empty() || !candidate.contains('.') {
+        return None;
+    }
+    Some(candidate.to_string())
 }
 
 fn version_meets(version: Option<&str>, minimum: &str) -> bool {
@@ -550,6 +608,12 @@ mod tests {
         );
         write_tool(dir, "tofu", "#!/bin/sh\necho 'OpenTofu v1.8.0'\n");
         write_tool(dir, "sh", "#!/bin/sh\nexit 0\n");
+        write_tool(dir, "git", "#!/bin/sh\necho 'git version 2.43.0'\n");
+        write_tool(
+            dir,
+            "ssh",
+            "#!/bin/sh\necho 'OpenSSH_9.6p1 Ubuntu-3ubuntu13.5' >&2\n",
+        );
         write_tool(
             dir,
             "docker",
@@ -592,6 +656,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn git_and_ssh_are_found_with_a_path_and_a_version() {
+        let dir = temp_dir("git-ssh");
+        ready_tools(&dir);
+        let report = check_with_paths(
+            RunnerMode::Local,
+            false,
+            std::slice::from_ref(&dir),
+            short(),
+        )
+        .await;
+        let git = report
+            .tools
+            .iter()
+            .find(|tool| tool.id == "git")
+            .expect("git");
+        assert!(git.found);
+        assert_eq!(git.version.as_deref(), Some("2.43.0"));
+        assert_eq!(git.path.as_deref(), Some(dir.join("git").to_str().unwrap()));
+        let ssh = report
+            .tools
+            .iter()
+            .find(|tool| tool.id == "ssh")
+            .expect("ssh");
+        assert!(ssh.found);
+        assert_eq!(ssh.version.as_deref(), Some("9.6"));
+        assert_eq!(ssh.path.as_deref(), Some(dir.join("ssh").to_str().unwrap()));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_missing_git_is_a_project_problem_not_a_template_problem() {
+        let dir = temp_dir("no-git");
+        ready_tools(&dir);
+        fs::remove_file(dir.join("git")).expect("remove git");
+        fs::remove_file(dir.join("docker")).expect("remove docker");
+        let report =
+            check_with_paths(RunnerMode::Auto, false, std::slice::from_ref(&dir), short()).await;
+        assert!(!report.ok());
+        let item = report
+            .missing
+            .iter()
+            .find(|item| item.tool == "git")
+            .expect("git missing");
+        assert_eq!(item.kind, "project");
+        assert_eq!(item.template_tool, "");
+        assert!(report.messages().iter().any(
+            |line| line.contains("git is missing") && line.contains("Git projects cannot sync")
+        ));
+        assert!(report.job_problem("ansible").is_none());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_missing_ssh_is_reported_for_ansible() {
+        let dir = temp_dir("no-ssh");
+        ready_tools(&dir);
+        fs::remove_file(dir.join("ssh")).expect("remove ssh");
+        fs::remove_file(dir.join("docker")).expect("remove docker");
+        let report =
+            check_with_paths(RunnerMode::Auto, false, std::slice::from_ref(&dir), short()).await;
+        assert!(!report.ok());
+        let item = report
+            .missing
+            .iter()
+            .find(|item| item.tool == "ssh")
+            .expect("ssh missing");
+        assert_eq!(item.kind, "tool");
+        assert_eq!(item.template_tool, "ansible");
+        let problem = report.job_problem("ansible").expect("ansible problem");
+        assert!(problem.contains("ssh is missing"));
+        assert!(problem.contains("OpenSSH"));
+        assert!(report.job_problem("shell").is_none());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
     async fn a_missing_tool_is_named_for_local_mode() {
         let dir = temp_dir("missing");
         write_tool(
@@ -612,7 +752,7 @@ mod tests {
         )
         .await;
         assert!(!report.ok());
-        assert_eq!(blocking(&report), vec!["tofu", "sh"]);
+        assert_eq!(blocking(&report), vec!["tofu", "sh", "git", "ssh"]);
         assert!(report.messages()[0].contains("tofu is missing"));
         let _ = fs::remove_dir_all(dir);
     }
@@ -625,7 +765,7 @@ mod tests {
             check_with_paths(RunnerMode::Auto, false, std::slice::from_ref(&dir), short()).await;
         assert_eq!(
             blocking(&report),
-            vec!["docker/podman", "ansible-playbook", "tofu"]
+            vec!["docker/podman", "ansible-playbook", "tofu", "git", "ssh"]
         );
         let messages = report.messages();
         assert!(messages.iter().any(
@@ -645,6 +785,7 @@ mod tests {
             "docker",
             "#!/bin/sh\necho 'Docker version 27.0.0, build test'\n",
         );
+        write_tool(&dir, "git", "#!/bin/sh\necho 'git version 2.43.0'\n");
         let report =
             check_with_paths(RunnerMode::Auto, false, std::slice::from_ref(&dir), short()).await;
         assert!(report.ok(), "{:?}", report.missing);
@@ -748,6 +889,11 @@ mod tests {
             Some("2.17.2".into())
         );
         assert_eq!(parse_version("OpenTofu v1.8.0"), Some("1.8.0".into()));
+        assert_eq!(
+            parse_version("OpenSSH_9.6p1 Ubuntu-3ubuntu13.5"),
+            Some("9.6".into())
+        );
+        assert_eq!(parse_version("git version 2.43.0"), Some("2.43.0".into()));
         assert_eq!(parse_version("no version here"), None);
         assert!(version_meets(Some("2.17.2"), "2.14"));
         assert!(version_meets(Some("1.6"), "1.6"));

@@ -93,6 +93,8 @@ fn doctor_names_missing_tools_and_exits_non_zero() {
     assert!(text.contains("Runner preflight (mode local):"), "{text}");
     assert!(text.contains("ansible-playbook"), "{text}");
     assert!(text.contains("tofu"), "{text}");
+    assert!(text.contains("git"), "{text}");
+    assert!(text.contains("ssh"), "{text}");
     assert!(text.contains("Result:"), "{text}");
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -107,6 +109,12 @@ fn doctor_exits_zero_with_every_local_tool() {
     );
     write_tool(&dir, "tofu", "#!/bin/sh\necho 'OpenTofu v1.8.0'\n");
     write_tool(&dir, "sh", "#!/bin/sh\nexit 0\n");
+    write_tool(&dir, "git", "#!/bin/sh\necho 'git version 2.43.0'\n");
+    write_tool(
+        &dir,
+        "ssh",
+        "#!/bin/sh\necho 'OpenSSH_9.6p1 Ubuntu-3ubuntu13.5' >&2\n",
+    );
     let output = doctor_output(&dir, "local");
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "{text}");

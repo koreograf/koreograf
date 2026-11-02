@@ -4,7 +4,7 @@ The shortest commands are also in the [README](../README.md#quick-start).
 
 ## Run on a machine
 
-Rust 1.89 is the minimum (`rust-version` in `Cargo.toml`). This repository pins 1.96.0 in `rust-toolchain.toml`, and rustup installs that toolchain in this checkout. You also need `ansible-playbook` and `tofu` on `PATH` when those tools should run locally. The shell health check needs only `sh`.
+Rust 1.89 is the minimum (`rust-version` in `Cargo.toml`). This repository pins 1.96.0 in `rust-toolchain.toml`, and rustup installs that toolchain in this checkout. You also need `ansible-playbook` and `tofu` on `PATH` when those tools should run locally. Git projects need `git`, and Ansible jobs on remote hosts need `ssh`. The shell health check needs only `sh`.
 
 ```bash
 cargo run
@@ -12,13 +12,15 @@ cargo run
 
 `koreograf --version` prints that same version and exits before the server starts. `koreograf doctor` prints the runner preflight in the same block as the startup log and exits with code 2 when the configured mode lacks something. It reads the saved runner mode from `KOREOGRAF_DATA` when that database exists and otherwise uses `KOREOGRAF_RUNNER`. Koreograf never installs a tool and never runs `sudo`.
 
-The preflight checks `ansible-playbook` 2.14 or newer, `tofu` 1.6 or newer, a POSIX `sh`, and a Docker or Podman CLI whose daemon answers. Each check has a two second timeout. The startup log prints the result once. Administrators also see it under **Settings → Jobs** and as a notice on the **Overview** page. The API endpoint is `GET /api/runner/preflight`.
+The preflight checks `ansible-playbook` 2.14 or newer, `tofu` 1.6 or newer, a POSIX `sh`, `git`, `ssh`, and a Docker or Podman CLI whose daemon answers. The tools get two seconds; the container CLI gets ten. The startup log prints the result once and caches it for the **Overview** page. Administrators can refresh it with **Check again** under **Settings → Jobs** or with `GET /api/runner/preflight`. Missing `git` blocks project sync; missing `ssh` is reported for Ansible.
 
 | Tool | Debian and Ubuntu | Fedora and RHEL | macOS | Alpine | Vendor |
 | --- | --- | --- | --- | --- | --- |
 | Ansible | `apt install ansible`, then `/usr/bin/ansible-playbook` | `dnf install ansible-core`, then `/usr/bin/ansible-playbook` | `brew install ansible`, then `/opt/homebrew/bin/ansible-playbook` on Apple silicon or `/usr/local/bin/ansible-playbook` on Intel | `apk add ansible`, then `/usr/bin/ansible-playbook` | [Ansible installation guide](https://docs.ansible.com/ansible/latest/installation_guide/) |
 | OpenTofu | the vendor `.deb`, then `/usr/bin/tofu` | the vendor DNF repository, then `/usr/bin/tofu` | `brew install opentofu`, then `/opt/homebrew/bin/tofu` on Apple silicon or `/usr/local/bin/tofu` on Intel | `apk add opentofu`, then `/usr/bin/tofu` | [OpenTofu installation](https://opentofu.org/docs/intro/install/) |
 | Shell | `apt install dash`, then `/bin/sh` | `dnf install bash`, then `/bin/sh` | `/bin/sh` is part of macOS | BusyBox provides `/bin/sh` | [POSIX shell](https://pubs.opengroup.org/onlinepubs/9699919799/utilities/sh.html) |
+| Git | `apt install git`, then `/usr/bin/git` | `dnf install git`, then `/usr/bin/git` | `/usr/bin/git`, or `brew install git` | `apk add git`, then `/usr/bin/git` | [Git downloads](https://git-scm.com/downloads) |
+| SSH | `apt install openssh-client`, then `/usr/bin/ssh` | `dnf install openssh-clients`, then `/usr/bin/ssh` | `/usr/bin/ssh` is part of macOS | `apk add openssh-client`, then `/usr/bin/ssh` | [OpenSSH](https://www.openssh.com/) |
 | Docker | [Docker Engine packages](https://docs.docker.com/engine/install/), then `/usr/bin/docker` | `dnf install docker`, then `/usr/bin/docker` | Docker Desktop or `brew install docker` | `apk add docker`, then `/usr/bin/docker` | [Docker Engine installation](https://docs.docker.com/engine/install/) |
 | Podman | `apt install podman`, then `/usr/bin/podman` | `dnf install podman`, then `/usr/bin/podman` | `brew install podman` | `apk add podman`, then `/usr/bin/podman` | [Podman installation](https://podman.io/docs/installation) |
 

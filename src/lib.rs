@@ -51,6 +51,7 @@ pub struct AppState {
     pub(crate) procs: Mutex<HashMap<String, RunningProc>>,
     /// Jobs whose later output is discarded. Set when cancel commits.
     pub(crate) canceled: Mutex<HashSet<String>>,
+    pub(crate) preflight: Mutex<Option<preflight::Report>>,
 }
 
 pub type Shared = Arc<AppState>;
@@ -142,6 +143,16 @@ impl AppState {
             .map_err(|_| ApiError::Internal("database lock is damaged".into()))
     }
 
+    pub(crate) fn preflight_report(&self) -> Option<preflight::Report> {
+        self.preflight.lock().ok().and_then(|report| report.clone())
+    }
+
+    pub(crate) fn set_preflight_report(&self, report: preflight::Report) {
+        if let Ok(mut slot) = self.preflight.lock() {
+            *slot = Some(report);
+        }
+    }
+
     pub(crate) fn encrypt(&self, plain: &str) -> Result<String, ApiError> {
         self.cipher
             .lock()
@@ -185,6 +196,7 @@ pub fn boot(mut cfg: Config) -> anyhow::Result<Shared> {
         maintenance: Mutex::new(()),
         procs: Mutex::new(HashMap::new()),
         canceled: Mutex::new(HashSet::new()),
+        preflight: Mutex::new(None),
     });
     credentials::backfill_netbox_urls(&state)?;
     Ok(state)
@@ -204,6 +216,7 @@ pub async fn serve(cfg: Config) -> anyhow::Result<()> {
     };
     let report = preflight::check(mode, state.cfg.container_image).await;
     tracing::info!("{}", report.log_block());
+    state.set_preflight_report(report);
     schedule::spawn(state.clone());
     let bind = state.cfg.bind.clone();
     let data_dir = state.cfg.data_dir.display().to_string();

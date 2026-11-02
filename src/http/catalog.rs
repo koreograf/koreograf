@@ -160,6 +160,7 @@ pub async fn runner_preflight(
     }
     let effective = crate::settings::load(&state)?;
     let report = crate::preflight::check(effective.runner, state.cfg.container_image).await;
+    state.set_preflight_report(report.clone());
     Ok(Json(report.json()))
 }
 
@@ -175,7 +176,7 @@ pub async fn overview(
     let effective = crate::settings::load(&state)?;
     let runtime = runner::detect_runtime().await;
     let preflight = if user.is_admin {
-        Some(crate::preflight::check(effective.runner, state.cfg.container_image).await)
+        state.preflight_report()
     } else {
         None
     };
