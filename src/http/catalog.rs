@@ -644,9 +644,13 @@ pub async fn list_inventory_hosts(
         .or(query.limit)
         .unwrap_or(HOST_PAGE_SIZE)
         .clamp(1, HOST_PAGE_SIZE_MAX);
-    let offset = query
-        .offset
-        .unwrap_or_else(|| query.page.unwrap_or(1).saturating_sub(1) * page_size);
+    let offset = query.offset.unwrap_or_else(|| {
+        query
+            .page
+            .unwrap_or(1)
+            .saturating_sub(1)
+            .saturating_mul(page_size)
+    });
     let page = offset / page_size + 1;
     let items: Vec<_> = shown.into_iter().skip(offset).take(page_size).collect();
     Ok(Json(json!({

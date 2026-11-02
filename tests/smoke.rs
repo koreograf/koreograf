@@ -2809,6 +2809,19 @@ cache-01 ansible_host=10.0.0.42 role=cache\n";
     assert_eq!(beyond["page"], 4);
     assert_eq!(beyond["hosts"], json!([]));
 
+    let (status, huge, _) = call(
+        &app,
+        "GET",
+        &hosts_url("?page=18446744073709551615&page_size=2"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{huge}");
+    assert_eq!(huge["total"], 6);
+    assert_eq!(huge["hosts"], json!([]));
+
     let (status, zero, _) = call(
         &app,
         "GET",
