@@ -46,12 +46,38 @@ pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
         if template.team_id != req.team_id {
             return Err(ApiError::Forbidden);
         }
+        let local_tool = runner::local_tool_available(state, &template.tool);
+        let controller_can_run =
+            runner::controller_can_run(settings.runner, state.cfg.container_image, local_tool);
+        let default_environment = settings.default_environment(&template.tool);
+        let has_own_environment = template
+            .environment_id
+            .as_deref()
+            .is_some_and(|id| !id.is_empty())
+            || req
+                .parameters_override
+                .as_deref()
+                .map(db::json_object)
+                .and_then(|params| {
+                    params
+                        .get("environment_id")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .is_some_and(|id| !id.is_empty());
+        if !controller_can_run && !has_own_environment && default_environment.is_empty() {
+            return Err(ApiError::bad_vars(
+                "no_default_execution_environment",
+                [("tool", runner::tool_label(&template.tool))],
+            ));
+        }
         let parameters = parameters_for_launch(
             state,
             &db,
             &template,
             &req,
-            settings.default_environment(&template.tool),
+            default_environment,
+            controller_can_run,
         )?;
         let parsed = db::json_object(&parameters);
         {
@@ -175,6 +201,9 @@ pub fn relaunch(
         if template.team_id != job.team_id {
             return Err(ApiError::Forbidden);
         }
+        let local_tool = runner::local_tool_available(state, &template.tool);
+        let controller_can_run =
+            runner::controller_can_run(settings.runner, state.cfg.container_image, local_tool);
         let mut parameters = if db::json_object(&job.parameters)
             .get("tool")
             .and_then(Value::as_str)
@@ -188,6 +217,7 @@ pub fn relaunch(
                 &db::json_object(&job.extra_vars),
                 None,
                 settings.default_environment(&template.tool),
+                controller_can_run,
             )
         };
         let mut parsed = db::json_object(&parameters);
@@ -294,6 +324,7 @@ fn parameters_for_node(
     node: &workflow::GraphNode,
     workflow_extra: &Value,
     default_environment: &str,
+    controller_can_run: bool,
 ) -> AppResult<String> {
     let mut params = db::json_object(&capture_parameters(
         db,
@@ -301,6 +332,7 @@ fn parameters_for_node(
         workflow_extra,
         None,
         default_environment,
+        controller_can_run,
     ));
     let had_extra = node.overrides.extra_vars.is_some();
     let had_spec = node.overrides.spec.is_some();
@@ -446,9 +478,29 @@ fn parameters_for_launch(
     template: &db::Template,
     req: &LaunchRequest,
     default_environment: &str,
+    controller_can_run: bool,
 ) -> AppResult<String> {
     if let Some(raw) = &req.parameters_override {
-        return stored_parameters(raw);
+        let stored = stored_parameters(raw)?;
+        if controller_can_run {
+            return Ok(stored);
+        }
+        let mut params = db::json_object(&stored);
+        let has_environment = params
+            .get("environment_id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| !id.is_empty());
+        if !has_environment && !default_environment.is_empty() {
+            if let Some(item) = db::environment(db, default_environment)? {
+                if let Some(map) = params.as_object_mut() {
+                    map.insert("environment_id".into(), json!(item.id));
+                    map.insert("environment_name".into(), json!(item.name));
+                    map.insert("environment_image".into(), json!(item.image));
+                    map.insert("no_environment".into(), Value::Bool(false));
+                }
+            }
+        }
+        return Ok(params.to_string());
     }
     if let Some(spec) = &req.overrides.spec {
         if !spec.is_object() {
@@ -470,6 +522,7 @@ fn parameters_for_launch(
             &req.extra_vars,
             None,
             default_environment,
+            controller_can_run,
         ));
     }
     if !template.prompt_on_launch && !req.overrides.launch_with_options {
@@ -500,6 +553,7 @@ fn parameters_for_launch(
         &req.extra_vars,
         credential_ids.as_deref(),
         default_environment,
+        controller_can_run,
     ));
     if let Some(spec) = spec_overlay {
         if template.tool != "ansible" {
@@ -586,6 +640,7 @@ fn capture_parameters(
     request_extra: &Value,
     credential_override: Option<&[String]>,
     default_environment: &str,
+    controller_can_run: bool,
 ) -> String {
     let project_name = template
         .project_id
@@ -621,7 +676,8 @@ fn capture_parameters(
         .filter_map(|id| db::credential(db, id).ok().flatten())
         .map(|item| credential_entry(&item))
         .collect::<Vec<_>>();
-    let environment_id = runner::resolved_environment_id(template, default_environment);
+    let environment_id =
+        runner::resolved_environment_id(template, default_environment, controller_can_run);
     let environment = environment_id
         .as_deref()
         .and_then(|id| db::environment(db, id).ok().flatten())
@@ -894,13 +950,22 @@ fn apply_step(
                 let settings = crate::settings::load(state)?;
                 let db = state.db()?;
                 match db::template(&db, &node.template_id)? {
-                    Some(template) if template.team_id == team_id => parameters_for_node(
-                        &db,
-                        &template,
-                        node,
-                        extra,
-                        settings.default_environment(&template.tool),
-                    ),
+                    Some(template) if template.team_id == team_id => {
+                        let local_tool = runner::local_tool_available(state, &template.tool);
+                        let controller_can_run = runner::controller_can_run(
+                            settings.runner,
+                            state.cfg.container_image,
+                            local_tool,
+                        );
+                        parameters_for_node(
+                            &db,
+                            &template,
+                            node,
+                            extra,
+                            settings.default_environment(&template.tool),
+                            controller_can_run,
+                        )
+                    }
                     Some(_) => Err(ApiError::Forbidden),
                     None => Err(ApiError::NotFound),
                 }
@@ -996,12 +1061,16 @@ fn workflow_hook_refuses_local_run(
         if template.team_id != team_id {
             continue;
         }
+        let local_tool = runner::local_tool_available(state, &template.tool);
+        let controller_can_run =
+            runner::controller_can_run(settings.runner, state.cfg.container_image, local_tool);
         let parameters = match parameters_for_node(
             &db,
             &template,
             node,
             extra,
             settings.default_environment(&template.tool),
+            controller_can_run,
         ) {
             Ok(parameters) => parameters,
             Err(_) => continue,
@@ -1261,6 +1330,60 @@ mod tests {
         assert!(merged.get("verbosity").is_none());
         let rejected = merge_prompt_spec(&base, &json!({"forks": 2})).expect_err("forks");
         assert_eq!(rejected, "launch_fields_are_only_for_ansible");
+    }
+
+    fn template_without_environment() -> db::Template {
+        db::Template {
+            id: "template".into(),
+            team_id: "team".into(),
+            name: "Run".into(),
+            description: String::new(),
+            tool: "shell".into(),
+            project_id: None,
+            inventory_id: None,
+            credential_id: None,
+            environment_id: None,
+            no_environment: true,
+            entrypoint: "run.sh".into(),
+            extra_vars: "{}".into(),
+            spec: "{}".into(),
+            created_at: db::now(),
+            update_on_launch: false,
+            admin_saved: true,
+            prompt_on_launch: false,
+        }
+    }
+
+    #[test]
+    fn a_migrated_no_environment_template_uses_the_tool_default_in_the_container() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-capture-env-{nanos}"));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let conn = db::open(&dir.join("koreograf.db")).expect("database");
+        let template = template_without_environment();
+        let kept = db::json_object(&capture_parameters(
+            &conn,
+            &template,
+            &json!({}),
+            None,
+            "tool-default",
+            true,
+        ));
+        assert!(kept["environment_id"].is_null());
+        let inherited = db::json_object(&capture_parameters(
+            &conn,
+            &template,
+            &json!({}),
+            None,
+            "tool-default",
+            false,
+        ));
+        assert_eq!(inherited["environment_id"], "tool-default");
+        drop(conn);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     fn config(dir: &std::path::Path) -> Config {

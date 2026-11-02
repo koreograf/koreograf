@@ -139,12 +139,23 @@ pub async fn runner_status(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     // The probe awaits. Load settings only after it returns.
-    let runtime = runner::detect_runtime().await;
     let effective = crate::settings::load(&state)?;
+    let report = crate::preflight::check(effective.runner, state.cfg.container_image).await;
+    let runtime = if report.runtime.responding {
+        report.runtime.binary.clone()
+    } else {
+        None
+    };
     Ok(Json(json!({
         "runner_mode": effective.runner.as_str(),
         "local_jobs": state.cfg.local_jobs.as_str(),
         "runtime": runtime,
+        "container_image": report.container_image,
+        "local_tools": {
+            "ansible": report.tool_ready("ansible"),
+            "opentofu": report.tool_ready("opentofu"),
+            "shell": report.tool_ready("shell"),
+        },
         "default_environment_ansible": effective.default_environment_ansible,
         "default_environment_opentofu": effective.default_environment_opentofu,
         "default_environment_shell": effective.default_environment_shell,

@@ -123,6 +123,20 @@ impl Report {
         self.missing.iter().map(|item| self.message(item)).collect()
     }
 
+    pub fn tool_ready(&self, template_tool: &str) -> bool {
+        let mut found = false;
+        for tool in &self.tools {
+            if tool.kind != "tool" || tool.template_tool != template_tool {
+                continue;
+            }
+            found = true;
+            if !tool.ready() {
+                return false;
+            }
+        }
+        found
+    }
+
     /// Why an automatic job of this template tool cannot start, in the same
     /// words as the overview notice.
     pub fn job_problem(&self, template_tool: &str) -> Option<String> {

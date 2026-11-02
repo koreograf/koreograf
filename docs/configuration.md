@@ -25,6 +25,7 @@ See `.env.example`. Comments in that file are English. Copy it to `.env` before 
 | `KOREOGRAF_PROJECT_ROOTS` | empty, plus the examples directory. Comma-separated absolute directories |
 | `KOREOGRAF_JOB_TIMEOUT_SECS` | `1800` (30–86400) |
 | `KOREOGRAF_JOB_OUTPUT_LINES` | `8000` (100 to 100000) |
+| `KOREOGRAF_SEED_ENVIRONMENTS` | on. `0`, `false`, `no`, or `off` skips the curated default environments |
 | `KOREOGRAF_SECRET_KEY` | empty, then `data/secret.key`. When set, must be 64 hex characters or startup fails |
 | `KOREOGRAF_LOG_FORMAT` | empty, text on stdout. `json` for Promtail |
 | `KOREOGRAF_HSTS` | false. `true` sends `Strict-Transport-Security` |
@@ -67,6 +68,6 @@ What the database file holds, and why a `postgres://` URL stops startup, is in [
 | `KOREOGRAF_WEB` | `/opt/koreograf/web` |
 | `KOREOGRAF_EXAMPLES` | `/opt/koreograf/examples` |
 
-Compose forwards the other names from `.env` into the container. That includes `KOREOGRAF_DATA_HOST`, `KOREOGRAF_LOG_FORMAT`, `KOREOGRAF_HSTS`, `KOREOGRAF_COOKIE_SECURE`, `KOREOGRAF_TRUSTED_PROXY`, `KOREOGRAF_DATABASE_URL`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, and the lowercase `http_proxy`, `https_proxy`, and `no_proxy`. Log format and the database URL are passed through even when they are empty. A proxy name is passed only when `.env` or the shell sets it. An unset proxy is left out of the container. An empty `https_proxy` would turn off `HTTPS_PROXY` for git and for Python, so do not set a proxy name to an empty string.
+Compose forwards the other names from `.env` into the container. That includes `KOREOGRAF_DATA_HOST`, `KOREOGRAF_LOG_FORMAT`, `KOREOGRAF_HSTS`, `KOREOGRAF_COOKIE_SECURE`, `KOREOGRAF_TRUSTED_PROXY`, `KOREOGRAF_DATABASE_URL`, `KOREOGRAF_SEED_ENVIRONMENTS`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, and the lowercase `http_proxy`, `https_proxy`, and `no_proxy`. Log format and the database URL are passed through even when they are empty. A proxy name is passed only when `.env` or the shell sets it. An unset proxy is left out of the container. An empty `https_proxy` would turn off `HTTPS_PROXY` for git and for Python, so do not set a proxy name to an empty string.
 
 Compose also reads the shell. A proxy exported in the shell is forwarded even when the line in `.env` is commented out. Leave those variables unset in the shell when the container should not use them. The container does not copy a proxy that is configured only on the Docker daemon.

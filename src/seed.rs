@@ -2,7 +2,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -11,10 +11,47 @@ use crate::crypto::{self, hash_password};
 use crate::db::{self, Environment, Hook, Inventory, InventorySource, Project, Template, Workflow};
 use crate::error::AppResult;
 
+const SEEDED_ENVIRONMENTS_KEY: &str = "default_environments";
+
+struct SeededEnvironment {
+    id: &'static str,
+    tool: &'static str,
+    name: &'static str,
+    image: &'static str,
+    description: &'static str,
+}
+
+const SEEDED_ENVIRONMENTS: [SeededEnvironment; 3] = [
+    SeededEnvironment {
+        id: "seeded-ansible",
+        tool: "ansible",
+        name: "Ansible (curated)",
+        image: "ghcr.io/ansible-community/community-ee-base:2.21.5-2@sha256:d42f2597080e8e34ce4d1f70f66f987fc841bd0bbeb680f8d234e94ef1afc60a",
+        description: "Curated Ansible execution environment. The image is maintained upstream and pinned by digest.",
+    },
+    SeededEnvironment {
+        id: "seeded-opentofu",
+        tool: "opentofu",
+        name: "OpenTofu (curated)",
+        image: "ghcr.io/opentofu/opentofu:1.13.2@sha256:25bdfbe87000b8a88d44c7ef0cca53381da95f6203f7aed1e8cf5b81ecbe18eb",
+        description: "Curated OpenTofu execution environment. The image is maintained upstream and pinned by digest.",
+    },
+    SeededEnvironment {
+        id: "seeded-shell",
+        tool: "shell",
+        name: "Shell (curated)",
+        image: "mcr.microsoft.com/devcontainers/base:bookworm@sha256:99f5250dd2d5f8b11046d5662dd94c1e3c1dae56b560c7caad5ceb7edf349046",
+        description: "Curated shell environment with bash, curl, jq, and OpenSSH. The image is maintained upstream and pinned by digest.",
+    },
+];
+
 pub fn seed(conn: &Connection, cfg: &Config) -> AppResult<Option<String>> {
     let tx = conn.unchecked_transaction()?;
     db::purge_sessions(&tx)?;
     let generated = ensure_admin(&tx, cfg)?;
+    if environments_seeded_by_env() {
+        seed_environments(&tx)?;
+    }
     if db::count_teams(&tx)? == 0 {
         seed_demo(&tx, cfg)?;
     }
@@ -49,6 +86,75 @@ fn ensure_admin(conn: &Connection, cfg: &Config) -> AppResult<Option<String>> {
         true,
     )?;
     Ok(generated)
+}
+
+fn environments_seeded_by_env() -> bool {
+    match std::env::var("KOREOGRAF_SEED_ENVIRONMENTS") {
+        Ok(value) => !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        ),
+        Err(_) => true,
+    }
+}
+
+pub(crate) fn seed_environments(conn: &Connection) -> AppResult<()> {
+    let done: Option<String> = conn
+        .query_row(
+            "SELECT value FROM seed_state WHERE key = ?1",
+            [SEEDED_ENVIRONMENTS_KEY],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if done.as_deref() == Some("1") {
+        return Ok(());
+    }
+    for item in &SEEDED_ENVIRONMENTS {
+        let exists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM environments WHERE id = ?1",
+            [item.id],
+            |row| row.get(0),
+        )?;
+        if exists == 0 {
+            db::insert_environment(
+                conn,
+                &Environment {
+                    id: item.id.to_string(),
+                    team_id: None,
+                    organization_id: None,
+                    name: item.name.to_string(),
+                    tool: item.tool.to_string(),
+                    image: item.image.to_string(),
+                    pull_policy: "if_not_present".to_string(),
+                    network: String::new(),
+                    description: item.description.to_string(),
+                    created_at: db::now(),
+                    scope: "global".to_string(),
+                    organization_name: String::new(),
+                    team_name: String::new(),
+                },
+            )?;
+        }
+        let key = format!("default_environment_{}", item.tool);
+        let current: Option<String> = conn
+            .query_row("SELECT value FROM settings WHERE key = ?1", [&key], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        if current.unwrap_or_default().trim().is_empty() {
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                rusqlite::params![key, item.id],
+            )?;
+        }
+    }
+    conn.execute(
+        "INSERT INTO seed_state (key, value) VALUES (?1, '1')
+         ON CONFLICT(key) DO UPDATE SET value = '1'",
+        [SEEDED_ENVIRONMENTS_KEY],
+    )?;
+    Ok(())
 }
 
 fn write_password_file(path: &Path, password: &str) -> AppResult<()> {
@@ -319,4 +425,85 @@ fn insert_template(conn: &Connection, item: DemoTemplate<'_>) -> AppResult<Strin
         },
     )?;
     Ok(id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn database() -> (std::path::PathBuf, Connection) {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-seed-ee-{nanos}"));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let conn = db::open(&dir.join("koreograf.db")).expect("database");
+        (dir, conn)
+    }
+
+    fn environment_count(conn: &Connection) -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM environments", [], |row| row.get(0))
+            .expect("count")
+    }
+
+    fn default_for(conn: &Connection, tool: &str) -> String {
+        conn.query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            [format!("default_environment_{tool}")],
+            |row| row.get(0),
+        )
+        .expect("default")
+    }
+
+    #[test]
+    fn seeding_twice_adds_one_environment_per_tool_and_keeps_the_defaults() {
+        let (dir, conn) = database();
+        seed_environments(&conn).expect("first seed");
+        seed_environments(&conn).expect("second seed");
+        assert_eq!(environment_count(&conn), 3);
+        for item in &SEEDED_ENVIRONMENTS {
+            assert_eq!(default_for(&conn, item.tool), item.id);
+            let image: String = conn
+                .query_row(
+                    "SELECT image FROM environments WHERE id = ?1",
+                    [item.id],
+                    |row| row.get(0),
+                )
+                .expect("image");
+            assert_eq!(image, item.image);
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_renamed_or_deleted_seeded_environment_is_not_recreated() {
+        let (dir, conn) = database();
+        seed_environments(&conn).expect("seed");
+        conn.execute(
+            "UPDATE environments SET name = 'Renamed by admin' WHERE id = 'seeded-ansible'",
+            [],
+        )
+        .expect("rename");
+        db::delete_environment(&conn, "seeded-opentofu").expect("delete");
+        seed_environments(&conn).expect("second seed");
+        let name: String = conn
+            .query_row(
+                "SELECT name FROM environments WHERE id = 'seeded-ansible'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("renamed");
+        assert_eq!(name, "Renamed by admin");
+        let deleted: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM environments WHERE id = 'seeded-opentofu'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count");
+        assert_eq!(deleted, 0);
+        assert_eq!(environment_count(&conn), 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

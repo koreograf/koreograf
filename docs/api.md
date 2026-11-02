@@ -161,6 +161,8 @@ Every inventory source that uses a NetBox credential uses the same credential ro
 
 `GET /api/environments` and `GET /api/environments/{id}` include `tool`. A new environment without one of the three tools answers 400 `choose_a_tool_for_the_environment`. A legacy `any` environment keeps that tool only when the image is unchanged; a create or an image change needs one of the three. A template may only use an environment whose tool is `any` or matches the template's tool. The API rejects a mismatch with `the_execution_environment_is_for_another_tool`.
 
+On the first start the database gets one global environment per tool and the matching defaults, unless `KOREOGRAF_SEED_ENVIRONMENTS` is off. The step is idempotent and records that it ran, so a renamed or deleted seeded environment is not created again. A launch that needs a container and finds no default answers 400 `no_default_execution_environment` with `vars.tool`.
+
 ### Templates
 
 | Field | Required | Notes |
@@ -173,14 +175,14 @@ Every inventory source that uses a NetBox credential uses the same credential ro
 | `credential_id` | no | One id. Ignored when `credential_ids` is present |
 | `credential_ids` | no | |
 | `environment_id` | no | Must match `tool`, or be a legacy `any` environment. Empty means the tool default |
-| `no_environment` | no | Default false. True with an empty `environment_id` runs on the controller |
+| `no_environment` | no | Default false. True with an empty `environment_id` runs on the controller when this machine has the tool; otherwise the tool default applies |
 | `entrypoint` | for ansible and opentofu | Playbook path, or the OpenTofu module directory |
 | `extra_vars` | no | Object. Default `{}` |
 | `spec` | no | Object. Default `{}` |
 | `update_on_launch` | no | Default true. Git projects only |
 | `prompt_on_launch` | no | Default false. The launch dialog asks for inventory, credentials, limit, tags, skip tags, job type, verbosity, and extra variables |
 
-A `PUT` replaces the stored template, and `no_environment` falls back to false when the body omits it. A migrated template that runs on the controller therefore needs `"no_environment": true` sent explicitly; omitting the field switches that template to the tool default.
+A `PUT` replaces the stored template, and `no_environment` falls back to false when the body omits it. A migrated template that runs on the controller therefore needs `"no_environment": true` sent explicitly; omitting the field switches that template to the tool default. In the container image `no_environment` is ignored and the tool default runs.
 
 Ansible `spec`: `job_type` `run` or `check`, `tags`, `skip_tags`, `limit`, `diff` (boolean), `verbosity` from 0 to 4, `forks` from 1 to 50.
 
@@ -264,6 +266,6 @@ Launches answer 202 and need a JSON object, at least `{}`. An array is rejected.
 
 `PUT /api/settings` takes a complete body. `ldap`, `proxy`, `runner`, and `job_timeout_secs` are required, and a body that leaves one of them out answers 400 with `the_settings_body_is_incomplete` and the missing names in `fields`. `job_output_lines` is optional. `default_environment_ansible`, `default_environment_opentofu`, and `default_environment_shell` are optional environment ids; empty means no default. A non-empty id must be global and match that tool, or be legacy `any`; otherwise the API answers `the_default_environment_is_missing`, `the_default_environment_must_be_global`, or `the_default_environment_is_for_another_tool`. `GET /api/settings` includes the three ids, and deleting the referenced environment clears the setting. An edit that changes that environment's tool or moves it out of the global scope clears the setting too. `GET /api/runner/preflight` is administrator-only. It reruns the runner check, refreshes the cached report, and returns `mode`, `container_image`, `ok`, `tools`, `runtime`, `missing`, and English `messages`. Each tool has `id`, `kind`, `template_tool`, `minimum`, `required`, `found`, `path`, `version`, `meets_minimum`, and `reason`. A `kind` of `project` marks `git`; the other tools are template tools, and `ssh` belongs to Ansible. A runtime has `binary`, `found`, `responding`, `path`, `version`, and `reason`. The response never includes an environment variable or the value of `PATH`. `GET /api/overview` includes the cached report as `preflight` for an administrator and `null` for everyone else; startup and this endpoint refresh that cache.
 
-`GET /api/runner` includes the same three ids for the template overlay. `{ "reset": true }` needs no other fields and clears the defaults.
+`GET /api/runner` includes the same three ids for the template overlay, plus `container_image`, `runtime`, and `local_tools` (`ansible`, `opentofu`, `shell`). The overlay hides **No environment** when `container_image` is true or the matching `local_tools` value is false. `{ "reset": true }` needs no other fields and clears the defaults.
 
 `GET /api/schedules` lists every schedule of the selected team and includes `target_name`. A schedule belongs to one template or one workflow. Creating one needs `name`, an IANA `timezone`, `start_date` (`YYYY-MM-DD`), `start_time` (`HH:MM`), and `frequency` (`once`, `hourly`, `daily`, `weekly`, `monthly`). Weekly also needs `weekdays` (`MO` through `SU`). `end_kind` is `never`, `after` with `end_count` from 1 to 999, or `on_date`. The clock time stays in that zone across daylight saving. `POST /api/schedules/preview` returns up to five upcoming UTC instants and does not save anything. A viewer can list. An operator can create, change, delete, and pause. `POST /api/schedules/{id}/enabled` takes `{ "enabled": true }`. `POST /api/schedules/{id}/missed` takes `{ "accept": true }` to start the last missed time once, or `{ "accept": false }` to clear it. A failed start leaves that missed time in place. Creating a schedule sets `created_by` and `updated_by` to the signed-in user. Changing one sets `updated_by` to the editing user and leaves `created_by` as it was. Automatic runs start as `updated_by` only when that user may still start jobs for the team. Otherwise no job starts, the time stays missed, and `launch_block` is `schedule_needs_a_new_owner`. Times that passed while the process was stopped are not replayed.

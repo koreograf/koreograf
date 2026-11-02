@@ -7865,6 +7865,158 @@ async fn an_opentofu_template_without_an_environment_uses_the_tool_default() {
 }
 
 #[tokio::test]
+async fn a_fresh_install_seeds_a_default_environment_per_tool() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-seeded-ee-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap();
+
+    let (status, environments, _) = call(
+        &app,
+        "GET",
+        "/api/environments",
+        Some(&cookie),
+        Some(team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{environments}");
+    let global = environments
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["scope"] == "global")
+        .collect::<Vec<_>>();
+    assert_eq!(global.len(), 3, "{environments}");
+    for tool in ["ansible", "opentofu", "shell"] {
+        assert!(
+            global.iter().any(|row| row["tool"] == tool),
+            "missing {tool}: {environments}"
+        );
+    }
+
+    let (status, settings, _) = call(
+        &app,
+        "GET",
+        "/api/settings",
+        Some(&cookie),
+        Some(team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{settings}");
+    for tool in ["ansible", "opentofu", "shell"] {
+        let id = settings
+            .get(format!("default_environment_{tool}"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        assert!(!id.is_empty(), "missing default for {tool}: {settings}");
+        assert!(
+            global
+                .iter()
+                .any(|row| row["id"] == id && row["tool"] == tool),
+            "default for {tool} is not the seeded environment: {settings}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn a_job_without_a_default_environment_fails_before_it_starts() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-no-default-ee-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut cfg = config(&dir);
+    cfg.container_image = true;
+    let state = koreograf::boot(cfg).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap();
+
+    let (status, cleared, _) = call(
+        &app,
+        "PUT",
+        "/api/settings",
+        Some(&cookie),
+        Some(team),
+        Some(json!({
+            "ldap": {"url": "", "mode": "ldap"},
+            "proxy": {"url": ""},
+            "runner": "auto",
+            "job_timeout_secs": 60,
+            "default_environment_ansible": "",
+            "default_environment_opentofu": "",
+            "default_environment_shell": ""
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{cleared}");
+
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(team),
+        Some(json!({
+            "name": "Shell ohne Standard",
+            "tool": "shell",
+            "entrypoint": "run.sh"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().unwrap();
+
+    let (status, rejected, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        Some(&cookie),
+        Some(team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+    assert_eq!(rejected["error"], "no_default_execution_environment");
+    assert_eq!(rejected["vars"]["tool"], "Shell");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn a_changed_environment_tool_fails_the_job_before_the_container_starts() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -14275,6 +14427,8 @@ fn template_tool_switch_changes_options_and_environments() {
     ));
     assert!(dialog.contains("form.environment_id.innerHTML = environmentOptions(tool, selected)"));
     assert!(dialog.contains("default_environment_${tool}"));
+    assert!(dialog.contains("noEnvironmentAvailable"));
+    assert!(dialog.contains("runner.local_tools"));
     let environments_for = extract_braced_function(&script, "const environmentsFor = (tool) =>");
     let probe = format!(
         r#"{environments_for}
@@ -14741,7 +14895,9 @@ async fn assert_same_runner(app: &axum::Router, cookie: &str, team: &str, overvi
     assert_eq!(status, StatusCode::OK, "{runner}");
     assert_eq!(runner["runner_mode"], overview["runner_mode"]);
     assert_eq!(runner["runtime"], overview["runtime"]);
-    assert_eq!(runner.as_object().map(|item| item.len()), Some(6));
+    assert!(runner["local_tools"].is_object(), "{runner}");
+    assert!(runner["container_image"].is_boolean(), "{runner}");
+    assert_eq!(runner.as_object().map(|item| item.len()), Some(8));
 }
 
 #[test]
