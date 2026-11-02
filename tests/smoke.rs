@@ -6039,7 +6039,7 @@ async fn workflow_node_can_override_template_parameters() {
     assert!(script.contains("colors_show_the_run_a_click_shows_the"));
     assert!(script.contains("back_to_the_workflow"));
     assert!(script.contains("id=\"run-log\""));
-    assert!(script.contains("id=\"node-output\""));
+    assert!(script.contains("id: \"node-output\""));
     assert!(!script.contains("Ein Klick öffnet den Auftrag"));
     assert!(!script.contains("#/jobs/${phase.job_id}"));
 
@@ -11024,7 +11024,7 @@ async fn a_schedule_runs_the_last_miss_once_and_lists_on_its_target() {
     assert_eq!(status, StatusCode::OK);
     let script = script.as_str().unwrap_or("");
     assert!(script.contains("schedule-card"));
-    assert!(script.contains("id=\"schedule-form\""));
+    assert!(script.contains("id: \"schedule-form\""));
     assert!(script.contains("#/schedules"));
     assert!(script.contains("class=\"switch\""));
     let (status, style, _) = call(&app, "GET", "/app.css", None, None, None).await;
