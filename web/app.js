@@ -394,13 +394,13 @@ const ERROR_FIELD = {
   the_project_path_is_not_a_directory: "source",
   the_project_path_is_not_allowed: "source",
   path_projects_are_limited_to_administrators: "source",
-  the_netbox_address_must_be_http_or_https: "api_endpoint",
+  the_netbox_address_must_be_http_or_https: "credential_id",
   the_netbox_token_is_invalid: "credential_id",
   the_netbox_token_is_missing: "credential_id",
   the_netbox_token_belongs_to_another_team: "credential_id",
   netbox_credential_has_the_wrong_kind: "credential_id",
   netbox_credential_is_required: "credential_id",
-  netbox_endpoint_must_match_credential: "api_endpoint",
+  netbox_endpoint_must_match_credential: "credential_id",
   netbox_token_needs_a_credential: "credential_id",
   path_is_missing: "path",
   the_file_is_not_an_inventory: "path",
@@ -4399,9 +4399,12 @@ function sourceTitle(source) {
   return name;
 }
 
-function sourceSummary(item) {
+function sourceSummary(item, credentials = []) {
   const data = item.source || {};
-  if (item.kind === "netbox") return t("netbox");
+  if (item.kind === "netbox") {
+    const credential = credentials.find((row) => row.id === item.credential_id);
+    return (credential && credential.name) || data.api_endpoint || t("netbox");
+  }
   if (item.kind === "project") return data.path || t("project");
   return t("text");
 }
@@ -4742,7 +4745,10 @@ function bindSourcePicks(projects, credentials) {
 
 async function pageInventories() {
   if (!needTeam()) return;
-  const items = await api("GET", "/api/inventories");
+  const [items, credentials] = await Promise.all([
+    api("GET", "/api/inventories"),
+    api("GET", "/api/credentials"),
+  ]);
   shell(t("inventories"), `
     <section class="card">
       <input class="search" id="inventory-search" placeholder="${h("search_inventories")}" autocomplete="off">
@@ -4753,7 +4759,7 @@ async function pageInventories() {
     const needle = document.querySelector("#inventory-search").value.trim().toLowerCase();
     const shown = items.filter((item) => {
       if (!needle) return true;
-      const kinds = (item.sources || []).map((source) => `${source.name} ${sourceKindLabel(source.kind)} ${sourceSummary(source)}`).join(" ");
+      const kinds = (item.sources || []).map((source) => `${source.name} ${sourceKindLabel(source.kind)} ${sourceSummary(source, credentials)}`).join(" ");
       return `${item.name} ${kinds}`.toLowerCase().includes(needle);
     });
     const rows = shown.map((item) => {
@@ -4874,7 +4880,7 @@ async function pageInventory(id) {
   const [item, projects, credentials, firstPage, groupPage] = await Promise.all([
     api("GET", `/api/inventories/${encodeURIComponent(id)}`),
     can("operator") ? api("GET", "/api/projects") : Promise.resolve([]),
-    can("operator") ? api("GET", "/api/credentials") : Promise.resolve([]),
+    api("GET", "/api/credentials"),
     api("GET", inventoryHostUrl(id, view)),
     api("GET", `/api/inventories/${encodeURIComponent(id)}/groups`),
   ]);
@@ -4896,7 +4902,7 @@ async function pageInventory(id) {
   const sourceCards = (item.sources || []).map((source) => `
     <section class="card" style="margin-top:10px">
       <div class="spread">
-        <div><strong>${esc(sourceTitle(source))}</strong>${certificateBadge(certificateCheckOff(source))} <span class="small muted">${esc(sourceKindLabel(source.kind))} · ${esc(sourceSummary(source))}</span></div>
+        <div><strong>${esc(sourceTitle(source))}</strong>${certificateBadge(certificateCheckOff(source))} <span class="small muted">${esc(sourceKindLabel(source.kind))} · ${esc(sourceSummary(source, credentials))}</span></div>
         <div class="row">
           ${can("operator") ? `<span class="small muted" data-source-status="${esc(source.id)}" aria-live="polite">${notice && notice.sourceId === source.id ? esc(notice.text) : ""}</span>` : ""}
           ${can("operator") ? `<button class="btn" type="button" data-edit-source="${esc(source.id)}">${h("edit")}</button>` : ""}
