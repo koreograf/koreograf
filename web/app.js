@@ -385,6 +385,7 @@ const ERROR_FIELD = {
   the_netbox_token_is_missing: "token",
   the_netbox_token_belongs_to_another_team: "credential_id",
   netbox_credential_has_the_wrong_kind: "credential_id",
+  netbox_endpoint_must_match_credential: "api_endpoint",
   netbox_token_required_for_endpoint_change: "token",
   path_is_missing: "path",
   the_file_is_not_an_inventory: "path",

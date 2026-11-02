@@ -198,6 +198,15 @@ pub async fn create_netbox(
         &body.api_endpoint,
         &name,
     )?;
+    ensure_certificate_override(
+        &state,
+        &user,
+        &team,
+        access.credential_id.is_some() || access.credential_blob.is_some(),
+        body.validate_certs,
+        &body.ca_file,
+        None,
+    )?;
     let source = netbox_source_fields(
         &access.api_endpoint,
         body.validate_certs,
@@ -287,6 +296,15 @@ pub async fn test_netbox(
         &body.token,
         &body.api_endpoint,
         "NetBox",
+    )?;
+    ensure_certificate_override(
+        &state,
+        &user,
+        &team,
+        access.credential_id.is_some() || access.credential_blob.is_some(),
+        body.validate_certs,
+        &body.ca_file,
+        None,
     )?;
     let source = connection_source(
         &access.api_endpoint,
@@ -516,6 +534,9 @@ fn netbox_access(
         let api_endpoint = if endpoint.is_empty() {
             url.to_string()
         } else {
+            if !url.is_empty() && !endpoint_matches(endpoint, url) {
+                return Err(ApiError::bad("netbox_endpoint_must_match_credential"));
+            }
             endpoint.to_string()
         };
         return Ok(NetboxAccess {
@@ -543,6 +564,54 @@ fn netbox_access(
         });
     }
     Err(ApiError::bad("the_netbox_token_is_missing"))
+}
+
+fn endpoint_matches(left: &str, right: &str) -> bool {
+    endpoint_key(left) == endpoint_key(right)
+}
+
+fn endpoint_key(endpoint: &str) -> String {
+    let text = endpoint.trim().trim_end_matches('/');
+    let Some((scheme, rest)) = text.split_once("://") else {
+        return text.to_ascii_lowercase();
+    };
+    let scheme = scheme.to_ascii_lowercase();
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let mut authority = authority.to_ascii_lowercase();
+    let default_port = match scheme.as_str() {
+        "http" => ":80",
+        "https" => ":443",
+        _ => "",
+    };
+    if !default_port.is_empty() && authority.ends_with(default_port) {
+        authority.truncate(authority.len() - default_port.len());
+    }
+    let path = path.trim_end_matches('/');
+    if path.is_empty() {
+        format!("{scheme}://{authority}")
+    } else {
+        format!("{scheme}://{authority}/{path}")
+    }
+}
+
+fn ensure_certificate_override(
+    state: &Shared,
+    user: &AuthUser,
+    team: &str,
+    credential_used: bool,
+    validate_certs: bool,
+    ca_file: &str,
+    stored: Option<&StoredNetbox>,
+) -> AppResult<()> {
+    if !credential_used {
+        return Ok(());
+    }
+    let stored_validate_certs = stored.is_none_or(|item| item.validate_certs);
+    let stored_ca_file = stored.map_or("", |item| item.ca_file.trim());
+    if validate_certs == stored_validate_certs && ca_file.trim() == stored_ca_file {
+        return Ok(());
+    }
+    gate(state, user, team, Role::Owner)
 }
 
 fn credential_secret(state: &Shared, id: &str, team: &str) -> AppResult<Value> {
@@ -640,13 +709,14 @@ pub(super) async fn create_with_sources(
     name: String,
     inputs: Vec<SourceInput>,
     admin_saved: bool,
+    user: &AuthUser,
 ) -> AppResult<axum::response::Response> {
     if inputs.len() > MAX_SOURCES {
         return Err(ApiError::bad("at_most_8_sources"));
     }
     let mut resolved = Vec::with_capacity(inputs.len());
     for input in &inputs {
-        resolved.push(resolve_source(&state, &team, input).await?);
+        resolved.push(resolve_source(&state, &team, input, user).await?);
     }
     let inventory_id = Uuid::new_v4().to_string();
     let created_at = db::now();
@@ -701,7 +771,7 @@ pub async fn add_source(
         }
         count as i64
     };
-    let resolved = resolve_source(&state, &team, &body).await?;
+    let resolved = resolve_source(&state, &team, &body, &user).await?;
     let mut db = state.db()?;
     let tx = db.transaction()?;
     store_source(&tx, &team, &id, position, &resolved, &db::now())?;
@@ -762,31 +832,40 @@ pub async fn update_source(
     let resolved = match source.kind.as_str() {
         "ini" => resolve_ini_update(&source, &body)?,
         "project" => resolve_project_update(&state, &team, &source, &body)?,
-        "netbox" => resolve_netbox_update(&state, &team, &source, &body).await?,
+        "netbox" => resolve_netbox_update(&state, &team, &source, &body, &user).await?,
         _ => return Err(ApiError::bad("a_source_is_manual_project_or_netbox")),
     };
     let mut db = state.db()?;
     let tx = db.transaction()?;
     let credential_id = if let Some(blob) = &resolved.credential_blob {
-        let id = Uuid::new_v4().to_string();
-        let base = resolved
-            .credential_name
-            .clone()
-            .unwrap_or_else(|| format!("{} Token", resolved.name));
-        let credential_name = unique_credential_name(&tx, &team, &base)?;
-        db::insert_credential(
-            &tx,
-            &db::Credential {
-                id: id.clone(),
-                team_id: team.clone(),
-                name: credential_name,
-                kind: "netbox".into(),
-                secret_blob: blob.clone(),
-                created_at: db::now(),
-                auto: false,
-            },
-        )?;
-        Some(id)
+        if let Some(existing) = &source.credential_id {
+            let mut item = db::credential(&tx, existing)?
+                .filter(|item| item.team_id == team)
+                .ok_or(ApiError::NotFound)?;
+            item.secret_blob = blob.clone();
+            db::update_credential(&tx, &item)?;
+            Some(existing.clone())
+        } else {
+            let id = Uuid::new_v4().to_string();
+            let base = resolved
+                .credential_name
+                .clone()
+                .unwrap_or_else(|| format!("{} Token", resolved.name));
+            let credential_name = unique_credential_name(&tx, &team, &base)?;
+            db::insert_credential(
+                &tx,
+                &db::Credential {
+                    id: id.clone(),
+                    team_id: team.clone(),
+                    name: credential_name,
+                    kind: "netbox".into(),
+                    secret_blob: blob.clone(),
+                    created_at: db::now(),
+                    auto: false,
+                },
+            )?;
+            Some(id)
+        }
     } else {
         resolved
             .credential_id
@@ -1014,6 +1093,7 @@ async fn resolve_netbox_update(
     team: &str,
     source: &db::InventorySource,
     body: &SourceUpdate,
+    user: &AuthUser,
 ) -> AppResult<ResolvedUpdate> {
     let stored = stored_netbox(&source.source_json)?;
     let new_token = body
@@ -1027,6 +1107,13 @@ async fn resolve_netbox_update(
         .map(str::trim)
         .filter(|id| !id.is_empty());
     let endpoint_override = body.api_endpoint.as_deref().map(str::trim);
+    if explicit_id.is_none() && new_token.is_none() {
+        if let Some(text) = endpoint_override.filter(|text| !text.is_empty()) {
+            if !endpoint_matches(text, &stored.api_endpoint) {
+                return Err(ApiError::bad("netbox_token_required_for_endpoint_change"));
+            }
+        }
+    }
     let endpoint = match endpoint_override {
         Some(text) if !text.is_empty() => text,
         Some(_) if explicit_id.is_some() => "",
@@ -1052,10 +1139,12 @@ async fn resolve_netbox_update(
         Some(filters) => netbox::parse_filters(filters).map_err(ApiError::bad)?,
         None => stored.query.clone(),
     };
+    let validate_certs = body.validate_certs.unwrap_or(stored.validate_certs);
+    let ca_file = body.ca_file.as_deref().unwrap_or(&stored.ca_file);
     let parsed = netbox_config(
         &access.api_endpoint,
-        body.validate_certs.unwrap_or(stored.validate_certs),
-        body.ca_file.as_deref().unwrap_or(&stored.ca_file),
+        validate_certs,
+        ca_file,
         body.group_by.as_deref().unwrap_or(&stored.group_by),
         query,
         body.virtual_machines.unwrap_or(stored.virtual_machines),
@@ -1066,6 +1155,15 @@ async fn resolve_netbox_update(
     if changes_destination && new_token.is_none() && explicit_id.is_none() {
         return Err(ApiError::bad("netbox_token_required_for_endpoint_change"));
     }
+    ensure_certificate_override(
+        state,
+        user,
+        team,
+        access.credential_id.is_some() || access.credential_blob.is_some(),
+        validate_certs,
+        ca_file,
+        Some(&stored),
+    )?;
     let name = updated_name(body.name.clone(), &source.name, "netbox")?;
     let ini = fetch_netbox(state, &parsed, &access.token).await?;
     Ok(ResolvedUpdate {
@@ -1148,6 +1246,7 @@ async fn resolve_source(
     state: &Shared,
     team: &str,
     input: &SourceInput,
+    user: &AuthUser,
 ) -> AppResult<ResolvedSource> {
     match input.kind.as_str() {
         "ini" => {
@@ -1208,6 +1307,15 @@ async fn resolve_source(
                 &input.token,
                 &input.api_endpoint,
                 &name,
+            )?;
+            ensure_certificate_override(
+                state,
+                user,
+                team,
+                access.credential_id.is_some() || access.credential_blob.is_some(),
+                input.validate_certs,
+                &input.ca_file,
+                None,
             )?;
             let parsed = netbox_source_fields(
                 &access.api_endpoint,

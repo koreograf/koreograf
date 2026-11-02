@@ -951,8 +951,15 @@ pub async fn create_inventory(
     gate(&state, &user, &team, Role::Operator)?;
     let name = require_name(&body.name)?;
     if !body.sources.is_empty() {
-        return super::sources::create_with_sources(state, team, name, body.sources, user.is_admin)
-            .await;
+        return super::sources::create_with_sources(
+            state,
+            team,
+            name,
+            body.sources,
+            user.is_admin,
+            &user,
+        )
+        .await;
     }
     check_static_ini(&body.body)?;
     let item = Inventory {

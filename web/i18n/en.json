@@ -334,6 +334,7 @@
   "netbox_address_from_credential": "Leave empty to use the address of the selected credential.",
   "netbox_credential": "NetBox credential",
   "netbox_credential_has_the_wrong_kind": "The selected credential is not a NetBox credential.",
+  "netbox_endpoint_must_match_credential": "The NetBox address must match the address of the selected credential.",
   "netbox_is_not_reachable_err": "NetBox is not reachable: {err}",
   "netbox_needs_a_token": "NetBox needs a token.",
   "netbox_token_becomes_a_credential": "The token becomes a visible credential named \"{name} Token\".",

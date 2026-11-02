@@ -3429,6 +3429,10 @@ async fn netbox_endpoint_changes_require_a_new_token() {
     assert_eq!(status, StatusCode::CREATED, "{created}");
     let inventory_id = created["id"].as_str().unwrap().to_string();
     let source_id = created["sources"][0]["id"].as_str().unwrap().to_string();
+    let credential_id = created["sources"][0]["credential_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     assert_eq!(
         first_hits.load(std::sync::atomic::Ordering::SeqCst),
         1,
@@ -3463,6 +3467,7 @@ async fn netbox_endpoint_changes_require_a_new_token() {
     .await;
     assert_eq!(status, StatusCode::OK, "{edited}");
     assert_eq!(edited["sources"][0]["source"]["api_endpoint"], second);
+    assert_eq!(edited["sources"][0]["credential_id"], credential_id);
     assert!(edited["sources"][0]["body"]
         .as_str()
         .unwrap_or("")
@@ -3546,6 +3551,302 @@ async fn netbox_endpoint_changes_require_a_new_token() {
         1,
         "{admin_edited}"
     );
+    assert_eq!(admin_edited["sources"][0]["credential_id"], credential_id);
+
+    let second_before = second_hits.load(std::sync::atomic::Ordering::SeqCst);
+    let (status, wrong_create, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Bound create",
+            "sources": [{
+                "kind": "netbox",
+                "credential_id": credential_id,
+                "api_endpoint": second
+            }]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{wrong_create}");
+    assert_eq!(
+        wrong_create["error"],
+        "netbox_endpoint_must_match_credential"
+    );
+    assert_eq!(
+        second_hits.load(std::sync::atomic::Ordering::SeqCst),
+        second_before,
+        "{wrong_create}"
+    );
+
+    let third_before = third_hits.load(std::sync::atomic::Ordering::SeqCst);
+    let (status, bound, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Bound inventory",
+            "sources": [{
+                "kind": "netbox",
+                "credential_id": credential_id,
+                "api_endpoint": third,
+                "virtual_machines": false
+            }]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{bound}");
+    assert_eq!(bound["sources"][0]["credential_id"], credential_id);
+    assert_eq!(
+        third_hits.load(std::sync::atomic::Ordering::SeqCst),
+        third_before + 1,
+        "{bound}"
+    );
+    let bound_inventory = bound["id"].as_str().unwrap().to_string();
+    let bound_source = bound["sources"][0]["id"].as_str().unwrap().to_string();
+
+    let second_before = second_hits.load(std::sync::atomic::Ordering::SeqCst);
+    let (status, wrong_add, _) = call(
+        &app,
+        "POST",
+        &format!("/api/inventories/{bound_inventory}/sources"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "kind": "netbox",
+            "credential_id": credential_id,
+            "api_endpoint": second
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{wrong_add}");
+    assert_eq!(wrong_add["error"], "netbox_endpoint_must_match_credential");
+    assert_eq!(
+        second_hits.load(std::sync::atomic::Ordering::SeqCst),
+        second_before,
+        "{wrong_add}"
+    );
+
+    let third_before = third_hits.load(std::sync::atomic::Ordering::SeqCst);
+    let (status, added, _) = call(
+        &app,
+        "POST",
+        &format!("/api/inventories/{bound_inventory}/sources"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "kind": "netbox",
+            "credential_id": credential_id,
+            "api_endpoint": third,
+            "virtual_machines": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    assert_eq!(
+        added["sources"].as_array().unwrap().last().unwrap()["credential_id"],
+        credential_id
+    );
+    assert_eq!(
+        third_hits.load(std::sync::atomic::Ordering::SeqCst),
+        third_before + 1,
+        "{added}"
+    );
+
+    let second_before = second_hits.load(std::sync::atomic::Ordering::SeqCst);
+    let (status, wrong_update, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/inventories/{bound_inventory}/sources/{bound_source}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "credential_id": credential_id,
+            "api_endpoint": second
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{wrong_update}");
+    assert_eq!(
+        wrong_update["error"],
+        "netbox_endpoint_must_match_credential"
+    );
+    assert_eq!(
+        second_hits.load(std::sync::atomic::Ordering::SeqCst),
+        second_before,
+        "{wrong_update}"
+    );
+
+    let third_before = third_hits.load(std::sync::atomic::Ordering::SeqCst);
+    let (status, updated, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/inventories/{bound_inventory}/sources/{bound_source}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "credential_id": credential_id,
+            "api_endpoint": third
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(
+        third_hits.load(std::sync::atomic::Ordering::SeqCst),
+        third_before + 1,
+        "{updated}"
+    );
+
+    let second_before = second_hits.load(std::sync::atomic::Ordering::SeqCst);
+    let (status, wrong_test, _) = call(
+        &app,
+        "POST",
+        "/api/inventories/netbox/test",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "credential_id": credential_id,
+            "api_endpoint": second
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{wrong_test}");
+    assert_eq!(wrong_test["error"], "netbox_endpoint_must_match_credential");
+    assert_eq!(
+        second_hits.load(std::sync::atomic::Ordering::SeqCst),
+        second_before,
+        "{wrong_test}"
+    );
+
+    let third_before = third_hits.load(std::sync::atomic::Ordering::SeqCst);
+    let (status, tested, _) = call(
+        &app,
+        "POST",
+        "/api/inventories/netbox/test",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "credential_id": credential_id,
+            "api_endpoint": format!("{third}/")
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{tested}");
+    assert_eq!(tested["version"], "4.2.1", "{tested}");
+    assert_eq!(
+        third_hits.load(std::sync::atomic::Ordering::SeqCst),
+        third_before + 1,
+        "{tested}"
+    );
+
+    let (status, wrong_netbox, _) = call(
+        &app,
+        "POST",
+        "/api/inventories/netbox",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Bound NetBox",
+            "credential_id": credential_id,
+            "api_endpoint": second,
+            "virtual_machines": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{wrong_netbox}");
+    assert_eq!(
+        wrong_netbox["error"],
+        "netbox_endpoint_must_match_credential"
+    );
+    assert_eq!(
+        second_hits.load(std::sync::atomic::Ordering::SeqCst),
+        second_before,
+        "{wrong_netbox}"
+    );
+
+    let third_before = third_hits.load(std::sync::atomic::Ordering::SeqCst);
+    let (status, netbox_created, _) = call(
+        &app,
+        "POST",
+        "/api/inventories/netbox",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Bound NetBox",
+            "credential_id": credential_id,
+            "api_endpoint": third,
+            "virtual_machines": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{netbox_created}");
+    assert_eq!(netbox_created["sources"][0]["credential_id"], credential_id);
+    assert_eq!(
+        third_hits.load(std::sync::atomic::Ordering::SeqCst),
+        third_before + 1,
+        "{netbox_created}"
+    );
+
+    let third_before = third_hits.load(std::sync::atomic::Ordering::SeqCst);
+    let (status, cert_denied, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/inventories/{bound_inventory}/sources/{bound_source}"),
+        Some(&operator_cookie),
+        Some(&team),
+        Some(json!({
+            "credential_id": credential_id,
+            "api_endpoint": third,
+            "validate_certs": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{cert_denied}");
+    assert_eq!(cert_denied["error"], "you_are_not_allowed_to_do_this");
+    assert_eq!(
+        third_hits.load(std::sync::atomic::Ordering::SeqCst),
+        third_before,
+        "{cert_denied}"
+    );
+
+    let third_before = third_hits.load(std::sync::atomic::Ordering::SeqCst);
+    let (status, add_denied, _) = call(
+        &app,
+        "POST",
+        &format!("/api/inventories/{bound_inventory}/sources"),
+        Some(&operator_cookie),
+        Some(&team),
+        Some(json!({
+            "kind": "netbox",
+            "credential_id": credential_id,
+            "api_endpoint": third,
+            "validate_certs": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{add_denied}");
+    assert_eq!(add_denied["error"], "you_are_not_allowed_to_do_this");
+    assert_eq!(
+        third_hits.load(std::sync::atomic::Ordering::SeqCst),
+        third_before,
+        "{add_denied}"
+    );
+
+    let (status, credentials, _) = call(
+        &app,
+        "GET",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{credentials}");
+    assert_eq!(credentials.as_array().unwrap().len(), 1, "{credentials}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -3986,26 +4287,38 @@ async fn netbox_mock_recording() -> (String, std::sync::Arc<std::sync::Mutex<Vec
 async fn netbox_mock() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
     let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let count = hits.clone();
+    let status_count = hits.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let mock = axum::Router::new().route(
-        "/api/dcim/devices/",
-        axum::routing::get(move || {
-            let count = count.clone();
-            async move {
-                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                axum::Json(json!({
-                    "next": null,
-                    "results": [{
-                        "id": 1,
-                        "name": "web-1",
-                        "primary_ip4": {"address": "10.0.0.8/24"},
-                        "site": {"slug": "berlin"}
-                    }]
-                }))
-            }
-        }),
-    );
+    let mock = axum::Router::new()
+        .route(
+            "/api/dcim/devices/",
+            axum::routing::get(move || {
+                let count = count.clone();
+                async move {
+                    count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    axum::Json(json!({
+                        "next": null,
+                        "results": [{
+                            "id": 1,
+                            "name": "web-1",
+                            "primary_ip4": {"address": "10.0.0.8/24"},
+                            "site": {"slug": "berlin"}
+                        }]
+                    }))
+                }
+            }),
+        )
+        .route(
+            "/api/status/",
+            axum::routing::get(move || {
+                let count = status_count.clone();
+                async move {
+                    count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    axum::Json(json!({"netbox-version": "4.2.1", "plugins": {}}))
+                }
+            }),
+        );
     tokio::spawn(async move {
         axum::serve(listener, mock).await.unwrap();
     });

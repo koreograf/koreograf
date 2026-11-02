@@ -334,6 +334,7 @@
   "netbox_address_from_credential": "Leer lassen, um die Adresse des gewählten Zugangs zu verwenden.",
   "netbox_credential": "NetBox-Zugang",
   "netbox_credential_has_the_wrong_kind": "Der gewählte Zugang ist kein NetBox-Zugang.",
+  "netbox_endpoint_must_match_credential": "Die NetBox-Adresse muss zur Adresse des gewählten Zugangs passen.",
   "netbox_is_not_reachable_err": "NetBox ist nicht erreichbar: {err}",
   "netbox_needs_a_token": "NetBox braucht token.",
   "netbox_token_becomes_a_credential": "Das Token wird zu einem sichtbaren Zugang namens \"{name} Token\".",
