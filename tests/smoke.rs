@@ -9755,6 +9755,18 @@ async fn a_template_can_run_the_last_sync_offline() {
     assert_eq!(kept["status"], "successful", "{}", kept["events"]);
     assert_eq!(kept["parameters"]["update_on_launch"], false);
     assert_eq!(kept["parameters"]["project_name"], "Offline");
+    let kept_id = kept["id"].as_str().unwrap().to_string();
+    let kept_commit = kept["parameters"]["project_commit"]
+        .as_str()
+        .expect("project commit")
+        .to_string();
+    let kept_full = kept["parameters"]["project_commit_full"]
+        .as_str()
+        .expect("full project commit")
+        .to_string();
+    assert_eq!(kept_commit.chars().count(), 7);
+    assert_eq!(kept_full.chars().count(), 40);
+    assert!(kept_full.starts_with(&kept_commit));
     assert!(has_line(
         &kept,
         "system",
@@ -9789,6 +9801,33 @@ async fn a_template_can_run_the_last_sync_offline() {
         "Using the checkout from the last sync."
     ));
     assert!(has_line(&updated, "stdout", "newer"));
+    let fresh_full = updated["parameters"]["project_commit_full"]
+        .as_str()
+        .expect("fresh full commit");
+    assert_ne!(fresh_full, kept_full.as_str());
+
+    let (status, synced_again, _) = call(
+        &app,
+        "POST",
+        &format!("/api/projects/{project_id}/sync"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{synced_again}");
+    let (status, old, _) = call(
+        &app,
+        "GET",
+        &format!("/api/jobs/{kept_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{old}");
+    assert_eq!(old["parameters"]["project_commit"], kept_commit);
+    assert_eq!(old["parameters"]["project_commit_full"], kept_full);
 
     let missing = format!(
         "file://{}/koreograf-missing-{}",
@@ -11508,6 +11547,68 @@ if (plain.page !== 1 || plain.size !== 25 || jobsHash(plain) !== "#/jobs") {{
 "##
     );
     run_node_probe("job-list-hash", &probe);
+}
+
+#[test]
+fn job_log_summary_search_and_first_failure() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let functions = format!(
+        "{}\n{}\n{}",
+        extract_braced_function(&script, "function parseRecapLine"),
+        extract_braced_function(&script, "function recapFailed"),
+        extract_braced_function(&script, "function searchSegments")
+    );
+    let probe = format!(
+        r##"{functions}
+const fixture = [
+  "PLAY RECAP *********************************************************************",
+  "web-1                      : ok=3    changed=1    unreachable=0    failed=0    skipped=1    rescued=0    ignored=0",
+  "web-2                      : ok=1    changed=0    unreachable=1    failed=1    skipped=0    rescued=0    ignored=0"
+];
+const rows = fixture.map(parseRecapLine).filter(Boolean);
+if (rows.length !== 2) {{
+  console.error(JSON.stringify(rows));
+  process.exit(1);
+}}
+if (rows[0].host !== "web-1" || rows[0].ok !== 3 || rows[0].changed !== 1 || recapFailed(rows[0])) {{
+  console.error(JSON.stringify(rows[0]));
+  process.exit(1);
+}}
+if (rows[1].host !== "web-2" || rows[1].unreachable !== 1 || rows[1].failed !== 1 || !recapFailed(rows[1])) {{
+  console.error(JSON.stringify(rows[1]));
+  process.exit(1);
+}}
+const raw = '<script>alert("&lt;")</script> &lt; <b>x</b>';
+for (const query of ["script", "&lt;", "<b>"]) {{
+  const segments = searchSegments(raw, query);
+  if (segments.map((item) => item.text).join("") !== raw) {{
+    console.error(JSON.stringify(segments));
+    process.exit(1);
+  }}
+  if (!segments.some((item) => item.hit)) {{
+    console.error(query);
+    process.exit(1);
+  }}
+}}
+"##
+    );
+    run_node_probe("job-log-summary", &probe);
+    let paint = extract_braced_function(&script, "function paintLogLine");
+    assert!(paint.contains("createTextNode"));
+    assert!(paint.contains("textContent"));
+    assert!(!paint.contains("innerHTML"));
+    assert!(script.contains("id=\"log-first-failure\""));
+    assert!(script.contains("id=\"log-jump-end\""));
+    assert!(script.contains("id=\"log-search\""));
+    assert!(script.contains("id=\"log-wrap\""));
+    assert!(script.contains("id=\"log-result\""));
+    assert!(script.contains("state.firstFailure.scrollIntoView"));
+    assert!(script.contains("state.atBottom"));
+    let parameters = extract_braced_function(&script, "function jobParameters");
+    assert!(parameters.contains("paramRow(\"credentials\""));
+    assert!(!parameters.contains("paramRow(\"nav.access\""));
+    assert!(parameters.contains("project_commit_full"));
 }
 
 async fn job_count(app: &axum::Router, cookie: &str, team: &str) -> usize {

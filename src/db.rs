@@ -2493,6 +2493,14 @@ pub fn set_failed_hosts(c: &Connection, id: &str, failed_hosts: &str) -> AppResu
     Ok(())
 }
 
+pub fn set_job_parameters(c: &Connection, id: &str, parameters: &str) -> AppResult<()> {
+    c.execute(
+        "UPDATE jobs SET parameters = ?2 WHERE id = ?1",
+        params![id, parameters],
+    )?;
+    Ok(())
+}
+
 pub fn finish_job(c: &Connection, id: &str, status: &str) -> AppResult<bool> {
     let n = c.execute(
         "UPDATE jobs SET status = ?2, finished_at = ?3

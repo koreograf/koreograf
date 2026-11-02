@@ -836,6 +836,11 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
         )
         .await
         .map_err(sync_log_line)?;
+        if project.source_type == "git" {
+            if let Some(commit) = head_commit_full(&source).await {
+                store_project_commit(state, job_id, &commit);
+            }
+        }
         if project.source_type == "git" && !template.update_on_launch {
             log(
                 state,
@@ -1993,12 +1998,21 @@ fn hex_digit(byte: u8) -> Option<u8> {
 }
 
 pub async fn head_commit(path: &Path) -> Option<String> {
+    rev_parse(path, &["--short", "HEAD"]).await
+}
+
+pub async fn head_commit_full(path: &Path) -> Option<String> {
+    rev_parse(path, &["HEAD"]).await
+}
+
+async fn rev_parse(path: &Path, args: &[&str]) -> Option<String> {
     let output = Command::new("git")
         .arg("-c")
         .arg(safe_directory(path))
         .arg("-C")
         .arg(path)
-        .args(["rev-parse", "--short", "HEAD"])
+        .arg("rev-parse")
+        .args(args)
         .output()
         .await
         .ok()?;
@@ -2010,6 +2024,28 @@ pub async fn head_commit(path: &Path) -> Option<String> {
         None
     } else {
         Some(commit)
+    }
+}
+
+fn store_project_commit(state: &Shared, job_id: &str, commit: &str) {
+    let Ok(db) = state.db() else {
+        return;
+    };
+    let Ok(Some(job)) = db::job(&db, job_id) else {
+        return;
+    };
+    let mut parameters = db::json_object(&job.parameters);
+    let Some(map) = parameters.as_object_mut() else {
+        return;
+    };
+    let short = commit.chars().take(7).collect::<String>();
+    map.insert("project_commit".into(), Value::String(short));
+    map.insert(
+        "project_commit_full".into(),
+        Value::String(commit.to_string()),
+    );
+    if let Ok(raw) = serde_json::to_string(&parameters) {
+        let _ = db::set_job_parameters(&db, job_id, &raw);
     }
 }
 

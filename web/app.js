@@ -2245,6 +2245,212 @@ function failureKind(text) {
   return "";
 }
 
+const RECAP_FIELDS = ["ok", "changed", "unreachable", "failed", "skipped", "rescued", "ignored"];
+
+function parseRecapLine(text) {
+  const match = /^\s*(\S+)\s*:\s*ok=(\d+)\s+changed=(\d+)\s+unreachable=(\d+)\s+failed=(\d+)\s+skipped=(\d+)\s+rescued=(\d+)\s+ignored=(\d+)\s*$/.exec(String(text ?? ""));
+  if (!match) return null;
+  return {
+    host: match[1],
+    ok: Number(match[2]),
+    changed: Number(match[3]),
+    unreachable: Number(match[4]),
+    failed: Number(match[5]),
+    skipped: Number(match[6]),
+    rescued: Number(match[7]),
+    ignored: Number(match[8]),
+  };
+}
+
+function recapFailed(row) {
+  return Boolean(row && (row.failed > 0 || row.unreachable > 0));
+}
+
+function searchSegments(text, query) {
+  const raw = String(text ?? "");
+  const needle = String(query ?? "");
+  if (!needle) return [{ text: raw, hit: false }];
+  const haystack = raw.toLocaleLowerCase();
+  const lower = needle.toLocaleLowerCase();
+  const segments = [];
+  let start = 0;
+  let index = haystack.indexOf(lower);
+  while (index !== -1) {
+    if (index > start) segments.push({ text: raw.slice(start, index), hit: false });
+    segments.push({ text: raw.slice(index, index + lower.length), hit: true });
+    start = index + lower.length;
+    index = haystack.indexOf(lower, start);
+  }
+  if (start < raw.length) segments.push({ text: raw.slice(start), hit: false });
+  if (!segments.length) segments.push({ text: raw, hit: false });
+  return segments;
+}
+
+function logState(log) {
+  if (!log.koreografLog) {
+    log.koreografLog = {
+      tool: "",
+      recap: new Map(),
+      firstFailure: null,
+      query: "",
+      matches: [],
+      current: -1,
+      atBottom: true,
+    };
+  }
+  return log.koreografLog;
+}
+
+function paintLogLine(line, query) {
+  const marks = [];
+  line.replaceChildren();
+  searchSegments(line.koreografRaw ?? "", query).forEach((segment) => {
+    if (segment.hit) {
+      const mark = document.createElement("mark");
+      mark.className = "log-hit";
+      mark.textContent = segment.text;
+      line.appendChild(mark);
+      marks.push(mark);
+    } else if (segment.text) {
+      line.appendChild(document.createTextNode(segment.text));
+    }
+  });
+  return marks;
+}
+
+function renderRecap(state) {
+  const box = document.querySelector("#log-result");
+  if (!box) return;
+  const rows = [...state.recap.values()];
+  box.hidden = state.tool !== "ansible" || !rows.length;
+  if (box.hidden) {
+    box.replaceChildren();
+    return;
+  }
+  const table = document.createElement("table");
+  const head = document.createElement("tr");
+  ["host", ...RECAP_FIELDS].forEach((key) => {
+    const cell = document.createElement("th");
+    cell.textContent = t(key);
+    head.appendChild(cell);
+  });
+  table.appendChild(head);
+  rows.forEach((row) => {
+    const line = document.createElement("tr");
+    if (recapFailed(row)) {
+      line.className = "fail";
+      line.dataset.failed = "1";
+    }
+    [row.host, ...RECAP_FIELDS.map((field) => String(row[field]))].forEach((value, index) => {
+      const cell = document.createElement(index === 0 ? "th" : "td");
+      cell.textContent = value;
+      line.appendChild(cell);
+    });
+    table.appendChild(line);
+  });
+  box.replaceChildren(table);
+}
+
+function updateRecap(state, text) {
+  if (state.tool !== "ansible") return;
+  const row = parseRecapLine(text);
+  if (!row) return;
+  state.recap.set(row.host, row);
+  renderRecap(state);
+}
+
+function updateSearchCount(state) {
+  const count = document.querySelector("#log-search-count");
+  if (!count) return;
+  if (!state.query) {
+    count.textContent = "";
+    return;
+  }
+  count.textContent = t("log_search_count", {
+    current: state.matches.length ? state.current + 1 : 0,
+    total: state.matches.length,
+  });
+}
+
+function jumpToSearchMatch(state, index) {
+  if (!state.matches.length) {
+    state.current = -1;
+    updateSearchCount(state);
+    return;
+  }
+  const total = state.matches.length;
+  state.current = ((index % total) + total) % total;
+  state.matches.forEach((mark) => mark.classList.remove("current"));
+  const mark = state.matches[state.current];
+  mark.classList.add("current");
+  mark.scrollIntoView({ block: "center", inline: "nearest" });
+  updateSearchCount(state);
+}
+
+function paintLogSearch(log, state, jump) {
+  state.matches = [];
+  state.current = -1;
+  log.querySelectorAll("div").forEach((line) => {
+    if (line.koreografRaw === undefined) return;
+    state.matches.push(...paintLogLine(line, state.query));
+  });
+  if (jump && state.matches.length) jumpToSearchMatch(state, 0);
+  else updateSearchCount(state);
+}
+
+function bindJobLog(log, job) {
+  const state = logState(log);
+  state.tool = job.tool || "";
+  state.recap.clear();
+  state.firstFailure = null;
+  state.query = "";
+  state.matches = [];
+  state.current = -1;
+  state.atBottom = true;
+  renderRecap(state);
+  const search = document.querySelector("#log-search");
+  const count = document.querySelector("#log-search-count");
+  const first = document.querySelector("#log-first-failure");
+  const end = document.querySelector("#log-jump-end");
+  const wrap = document.querySelector("#log-wrap");
+  if (first) first.hidden = true;
+  if (end) end.hidden = true;
+  if (count) count.textContent = "";
+  if (!search) return;
+  search.value = "";
+  search.addEventListener("input", () => {
+    state.query = search.value.trim();
+    paintLogSearch(log, state, true);
+  });
+  search.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || !state.matches.length) return;
+    event.preventDefault();
+    jumpToSearchMatch(state, state.current + (event.shiftKey ? -1 : 1));
+  });
+  log.addEventListener("scroll", () => {
+    const bottom = log.scrollHeight - log.scrollTop - log.clientHeight < 24;
+    state.atBottom = bottom;
+    if (end) end.hidden = bottom;
+  });
+  if (wrap) {
+    wrap.checked = false;
+    log.classList.remove("wrap");
+    wrap.addEventListener("change", () => log.classList.toggle("wrap", wrap.checked));
+  }
+  if (first) {
+    first.addEventListener("click", () => {
+      if (state.firstFailure) state.firstFailure.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+  }
+  if (end) {
+    end.addEventListener("click", () => {
+      state.atBottom = true;
+      log.scrollTop = log.scrollHeight;
+      end.hidden = true;
+    });
+  }
+}
+
 function tagFilterNote(row) {
   return row.stream === "system" && plainLogLine(row.line).includes("Tag filter matched no tasks.");
 }
@@ -2302,22 +2508,48 @@ function pinFailure(text, kind) {
 function appendLog(row) {
   const log = document.querySelector("#log");
   if (!log) return;
+  const state = logState(log);
   const line = document.createElement("div");
   if (row.stream === "gap") {
     line.className = "system";
     line.textContent = t("log_gap", { count: Number(row.line) || 0 });
+    line.koreografRaw = line.textContent;
     log.appendChild(line);
-    log.scrollTop = log.scrollHeight;
+    if (state.query) {
+      state.matches.push(...paintLogLine(line, state.query));
+      updateSearchCount(state);
+    }
+    if (state.atBottom) log.scrollTop = log.scrollHeight;
     return;
   }
   const kind = classifyLogLine(log, row);
   if (tagFilterNote(row)) showTagFilterBanner();
   if (kind) line.className = kind;
   line.textContent = row.line;
+  line.koreografRaw = row.line;
   log.appendChild(line);
-  if (kind === "fail") markRecap(line);
+  if (kind === "fail") {
+    markRecap(line);
+    if (!state.firstFailure) {
+      state.firstFailure = line;
+      const first = document.querySelector("#log-first-failure");
+      if (first) first.hidden = false;
+    }
+  }
   pinFailure(plainLogLine(row.line), kind);
-  log.scrollTop = log.scrollHeight;
+  updateRecap(state, plainLogLine(row.line));
+  if (state.query) {
+    const marks = paintLogLine(line, state.query);
+    if (marks.length) {
+      state.matches.push(...marks);
+      if (state.current < 0) {
+        state.current = 0;
+        state.matches[0].classList.add("current");
+      }
+      updateSearchCount(state);
+    }
+  }
+  if (state.atBottom) log.scrollTop = log.scrollHeight;
 }
 
 function paramRow(label, value) {
@@ -2362,6 +2594,9 @@ function jobParameters(job) {
   const environment = [params.environment_name, params.environment_image].filter(Boolean).join(" · ");
   const kind = spec.job_type === "check" ? t("check") : spec.job_type === "run" ? t("run") : "";
   const diff = spec.diff === true ? t("yes") : spec.diff === false ? t("no") : "";
+  const commit = params.project_commit
+    ? `<span title="${esc(params.project_commit_full || params.project_commit)}">${esc(params.project_commit)}</span>`
+    : "";
   const hostLine = hosts.length
     ? `<dt>${h("failed_hosts")}</dt><dd>${hosts.map((host) => esc(host)).join(", ")}</dd>`
     : "";
@@ -2370,9 +2605,10 @@ function jobParameters(job) {
     ${paramRow("tool", params.tool)}
     ${paramRow("entry", params.entrypoint)}
     ${paramRow("project", params.project_name)}
+    ${paramRowHtml("project_commit", commit)}
     ${typeof params.update_on_launch === "boolean" && params.project_name ? paramRow("project_update", t(params.update_on_launch ? "on_launch" : "use_the_last_sync")) : ""}
     ${paramRow("inventory", params.inventory_name)}
-    ${paramRow("nav.access", credential)}
+    ${paramRow("credentials", credential)}
     ${paramRow("execution_environment", environment)}
     ${paramRow("type", kind)}
     ${paramRowHtml("tags", chipReadout(spec.tags))}
@@ -2423,7 +2659,7 @@ async function pageJob(id) {
   const actions = jobActions(job);
   shell(job.name, `
     <div class="spread" style="margin-bottom:12px">
-      <div class="row">${pill(job.status)} <span class="tool">${esc(job.tool)}</span> <span class="small muted">${esc(job.trigger)} · ${esc(job.launched_by)} · ${esc(when(job.created_at))} · <span id="job-duration">${esc(spanText(job.started_at, job.finished_at, job.status))}</span></span></div>
+      <div class="row">${pill(job.status)} <span class="tool">${esc(job.tool)}</span> <span class="small muted">${esc(job.trigger)} · ${esc(job.launched_by)} · ${esc(when(job.started_at || job.created_at))} · <span id="job-duration">${esc(spanText(job.started_at, job.finished_at, job.status))}</span></span></div>
     </div>
     <div class="spread tab-bar">
       <div class="tabs">
@@ -2436,9 +2672,23 @@ async function pageJob(id) {
         ${job.output_capped ? `<span class="small muted" id="output-capped">${h("output_download_is_incomplete")}</span>` : ""}
       </div>
     </div>
-    <div id="panel-output"><div class="log-summary" id="log-summary" hidden></div><div class="log" id="log"></div></div>
+    <div id="panel-output">
+      <div class="log-tools">
+        <input class="search" id="log-search" placeholder="${h("search_log")}" aria-label="${h("search_log")}" autocomplete="off">
+        <span class="small muted" id="log-search-count"></span>
+        <div class="row">
+          <button class="btn" type="button" id="log-first-failure" hidden>${h("jump_to_first_failure")}</button>
+          <label class="row"><input id="log-wrap" type="checkbox"> ${h("wrap_lines")}</label>
+          <button class="btn" type="button" id="log-jump-end" hidden>${h("jump_to_end")}</button>
+        </div>
+      </div>
+      <div class="result-summary" id="log-result" hidden></div>
+      <div class="log-summary" id="log-summary" hidden></div>
+      <div class="log" id="log"></div>
+    </div>
     <div id="panel-parameters" hidden>${jobParameters(job)}</div>`);
   const badge = document.querySelector(".pill");
+  bindJobLog(document.querySelector("#log"), job);
   (job.events || []).forEach(appendLog);
   const relaunchButtons = () => document.querySelectorAll("[data-action=relaunch], [data-action=relaunch-failed]");
   const startAgain = async (onlyFailed) => {
