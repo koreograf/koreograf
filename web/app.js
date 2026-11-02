@@ -3115,7 +3115,7 @@ async function pageWorkflows() {
       <input class="search" id="workflow-search" placeholder="${h("search_workflows")}" autocomplete="off">
       <div id="workflow-table"></div>
     </section>`,
-    can("operator") ? addLink("#/workflows/new", "workflow_2") : "");
+    can("operator") ? addLink("#/workflows?new=1", "workflow_2") : "");
   const drawWorkflows = () => {
     const needle = document.querySelector("#workflow-search").value.trim().toLowerCase();
     const shown = items.filter((item) => !needle || `${item.name} ${item.description}`.toLowerCase().includes(needle));
@@ -3141,34 +3141,31 @@ async function pageWorkflows() {
   };
   document.querySelector("#workflow-search").addEventListener("input", drawWorkflows);
   drawWorkflows();
-}
-
-async function pageWorkflowNew() {
-  if (!needTeam()) return;
-  if (!can("operator")) {
-    deny("workflow", "operator");
+  const request = editQuery();
+  if (request.create !== null) {
+    if (can("operator")) openWorkflowDialog();
     return;
   }
-  shell(t("new_workflow"), `
-    <form class="card form" id="workflow-new">
-      <label class="field"><span>${h("name")}</span><input name="name" required></label>
-      <label class="field"><span>${h("description")}</span><input name="description" maxlength="1000"></label>
-      <button class="btn pill primary" type="submit">${h("create_and_open")}</button>
-    </form>`);
-  document.querySelector("#workflow-new").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    try {
+}
+
+function openWorkflowDialog() {
+  openEditDialog({
+    id: "workflow-dialog",
+    title: t("new_workflow"),
+    body: `
+      <label class="field required"><span>${h("name")}</span><input name="name" required></label>
+      <label class="field"><span>${h("description")}</span><input name="description" maxlength="1000"></label>`,
+    submit: t("create_and_open"),
+    onSubmit: async ({ form, close }) => {
       const created = await api("POST", "/api/workflows", {
         name: form.name.value,
         description: form.description.value,
         graph: { nodes: [], edges: [] },
       });
       markSaved();
+      close();
       go(`#/workflows/${created.id}`);
-    } catch (error) {
-      handle(error);
-    }
+    },
   });
 }
 
@@ -6941,7 +6938,7 @@ async function route() {
     else if (parts[0] === "templates") await pageTemplates();
     else if (parts[0] === "jobs" && parts[1]) await pageJob(parts[1]);
     else if (parts[0] === "jobs") await pageJobs();
-    else if (parts[0] === "workflows" && parts[1] === "new") await pageWorkflowNew();
+    else if (parts[0] === "workflows" && parts[1] === "new") { location.replace("#/workflows?new=1"); return; }
     else if (parts[0] === "workflows" && parts[1]) await pageWorkflow(parts[1]);
     else if (parts[0] === "workflows") await pageWorkflows();
     else if (parts[0] === "schedules") await pageSchedules();
