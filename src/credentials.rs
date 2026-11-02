@@ -580,11 +580,8 @@ fn check_netbox(secret: &Value) -> Result<(), String> {
     require(token, "netbox_needs_a_token")?;
     one_line(token, "token")?;
     let url = text(secret, "url");
-    if url.is_empty() {
-        Ok(())
-    } else {
-        one_line(url, "address")
-    }
+    require(url, "netbox_needs_an_address")?;
+    one_line(url, "address")
 }
 
 pub(crate) fn backfill_netbox_urls(state: &crate::Shared) -> Result<(), crate::error::ApiError> {
@@ -626,26 +623,34 @@ pub(crate) fn backfill_netbox_urls(state: &crate::Shared) -> Result<(), crate::e
         if has_url {
             continue;
         }
-        let Some(endpoint) = endpoints.get(&credential.id) else {
-            continue;
-        };
-        let Some(object) = secret.as_object_mut() else {
-            continue;
-        };
-        object.insert("url".into(), Value::String(endpoint.clone()));
-        if let Ok(blob) = state.encrypt(&secret.to_string()) {
-            updates.push((credential.id, blob));
+        if let Some(endpoint) = endpoints.get(&credential.id) {
+            let Some(object) = secret.as_object_mut() else {
+                continue;
+            };
+            object.insert("url".into(), Value::String(endpoint.clone()));
+            if let Ok(blob) = state.encrypt(&secret.to_string()) {
+                updates.push((credential.id, Some(blob), false));
+            }
+        } else {
+            updates.push((credential.id, None, true));
         }
     }
     if updates.is_empty() {
         return Ok(());
     }
     let db = state.db()?;
-    for (id, blob) in updates {
-        db.execute(
-            "UPDATE credentials SET secret_blob = ?2 WHERE id = ?1",
-            rusqlite::params![id, blob],
-        )?;
+    for (id, blob, disabled) in updates {
+        if let Some(blob) = blob {
+            db.execute(
+                "UPDATE credentials SET secret_blob = ?2, disabled = ?3 WHERE id = ?1",
+                rusqlite::params![id, blob, disabled],
+            )?;
+        } else {
+            db.execute(
+                "UPDATE credentials SET disabled = ?2 WHERE id = ?1",
+                rusqlite::params![id, disabled],
+            )?;
+        }
     }
     Ok(())
 }

@@ -1119,6 +1119,7 @@ pub async fn create_credential(
         secret_blob: blob,
         created_at: db::now(),
         auto: false,
+        disabled: false,
     };
     let db = state.db()?;
     db::insert_credential(&db, &item)?;
@@ -1229,6 +1230,7 @@ pub async fn update_credential(
     }
     item.name = require_name(&body.name)?;
     item.secret_blob = state.encrypt(&raw)?;
+    item.disabled = false;
     let db = state.db()?;
     db::update_credential(&db, &item)?;
     let usages = usage_json(&db, &item.id, &team)?;

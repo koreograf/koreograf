@@ -259,6 +259,7 @@ pub async fn create_netbox(
                 secret_blob: blob,
                 created_at: db::now(),
                 auto: false,
+                disabled: false,
             },
         )?;
         Some(id)
@@ -390,7 +391,7 @@ fn stored_token(
     state: &Shared,
     credential_id: &Option<String>,
     team_id: &str,
-) -> AppResult<String> {
+) -> AppResult<(String, String)> {
     let credential_id = credential_id
         .as_deref()
         .ok_or_else(|| ApiError::bad("the_netbox_token_is_missing"))?;
@@ -400,8 +401,23 @@ fn stored_token(
     if credential.team_id != team_id || credential.kind != "netbox" {
         return Err(ApiError::bad("the_netbox_token_belongs_to_another_team"));
     }
+    if credential.disabled {
+        return Err(ApiError::bad("netbox_credential_is_disabled"));
+    }
     let plain = state.decrypt(&credential.secret_blob)?;
-    token_from_secret(&plain)
+    let value: Value = serde_json::from_str(&plain)
+        .map_err(|_| ApiError::bad("the_netbox_credential_is_damaged"))?;
+    let token = token_from_value(&value)?;
+    let url = value
+        .get("url")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if url.is_empty() {
+        return Err(ApiError::bad("netbox_needs_an_address"));
+    }
+    Ok((token, url))
 }
 
 async fn refresh_netbox(
@@ -411,7 +427,10 @@ async fn refresh_netbox(
     source_json: &str,
 ) -> AppResult<String> {
     let stored = stored_netbox(source_json)?;
-    let token = stored_token(state, credential_id, team_id)?;
+    let (token, url) = stored_token(state, credential_id, team_id)?;
+    if !endpoint_matches(&stored.api_endpoint, &url) {
+        return Err(ApiError::bad("netbox_endpoint_must_match_credential"));
+    }
     let source = NetboxSource {
         api_endpoint: stored.api_endpoint,
         validate_certs: stored.validate_certs,
@@ -428,12 +447,6 @@ async fn fetch_netbox(state: &Shared, source: &NetboxSource, token: &str) -> App
     netbox::fetch_ini(source, token, &proxy)
         .await
         .map_err(ApiError::bad)
-}
-
-fn token_from_secret(plain: &str) -> AppResult<String> {
-    let value: Value = serde_json::from_str(plain)
-        .map_err(|_| ApiError::bad("the_netbox_credential_is_damaged"))?;
-    token_from_value(&value)
 }
 
 fn netbox_config(
@@ -531,10 +544,13 @@ fn netbox_access(
             .and_then(Value::as_str)
             .unwrap_or("")
             .trim();
+        if url.is_empty() {
+            return Err(ApiError::bad("netbox_needs_an_address"));
+        }
         let api_endpoint = if endpoint.is_empty() {
             url.to_string()
         } else {
-            if !url.is_empty() && !endpoint_matches(endpoint, url) {
+            if !endpoint_matches(endpoint, url) {
                 return Err(ApiError::bad("netbox_endpoint_must_match_credential"));
             }
             endpoint.to_string()
@@ -615,17 +631,20 @@ fn ensure_certificate_override(
 }
 
 fn credential_secret(state: &Shared, id: &str, team: &str) -> AppResult<Value> {
-    let (blob, kind, credential_team) = {
+    let (blob, kind, credential_team, disabled) = {
         let db = state.db()?;
         let item =
             db::credential(&db, id)?.ok_or_else(|| ApiError::bad("the_netbox_token_is_missing"))?;
-        (item.secret_blob, item.kind, item.team_id)
+        (item.secret_blob, item.kind, item.team_id, item.disabled)
     };
     if credential_team != team {
         return Err(ApiError::bad("the_credential_belongs_to_another_team"));
     }
     if kind != "netbox" {
         return Err(ApiError::bad("netbox_credential_has_the_wrong_kind"));
+    }
+    if disabled {
+        return Err(ApiError::bad("netbox_credential_is_disabled"));
     }
     let plain = state.decrypt(&blob)?;
     serde_json::from_str(&plain).map_err(|_| ApiError::bad("the_netbox_credential_is_damaged"))
@@ -838,34 +857,26 @@ pub async fn update_source(
     let mut db = state.db()?;
     let tx = db.transaction()?;
     let credential_id = if let Some(blob) = &resolved.credential_blob {
-        if let Some(existing) = &source.credential_id {
-            let mut item = db::credential(&tx, existing)?
-                .filter(|item| item.team_id == team)
-                .ok_or(ApiError::NotFound)?;
-            item.secret_blob = blob.clone();
-            db::update_credential(&tx, &item)?;
-            Some(existing.clone())
-        } else {
-            let id = Uuid::new_v4().to_string();
-            let base = resolved
-                .credential_name
-                .clone()
-                .unwrap_or_else(|| format!("{} Token", resolved.name));
-            let credential_name = unique_credential_name(&tx, &team, &base)?;
-            db::insert_credential(
-                &tx,
-                &db::Credential {
-                    id: id.clone(),
-                    team_id: team.clone(),
-                    name: credential_name,
-                    kind: "netbox".into(),
-                    secret_blob: blob.clone(),
-                    created_at: db::now(),
-                    auto: false,
-                },
-            )?;
-            Some(id)
-        }
+        let id = Uuid::new_v4().to_string();
+        let base = resolved
+            .credential_name
+            .clone()
+            .unwrap_or_else(|| format!("{} Token", resolved.name));
+        let credential_name = unique_credential_name(&tx, &team, &base)?;
+        db::insert_credential(
+            &tx,
+            &db::Credential {
+                id: id.clone(),
+                team_id: team.clone(),
+                name: credential_name,
+                kind: "netbox".into(),
+                secret_blob: blob.clone(),
+                created_at: db::now(),
+                auto: false,
+                disabled: false,
+            },
+        )?;
+        Some(id)
     } else {
         resolved
             .credential_id
@@ -1220,6 +1231,7 @@ fn store_source(
                     secret_blob: blob.clone(),
                     created_at: created_at.to_string(),
                     auto: false,
+                    disabled: false,
                 },
             )?;
             Some(id)

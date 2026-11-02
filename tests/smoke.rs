@@ -3429,7 +3429,7 @@ async fn netbox_endpoint_changes_require_a_new_token() {
     assert_eq!(status, StatusCode::CREATED, "{created}");
     let inventory_id = created["id"].as_str().unwrap().to_string();
     let source_id = created["sources"][0]["id"].as_str().unwrap().to_string();
-    let credential_id = created["sources"][0]["credential_id"]
+    let mut credential_id = created["sources"][0]["credential_id"]
         .as_str()
         .unwrap()
         .to_string();
@@ -3467,7 +3467,11 @@ async fn netbox_endpoint_changes_require_a_new_token() {
     .await;
     assert_eq!(status, StatusCode::OK, "{edited}");
     assert_eq!(edited["sources"][0]["source"]["api_endpoint"], second);
-    assert_eq!(edited["sources"][0]["credential_id"], credential_id);
+    assert_ne!(edited["sources"][0]["credential_id"], credential_id);
+    let operator_credential = edited["sources"][0]["credential_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     assert!(edited["sources"][0]["body"]
         .as_str()
         .unwrap_or("")
@@ -3551,7 +3555,14 @@ async fn netbox_endpoint_changes_require_a_new_token() {
         1,
         "{admin_edited}"
     );
-    assert_eq!(admin_edited["sources"][0]["credential_id"], credential_id);
+    assert_ne!(
+        admin_edited["sources"][0]["credential_id"],
+        operator_credential
+    );
+    credential_id = admin_edited["sources"][0]["credential_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     let second_before = second_hits.load(std::sync::atomic::Ordering::SeqCst);
     let (status, wrong_create, _) = call(
@@ -3846,7 +3857,524 @@ async fn netbox_endpoint_changes_require_a_new_token() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{credentials}");
-    assert_eq!(credentials.as_array().unwrap().len(), 1, "{credentials}");
+    assert_eq!(credentials.as_array().unwrap().len(), 3, "{credentials}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn netbox_credentials_without_a_url_cannot_reach_another_endpoint() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-netbox-no-url-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state.clone());
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "username": "operator",
+            "display_name": "operator",
+            "password": "operator-pass",
+            "is_admin": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{team}/members"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"username": "operator", "role": "operator"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, operator_me, operator_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "operator", "password": "operator-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{operator_me}");
+    let operator_cookie = operator_cookie.expect("operator cookie");
+
+    let (first, first_hits) = netbox_mock().await;
+    let (second, second_hits) = netbox_mock().await;
+
+    let (status, legacy, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Legacy token",
+            "kind": "github",
+            "secret": {"token": "legacy-token"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{legacy}");
+    let legacy_id = legacy["id"].as_str().unwrap().to_string();
+    {
+        let db = state.db().unwrap();
+        let changed = db
+            .execute(
+                "UPDATE credentials SET kind = 'netbox' WHERE id = ?1",
+                [&legacy_id],
+            )
+            .unwrap();
+        assert_eq!(changed, 1);
+    }
+
+    let (status, missing, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "No address",
+            "kind": "netbox",
+            "secret": {"token": "secret-token"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{missing}");
+    assert_eq!(missing["error"], "netbox_needs_an_address");
+
+    let (status, valid, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Valid NetBox",
+            "kind": "netbox",
+            "secret": {"token": "secret-token", "url": first}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{valid}");
+    let valid_id = valid["id"].as_str().unwrap().to_string();
+
+    let (status, cleared, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/credentials/{valid_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Valid NetBox", "secret": {"url": ""}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{cleared}");
+    assert_eq!(cleared["error"], "netbox_needs_an_address");
+
+    let (status, denied_create, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&operator_cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Foreign NetBox",
+            "sources": [{
+                "kind": "netbox",
+                "credential_id": legacy_id,
+                "api_endpoint": second
+            }]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{denied_create}");
+    assert_eq!(denied_create["error"], "netbox_needs_an_address");
+
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&operator_cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Bound NetBox",
+            "sources": [{
+                "kind": "netbox",
+                "credential_id": valid_id,
+                "api_endpoint": first,
+                "virtual_machines": false
+            }]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(
+        first_hits.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "{created}"
+    );
+    let inventory_id = created["id"].as_str().unwrap().to_string();
+    let source_id = created["sources"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, denied_add, _) = call(
+        &app,
+        "POST",
+        &format!("/api/inventories/{inventory_id}/sources"),
+        Some(&operator_cookie),
+        Some(&team),
+        Some(json!({
+            "kind": "netbox",
+            "credential_id": legacy_id,
+            "api_endpoint": second
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{denied_add}");
+    assert_eq!(denied_add["error"], "netbox_needs_an_address");
+
+    let (status, denied_update, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/inventories/{inventory_id}/sources/{source_id}"),
+        Some(&operator_cookie),
+        Some(&team),
+        Some(json!({"credential_id": legacy_id, "api_endpoint": second})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{denied_update}");
+    assert_eq!(denied_update["error"], "netbox_needs_an_address");
+
+    let (status, denied_test, _) = call(
+        &app,
+        "POST",
+        "/api/inventories/netbox/test",
+        Some(&operator_cookie),
+        Some(&team),
+        Some(json!({"credential_id": legacy_id, "api_endpoint": second})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{denied_test}");
+    assert_eq!(denied_test["error"], "netbox_needs_an_address");
+    assert_eq!(
+        second_hits.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "{denied_test}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn netbox_credentials_without_a_source_are_disabled() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-netbox-disabled-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state.clone());
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, legacy, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Orphan token",
+            "kind": "github",
+            "secret": {"token": "orphan-token"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{legacy}");
+    let legacy_id = legacy["id"].as_str().unwrap().to_string();
+    {
+        let db = state.db().unwrap();
+        db.execute(
+            "UPDATE credentials SET kind = 'netbox' WHERE id = ?1",
+            [&legacy_id],
+        )
+        .unwrap();
+    }
+    drop(app);
+    drop(state);
+
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state.clone());
+    {
+        let db = state.db().unwrap();
+        let disabled: i64 = db
+            .query_row(
+                "SELECT disabled FROM credentials WHERE id = ?1",
+                [&legacy_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(disabled, 1);
+    }
+
+    let (status, _, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let cookie = cookie.expect("session cookie");
+    let (status, listed, _) = call(
+        &app,
+        "GET",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert!(!listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["id"] == legacy_id));
+
+    let (status, denied, _) = call(
+        &app,
+        "POST",
+        "/api/inventories/netbox/test",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "credential_id": legacy_id,
+            "api_endpoint": "http://127.0.0.1:9"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{denied}");
+    assert_eq!(denied["error"], "netbox_credential_is_disabled");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn netbox_source_update_keeps_the_previous_credential() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-netbox-immutable-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state.clone());
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "username": "operator",
+            "display_name": "operator",
+            "password": "operator-pass",
+            "is_admin": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{team}/members"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"username": "operator", "role": "operator"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, operator_me, operator_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "operator", "password": "operator-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{operator_me}");
+    let operator_cookie = operator_cookie.expect("operator cookie");
+
+    let (first, first_seen) = netbox_mock_recording().await;
+    let (second, second_seen) = netbox_mock_recording().await;
+
+    let (status, shared, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Shared NetBox",
+            "kind": "netbox",
+            "secret": {"token": "shared-token", "url": first}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{shared}");
+    let shared_id = shared["id"].as_str().unwrap().to_string();
+
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Shared source",
+            "sources": [{
+                "kind": "netbox",
+                "credential_id": shared_id,
+                "api_endpoint": first,
+                "virtual_machines": false
+            }]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(
+        first_seen.lock().unwrap().last().map(String::as_str),
+        Some("Token shared-token")
+    );
+    let inventory_id = created["id"].as_str().unwrap().to_string();
+    let source_id = created["sources"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, edited, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/inventories/{inventory_id}/sources/{source_id}"),
+        Some(&operator_cookie),
+        Some(&team),
+        Some(json!({"api_endpoint": second, "token": "operator-token"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    assert_ne!(edited["sources"][0]["credential_id"], shared_id);
+    let private_id = edited["sources"][0]["credential_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        second_seen.lock().unwrap().last().map(String::as_str),
+        Some("Token operator-token")
+    );
+
+    let (status, stored, _) = call(
+        &app,
+        "GET",
+        &format!("/api/credentials/{shared_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{stored}");
+    assert_eq!(stored["fields"]["url"], first);
+
+    let (status, listed, _) = call(
+        &app,
+        "GET",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let private = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == private_id)
+        .expect("private credential");
+    assert_eq!(private["name"], "netbox Token");
+
+    let (status, rebound, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Shared again",
+            "sources": [{
+                "kind": "netbox",
+                "credential_id": shared_id,
+                "api_endpoint": first,
+                "virtual_machines": false
+            }]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{rebound}");
+    assert_eq!(
+        first_seen.lock().unwrap().last().map(String::as_str),
+        Some("Token shared-token")
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -4147,46 +4675,64 @@ async fn netbox_automatic_credentials_become_normal_and_get_their_url() {
         Some(&team),
         Some(json!({
             "name": "Legacy NetBox Token",
-            "kind": "netbox",
+            "kind": "github",
             "secret": {"token": "secret-token"}
         })),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{credential}");
     let credential_id = credential["id"].as_str().unwrap().to_string();
-    let (status, created, _) = call(
-        &app,
-        "POST",
-        "/api/inventories",
-        Some(&cookie),
-        Some(&team),
-        Some(json!({
-            "name": "Legacy NetBox",
-            "sources": [{
-                "kind": "netbox",
-                "name": "Legacy NetBox",
-                "credential_id": credential_id,
-                "api_endpoint": addr,
-                "query_filters": ["status=active"],
-                "virtual_machines": false
-            }]
-        })),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED, "{created}");
-    let inventory_id = created["id"].as_str().unwrap().to_string();
-    let source_id = created["sources"][0]["id"].as_str().unwrap().to_string();
-    assert_eq!(created["sources"][0]["credential_id"], credential_id);
+    let inventory_id = format!("legacy-inventory-{nanos}");
+    let source_id = format!("legacy-source-{nanos}");
+    let source_json = json!({
+        "api_endpoint": addr,
+        "validate_certs": true,
+        "ca_file": "",
+        "group_by": [],
+        "query": [["status", "active"]],
+        "virtual_machines": false
+    })
+    .to_string();
+    let created_at = "2024-01-01T00:00:00Z";
 
     {
         let db = state.db().unwrap();
         let changed = db
             .execute(
-                "UPDATE credentials SET auto = 1 WHERE id = ?1",
+                "UPDATE credentials SET kind = 'netbox', auto = 1 WHERE id = ?1",
                 [&credential_id],
             )
             .unwrap();
         assert_eq!(changed, 1);
+        db.execute(
+            "INSERT INTO inventories (id, team_id, name, body, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            [
+                inventory_id.as_str(),
+                team.as_str(),
+                "Legacy NetBox",
+                "",
+                created_at,
+            ],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO inventory_sources (
+                id, inventory_id, name, kind, source_json, credential_id, body, position, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            [
+                source_id.as_str(),
+                inventory_id.as_str(),
+                "Legacy NetBox",
+                "netbox",
+                source_json.as_str(),
+                credential_id.as_str(),
+                "",
+                "0",
+                created_at,
+            ],
+        )
+        .unwrap();
     }
     drop(app);
     drop(state);
@@ -4585,7 +5131,7 @@ async fn deleting_an_inventory_keeps_its_shortcut_netbox_credential() {
         Some(json!({
             "name": "Unrelated NetBox Token",
             "kind": "netbox",
-            "secret": {"token": "keep-me"}
+            "secret": {"token": "keep-me", "url": "http://127.0.0.1:9"}
         })),
     )
     .await;
@@ -4811,7 +5357,7 @@ async fn deleting_an_inventory_keeps_shortcut_credentials_from_sources() {
         Some(json!({
             "name": "Unrelated NetBox Token",
             "kind": "netbox",
-            "secret": {"token": "keep-me"}
+            "secret": {"token": "keep-me", "url": "http://127.0.0.1:9"}
         })),
     )
     .await;
@@ -5077,7 +5623,7 @@ async fn deleting_an_inventory_keeps_shortcut_credentials_referenced_in_workflow
         Some(json!({
             "name": "Unrelated NetBox Token",
             "kind": "netbox",
-            "secret": {"token": "keep-me"}
+            "secret": {"token": "keep-me", "url": "http://127.0.0.1:9"}
         })),
     )
     .await;
