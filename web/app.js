@@ -327,6 +327,7 @@ function bytes(value) {
 
 function closeLive() {
   generation += 1;
+  document.querySelector("#schedule-form")?.remove();
   if (source) {
     source.close();
     source = null;
@@ -995,7 +996,7 @@ function makeModal(overlay, close) {
 
 let dialogSerial = 0;
 
-function openDialog({ id, formId, title, body, submit, onSubmit, danger, form = Boolean(onSubmit), actions = true, wide = false, onClose }) {
+function openDialog({ id, formId, title, body, submit, onSubmit, danger, form = Boolean(onSubmit), actions = true, wide = false, bodyClass = "", footer = "", onClose }) {
   const serial = ++dialogSerial;
   const titleId = `dialog-title-${serial}`;
   const shellTag = form ? "form" : "div";
@@ -1009,7 +1010,8 @@ function openDialog({ id, formId, title, body, submit, onSubmit, danger, form = 
         <button class="btn ghost dialog-close" type="button" aria-label="${h("close")}">×</button>
       </div>
       <${shellTag} class="dialog-form">
-        <div class="dialog-body">${body}</div>
+        <div class="dialog-body${bodyClass ? ` ${bodyClass}` : ""}">${body}</div>
+        ${footer ? `<div class="dialog-footer">${footer}</div>` : ""}
         ${actions ? `<div class="dialog-actions">
           <div class="dialog-danger">${danger || ""}</div>
           <div class="dialog-buttons">
@@ -1053,7 +1055,7 @@ function openDialog({ id, formId, title, body, submit, onSubmit, danger, form = 
       }
     });
   }
-  return { overlay, card, form: shell, close: () => { dirty = false; dismiss(); } };
+  return { overlay, card, form: shell, close: () => { dirty = false; dismiss(); }, dirty: () => dirty };
 }
 
 async function openLaunchPrompt(item, launchWithOptions = false, preset = {}) {
@@ -1574,6 +1576,54 @@ const SCHEDULE_ZONES = [
 ];
 const SCHEDULE_DAYS = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"];
 
+function scheduleQuery(hash = location.hash || "#/") {
+  const params = new URLSearchParams((hash || "").split("?")[1] || "");
+  return {
+    edit: params.get("edit") || "",
+    create: params.has("new") ? (params.get("new") || "1") : null,
+    kind: params.get("kind") || "",
+    target: params.get("target") || "",
+  };
+}
+
+function scheduleAddress(params, hash = location.hash || "#/") {
+  const [path, query] = (hash || "#/").split("?");
+  params = params || {};
+  const search = new URLSearchParams(query || "");
+  ["edit", "new", "kind", "target"].forEach((key) => search.delete(key));
+  if (params.edit) search.set("edit", params.edit);
+  if (Object.prototype.hasOwnProperty.call(params, "new")) search.set("new", params.new || "1");
+  if (params.kind) search.set("kind", params.kind);
+  if (params.target) search.set("target", params.target);
+  const rest = search.toString();
+  return `${path}${rest ? `?${rest}` : ""}`;
+}
+
+function scheduleNewTarget(request) {
+  const value = request.create || "";
+  let kind = request.kind;
+  let target = request.target;
+  if (value.includes(":")) [kind, target] = value.split(":");
+  else if (value.includes("/")) [kind, target] = value.split("/");
+  else if (value && value !== "1") target = value;
+  if (kind !== "template" && kind !== "workflow") kind = "";
+  return target ? { kind, target } : null;
+}
+
+function rememberScheduleHash(params, push = true) {
+  const next = scheduleAddress(params);
+  if (push) history.pushState(null, "", next);
+  else history.replaceState(null, "", next);
+  shownHash = next;
+}
+
+function clearScheduleHash() {
+  const next = scheduleAddress();
+  if ((location.hash || "#/") === next) return;
+  history.replaceState(null, "", next);
+  shownHash = next;
+}
+
 function browserZone() {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Berlin";
@@ -1654,9 +1704,35 @@ function mountSchedules(card) {
   const path = all ? "/api/schedules" : `/api/${kind}s/${encodeURIComponent(target)}/schedules`;
   let items = [];
   let query = "";
+  let requested = false;
   const empty = all
     ? h("schedule_empty_all")
     : h(kind === "workflow" ? "schedule_empty_workflow" : "schedule_empty_template");
+  const openRequested = async () => {
+    if (requested) return;
+    requested = true;
+    const request = scheduleQuery();
+    if (request.edit) {
+      const item = items.find((row) => row.id === request.edit);
+      if (item) openScheduleForm(item.target_kind || kind, item.target_id || target, item, draw);
+      return;
+    }
+    if (request.create === null) return;
+    const chosen = scheduleNewTarget(request);
+    let openKind = chosen?.kind || (all ? "" : kind);
+    const openTarget = chosen?.target || (all ? "" : target);
+    if (all && !openKind && openTarget) {
+      const [templates, workflows] = await Promise.all([
+        api("GET", "/api/templates"),
+        api("GET", "/api/workflows"),
+      ]);
+      if (templates.some((row) => row.id === openTarget)) openKind = "template";
+      else if (workflows.some((row) => row.id === openTarget)) openKind = "workflow";
+    }
+    if (openKind && openTarget) {
+      openScheduleForm(openKind, openTarget, null, draw);
+    }
+  };
   const render = () => {
     const needle = query.trim().toLowerCase();
     const shown = items
@@ -1670,6 +1746,7 @@ function mountSchedules(card) {
   const draw = async () => {
     items = await api("GET", path);
     render();
+    await openRequested();
   };
   const search = all
     ? `<input class="search" id="schedule-search" placeholder="${h("search_schedules")}" autocomplete="off">`
@@ -1685,7 +1762,10 @@ function mountSchedules(card) {
     });
   }
   const addButton = card.querySelector("#schedule-add");
-  if (addButton) addButton.addEventListener("click", () => openScheduleForm(kind, target, null, draw));
+  if (addButton) addButton.addEventListener("click", () => {
+    rememberScheduleHash({ new: "1" });
+    openScheduleForm(kind, target, null, draw);
+  });
   draw().catch(handle);
 }
 
@@ -1693,7 +1773,10 @@ function bindScheduleActions(card, items, kind, target, draw) {
   card.querySelectorAll("[data-schedule-edit]").forEach((button) => {
     button.addEventListener("click", () => {
       const item = items.find((row) => row.id === button.dataset.scheduleEdit);
-      if (item) openScheduleForm(item.target_kind || kind, item.target_id || target, item, draw);
+      if (item) {
+        rememberScheduleHash({ edit: item.id });
+        openScheduleForm(item.target_kind || kind, item.target_id || target, item, draw);
+      }
     });
   });
   card.querySelectorAll("[data-schedule-delete]").forEach((button) => {
@@ -1881,56 +1964,72 @@ function openScheduleForm(kind, target, existing, redraw) {
     id: "schedule-form",
     formId: "schedule-fields",
     title: existing ? t("edit_schedule") : t("new_schedule"),
+    wide: true,
+    bodyClass: "schedule-body",
+    footer: `<p class="schedule-pin" id="schedule-pin"></p>`,
     body: `
-      <div class="form-section">
-        <h2>${h("general")}</h2>
-        <label class="field"><span>${h("name")}</span><input name="name" required value="${esc(item.name)}"></label>
-        <label class="field"><span>${h("time_zone")}</span><select class="fit" name="timezone">${zones}</select></label>
-      </div>
-      <div class="form-section">
-        <h2>${h("start")}</h2>
-        <div class="field-row">
-          <label class="field"><span>${h("start_date")}</span><input name="start_date" type="date" required value="${esc(item.start_date)}"></label>
-          <label class="field"><span>${h("start_time")}</span><input name="start_time" type="time" required value="${esc(item.start_time)}"></label>
+      <div class="schedule-layout">
+        <div class="schedule-fields">
+          <p class="small muted">${h("fields_marked_with_a_star_are_required")}</p>
+          <div class="form-section">
+            <h2>${h("general")}</h2>
+            <label class="field required"><span>${h("name")}</span><input name="name" required value="${esc(item.name)}"></label>
+            <label class="field"><span>${h("time_zone")}</span><select name="timezone">${zones}</select></label>
+          </div>
+          <div class="form-section">
+            <h2>${h("start")}</h2>
+            <div class="field-row">
+              <label class="field required"><span>${h("start_date")}</span><input name="start_date" type="date" required value="${esc(item.start_date)}"></label>
+              <label class="field required"><span>${h("start_time")}</span><input name="start_time" type="time" required value="${esc(item.start_time)}"></label>
+            </div>
+          </div>
+          <div class="form-section">
+            <h2>${h("repeat")}</h2>
+            <label class="field"><span>${h("repeat")}</span>
+              <select name="frequency">
+                ${["once", "hourly", "daily", "weekly", "monthly"].map((value) => `<option value="${value}"${item.frequency === value ? " selected" : ""}>${h(value)}</option>`).join("")}
+              </select>
+            </label>
+            <div class="field" id="schedule-weekdays">
+              <span>${h("weekdays")}</span>
+              <div class="weekday-row">${days}</div>
+            </div>
+          </div>
+          <div class="form-section">
+            <h2>${h("end")}</h2>
+            <div class="field-row" id="schedule-end">
+              <label class="field"><span>${h("ends")}</span>
+                <select name="end_kind">
+                  <option value="never"${item.end_kind === "never" ? " selected" : ""}>${h("never")}</option>
+                  <option value="after"${item.end_kind === "after" ? " selected" : ""}>${h("after_n_occurrences")}</option>
+                  <option value="on_date"${item.end_kind === "on_date" ? " selected" : ""}>${h("on_a_date")}</option>
+                </select>
+              </label>
+              <label class="field" id="schedule-count"><span>${h("times")}</span><input class="tiny" name="end_count" type="number" min="1" max="999" value="${esc(item.end_count || 5)}"></label>
+              <label class="field" id="schedule-until"><span>${h("end_date")}</span><input name="end_date" type="date" value="${esc(item.end_date || local.date)}"></label>
+            </div>
+          </div>
         </div>
-      </div>
-      <div class="form-section">
-        <h2>${h("repeat")}</h2>
-        <label class="field"><span>${h("repeat")}</span>
-          <select class="fit" name="frequency">
-            ${["once", "hourly", "daily", "weekly", "monthly"].map((value) => `<option value="${value}"${item.frequency === value ? " selected" : ""}>${h(value)}</option>`).join("")}
-          </select>
-        </label>
-        <div class="field" id="schedule-weekdays">
-          <span>${h("weekdays")}</span>
-          <div class="weekday-row">${days}</div>
-        </div>
-      </div>
-      <div class="form-section">
-        <h2>${h("end")}</h2>
-        <div class="field-row" id="schedule-end">
-          <label class="field"><span>${h("ends")}</span>
-            <select class="fit" name="end_kind">
-              <option value="never"${item.end_kind === "never" ? " selected" : ""}>${h("never")}</option>
-              <option value="after"${item.end_kind === "after" ? " selected" : ""}>${h("after_n_occurrences")}</option>
-              <option value="on_date"${item.end_kind === "on_date" ? " selected" : ""}>${h("on_a_date")}</option>
-            </select>
-          </label>
-          <label class="field" id="schedule-count"><span>${h("times")}</span><input class="tiny" name="end_count" type="number" min="1" max="999" value="${esc(item.end_count || 5)}"></label>
-          <label class="field" id="schedule-until"><span>${h("end_date")}</span><input name="end_date" type="date" value="${esc(item.end_date || local.date)}"></label>
-        </div>
-      </div>
-      <div class="form-section">
-        <h2>${h("preview")}</h2>
-        <p id="schedule-sentence"></p>
-        <p class="small muted">${h("schedule_preview")}</p>
-        <ul id="schedule-next"></ul>
+        <aside class="schedule-preview">
+          <div class="form-section">
+            <h2>${h("preview")}</h2>
+            <p id="schedule-sentence"></p>
+            <p class="small muted">${h("schedule_preview")}</p>
+            <ul id="schedule-next"></ul>
+          </div>
+        </aside>
       </div>`,
     submit: t("save"),
     onSubmit: async ({ form, close }) => {
+      if (!form.name.value.trim()) {
+        showFieldError(form.name, t("this_field_needs_a_valid_value"));
+        form.name.focus();
+        return;
+      }
       const body = { ...payload(), name: form.name.value };
       if (existing) await api("PUT", `/api/schedules/${encodeURIComponent(existing.id)}`, body);
       else await api("POST", `/api/${kind}s/${encodeURIComponent(target)}/schedules`, body);
+      leaveGuard = null;
       close();
       await redraw();
       const card = document.querySelector("#schedule-card");
@@ -1939,15 +2038,26 @@ function openScheduleForm(kind, target, existing, redraw) {
         card.insertAdjacentHTML("afterbegin", `<div class="banner good">${h("saved")}</div>`);
       }
     },
+    onClose: () => {
+      leaveGuard = null;
+      clearScheduleHash();
+    },
   });
+  leaveGuard = () => dialog.dirty();
   const form = dialog.form;
   const showParts = () => {
     const weekly = form.frequency.value === "weekly";
-    const once = form.frequency.value === "once";
-    document.querySelector("#schedule-weekdays").hidden = !weekly;
-    document.querySelector("#schedule-end").hidden = once;
-    document.querySelector("#schedule-count").hidden = form.end_kind.value !== "after";
-    document.querySelector("#schedule-until").hidden = form.end_kind.value !== "on_date";
+    const ends = form.frequency.value !== "once";
+    const after = ends && form.end_kind.value === "after";
+    const onDate = ends && form.end_kind.value === "on_date";
+    dialog.overlay.querySelector("#schedule-weekdays").hidden = !weekly;
+    dialog.overlay.querySelector("#schedule-end").hidden = !ends;
+    dialog.overlay.querySelector("#schedule-count").hidden = !after;
+    dialog.overlay.querySelector("#schedule-count").classList.toggle("required", after);
+    form.end_count.required = after;
+    dialog.overlay.querySelector("#schedule-until").hidden = !onDate;
+    dialog.overlay.querySelector("#schedule-until").classList.toggle("required", onDate);
+    form.end_date.required = onDate;
   };
   const payload = () => ({
     timezone: form.timezone.value,
@@ -1964,13 +2074,15 @@ function openScheduleForm(kind, target, existing, redraw) {
     window.clearTimeout(previewTimer);
     previewTimer = window.setTimeout(async () => {
       const body = payload();
-      document.querySelector("#schedule-sentence").textContent = scheduleSentence({ ...body, name: form.name.value });
+      const sentence = scheduleSentence({ ...body, name: form.name.value });
+      dialog.overlay.querySelector("#schedule-sentence").textContent = sentence;
+      dialog.overlay.querySelector("#schedule-pin").textContent = sentence;
       try {
         const result = await api("POST", "/api/schedules/preview", body);
         const lines = (result.occurrences || []).map((at) => `<li>${esc(formatWhen(at, body.timezone))}</li>`).join("");
-        document.querySelector("#schedule-next").innerHTML = lines || `<li>${h("schedule_no_upcoming")}</li>`;
+        dialog.overlay.querySelector("#schedule-next").innerHTML = lines || `<li>${h("schedule_no_upcoming")}</li>`;
       } catch (error) {
-        document.querySelector("#schedule-next").innerHTML = `<li>${esc(t(error.message || "error.internal", error.vars))}</li>`;
+        dialog.overlay.querySelector("#schedule-next").innerHTML = `<li>${esc(t(error.message || "error.internal", error.vars))}</li>`;
       }
     }, 200);
   };

@@ -13198,6 +13198,93 @@ fn auto_mode_names_a_missing_runtime() {
 }
 
 #[test]
+fn schedule_overlay_uses_the_shared_wide_form() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    assert!(script.contains("wide: true"));
+    assert!(script.contains("bodyClass: \"schedule-body\""));
+    assert!(script.contains("class=\"schedule-layout\""));
+    assert!(script.contains("class=\"schedule-fields\""));
+    assert!(script.contains("class=\"schedule-preview\""));
+    assert!(script.contains("id=\"schedule-pin\""));
+    assert!(script.contains("fields_marked_with_a_star_are_required"));
+    assert!(script.contains("class=\"field required\""));
+    assert!(script.contains("classList.toggle(\"required\", after)"));
+    assert!(script.contains("classList.toggle(\"required\", onDate)"));
+    assert!(script.contains("!form.name.value.trim()"));
+    assert!(!script.contains("select class=\"fit\" name=\"timezone\""));
+    assert!(!script.contains("select class=\"fit\" name=\"frequency\""));
+    let css = std::fs::read_to_string(root.join("web/app.css")).expect("app.css");
+    assert!(css.contains(".schedule-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(15rem, 19rem);"));
+    assert!(css.contains(".schedule-fields { overflow-y: auto;"));
+    assert!(css.contains(".schedule-preview { overflow-y: auto;"));
+    assert!(css.contains("@media (max-width: 900px)"));
+    assert!(css.contains(".schedule-layout { grid-template-columns: 1fr; height: auto; }"));
+    assert!(css.contains(".dialog-footer { display: block; }"));
+    assert!(css.contains(".schedule-pin { display: block;"));
+    assert!(css.contains("#schedule-form input:not([type=\"checkbox\"]):not([type=\"radio\"])"));
+}
+
+#[test]
+fn schedule_overlay_address_opens_and_closes_the_dialog() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    assert!(script.contains("if (request.edit)"));
+    assert!(script.contains(
+        "openScheduleForm(item.target_kind || kind, item.target_id || target, item, draw);"
+    ));
+    assert!(script.contains("openScheduleForm(openKind, openTarget, null, draw);"));
+    assert!(!script.contains("fromHash"));
+    assert!(script.contains("rememberScheduleHash({ edit: item.id })"));
+    assert!(script.contains("rememberScheduleHash({ new: \"1\" })"));
+    assert!(script.contains("onClose: () => {"));
+    assert!(script.contains("document.querySelector(\"#schedule-form\")?.remove();"));
+    let functions = format!(
+        "{}\n{}\n{}",
+        extract_braced_function(&script, "function scheduleQuery"),
+        extract_braced_function(&script, "function scheduleAddress"),
+        extract_braced_function(&script, "function scheduleNewTarget")
+    );
+    let probe = format!(
+        r##"{functions}
+function check(ok, message) {{
+  if (!ok) {{ console.error(message); process.exit(1); }}
+}}
+const edit = scheduleQuery("#/schedules?edit=s1");
+check(edit.edit === "s1" && edit.create === null, "edit was not read");
+const create = scheduleQuery("#/schedules?new=1");
+check(create.create === "1", "new was not read");
+const template = scheduleNewTarget({{ create: "template:t1", kind: "", target: "" }});
+check(template && template.kind === "template" && template.target === "t1", "template target was not read");
+const workflow = scheduleNewTarget({{ create: "1", kind: "workflow", target: "w1" }});
+check(workflow && workflow.kind === "workflow" && workflow.target === "w1", "workflow target was not read");
+check(scheduleAddress({{ edit: "s1" }}, "#/schedules?page=2") === "#/schedules?page=2&edit=s1", "edit address was not built");
+check(scheduleAddress({{ new: "1" }}, "#/templates/t1") === "#/templates/t1?new=1", "new address was not built");
+check(scheduleAddress({{}}, "#/schedules?edit=s1&page=2") === "#/schedules?page=2", "address was not cleared");
+"##
+    );
+    run_node_probe("schedule-address", &probe);
+}
+
+#[test]
+fn schedule_overlay_guards_unsaved_edits() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    assert!(script.contains("dirty: () => dirty"));
+    let form = extract_braced_function(&script, "function openScheduleForm");
+    assert!(form.contains("leaveGuard = () => dialog.dirty();"));
+    let submit = form
+        .find("onSubmit: async")
+        .expect("schedule dialog submit");
+    let close = form
+        .find("onClose: () => {")
+        .expect("schedule dialog close");
+    assert!(submit < close);
+    assert!(form[submit..close].contains("leaveGuard = null;"));
+    assert!(form[close..].contains("leaveGuard = null;"));
+}
+
+#[test]
 fn template_form_saves_the_visible_playbook_path() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
