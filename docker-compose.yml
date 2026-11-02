@@ -1,7 +1,7 @@
 services:
   koreograf:
     # Published image. A local build uses docker-compose.build.yml and the tag koreograf:local.
-    image: ghcr.io/koreograf/koreograf:0.1.0-alpha.6 # x-release-please-version
+    image: ghcr.io/koreograf/koreograf:0.1.0-alpha.7 # x-release-please-version
     pull_policy: missing
     ports:
       - "127.0.0.1:8080:8080"
