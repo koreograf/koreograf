@@ -21,7 +21,6 @@ let lang = languageId(localStorage.getItem("koreograf.lang"));
 let source = null;
 let pollTimer = null;
 let generation = 0;
-let runKey = null;
 let navOpen = false;
 let navKey = null;
 let navToken = null;
@@ -322,10 +321,6 @@ function closeLive() {
     clearInterval(pollTimer);
     pollTimer = null;
   }
-  if (runKey) {
-    document.removeEventListener("keydown", runKey);
-    runKey = null;
-  }
   if (navKey) {
     document.removeEventListener("keydown", navKey);
     navKey = null;
@@ -395,6 +390,12 @@ const ERROR_FIELD = {
   plugin_files_are_not_copied_as_text_add: "path",
   the_manual_source_is_empty: "body",
   inventory_ini_is_invalid: "body",
+  schedule_date_is_too_far_in_the_past: "start_date",
+  schedule_time_does_not_exist: "start_time",
+  schedule_end_date_is_invalid: "end_date",
+  schedule_count_is_invalid: "end_count",
+  schedule_end_is_invalid: "end_kind",
+  schedule_needs_a_weekday: "weekday",
 };
 
 let flashKey = "";
@@ -507,7 +508,10 @@ function handle(error) {
   const message = t(error.message || "error.generic", error.vars);
   clearErrorBanners();
   main.querySelectorAll(":scope > .banner.good").forEach((node) => node.remove());
-  (topmostCard() || main).insertAdjacentHTML("afterbegin", `<div class="banner bad">${esc(message)}</div>`);
+  const card = topmostCard();
+  const banner = `<div class="banner bad">${esc(message)}</div>`;
+  if (card) (card.querySelector(".dialog-body") || card).insertAdjacentHTML("afterbegin", banner);
+  else main.insertAdjacentHTML("afterbegin", banner);
   const fieldName = (error.vars && error.vars.field) || ERROR_FIELD[error.message] || "";
   const control = fieldControl(fieldName);
   if (!control) return;
@@ -931,7 +935,7 @@ function templateOptionLine(item) {
 function makeModal(overlay, close) {
   const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const dismiss = () => {
-    close();
+    if (close() === false) return;
     if (opener && document.contains(opener)) opener.focus();
   };
   const card = overlay.querySelector(".overlay-card");
@@ -957,6 +961,69 @@ function makeModal(overlay, close) {
     }
   });
   return dismiss;
+}
+
+let dialogSerial = 0;
+
+function openDialog({ id, formId, title, body, submit, onSubmit, danger, form = Boolean(onSubmit), actions = true, wide = false, onClose }) {
+  const serial = ++dialogSerial;
+  const titleId = `dialog-title-${serial}`;
+  const shellTag = form ? "form" : "div";
+  const overlay = document.createElement("div");
+  overlay.className = "overlay";
+  if (id) overlay.id = id;
+  overlay.innerHTML = `
+    <div class="overlay-card dialog${wide ? " wide" : ""}" role="dialog" aria-modal="true" aria-labelledby="${titleId}">
+      <div class="dialog-head">
+        <h2 id="${titleId}">${esc(title)}</h2>
+        <button class="btn ghost dialog-close" type="button" aria-label="${h("close")}">×</button>
+      </div>
+      <${shellTag} class="dialog-form">
+        <div class="dialog-body">${body}</div>
+        ${actions ? `<div class="dialog-actions">
+          <div class="dialog-danger">${danger || ""}</div>
+          <div class="dialog-buttons">
+            <button class="btn" type="button" data-dialog-cancel>${h("cancel")}</button>
+            ${onSubmit ? `<button class="btn pill primary" type="submit">${esc(submit || t("save"))}</button>` : ""}
+          </div>
+        </div>` : ""}
+      </${shellTag}>
+    </div>`;
+  document.body.appendChild(overlay);
+  const card = overlay.querySelector(".overlay-card");
+  const shell = overlay.querySelector(".dialog-form");
+  if (formId && form) shell.id = formId;
+  let dirty = false;
+  shell.addEventListener("input", () => { dirty = true; });
+  shell.addEventListener("change", () => { dirty = true; });
+  const remove = () => {
+    if (!overlay.isConnected) return true;
+    if (onClose) onClose();
+    overlay.remove();
+    return true;
+  };
+  const requestClose = () => {
+    if (dirty && !confirm(t("discard_unsaved_changes"))) return false;
+    return remove();
+  };
+  const dismiss = makeModal(overlay, requestClose);
+  overlay.querySelector(".dialog-close").addEventListener("click", dismiss);
+  const cancel = overlay.querySelector("[data-dialog-cancel]");
+  if (cancel) cancel.addEventListener("click", dismiss);
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) dismiss();
+  });
+  if (onSubmit) {
+    shell.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        await onSubmit({ form: shell, close: () => { dirty = false; dismiss(); } });
+      } catch (error) {
+        handle(error);
+      }
+    });
+  }
+  return { overlay, card, form: shell, close: () => { dirty = false; dismiss(); } };
 }
 
 async function openLaunchPrompt(item, launchWithOptions = false, preset = {}) {
@@ -993,40 +1060,19 @@ async function openLaunchPrompt(item, launchWithOptions = false, preset = {}) {
       ${chipBox("skip_tags", "skip_tags", spec.skip_tags)}
     </div>
     <label class="field"><span>${h("limit")}</span><input class="fit" name="limit" value="${esc(limit)}"></label>` : "";
-  document.querySelector(".main").insertAdjacentHTML("beforeend", `
-    <div class="overlay" id="launch-prompt">
-      <div class="overlay-card launch-prompt" role="dialog" aria-modal="true" aria-labelledby="launch-prompt-title">
-        <div class="spread">
-          <h2 id="launch-prompt-title">${h("launch")}</h2>
-          <button class="btn" type="button" id="launch-prompt-close">${h("close")}</button>
-        </div>
-        <p class="small muted">${h(launchWithOptions ? "launch_with_options_help" : "the_launch_dialog_starts_from_the_template")}</p>
-        <form class="form" id="launch-prompt-form">
-          ${inventory}
-          ${templateCredentialFields(credentials, selectedCredentialIds(item))}
-          ${ansibleFields}
-          <label class="field"><span>${h("extra_variables_json")}</span><textarea name="extra_vars">${esc(JSON.stringify(item.extra_vars || {}, null, 2))}</textarea></label>
-          <div class="row">
-            <button class="btn pill primary" type="submit">${h("launch")}</button>
-            <button class="btn" type="button" id="launch-prompt-cancel">${h("cancel")}</button>
-          </div>
-        </form>
-      </div>
-    </div>`);
-  const overlay = document.querySelector("#launch-prompt");
-  const form = document.querySelector("#launch-prompt-form");
-  bindChips(form);
-  bindVaultPicker(form, credentials, selectedCredentialIds(item));
-  const close = makeModal(overlay, () => overlay.remove());
-  document.querySelector("#launch-prompt-close").addEventListener("click", close);
-  document.querySelector("#launch-prompt-cancel").addEventListener("click", close);
-  overlay.addEventListener("click", (event) => {
-    if (event.target === overlay) close();
-  });
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    if (!flushChips(form)) return;
-    try {
+  const dialog = openDialog({
+    id: "launch-prompt",
+    formId: "launch-prompt-form",
+    title: t("launch"),
+    body: `
+      <p class="small muted">${h(launchWithOptions ? "launch_with_options_help" : "the_launch_dialog_starts_from_the_template")}</p>
+      ${inventory}
+      ${templateCredentialFields(credentials, selectedCredentialIds(item))}
+      ${ansibleFields}
+      <label class="field"><span>${h("extra_variables_json")}</span><textarea name="extra_vars">${esc(JSON.stringify(item.extra_vars || {}, null, 2))}</textarea></label>`,
+    submit: t("launch"),
+    onSubmit: async ({ form, close }) => {
+      if (!flushChips(form)) return;
       const body = {
         extra_vars: jsonObject(form.extra_vars.value, "extra_variables"),
         credential_ids: [
@@ -1049,10 +1095,11 @@ async function openLaunchPrompt(item, launchWithOptions = false, preset = {}) {
       const job = await api("POST", `/api/templates/${encodeURIComponent(item.id)}/launch`, body);
       close();
       go(`#/jobs/${job.id}`);
-    } catch (error) {
-      handle(error);
-    }
+    },
   });
+  const form = dialog.form;
+  bindChips(form);
+  bindVaultPicker(form, credentials, selectedCredentialIds(item));
 }
 
 async function pageTemplates() {
@@ -1764,60 +1811,70 @@ function openScheduleForm(kind, target, existing, redraw) {
   const zones = zoneChoices(item.timezone).map((name) => `<option value="${esc(name)}"${name === item.timezone ? " selected" : ""}>${esc(name)}</option>`).join("");
   const days = SCHEDULE_DAYS.map((day) => `
     <label><input type="checkbox" name="weekday" value="${day}"${(item.weekdays || []).includes(day) ? " checked" : ""}> ${h(`schedule.day.${day.toLowerCase()}`)}</label>`).join("");
-  const host = document.createElement("div");
-  host.innerHTML = `
-    <div class="overlay" id="schedule-form">
-      <div class="overlay-card schedule-form" role="dialog" aria-modal="true" aria-labelledby="schedule-title">
-        <div class="row">
-          <h2 id="schedule-title">${existing ? h("edit_schedule") : h("new_schedule")}</h2>
-          <button class="btn" type="button" id="schedule-close">${h("close")}</button>
+  const dialog = openDialog({
+    id: "schedule-form",
+    formId: "schedule-fields",
+    title: existing ? t("edit_schedule") : t("new_schedule"),
+    body: `
+      <div class="form-section">
+        <h2>${h("general")}</h2>
+        <label class="field"><span>${h("name")}</span><input name="name" required value="${esc(item.name)}"></label>
+        <label class="field"><span>${h("time_zone")}</span><select class="fit" name="timezone">${zones}</select></label>
+      </div>
+      <div class="form-section">
+        <h2>${h("start")}</h2>
+        <div class="field-row">
+          <label class="field"><span>${h("start_date")}</span><input name="start_date" type="date" required value="${esc(item.start_date)}"></label>
+          <label class="field"><span>${h("start_time")}</span><input name="start_time" type="time" required value="${esc(item.start_time)}"></label>
         </div>
-        <form id="schedule-fields" class="form">
-          <label class="field"><span>${h("name")}</span><input name="name" required value="${esc(item.name)}"></label>
-          <div class="field-row">
-            <label class="field"><span>${h("start_date")}</span><input name="start_date" type="date" required value="${esc(item.start_date)}"></label>
-            <label class="field"><span>${h("start_time")}</span><input name="start_time" type="time" required value="${esc(item.start_time)}"></label>
-            <label class="field"><span>${h("time_zone")}</span><select class="fit" name="timezone">${zones}</select></label>
-          </div>
-          <label class="field"><span>${h("repeat")}</span>
-            <select class="fit" name="frequency">
-              ${["once", "hourly", "daily", "weekly", "monthly"].map((value) => `<option value="${value}"${item.frequency === value ? " selected" : ""}>${h(value)}</option>`).join("")}
+      </div>
+      <div class="form-section">
+        <h2>${h("repeat")}</h2>
+        <label class="field"><span>${h("repeat")}</span>
+          <select class="fit" name="frequency">
+            ${["once", "hourly", "daily", "weekly", "monthly"].map((value) => `<option value="${value}"${item.frequency === value ? " selected" : ""}>${h(value)}</option>`).join("")}
+          </select>
+        </label>
+        <div class="field" id="schedule-weekdays">
+          <span>${h("weekdays")}</span>
+          <div class="weekday-row">${days}</div>
+        </div>
+      </div>
+      <div class="form-section">
+        <h2>${h("end")}</h2>
+        <div class="field-row" id="schedule-end">
+          <label class="field"><span>${h("ends")}</span>
+            <select class="fit" name="end_kind">
+              <option value="never"${item.end_kind === "never" ? " selected" : ""}>${h("never")}</option>
+              <option value="after"${item.end_kind === "after" ? " selected" : ""}>${h("after_n_occurrences")}</option>
+              <option value="on_date"${item.end_kind === "on_date" ? " selected" : ""}>${h("on_a_date")}</option>
             </select>
           </label>
-          <div class="field" id="schedule-weekdays">
-            <span>${h("weekdays")}</span>
-            <div class="weekday-row">${days}</div>
-          </div>
-          <div class="field-row" id="schedule-end">
-            <label class="field"><span>${h("ends")}</span>
-              <select class="fit" name="end_kind">
-                <option value="never"${item.end_kind === "never" ? " selected" : ""}>${h("never")}</option>
-                <option value="after"${item.end_kind === "after" ? " selected" : ""}>${h("after_n_occurrences")}</option>
-                <option value="on_date"${item.end_kind === "on_date" ? " selected" : ""}>${h("on_a_date")}</option>
-              </select>
-            </label>
-            <label class="field" id="schedule-count"><span>${h("times")}</span><input class="tiny" name="end_count" type="number" min="1" max="999" value="${esc(item.end_count || 5)}"></label>
-            <label class="field" id="schedule-until"><span>${h("end_date")}</span><input name="end_date" type="date" value="${esc(item.end_date || local.date)}"></label>
-          </div>
-          <p id="schedule-sentence"></p>
-          <div>
-            <p class="small muted">${h("schedule_preview")}</p>
-            <ul id="schedule-next"></ul>
-          </div>
-          <div class="row">
-            <button class="btn pill primary" type="submit">${h("save")}</button>
-          </div>
-        </form>
+          <label class="field" id="schedule-count"><span>${h("times")}</span><input class="tiny" name="end_count" type="number" min="1" max="999" value="${esc(item.end_count || 5)}"></label>
+          <label class="field" id="schedule-until"><span>${h("end_date")}</span><input name="end_date" type="date" value="${esc(item.end_date || local.date)}"></label>
+        </div>
       </div>
-    </div>`;
-  document.body.appendChild(host.firstElementChild);
-  const overlay = document.querySelector("#schedule-form");
-  const form = document.querySelector("#schedule-fields");
-  const close = makeModal(overlay, () => overlay.remove());
-  overlay.querySelector("#schedule-close").addEventListener("click", close);
-  overlay.addEventListener("click", (event) => {
-    if (event.target === overlay) close();
+      <div class="form-section">
+        <h2>${h("preview")}</h2>
+        <p id="schedule-sentence"></p>
+        <p class="small muted">${h("schedule_preview")}</p>
+        <ul id="schedule-next"></ul>
+      </div>`,
+    submit: t("save"),
+    onSubmit: async ({ form, close }) => {
+      const body = { ...payload(), name: form.name.value };
+      if (existing) await api("PUT", `/api/schedules/${encodeURIComponent(existing.id)}`, body);
+      else await api("POST", `/api/${kind}s/${encodeURIComponent(target)}/schedules`, body);
+      close();
+      await redraw();
+      const card = document.querySelector("#schedule-card");
+      if (card) {
+        card.querySelectorAll(":scope > .banner.good").forEach((node) => node.remove());
+        card.insertAdjacentHTML("afterbegin", `<div class="banner good">${h("saved")}</div>`);
+      }
+    },
   });
+  const form = dialog.form;
   const showParts = () => {
     const weekly = form.frequency.value === "weekly";
     const once = form.frequency.value === "once";
@@ -1861,23 +1918,6 @@ function openScheduleForm(kind, target, existing, redraw) {
   });
   showParts();
   preview();
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const body = { ...payload(), name: form.name.value };
-    try {
-      if (existing) await api("PUT", `/api/schedules/${encodeURIComponent(existing.id)}`, body);
-      else await api("POST", `/api/${kind}s/${encodeURIComponent(target)}/schedules`, body);
-      close();
-      await redraw();
-      const card = document.querySelector("#schedule-card");
-      if (card) {
-        card.querySelectorAll(":scope > .banner.good").forEach((node) => node.remove());
-        card.insertAdjacentHTML("afterbegin", `<div class="banner good">${h("saved")}</div>`);
-      }
-    } catch (error) {
-      handle(error);
-    }
-  });
 }
 
 async function pageSchedules() {
@@ -3090,25 +3130,17 @@ async function pageRun(id) {
     }
     let overlay = document.querySelector("#node-output");
     if (!overlay) {
-      document.querySelector(".main").insertAdjacentHTML("beforeend", `
-        <div class="overlay" id="node-output">
-          <div class="overlay-card" role="dialog" aria-modal="true" aria-labelledby="overlay-title">
-            <div class="spread">
-              <h2 id="overlay-title"></h2>
-              <button class="btn" type="button" id="overlay-close">${h("close")}</button>
-            </div>
-            <p class="small row" id="overlay-meta"></p>
-            <div class="log" id="log"></div>
-          </div>
-        </div>`);
-      overlay = document.querySelector("#node-output");
-      const close = makeModal(overlay, closeOutput);
-      overlay.addEventListener("click", (event) => {
-        if (event.target === overlay) close();
-      });
-      document.querySelector("#overlay-close").addEventListener("click", close);
+      overlay = openDialog({
+        id: "node-output",
+        title: node.name,
+        body: `<p class="small row" id="overlay-meta"></p><div class="log" id="log"></div>`,
+        form: false,
+        actions: false,
+        wide: true,
+        onClose: closeOutput,
+      }).overlay;
     }
-    document.querySelector("#overlay-title").textContent = node.name;
+    overlay.querySelector("h2").textContent = node.name;
     document.querySelector("#overlay-meta").innerHTML = overlayMeta(phase);
     const log = document.querySelector("#log");
     log.replaceChildren();
@@ -3178,11 +3210,6 @@ async function pageRun(id) {
       if (meta) meta.innerHTML = overlayMeta(phase);
     }
   }
-
-  runKey = (event) => {
-    if (event.key === "Escape") closeOutput();
-  };
-  document.addEventListener("keydown", runKey);
 
   const run = await api("GET", `/api/workflow-jobs/${encodeURIComponent(id)}`);
   if (live !== generation) return;
@@ -4792,30 +4819,24 @@ function openVaultPicker(credentials, selected, onApply) {
     </label>`).join("");
   const body = vaults.length
     ? `<input class="search" id="vault-search" placeholder="${h("search_vaults")}" autocomplete="off">
-       <div class="vault-choices" id="vault-choices">${rows}</div>
-       <div class="row">
-         <button class="btn pill primary" type="button" id="vault-apply">${h("apply")}</button>
-         <button class="btn" type="button" id="vault-cancel">${h("cancel")}</button>
-       </div>`
+       <div class="vault-choices" id="vault-choices">${rows}</div>`
     : `<p class="muted">${h("no_vault_credentials_in_this_team")}</p>`;
-  document.querySelector(".main").insertAdjacentHTML("beforeend", `
-    <div class="overlay" id="vault-picker">
-      <div class="overlay-card vault-picker" role="dialog" aria-modal="true" aria-labelledby="vault-picker-title">
-        <div class="spread">
-          <h2 id="vault-picker-title">${esc(credentialKindLabel("vault"))}</h2>
-          <button class="btn" type="button" id="vault-picker-close">${h("close")}</button>
-        </div>
-        ${body}
-      </div>
-    </div>`);
-  const overlay = document.querySelector("#vault-picker");
-  const dismiss = makeModal(overlay, closeVaultPicker);
-  overlay.addEventListener("click", (event) => {
-    if (event.target === overlay) dismiss();
+  openDialog({
+    id: "vault-picker",
+    title: credentialKindLabel("vault"),
+    body,
+    submit: t("apply"),
+    actions: vaults.length > 0,
+    onSubmit: ({ close }) => {
+      const checked = [...document.querySelectorAll("#vault-choices input")]
+        .filter((input) => input.checked)
+        .map((input) => input.value);
+      const kept = selected.filter((id) => checked.includes(id));
+      const added = checked.filter((id) => !selected.includes(id));
+      onApply([...kept, ...added]);
+      close();
+    },
   });
-  document.querySelector("#vault-picker-close").addEventListener("click", dismiss);
-  const cancel = document.querySelector("#vault-cancel");
-  if (cancel) cancel.addEventListener("click", dismiss);
   document.querySelectorAll(".vault-choice").forEach((label) => {
     const input = label.querySelector("input");
     input.addEventListener("change", () => label.classList.toggle("selected", input.checked));
@@ -4830,17 +4851,6 @@ function openVaultPicker(credentials, selected, onApply) {
       });
     });
   }
-  const apply = document.querySelector("#vault-apply");
-  if (!apply) return;
-  apply.addEventListener("click", () => {
-    const checked = [...document.querySelectorAll("#vault-choices input")]
-      .filter((input) => input.checked)
-      .map((input) => input.value);
-    const kept = selected.filter((id) => checked.includes(id));
-    const added = checked.filter((id) => !selected.includes(id));
-    onApply([...kept, ...added]);
-    dismiss();
-  });
 }
 
 function bindVaultPicker(form, credentials, selectedIds) {
@@ -4851,7 +4861,10 @@ function bindVaultPicker(form, credentials, selectedIds) {
   renderVaultPills(box, credentials, (selectedIds || []).filter((id) => vaultIds.has(id)));
   open.addEventListener("click", () => {
     const current = [...box.querySelectorAll("[data-vault-id]")].map((node) => node.dataset.vaultId);
-    openVaultPicker(credentials, current, (ids) => renderVaultPills(box, credentials, ids));
+    openVaultPicker(credentials, current, (ids) => {
+      renderVaultPills(box, credentials, ids);
+      box.dispatchEvent(new Event("change", { bubbles: true }));
+    });
   });
 }
 
@@ -5105,46 +5118,25 @@ function bindCredentialKind(form) {
 
 function openCredentialCreator(kind, onCreated) {
   document.querySelector("#quick-credential")?.remove();
-  document.querySelector(".main").insertAdjacentHTML("beforeend", `
-    <div class="overlay" id="quick-credential">
-      <div class="overlay-card" role="dialog" aria-modal="true" aria-labelledby="quick-credential-title">
-        <form class="form" id="quick-credential-form">
-          <div class="spread">
-            <h2 id="quick-credential-title">${h("new_credential")}</h2>
-            <button class="btn" type="button" id="quick-credential-close">${h("close")}</button>
-          </div>
-          <input type="hidden" name="kind" value="${esc(kind)}">
-          <label class="field required"><span>${h("name")}</span><input name="name" required></label>
-          <label class="field"><span>${h("type")}</span><input value="${esc(credentialKindLabel(kind))}" disabled></label>
-          <div>${credentialFields(kind)}</div>
-          <p class="small muted" data-quick-error aria-live="polite"></p>
-          <button class="btn pill primary" type="submit">${h("create")}</button>
-        </form>
-      </div>
-    </div>`);
-  const overlay = document.querySelector("#quick-credential");
-  const close = () => overlay.remove();
-  const dismiss = makeModal(overlay, close);
-  overlay.addEventListener("click", (event) => {
-    if (event.target === overlay) dismiss();
-  });
-  document.querySelector("#quick-credential-close").addEventListener("click", dismiss);
-  const form = document.querySelector("#quick-credential-form");
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const errorNote = form.querySelector("[data-quick-error]");
-    errorNote.textContent = "";
-    try {
+  openDialog({
+    id: "quick-credential",
+    formId: "quick-credential-form",
+    title: t("new_credential"),
+    body: `
+      <input type="hidden" name="kind" value="${esc(kind)}">
+      <label class="field required"><span>${h("name")}</span><input name="name" required></label>
+      <label class="field"><span>${h("type")}</span><input value="${esc(credentialKindLabel(kind))}" disabled></label>
+      <div>${credentialFields(kind)}</div>`,
+    submit: t("create"),
+    onSubmit: async ({ form, close }) => {
       const created = await api("POST", "/api/credentials", {
         name: form.name.value,
         kind: form.kind.value,
         secret: credentialSecret(form),
       });
-      dismiss();
+      close();
       onCreated(created);
-    } catch (error) {
-      errorNote.textContent = t(error.message || "error.generic", error.vars);
-    }
+    },
   });
 }
 
