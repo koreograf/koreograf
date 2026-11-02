@@ -153,6 +153,7 @@
   "delete_inventory": "Delete inventory",
   "delete_node": "Delete node",
   "delete_this_account": "Delete account \"{name}\"? The user is removed from every team.",
+  "delete_this_credential": "Delete credential \"{name}\"? Its secret is removed.",
   "delete_this_inventory": "Delete inventory \"{name}\"? Its sources and hosts are removed.",
   "delete_this_node": "Delete node \"{name}\"? Its connections are removed.",
   "delete_this_project": "Delete project \"{name}\"? Templates that use it can no longer run.",
