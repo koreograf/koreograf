@@ -1491,7 +1491,7 @@ fn load_environment(
         return Err("the_execution_environment_is_not_visible_to_this".into());
     }
     if !environment_fits_tool(&template.tool, &environment.tool) {
-        return Err("The execution environment is for another tool.".into());
+        return Err("the_execution_environment_is_for_another_tool".into());
     }
     if !valid_image(&environment.image) {
         return Err("the_image_name_is_invalid".into());

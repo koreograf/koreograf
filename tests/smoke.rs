@@ -7784,6 +7784,106 @@ async fn an_environment_tool_limits_the_templates_that_can_use_it() {
 }
 
 #[tokio::test]
+async fn a_changed_environment_tool_fails_the_job_before_the_container_starts() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-env-tool-job-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut cfg = config(&dir);
+    cfg.runner = RunnerMode::Docker;
+    let state = koreograf::boot(cfg).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap();
+
+    let (status, environment, _) = call(
+        &app,
+        "POST",
+        "/api/environments",
+        Some(&cookie),
+        Some(team),
+        Some(json!({
+            "name": "Any",
+            "image": "quay.io/example/any:1",
+            "tool": "any"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{environment}");
+    let environment_id = environment["id"].as_str().unwrap();
+
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(team),
+        Some(json!({
+            "name": "Shell",
+            "tool": "shell",
+            "entrypoint": "",
+            "environment_id": environment_id,
+            "spec": {"script": "true"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().unwrap();
+
+    let (status, changed, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/environments/{environment_id}"),
+        Some(&cookie),
+        Some(team),
+        Some(json!({
+            "name": "Any",
+            "image": "quay.io/example/any:1",
+            "tool": "ansible"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    assert_eq!(changed["tool"], "ansible");
+
+    let job = launch_and_wait(&app, &cookie, team, template_id).await;
+    assert_eq!(job["status"], "failed", "{}", job["events"]);
+    assert!(
+        has_line(
+            &job,
+            "system",
+            "the_execution_environment_is_for_another_tool"
+        ),
+        "{}",
+        job["events"]
+    );
+    assert!(
+        !job["events"]
+            .as_array()
+            .is_some_and(|events| events.iter().any(|event| event["line"]
+                .as_str()
+                .is_some_and(|line| line.starts_with("Execution Environment ")))),
+        "{}",
+        job["events"]
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn environment_scopes_follow_the_selected_team() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
