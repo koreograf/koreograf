@@ -253,6 +253,8 @@ CREATE TABLE IF NOT EXISTS schedules (
   UNIQUE (target_kind, target_id, name)
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_team ON jobs(team_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_jobs_team_created ON jobs(team_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_jobs_team_status ON jobs(team_id, status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_events_job ON job_events(job_id, id);
 CREATE INDEX IF NOT EXISTS idx_members_user ON memberships(user_id);
 CREATE INDEX IF NOT EXISTS idx_schedules_due ON schedules(enabled, next_run_at);
@@ -517,6 +519,10 @@ CREATE INDEX IF NOT EXISTS idx_schedules_target ON schedules(target_kind, target
     if !column_exists(c, "schedules", "launch_block")? {
         c.execute("ALTER TABLE schedules ADD COLUMN launch_block TEXT", [])?;
     }
+    c.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_jobs_team_created ON jobs(team_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_jobs_team_status ON jobs(team_id, status, created_at DESC);",
+    )?;
     Ok(())
 }
 
@@ -688,6 +694,35 @@ pub struct Template {
     pub admin_saved: bool,
     /// When set, the launch dialog may replace inventory, credentials, and Ansible options.
     pub prompt_on_launch: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct JobQuery {
+    pub limit: i64,
+    pub offset: i64,
+    pub q: String,
+    pub status: String,
+    pub tool: String,
+    pub trigger: String,
+    pub template_id: String,
+    pub since: String,
+    pub until: String,
+}
+
+impl Default for JobQuery {
+    fn default() -> Self {
+        Self {
+            limit: 25,
+            offset: 0,
+            q: String::new(),
+            status: String::new(),
+            tool: String::new(),
+            trigger: String::new(),
+            template_id: String::new(),
+            since: String::new(),
+            until: String::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -2388,12 +2423,57 @@ fn map_job(row: &rusqlite::Row<'_>) -> rusqlite::Result<Job> {
     })
 }
 
-pub fn list_jobs(c: &Connection, team_id: &str, limit: i64) -> AppResult<Vec<Job>> {
+const JOB_FILTER: &str = "team_id = ?1
+  AND (?2 = ''
+    OR instr(lower(name), lower(?2)) > 0
+    OR instr(lower(tool), lower(?2)) > 0
+    OR instr(lower(status), lower(?2)) > 0
+    OR instr(lower(trigger), lower(?2)) > 0)
+  AND (?3 = '' OR status = ?3)
+  AND (?4 = '' OR tool = ?4)
+  AND (?5 = '' OR trigger = ?5)
+  AND (?6 = '' OR template_id = ?6)
+  AND (?7 = '' OR created_at >= ?7)
+  AND (?8 = '' OR created_at <= ?8)";
+
+pub fn list_jobs(c: &Connection, team_id: &str, query: &JobQuery) -> AppResult<(Vec<Job>, i64)> {
+    let limit = query.limit.clamp(1, 100);
+    let offset = query.offset.max(0);
     let mut stmt = c.prepare(&format!(
-        "SELECT {JOB_SELECT} FROM jobs WHERE team_id = ?1 ORDER BY created_at DESC LIMIT ?2"
+        "SELECT {JOB_SELECT} FROM jobs WHERE {JOB_FILTER}
+         ORDER BY created_at DESC, id DESC LIMIT ?9 OFFSET ?10"
     ))?;
-    let rows = stmt.query_map(params![team_id, limit], map_job)?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    let rows = stmt.query_map(
+        params![
+            team_id,
+            &query.q,
+            &query.status,
+            &query.tool,
+            &query.trigger,
+            &query.template_id,
+            &query.since,
+            &query.until,
+            limit,
+            offset
+        ],
+        map_job,
+    )?;
+    let items = rows.collect::<Result<Vec<_>, _>>()?;
+    let total = c.query_row(
+        &format!("SELECT COUNT(*) FROM jobs WHERE {JOB_FILTER}"),
+        params![
+            team_id,
+            &query.q,
+            &query.status,
+            &query.tool,
+            &query.trigger,
+            &query.template_id,
+            &query.since,
+            &query.until
+        ],
+        |row| row.get(0),
+    )?;
+    Ok((items, total))
 }
 
 pub fn mark_running(c: &Connection, id: &str) -> AppResult<bool> {
@@ -3116,6 +3196,183 @@ pub fn set_schedule_enabled(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_job(id: &str, team_id: &str, name: &str, created_at: &str) -> Job {
+        Job {
+            id: id.to_string(),
+            team_id: team_id.to_string(),
+            template_id: Some("tpl".into()),
+            workflow_job_id: None,
+            workflow_node_id: None,
+            name: name.to_string(),
+            tool: "ansible".into(),
+            status: "successful".into(),
+            extra_vars: "{}".into(),
+            launched_by: "tester".into(),
+            trigger: "manual".into(),
+            started_at: None,
+            finished_at: None,
+            created_at: created_at.to_string(),
+            parameters: "{}".into(),
+            failed_hosts: "[]".into(),
+        }
+    }
+
+    fn job_database(prefix: &str) -> (std::path::PathBuf, Connection) {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-{prefix}-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = open(&dir.join("koreograf.db")).unwrap();
+        (dir, conn)
+    }
+
+    #[test]
+    fn job_list_pages_filters_and_counts_literally() {
+        let (dir, conn) = job_database("job-list");
+        let tools = ["ansible", "shell", "opentofu"];
+        let statuses = ["failed", "successful", "running", "canceled"];
+        let triggers = ["manual", "schedule", "hook", "workflow"];
+        for index in 0..12 {
+            let id = format!("job-{index:02}");
+            let name = if index == 5 {
+                "Odd 100% _quoted '\"".to_string()
+            } else {
+                format!("Deploy {index}")
+            };
+            let created = format!("2026-01-01T00:{:02}:00Z", index + 1);
+            let mut job = sample_job(&id, "team", &name, &created);
+            job.tool = tools[index % tools.len()].into();
+            job.status = statuses[index % statuses.len()].into();
+            job.trigger = triggers[index % triggers.len()].into();
+            job.template_id = Some(if index % 2 == 0 { "tpl-a" } else { "tpl-b" }.into());
+            insert_job(&conn, &job).unwrap();
+        }
+        let mut foreign = sample_job("foreign", "other-team", "Deploy 99", "2026-01-01T00:59:00Z");
+        foreign.status = "failed".into();
+        foreign.trigger = "schedule".into();
+        foreign.template_id = Some("tpl-a".into());
+        insert_job(&conn, &foreign).unwrap();
+
+        let list = |query: JobQuery| list_jobs(&conn, "team", &query).unwrap();
+        let ids = |jobs: &[Job]| jobs.iter().map(|job| job.id.clone()).collect::<Vec<_>>();
+
+        let (page, total) = list(JobQuery::default());
+        assert_eq!(total, 12);
+        assert_eq!(page.len(), 12);
+        assert_eq!(page.first().unwrap().id, "job-11");
+
+        let (page, total) = list(JobQuery {
+            limit: 3,
+            offset: 3,
+            ..Default::default()
+        });
+        assert_eq!(total, 12);
+        assert_eq!(ids(&page), vec!["job-08", "job-07", "job-06"]);
+
+        let (page, total) = list(JobQuery {
+            status: "failed".into(),
+            ..Default::default()
+        });
+        assert_eq!(total, 3);
+        assert!(page.iter().all(|job| job.status == "failed"));
+
+        let (page, total) = list(JobQuery {
+            tool: "shell".into(),
+            ..Default::default()
+        });
+        assert_eq!(total, 4);
+        assert!(page.iter().all(|job| job.tool == "shell"));
+
+        let (page, total) = list(JobQuery {
+            trigger: "schedule".into(),
+            ..Default::default()
+        });
+        assert_eq!(total, 3);
+        assert!(page.iter().all(|job| job.trigger == "schedule"));
+
+        let (page, total) = list(JobQuery {
+            template_id: "tpl-a".into(),
+            ..Default::default()
+        });
+        assert_eq!(total, 6);
+        assert!(page
+            .iter()
+            .all(|job| job.template_id.as_deref() == Some("tpl-a")));
+
+        let (page, total) = list(JobQuery {
+            status: "failed".into(),
+            tool: "shell".into(),
+            ..Default::default()
+        });
+        assert_eq!(total, 1);
+        assert_eq!(page[0].id, "job-04");
+
+        let (_, total) = list(JobQuery {
+            since: "2026-01-01T00:08:00Z".into(),
+            ..Default::default()
+        });
+        assert_eq!(total, 5);
+        let (_, total) = list(JobQuery {
+            until: "2026-01-01T00:04:00Z".into(),
+            ..Default::default()
+        });
+        assert_eq!(total, 4);
+        let (_, total) = list(JobQuery {
+            since: "2026-01-01T00:03:00Z".into(),
+            until: "2026-01-01T00:06:00Z".into(),
+            ..Default::default()
+        });
+        assert_eq!(total, 4);
+
+        for needle in ["odd", "100%", "_", "'", "\"", "DEPLOY"] {
+            let (page, total) = list(JobQuery {
+                q: needle.into(),
+                ..Default::default()
+            });
+            let expected: usize = if needle == "DEPLOY" { 11 } else { 1 };
+            assert_eq!(total as usize, expected, "{needle}");
+            assert_eq!(page.len(), expected, "{needle}");
+            assert!(page.iter().all(|job| job.team_id == "team"));
+        }
+
+        let (page, total) = list(JobQuery {
+            q: "schedule".into(),
+            status: "successful".into(),
+            ..Default::default()
+        });
+        assert_eq!(total, 3);
+        assert_eq!(page[0].id, "job-09");
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn job_list_caps_the_limit() {
+        let (dir, conn) = job_database("job-limit");
+        for index in 0..105 {
+            let id = format!("job-{index:03}");
+            let created = format!("2026-01-{:02}T{:02}:00:00Z", index / 60 + 1, index % 60);
+            let job = sample_job(&id, "team", &format!("Job {index}"), &created);
+            insert_job(&conn, &job).unwrap();
+        }
+        let (page, total) = list_jobs(
+            &conn,
+            "team",
+            &JobQuery {
+                limit: 1_000,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(total, 105);
+        assert_eq!(page.len(), 100);
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn an_old_template_keeps_running_without_an_environment() {

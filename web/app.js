@@ -291,6 +291,20 @@ function when(value) {
   });
 }
 
+function relativeTime(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const secs = Math.max(0, Math.round((Date.now() - date.getTime()) / 1000));
+  if (secs < 60) return t("just_now");
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return mins === 1 ? t("minute_ago") : t("minutes_ago", { count: mins });
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return hours === 1 ? t("hour_ago") : t("hours_ago", { count: hours });
+  const days = Math.floor(hours / 24);
+  return days === 1 ? t("day_ago") : t("days_ago", { count: days });
+}
+
 function spanText(start, end, phase) {
   if (!start || phase === "pending" || phase === "skipped") return "—";
   const from = Date.parse(start);
@@ -1978,41 +1992,225 @@ async function pageSchedules() {
   mountSchedules(document.querySelector("#schedule-card"));
 }
 
+function jobsState() {
+  const params = new URLSearchParams((location.hash || "").split("?")[1] || "");
+  const size = Number(params.get("size"));
+  return {
+    page: Math.max(1, Number(params.get("page")) || 1),
+    size: [25, 50, 100].includes(size) ? size : 25,
+    q: params.get("q") || "",
+    status: params.get("status") || "",
+    tool: params.get("tool") || "",
+    trigger: params.get("trigger") || "",
+    template: params.get("template") || "",
+  };
+}
+
+function jobsHash(state) {
+  const params = new URLSearchParams();
+  if (state.page > 1) params.set("page", String(state.page));
+  if (state.size !== 25) params.set("size", String(state.size));
+  if (state.q) params.set("q", state.q);
+  if (state.status) params.set("status", state.status);
+  if (state.tool) params.set("tool", state.tool);
+  if (state.trigger) params.set("trigger", state.trigger);
+  if (state.template) params.set("template", state.template);
+  const query = params.toString();
+  return `#/jobs${query ? `?${query}` : ""}`;
+}
+
+function jobsUrl(state) {
+  const params = new URLSearchParams();
+  params.set("limit", String(state.size));
+  params.set("offset", String((state.page - 1) * state.size));
+  if (state.q) params.set("q", state.q);
+  if (state.status) params.set("status", state.status);
+  if (state.tool) params.set("tool", state.tool);
+  if (state.trigger) params.set("trigger", state.trigger);
+  if (state.template) params.set("template_id", state.template);
+  return `/api/jobs?${params.toString()}`;
+}
+
 async function pageJobs() {
   if (!needTeam()) return;
-  const jobs = await api("GET", "/api/jobs");
+  const templates = await api("GET", "/api/templates");
+  const view = jobsState();
+  const choices = (values, selected, label) => [
+    `<option value=""${selected ? "" : " selected"}>${h("all")}</option>`,
+    ...values.map((value) => `<option value="${esc(value)}"${value === selected ? " selected" : ""}>${esc(label(value))}</option>`),
+  ].join("");
+  const templateOptions = [
+    `<option value=""${view.template ? "" : " selected"}>${h("all")}</option>`,
+    ...templates.map((item) => `<option value="${esc(item.id)}"${item.id === view.template ? " selected" : ""}>${esc(item.name)}</option>`),
+  ].join("");
   shell(t("jobs"), `
     <section class="card">
-      <input class="search" id="job-search" placeholder="${h("search_jobs")}" autocomplete="off">
+      <div class="row">
+        <input class="search" id="job-search" type="search" value="${esc(view.q)}" placeholder="${h("search_jobs")}" aria-label="${h("search_jobs")}" autocomplete="off">
+        <label class="field"><span>${h("status")}</span><select id="job-status" aria-label="${h("status")}">${choices(["pending", "running", "successful", "failed", "canceled"], view.status, statusLabel)}</select></label>
+        <label class="field"><span>${h("tool")}</span><select id="job-tool" aria-label="${h("tool")}">${choices(["ansible", "opentofu", "shell"], view.tool, (value) => t(value))}</select></label>
+        <label class="field"><span>${h("trigger")}</span><select id="job-trigger" aria-label="${h("trigger")}">${choices(["manual", "schedule", "hook", "workflow", "relaunch"], view.trigger, (value) => t(value))}</select></label>
+        <label class="field"><span>${h("template")}</span><select id="job-template" aria-label="${h("template")}">${templateOptions}</select></label>
+        <label class="field"><span>${h("page_size")}</span><select id="job-size" aria-label="${h("page_size")}">${[25, 50, 100].map((size) => `<option value="${size}"${size === view.size ? " selected" : ""}>${size}</option>`).join("")}</select></label>
+        <button class="btn pill${view.status === "failed" ? " primary" : ""}" id="job-only-failed" type="button">${h("only_failed")}</button>
+      </div>
+      <p class="small muted" id="job-total" tabindex="-1" aria-live="polite"></p>
       <div id="job-table"></div>
+      <div class="row" id="job-pager" tabindex="-1"></div>
     </section>`);
-  const drawJobs = () => {
-    const needle = document.querySelector("#job-search").value.trim().toLowerCase();
-    const shown = jobs.filter((job) => !needle || [job.name, job.tool, job.status, job.trigger, statusLabel(job.status)].join(" ").toLowerCase().includes(needle));
-    const filtered = shown.map((job) =>
-      `<tr><td><a href="#/jobs/${esc(job.id)}">${esc(job.name)}</a></td><td class="tool">${esc(job.tool)}</td><td>${pill(job.status)}</td><td class="small">${esc(job.trigger)}</td><td class="small muted">${esc(when(job.created_at))}</td><td class="small muted">${esc(spanText(job.started_at, job.finished_at, job.status))}</td><td>${jobListActions(job)}</td></tr>`
-    );
-    document.querySelector("#job-table").innerHTML = table([t("name"), t("tool"), t("status"), t("trigger"), t("created"), t("duration"), ""], filtered);
-    document.querySelectorAll("[data-relaunch]").forEach((button) => {
-      button.addEventListener("click", async () => {
-        const job = jobs.find((item) => item.id === button.dataset.relaunch);
-        if (!job) return;
-        if (!confirm(relaunchPrompt(job, button.dataset.failed === "1"))) return;
-        button.disabled = true;
-        try {
-          const copy = await api("POST", `/api/jobs/${encodeURIComponent(button.dataset.relaunch)}/relaunch`, {
-            only_failed_hosts: button.dataset.failed === "1",
-          });
-          go(`#/jobs/${copy.id}`);
-        } catch (error) {
-          button.disabled = false;
-          handle(error);
-        }
-      });
-    });
+  const search = document.querySelector("#job-search");
+  const status = document.querySelector("#job-status");
+  const tool = document.querySelector("#job-tool");
+  const trigger = document.querySelector("#job-trigger");
+  const template = document.querySelector("#job-template");
+  const size = document.querySelector("#job-size");
+  const failed = document.querySelector("#job-only-failed");
+  const jobTable = document.querySelector("#job-table");
+  const jobTotal = document.querySelector("#job-total");
+  const jobPager = document.querySelector("#job-pager");
+  let current = [];
+  const rememberHash = (push = false) => {
+    const next = jobsHash(view);
+    if (push) history.pushState(null, "", next);
+    else history.replaceState(null, "", next);
+    shownHash = next;
   };
-  document.querySelector("#job-search").addEventListener("input", drawJobs);
-  drawJobs();
+  const load = async (focus) => {
+    jobTotal.textContent = t("loading");
+    try {
+      const data = await api("GET", jobsUrl(view));
+      const totalPages = Math.max(1, Math.ceil(Number(data.total) / view.size));
+      if (view.page > totalPages) {
+        view.page = totalPages;
+        rememberHash();
+        return load(focus);
+      }
+      draw(data);
+      const target = focus ? document.querySelector(focus) : null;
+      (target || jobPager).focus();
+    } catch (error) {
+      jobTotal.textContent = "";
+      handle(error);
+    }
+  };
+  const draw = (data) => {
+    current = data.items || [];
+    const total = Number(data.total) || 0;
+    const filters = view.q || view.status || view.tool || view.trigger || view.template;
+    if (!current.length) {
+      jobTable.innerHTML = filters
+        ? `<p class="small muted">${h("no_jobs_match")}</p><button class="btn" id="clear-job-filter" type="button">${h("clear_filter")}</button>`
+        : `<p class="small muted">${h("nothing_here")}</p>`;
+    } else {
+      const rows = current.map((job) =>
+        `<tr><td><a href="#/jobs/${esc(job.id)}">${esc(job.name)}</a></td><td class="tool">${esc(job.tool)}</td><td>${pill(job.status)}</td><td class="small">${esc(job.trigger)}</td><td class="small muted"><time datetime="${esc(job.created_at)}" title="${esc(when(job.created_at))}">${esc(when(job.created_at))}</time><br><span class="small">${esc(relativeTime(job.created_at))}</span></td><td class="small muted">${esc(spanText(job.started_at, job.finished_at, job.status))}</td><td>${jobListActions(job)}</td></tr>`
+      );
+      jobTable.innerHTML = table([t("name"), t("tool"), t("status"), t("trigger"), t("created"), t("duration"), ""], rows);
+    }
+    const offset = (view.page - 1) * view.size;
+    const from = total ? Math.min(offset + 1, total) : 0;
+    const to = Math.min(offset + current.length, total);
+    jobTotal.textContent = total ? t("jobs_range", { from, to, total }) : filters ? t("no_jobs_match") : t("nothing_here");
+    const totalPages = Math.max(1, Math.ceil(total / view.size));
+    jobPager.innerHTML = totalPages > 1
+      ? `<button class="btn" type="button" data-job-page="${view.page - 1}"${view.page <= 1 ? " disabled" : ""}>${h("previous_page")}</button>
+        <span class="small muted">${h("page_of_pages", { page: view.page, pages: totalPages })}</span>
+        <button class="btn" type="button" data-job-page="${view.page + 1}"${view.page >= totalPages ? " disabled" : ""}>${h("next_page")}</button>`
+      : "";
+  };
+  const resetFilters = () => {
+    view.q = "";
+    view.status = "";
+    view.tool = "";
+    view.trigger = "";
+    view.template = "";
+    view.page = 1;
+    search.value = "";
+    status.value = "";
+    tool.value = "";
+    trigger.value = "";
+    template.value = "";
+    failed.classList.remove("primary");
+    rememberHash();
+    load("#job-search");
+  };
+  search.addEventListener("input", () => {
+    if (search.jobTimer) window.clearTimeout(search.jobTimer);
+    search.jobTimer = window.setTimeout(() => {
+      view.q = search.value.trim();
+      view.page = 1;
+      rememberHash();
+      load("#job-search");
+    }, 250);
+  });
+  status.addEventListener("change", () => {
+    view.status = status.value;
+    view.page = 1;
+    failed.classList.toggle("primary", view.status === "failed");
+    rememberHash(true);
+    load("#job-status");
+  });
+  tool.addEventListener("change", () => {
+    view.tool = tool.value;
+    view.page = 1;
+    rememberHash(true);
+    load("#job-tool");
+  });
+  trigger.addEventListener("change", () => {
+    view.trigger = trigger.value;
+    view.page = 1;
+    rememberHash(true);
+    load("#job-trigger");
+  });
+  template.addEventListener("change", () => {
+    view.template = template.value;
+    view.page = 1;
+    rememberHash(true);
+    load("#job-template");
+  });
+  size.addEventListener("change", () => {
+    view.size = Number(size.value) || 25;
+    view.page = 1;
+    rememberHash(true);
+    load("#job-size");
+  });
+  failed.addEventListener("click", () => {
+    view.status = view.status === "failed" ? "" : "failed";
+    view.page = 1;
+    status.value = view.status;
+    failed.classList.toggle("primary", view.status === "failed");
+    rememberHash(true);
+    load("#job-only-failed");
+  });
+  jobTable.addEventListener("click", async (event) => {
+    if (event.target.closest("#clear-job-filter")) {
+      resetFilters();
+      return;
+    }
+    const button = event.target.closest("[data-relaunch]");
+    if (!button) return;
+    const job = current.find((item) => item.id === button.dataset.relaunch);
+    if (!job) return;
+    if (!confirm(relaunchPrompt(job, button.dataset.failed === "1"))) return;
+    button.disabled = true;
+    try {
+      const copy = await api("POST", `/api/jobs/${encodeURIComponent(button.dataset.relaunch)}/relaunch`, {
+        only_failed_hosts: button.dataset.failed === "1",
+      });
+      go(`#/jobs/${copy.id}`);
+    } catch (error) {
+      button.disabled = false;
+      handle(error);
+    }
+  });
+  jobPager.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-job-page]");
+    if (!button || button.disabled) return;
+    view.page = Number(button.dataset.jobPage);
+    rememberHash(true);
+    load(`[data-job-page="${view.page}"]`);
+  });
+  await load();
 }
 
 function plainLogLine(text) {

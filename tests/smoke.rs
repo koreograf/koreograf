@@ -6806,7 +6806,7 @@ async fn workflow_node_can_override_template_parameters() {
         let (status, jobs, _) =
             call(&app, "GET", "/api/jobs", Some(&cookie), Some(&team), None).await;
         assert_eq!(status, StatusCode::OK, "{jobs}");
-        for job in jobs.as_array().unwrap() {
+        for job in jobs["items"].as_array().unwrap() {
             if job["workflow_node_id"] == "test" {
                 test_job = Some(job.clone());
             }
@@ -9287,7 +9287,7 @@ async fn template_accepts_one_credential_per_kind_and_many_vaults() {
         let (status, jobs, _) =
             call(&app, "GET", "/api/jobs", Some(&cookie), Some(&team), None).await;
         assert_eq!(status, StatusCode::OK, "{jobs}");
-        if let Some(found) = jobs
+        if let Some(found) = jobs["items"]
             .as_array()
             .unwrap()
             .iter()
@@ -11352,10 +11352,169 @@ async fn expect_unknown_field(
     assert_eq!(parsed["vars"]["field"], field, "{text}");
 }
 
+#[tokio::test]
+async fn job_list_pages_searches_filters_and_reloads_the_hash() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-job-list-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state.clone());
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+    {
+        let db = state.db().expect("database");
+        for index in 0..60 {
+            let id = format!("job-{index:02}");
+            let name = format!("Job {index:02}");
+            let tool = ["shell", "ansible", "opentofu"][index % 3];
+            let job_status = if index % 5 == 0 {
+                "failed"
+            } else {
+                "successful"
+            };
+            let trigger = if index % 2 == 0 { "manual" } else { "schedule" };
+            let created = format!("2026-02-01T00:{index:02}:00Z");
+            db.execute(
+                "INSERT INTO jobs (
+                    id, team_id, name, tool, status, extra_vars, launched_by, trigger, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, '{}', 'admin', ?6, ?7)",
+                (
+                    id.as_str(),
+                    team.as_str(),
+                    name.as_str(),
+                    tool,
+                    job_status,
+                    trigger,
+                    created.as_str(),
+                ),
+            )
+            .unwrap();
+        }
+    }
+
+    let (status, page, _) = call(
+        &app,
+        "GET",
+        "/api/jobs?limit=25&offset=25",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["total"], 60);
+    let items = page["items"].as_array().unwrap();
+    assert_eq!(items.len(), 25);
+    assert_eq!(items[0]["id"], "job-34");
+
+    let (status, found, _) = call(
+        &app,
+        "GET",
+        "/api/jobs?q=Job%2005&limit=25",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{found}");
+    assert_eq!(found["total"], 1);
+    assert_eq!(found["items"][0]["id"], "job-05");
+
+    let (status, failed, _) = call(
+        &app,
+        "GET",
+        "/api/jobs?status=failed&limit=100",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{failed}");
+    assert_eq!(failed["total"], 12);
+    assert!(failed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|job| job["status"] == "failed"));
+
+    let (status, combined, _) = call(
+        &app,
+        "GET",
+        "/api/jobs?status=failed&tool=shell&limit=100",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{combined}");
+    assert_eq!(combined["total"], 4);
+
+    let (status, bad, _) = call(
+        &app,
+        "GET",
+        "/api/jobs?since=not-a-date",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    assert_eq!(bad["error"], "invalid_query_parameter");
+    assert_eq!(bad["vars"]["field"], "since");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn job_list_hash_round_trips_filters_and_pages() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let functions = format!(
+        "{}\n{}",
+        extract_braced_function(&script, "function jobsState"),
+        extract_braced_function(&script, "function jobsHash")
+    );
+    let probe = format!(
+        r##"{functions}
+let location = {{ hash: "#/jobs?status=failed&page=2&size=50&q=Job%2005&tool=shell&trigger=schedule&template=tpl-a" }};
+const view = jobsState();
+if (view.page !== 2 || view.size !== 50 || view.q !== "Job 05" || view.status !== "failed" || view.tool !== "shell" || view.trigger !== "schedule" || view.template !== "tpl-a") {{
+  console.error(JSON.stringify(view));
+  process.exit(1);
+}}
+if (jobsHash(view) !== "#/jobs?page=2&size=50&q=Job+05&status=failed&tool=shell&trigger=schedule&template=tpl-a") {{
+  console.error(jobsHash(view));
+  process.exit(1);
+}}
+location.hash = "#/jobs";
+const plain = jobsState();
+if (plain.page !== 1 || plain.size !== 25 || jobsHash(plain) !== "#/jobs") {{
+  console.error(jobsHash(plain));
+  process.exit(1);
+}}
+"##
+    );
+    run_node_probe("job-list-hash", &probe);
+}
+
 async fn job_count(app: &axum::Router, cookie: &str, team: &str) -> usize {
     let (status, jobs, _) = call(app, "GET", "/api/jobs", Some(cookie), Some(team), None).await;
     assert_eq!(status, StatusCode::OK, "{jobs}");
-    jobs.as_array().expect("job list").len()
+    jobs["items"].as_array().expect("job list");
+    jobs["total"].as_u64().expect("job total") as usize
 }
 
 async fn expect_json_error(
@@ -12804,7 +12963,8 @@ fn mark_missed(state: &koreograf::Shared, id: &str) {
 }
 
 fn scheduled_jobs<'a>(jobs: &'a Value, template_id: &str) -> Vec<&'a Value> {
-    jobs.as_array()
+    jobs["items"]
+        .as_array()
         .unwrap()
         .iter()
         .filter(|job| {
