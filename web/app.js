@@ -4344,60 +4344,107 @@ async function pageProjects() {
       <input class="search" id="project-search" placeholder="${h("search_projects")}" autocomplete="off">
       <div id="project-table"></div>
     </section>`,
-    can("operator") ? addLink("#/projects/new", "project_2") : "");
+    can("operator") ? addLink("#/projects?new=1", "project_2") : "");
   const drawProjects = () => {
     const needle = document.querySelector("#project-search").value.trim().toLowerCase();
     const rows = projects.filter((item) => !needle || `${item.name} ${item.organization_name || ""} ${item.source_type} ${grantLabel(item)}`.toLowerCase().includes(needle)).map((item) =>
-      `<tr><td><a href="#/projects/${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(item.organization_name || "")}</td><td>${esc(item.source_type)}</td><td class="small muted">${esc(grantLabel(item))}</td></tr>`
+      `<tr><td><a href="#/projects/${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(item.organization_name || "")}</td><td>${esc(item.source_type)}</td><td class="small muted">${esc(grantLabel(item))}</td><td>${can("operator") ? `<a class="btn" href="#/projects?edit=${esc(item.id)}">${h("edit")}</a>` : ""}</td></tr>`
     );
-    document.querySelector("#project-table").innerHTML = table([t("name"), t("organization"), t("type"), t("visibility")], rows);
+    document.querySelector("#project-table").innerHTML = table([t("name"), t("organization"), t("type"), t("visibility"), ""], rows);
   };
   document.querySelector("#project-search").addEventListener("input", drawProjects);
   drawProjects();
-}
-
-async function pageProjectNew() {
-  if (!needTeam()) return;
-  if (!can("operator")) {
-    deny("project", "operator");
+  const request = editQuery();
+  if (request.create !== null) {
+    if (can("operator")) await openProjectDialog(null);
     return;
   }
+  if (!request.edit) return;
+  const item = projects.find((row) => row.id === request.edit);
+  if (!item) {
+    clearEditHash();
+    return;
+  }
+  if (can("operator")) await openProjectDialog(item, request.tab);
+}
+
+async function openProjectDialog(item, initialTab = "") {
+  const editing = Boolean(item);
   const [organizations, credentials] = await Promise.all([
-    me.is_admin ? api("GET", "/api/organizations") : Promise.resolve([]),
+    editing || me.is_admin ? api("GET", "/api/organizations") : Promise.resolve([]),
     api("GET", "/api/credentials"),
   ]);
   const current = (me.teams || []).find((team) => team.id === teamId);
-  shell(t("new_project"), `
-    <form class="card form" id="project-form">
-      <label class="field"><span>${h("name")}</span><input name="name" required></label>
-      <div class="field-row">
-        <label class="field"><span>${h("type")}</span><select class="fit" name="source_type"><option value="path">${h("path")}</option><option value="git">Git</option></select></label>
-        <label class="field"><span>${h("revision")}</span><input class="fit" name="revision" placeholder="${h("branch_tag_or_commit")}"></label>
-      </div>
-      <label class="field"><span>${h("source_2")}</span><input name="source" required placeholder="${h("https_or_file")}"></label>
-      ${projectCredentialField(credentials, "")}
-      ${me.is_admin ? `<label class="field"><span>${h("organization")}</span><select name="organization_id">${orgOptions(organizations, current && current.organization_id)}</select></label>` : ""}
-      <button class="btn pill primary" type="submit">${h("create")}</button>
-    </form>`);
-  const form = document.querySelector("#project-form");
-  bindProjectCredential(form, credentials);
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    try {
+  const organization = editing ? await api("GET", `/api/organizations/${encodeURIComponent(item.organization_id)}`) : null;
+  const organizationField = editing || me.is_admin
+    ? `<label class="field"><span>${h("organization")}</span><select name="organization_id"${me.is_admin ? "" : " disabled"}>${orgOptions(organizations, editing ? item.organization_id : (current && current.organization_id))}</select></label>`
+    : "";
+  const general = `<label class="field required"><span>${h("name")}</span><input name="name" required value="${editing ? esc(item.name) : ""}"></label>`;
+  const source = `
+    <div class="field-row">
+      <label class="field"><span>${h("type")}</span><select class="fit" name="source_type">
+        <option value="path"${editing && item.source_type === "git" ? "" : " selected"}>${h("path")}</option>
+        <option value="git"${editing && item.source_type === "git" ? " selected" : ""}>Git</option>
+      </select></label>
+      <label class="field"><span>${h("revision")}</span><input class="fit" name="revision" value="${editing ? esc(item.revision) : ""}" placeholder="${h("branch_tag_or_commit")}"></label>
+    </div>
+    <label class="field required"><span>${h("source_2")}</span><input name="source" required value="${editing ? esc(item.source) : ""}" placeholder="${h("https_or_file")}"></label>
+    ${projectCredentialField(credentials, editing ? item.credential_id : "")}
+    ${editing && item.source_type === "git" ? `<p class="small muted" id="last-sync">${esc(projectSyncText(item))}</p>` : ""}`;
+  const assignment = `
+    <p class="small muted">${h("with_no_team_checked_every_team_in_the")}</p>
+    ${organizationField}
+    <div class="stack" id="team-boxes">${teamBoxes((organization && organization.teams) || [], editing ? item.team_ids : [])}</div>`;
+  const dialog = openEditDialog({
+    id: "project-dialog",
+    title: editing ? t("edit_project") : t("new_project"),
+    tabs: editing ? [
+      { id: "general", label: t("general"), body: general },
+      { id: "source", label: t("source_2"), body: source },
+      { id: "assignment", label: t("assignment"), body: assignment },
+    ] : null,
+    body: `${general}${source}${organizationField}`,
+    submit: editing ? t("save") : t("create"),
+    initialTab,
+    onSubmit: async ({ form, close }) => {
       const payload = {
         name: form.name.value,
         source_type: form.source_type.value,
         source: form.source.value,
         revision: form.revision.value,
-        team_ids: [],
         credential_id: form.credential_id.value,
       };
       if (form.organization_id) payload.organization_id = form.organization_id.value;
-      const created = await api("POST", "/api/projects", payload);
-      markSaved();
-      go(`#/projects/${created.id}`);
-    } catch (error) { handle(error); }
+      if (editing) {
+        payload.team_ids = [...form.querySelectorAll("input[name=team_ids]:checked")].map((input) => input.value).sort();
+        const saved = await api("PUT", `/api/projects/${encodeURIComponent(item.id)}`, payload);
+        markSaved();
+        close();
+        await route();
+        if (saved.sync && !saved.sync.ok) {
+          handle({ message: saved.sync.error || "sync_failed", vars: saved.sync.vars });
+        }
+      } else {
+        payload.team_ids = [];
+        const created = await api("POST", "/api/projects", payload);
+        markSaved();
+        close();
+        go(`#/projects/${created.id}`);
+      }
+    },
+    onTab: editing ? (tab) => rememberEditHash({ edit: item.id, tab }, false) : undefined,
   });
+  bindProjectCredential(dialog.form, credentials);
+  if (editing && me.is_admin) {
+    dialog.form.organization_id.addEventListener("change", async () => {
+      const box = dialog.overlay.querySelector("#team-boxes");
+      box.innerHTML = `<p class="small muted">${h("loading_teams")}</p>`;
+      try {
+        const next = await api("GET", `/api/organizations/${encodeURIComponent(dialog.form.organization_id.value)}`);
+        box.innerHTML = teamBoxes(next.teams || [], []);
+      } catch (error) { handle(error); }
+    });
+  }
 }
 
 function projectSyncText(project) {
@@ -4412,8 +4459,8 @@ function projectSyncText(project) {
 async function pageProject(id) {
   if (!needTeam()) return;
   const project = await api("GET", `/api/projects/${encodeURIComponent(id)}`);
-  if (!can("operator")) {
-    shell(project.name, `<section class="card">
+  shell(project.name, `
+    <section class="card">
       <dl class="kv">
         ${paramRow("name", project.name)}
         ${paramRow("source_2", `${project.source_type} · ${project.source}`)}
@@ -4422,92 +4469,14 @@ async function pageProject(id) {
         ${paramRow("visibility", grantLabel(project))}
       </dl>
       ${project.source_type === "git" ? `<p class="small muted" id="last-sync">${esc(projectSyncText(project))}</p>` : ""}
-    </section>`);
-    return;
-  }
-  const [organizations, credentials] = await Promise.all([
-    api("GET", "/api/organizations"),
-    api("GET", "/api/credentials"),
-  ]);
-  const org = await api("GET", `/api/organizations/${encodeURIComponent(project.organization_id)}`);
-  shell(t("edit_project"), `
-    <form class="card form" id="project-form">
-      <p class="small muted">${h("fields_marked_with_a_star_are_required")}</p>
-      <div class="form-section">
-        <h2>${h("general")}</h2>
-        <label class="field required"><span>${h("name")}</span><input name="name" required value="${esc(project.name)}"></label>
-      </div>
-      <div class="form-section">
-        <h2>${h("source_2")}</h2>
-        <div class="field-row">
-          <label class="field"><span>${h("type")}</span><select class="fit" name="source_type">
-            <option value="path"${project.source_type === "path" ? " selected" : ""}>${h("path")}</option>
-            <option value="git"${project.source_type === "git" ? " selected" : ""}>Git</option>
-          </select></label>
-          <label class="field"><span>${h("revision")}</span><input class="fit" name="revision" value="${esc(project.revision)}" placeholder="${h("branch_tag_or_commit")}"></label>
-        </div>
-        <label class="field required"><span>${h("source_2")}</span><input name="source" required value="${esc(project.source)}" placeholder="${h("https_or_file")}"></label>
-        ${projectCredentialField(credentials, project.credential_id)}
-        ${project.source_type === "git" ? `<p class="small muted" id="last-sync">${esc(projectSyncText(project))}</p>
-        <div class="row"><button class="btn" id="sync" type="button">${h("sync")}</button></div>` : ""}
-      </div>
-      <div class="form-section">
-        <h2>${h("assignment")}</h2>
-        <p class="small muted">${h("with_no_team_checked_every_team_in_the")}</p>
-        <label class="field"><span>${h("organization")}</span><select name="organization_id"${me.is_admin ? "" : " disabled"}>${orgOptions(organizations, project.organization_id)}</select></label>
-        <div class="stack" id="team-boxes">${teamBoxes(org.teams || [], project.team_ids)}</div>
-      </div>
-      <div class="row"><button class="btn pill primary" type="submit">${h("save")}</button></div>
-    </form>
-    <section class="card danger-zone" style="margin-top:14px">
+      ${can("operator") && project.source_type === "git" ? `<div class="row"><button class="btn" id="sync" type="button">${h("sync")}</button></div>` : ""}
+    </section>
+    ${can("operator") ? `<section class="card danger-zone" style="margin-top:14px">
       <h2>${h("danger_zone")}</h2>
       <p class="small muted">${h("deleting_cannot_be_undone")}</p>
       <button class="btn danger" id="delete-project" type="button">${h("delete")}</button>
-    </section>`);
-  const form = document.querySelector("#project-form");
-  bindProjectCredential(form, credentials);
-  const chosenTeams = () => [...form.querySelectorAll("input[name=team_ids]:checked")].map((input) => input.value).sort();
-  const snapshot = () => JSON.stringify({
-    name: form.name.value,
-    source_type: form.source_type.value,
-    source: form.source.value,
-    revision: form.revision.value,
-    credential_id: form.credential_id.value,
-    organization_id: form.organization_id.value,
-    team_ids: chosenTeams(),
-  });
-  let initial = snapshot();
-  leaveGuard = () => snapshot() !== initial;
-  form.organization_id.addEventListener("change", async () => {
-    const box = document.querySelector("#team-boxes");
-    box.innerHTML = `<p class="small muted">${h("loading_teams")}</p>`;
-    try {
-      const next = await api("GET", `/api/organizations/${encodeURIComponent(form.organization_id.value)}`);
-      box.innerHTML = teamBoxes(next.teams || [], []);
-    } catch (error) { handle(error); }
-  });
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    if (!form.reportValidity()) return;
-    try {
-      const saved = await api("PUT", `/api/projects/${encodeURIComponent(id)}`, {
-        name: form.name.value,
-        source_type: form.source_type.value,
-        source: form.source.value,
-        revision: form.revision.value,
-        credential_id: form.credential_id.value,
-        organization_id: form.organization_id.value,
-        team_ids: chosenTeams(),
-      });
-      initial = snapshot();
-      leaveGuard = null;
-      markSaved();
-      await route();
-      if (saved.sync && !saved.sync.ok) {
-        handle({ message: saved.sync.error || "sync_failed", vars: saved.sync.vars });
-      }
-    } catch (error) { handle(error); }
-  });
+    </section>` : ""}`,
+    can("operator") ? `<a class="btn pill" href="#/projects?edit=${esc(project.id)}">${h("edit")}</a>` : "");
   const sync = document.querySelector("#sync");
   if (sync) {
     sync.addEventListener("click", async () => {
@@ -4527,14 +4496,17 @@ async function pageProject(id) {
       }
     });
   }
-  document.querySelector("#delete-project").addEventListener("click", async () => {
-    if (!confirm(t("delete_this_project", { name: project.name }))) return;
-    try {
-      await api("DELETE", `/api/projects/${encodeURIComponent(id)}`);
-      leaveGuard = null;
-      go("#/projects");
-    } catch (error) { handle(error); }
-  });
+  const remove = document.querySelector("#delete-project");
+  if (remove) {
+    remove.addEventListener("click", async () => {
+      if (!confirm(t("delete_this_project", { name: project.name }))) return;
+      try {
+        await api("DELETE", `/api/projects/${encodeURIComponent(id)}`);
+        leaveGuard = null;
+        go("#/projects");
+      } catch (error) { handle(error); }
+    });
+  }
 }
 
 function sourceKindLabel(kind) {
@@ -4903,7 +4875,7 @@ async function pageInventories() {
       <input class="search" id="inventory-search" placeholder="${h("search_inventories")}" autocomplete="off">
       <div id="inventory-table"></div>
     </section>`,
-    can("operator") ? addLink("#/inventories/new", "inventory_2") : "");
+    can("operator") ? addLink("#/inventories?new=1", "inventory_2") : "");
   const draw = () => {
     const needle = document.querySelector("#inventory-search").value.trim().toLowerCase();
     const shown = items.filter((item) => {
@@ -4916,48 +4888,63 @@ async function pageInventories() {
       const label = kinds.length ? [...new Set(kinds)].join(", ") : sourceKindLabel(item.source_kind);
       const count = item.source_count != null ? item.source_count : kinds.length;
       const insecure = (item.sources || []).some(certificateCheckOff) || certificateCheckOff({ kind: item.source_kind, source: item.source });
-      return `<tr><td><a href="#/inventories/${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(count)}</td><td>${esc(label)}${certificateBadge(insecure)}</td><td>${esc(item.host_count)}</td></tr>`;
+      return `<tr><td><a href="#/inventories/${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(count)}</td><td>${esc(label)}${certificateBadge(insecure)}</td><td>${esc(item.host_count)}</td><td>${can("operator") ? `<a class="btn" href="#/inventories?edit=${esc(item.id)}">${h("edit")}</a>` : ""}</td></tr>`;
     });
-    document.querySelector("#inventory-table").innerHTML = table([t("name"), t("sources"), t("type"), t("hosts")], rows);
+    document.querySelector("#inventory-table").innerHTML = table([t("name"), t("sources"), t("type"), t("hosts"), ""], rows);
   };
   document.querySelector("#inventory-search").addEventListener("input", draw);
   draw();
-}
-
-async function pageInventoryNew() {
-  if (!needTeam()) return;
-  if (!can("operator")) {
-    deny("inventory", "operator");
+  const request = editQuery();
+  if (request.create !== null) {
+    if (can("operator")) await openInventoryDialog(null);
     return;
   }
-  const projects = await api("GET", "/api/projects");
-  const credentials = await api("GET", "/api/credentials");
-  shell(t("new_inventory"), `
-    <form class="card form" id="inventory-create">
-      <label class="field"><span>${h("name")}</span><input name="name" required></label>
-      <div>
-        <h2>${h("sources")}</h2>
-        <p class="small muted">${h("an_inventory_can_have_several_sources_they_are")}</p>
-        <div class="choice-row">
-          <button class="btn pill" type="button" data-add-kind="ini">${h("manual_2")}</button>
-          <button class="btn pill" type="button" data-add-kind="project">${h("project_2")}</button>
-          <button class="btn pill" type="button" data-add-kind="netbox">${h("netbox_2")}</button>
-        </div>
-        <div id="source-drafts"></div>
+  if (!request.edit) return;
+  const item = items.find((row) => row.id === request.edit);
+  if (!item) {
+    clearEditHash();
+    return;
+  }
+  if (can("operator")) await openInventoryDialog(item);
+}
+
+async function openInventoryDialog(item) {
+  const editing = Boolean(item);
+  const [projects, credentials] = editing
+    ? [[], []]
+    : await Promise.all([api("GET", "/api/projects"), api("GET", "/api/credentials")]);
+  const sources = `
+    <div>
+      <h2>${h("sources")}</h2>
+      <p class="small muted">${h("an_inventory_can_have_several_sources_they_are")}</p>
+      <div class="choice-row">
+        <button class="btn pill" type="button" data-add-kind="ini">${h("manual_2")}</button>
+        <button class="btn pill" type="button" data-add-kind="project">${h("project_2")}</button>
+        <button class="btn pill" type="button" data-add-kind="netbox">${h("netbox_2")}</button>
       </div>
-      <button class="btn pill primary" type="submit">${h("create")}</button>
-    </form>`);
-  bindSourcePicks(projects, credentials);
-  document.querySelector("#inventory-create").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    try {
-      const sources = [...document.querySelectorAll("#source-drafts [data-kind]")].map(readSourceDraft);
-      const created = await api("POST", "/api/inventories", { name: form.name.value, sources });
-      markSaved();
-      go(`#/inventories/${created.id}`);
-    } catch (error) { handle(error); }
+      <div id="source-drafts"></div>
+    </div>`;
+  const dialog = openEditDialog({
+    id: "inventory-dialog",
+    title: editing ? item.name : t("new_inventory"),
+    body: `<label class="field required"><span>${h("name")}</span><input name="name" required value="${editing ? esc(item.name) : ""}"></label>${editing ? "" : sources}`,
+    submit: editing ? t("save") : t("create"),
+    onSubmit: async ({ form, close }) => {
+      if (editing) {
+        await api("PUT", `/api/inventories/${encodeURIComponent(item.id)}`, { name: form.name.value });
+        markSaved();
+        close();
+        await route();
+      } else {
+        const drafts = [...dialog.overlay.querySelectorAll("#source-drafts [data-kind]")].map(readSourceDraft);
+        const created = await api("POST", "/api/inventories", { name: form.name.value, sources: drafts });
+        markSaved();
+        close();
+        go(`#/inventories/${created.id}`);
+      }
+    },
   });
+  if (!editing) bindSourcePicks(projects, credentials);
 }
 
 function inventoryHostState() {
@@ -5064,12 +5051,6 @@ async function pageInventory(id) {
       <div class="source-raw" id="source-raw-${esc(source.id)}" hidden><pre class="mono" data-raw-body></pre></div>
     </section>`).join("");
   shell(item.name, `
-    <form class="card form" id="inventory-name-form" style="margin-bottom:14px">
-      <p class="small muted">${h("fields_marked_with_a_star_are_required")}</p>
-      <label class="field required"><span>${h("name")}</span><input name="name" required value="${esc(item.name)}"></label>
-      <div class="row"><button class="btn pill primary" type="submit">${h("save")}</button><button class="btn" id="cancel-inventory-name" type="button">${h("cancel")}</button></div>
-      <p class="small muted" data-inventory-name-error aria-live="polite"></p>
-    </form>
     <section class="card" style="margin-bottom:14px">
       <div class="spread">
         <h2>${h("hosts")}</h2>
@@ -5115,7 +5096,7 @@ async function pageInventory(id) {
       <p class="small muted">${h("deleting_cannot_be_undone")}</p>
       <button class="btn danger" id="delete-inventory" type="button">${h("delete_inventory")}</button>
     </section>` : ""}`,
-    can("operator") ? `<a class="btn pill" href="#/inventories/new">${h("inventory_2")}</a>` : "");
+    can("operator") ? `<a class="btn pill" href="#/inventories?edit=${esc(item.id)}">${h("edit")}</a><a class="btn pill" href="#/inventories?new=1">${h("inventory_2")}</a>` : "");
   if (notice) sourceNotice = null;
   const hostSearch = document.querySelector("#host-search");
   const hostGroup = document.querySelector("#host-group");
@@ -5270,30 +5251,6 @@ async function pageInventory(id) {
       button.setAttribute("aria-expanded", String(show));
     });
   });
-  const nameForm = document.querySelector("#inventory-name-form");
-  const nameInput = nameForm.querySelector("[name=name]");
-  const nameError = nameForm.querySelector("[data-inventory-name-error]");
-  const nameInitial = item.name;
-  nameForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    if (!nameForm.reportValidity()) return;
-    nameError.textContent = "";
-    const button = nameForm.querySelector("button[type=submit]");
-    button.disabled = true;
-    try {
-      await api("PUT", `/api/inventories/${encodeURIComponent(id)}`, { name: nameInput.value });
-      markSaved();
-      route();
-    } catch (error) {
-      button.disabled = false;
-      nameError.textContent = t(error.message || "error.generic", error.vars);
-      handle(error);
-    }
-  });
-  document.querySelector("#cancel-inventory-name").addEventListener("click", () => {
-    nameInput.value = nameInitial;
-    nameError.textContent = "";
-  });
   const sync = document.querySelector("#sync-inventory");
   if (sync) {
     sync.addEventListener("click", async () => {
@@ -5414,8 +5371,7 @@ async function pageInventory(id) {
       } catch (error) { handle(error); }
     });
   }
-  leaveGuard = () => nameInput.value !== nameInitial
-    || document.querySelector("#source-edit [data-dirty]") !== null
+  leaveGuard = () => document.querySelector("#source-edit [data-dirty]") !== null
     || document.querySelector("#source-drafts [data-kind]") !== null;
 }
 function looksSecretVar(name) {
@@ -6938,10 +6894,10 @@ async function route() {
     else if (parts[0] === "environments" && parts[1] === "new") await pageEnvironmentNew();
     else if (parts[0] === "environments" && parts[1]) await pageEnvironment(parts[1]);
     else if (parts[0] === "runtime") await pageRuntime();
-    else if (parts[0] === "projects" && parts[1] === "new") await pageProjectNew();
+    else if (parts[0] === "projects" && parts[1] === "new") { location.replace("#/projects?new=1"); return; }
     else if (parts[0] === "projects" && parts[1]) await pageProject(parts[1]);
     else if (parts[0] === "projects") await pageProjects();
-    else if (parts[0] === "inventories" && parts[1] === "new") await pageInventoryNew();
+    else if (parts[0] === "inventories" && parts[1] === "new") { location.replace("#/inventories?new=1"); return; }
     else if (parts[0] === "inventories" && parts[1] && parts[2] === "hosts" && parts[3]) await pageInventoryHost(parts[1], decodeURIComponent(parts[3]));
     else if (parts[0] === "inventories" && parts[1] && parts[2] === "groups" && parts[3]) await pageInventoryGroup(parts[1], decodeURIComponent(parts[3]));
     else if (parts[0] === "inventories" && parts[1]) await pageInventory(parts[1]);

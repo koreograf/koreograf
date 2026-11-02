@@ -13165,6 +13165,8 @@ fn edit_overlay_addresses_round_trip_and_old_pages_redirect() {
         "location.replace(`#/team?edit=${encodeURIComponent(parts[1])}`)",
         "location.replace(\"#/users?new=1\")",
         "location.replace(`#/users?edit=${encodeURIComponent(parts[1])}`)",
+        "location.replace(\"#/projects?new=1\")",
+        "location.replace(\"#/inventories?new=1\")",
     ] {
         assert!(script.contains(redirect), "missing redirect {redirect}");
     }
@@ -13176,6 +13178,10 @@ fn edit_overlay_addresses_round_trip_and_old_pages_redirect() {
         "addLink(\"#/organizations/new\"",
         "addLink(\"#/team/new\"",
         "addLink(\"#/users/new\"",
+        "addLink(\"#/projects/new\"",
+        "addLink(\"#/inventories/new\"",
+        "href=\"#/projects/new\"",
+        "href=\"#/inventories/new\"",
     ] {
         assert!(
             !script.contains(old),
@@ -13206,7 +13212,11 @@ const edit = editQuery("#/credentials?edit=c1&tab=memberships");
 check(edit.edit === "c1" && edit.tab === "memberships" && edit.create === null, "edit and tab were not read");
 const create = editQuery("#/organizations?new=1");
 check(create.create === "1" && create.edit === "" && create.tab === "", "new was not read");
+const project = editQuery("#/projects?edit=p1&tab=source");
+check(project.edit === "p1" && project.tab === "source", "project edit and tab were not read");
 check(editAddress({{ create: "1" }}, "#/credentials") === "#/credentials?new=1", "new address was not built");
+check(editAddress({{ create: "1" }}, "#/inventories") === "#/inventories?new=1", "inventory new address was not built");
+check(editAddress({{ edit: "p1", tab: "source" }}, "#/projects") === "#/projects?edit=p1&tab=source", "project address was not built");
 check(editAddress({{ edit: "u1", tab: "account" }}, "#/users?page=2") === "#/users?page=2&edit=u1&tab=account", "edit address was not built");
 check(editAddress({{ edit: "t1" }}, "#/team?edit=t1&tab=general") === "#/team?edit=t1", "old tab was not cleared");
 check(editAddress({{}}, "#/team?edit=t1&tab=general") === "#/team", "address was not cleared");
@@ -13272,6 +13282,56 @@ fn credentials_and_admin_objects_use_the_edit_overlay() {
         assert!(function.contains("markSaved();"));
         assert!(function.contains("await route();"));
     }
+}
+
+#[test]
+fn projects_and_inventories_use_the_edit_overlay() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let projects = extract_braced_function(&script, "async function pageProjects");
+    assert!(projects.contains("openProjectDialog(item, request.tab)"));
+    assert!(projects.contains("openProjectDialog(null)"));
+    assert!(projects.contains("#/projects?edit="));
+    assert!(projects.contains("#/projects?new=1"));
+    assert!(projects.contains("clearEditHash();"));
+    let project = extract_braced_function(&script, "async function openProjectDialog");
+    assert!(project.contains("openEditDialog({"));
+    assert!(project.contains("api(\"POST\", \"/api/projects\""));
+    assert!(project.contains("api(\"PUT\", `/api/projects/"));
+    assert!(project.contains("{ id: \"general\", label: t(\"general\")"));
+    assert!(project.contains("{ id: \"source\", label: t(\"source_2\")"));
+    assert!(project.contains("{ id: \"assignment\", label: t(\"assignment\")"));
+    assert!(project.contains("onTab: editing ? (tab) => rememberEditHash("));
+    assert!(project.contains("saved.sync"));
+    assert!(project.contains("markSaved();"));
+    assert!(project.contains("close();"));
+    assert!(project.contains("await route();"));
+    let detail = extract_braced_function(&script, "async function pageProject(id)");
+    assert!(detail.contains("#/projects?edit="));
+    assert!(detail.contains("delete-project"));
+    assert!(!detail.contains("id=\"project-form\""));
+    let inventories = extract_braced_function(&script, "async function pageInventories");
+    assert!(inventories.contains("openInventoryDialog(item)"));
+    assert!(inventories.contains("openInventoryDialog(null)"));
+    assert!(inventories.contains("#/inventories?edit="));
+    assert!(inventories.contains("#/inventories?new=1"));
+    let inventory = extract_braced_function(&script, "async function openInventoryDialog");
+    assert!(inventory.contains("openEditDialog({"));
+    assert!(inventory.contains("api(\"POST\", \"/api/inventories\""));
+    assert!(inventory.contains("api(\"PUT\", `/api/inventories/"));
+    assert!(inventory.contains("bindSourcePicks(projects, credentials)"));
+    assert!(inventory.contains("markSaved();"));
+    assert!(inventory.contains("close();"));
+    assert!(inventory.contains("await route();"));
+    assert!(!inventory.contains("onTab:"));
+    let inventory_detail = extract_braced_function(&script, "async function pageInventory(id)");
+    assert!(inventory_detail.contains("#/inventories?edit="));
+    assert!(!inventory_detail.contains("id=\"inventory-name-form\""));
+    assert!(!script.contains("id=\"project-form\""));
+    assert!(!script.contains("id=\"inventory-create\""));
+    assert!(!script.contains("id=\"inventory-name-form\""));
+    let close = extract_braced_function(&script, "function closeLive");
+    assert!(close.contains("[data-edit-overlay]"));
 }
 
 #[test]
