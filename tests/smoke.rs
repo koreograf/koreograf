@@ -12532,6 +12532,77 @@ if (!vars.includes("ansible_host=10.0.0.1")) {{
     run_node_probe("inventory-vars-mask", &probe);
 }
 
+#[test]
+fn route_leave_guard_only_blocks_changed_forms() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let route = extract_braced_function(&script, "async function route");
+    let probe = format!(
+        r##"let leaveGuard = null;
+let shownHash = null;
+let navToken = null;
+let me = null;
+let location = {{ hash: "#/" }};
+let replaced = 0;
+const history = {{ replaceState(_state, _title, url) {{ replaced += 1; location.hash = url; }} }};
+let prompts = 0;
+let promptedKey = "";
+let confirmAnswer = true;
+function confirm() {{ prompts += 1; return confirmAnswer; }}
+function t(key) {{ promptedKey = key; return key; }}
+function closeLive() {{}}
+let rendered = 0;
+function renderLogin() {{ rendered += 1; }}
+{route}
+function reset(hash) {{
+  location.hash = hash;
+  shownHash = hash;
+  replaced = 0;
+  prompts = 0;
+  promptedKey = "";
+  rendered = 0;
+  confirmAnswer = true;
+}}
+function check(ok, message) {{
+  if (!ok) {{ console.error(message); process.exit(1); }}
+}}
+(async () => {{
+  reset("#/projects/p1");
+  leaveGuard = () => false;
+  location.hash = "#/jobs";
+  await route();
+  check(rendered === 1 && shownHash === "#/jobs" && replaced === 0 && prompts === 0, "unchanged project was blocked");
+
+  reset("#/inventories/i1");
+  leaveGuard = () => false;
+  location.hash = "#/jobs";
+  await route();
+  check(rendered === 1 && shownHash === "#/jobs" && replaced === 0 && prompts === 0, "unchanged inventory was blocked");
+
+  reset("#/projects/p1");
+  leaveGuard = () => true;
+  confirmAnswer = false;
+  location.hash = "#/jobs";
+  await route();
+  check(prompts === 1 && promptedKey === "discard_unsaved_changes" && replaced === 1 && location.hash === "#/projects/p1" && shownHash === "#/projects/p1" && rendered === 0, "cancel left the form");
+
+  reset("#/inventories/i1");
+  leaveGuard = () => true;
+  location.hash = "#/jobs";
+  await route();
+  check(prompts === 1 && replaced === 0 && shownHash === "#/jobs" && rendered === 1, "confirm did not navigate");
+
+  reset("#/projects/p1");
+  leaveGuard = () => false;
+  location.hash = "#/projects";
+  await route();
+  check(rendered === 1 && shownHash === "#/projects" && replaced === 0, "browser back was blocked");
+}})();
+"##
+    );
+    run_node_probe("route-leave-guard", &probe);
+}
+
 fn extract_braced_function(script: &str, needle: &str) -> String {
     let start = script
         .find(needle)
