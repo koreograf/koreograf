@@ -6255,7 +6255,7 @@ async function pageTeam() {
       <h2>${esc(current.name)}</h2>
       <p class="muted">${esc(current.description || "")}</p>
       <p class="small">${h("organization_name_2", { name: current.organization_name || "—" })}</p>
-      ${can("owner") ? `<div class="row"><a class="btn" href="#/team?edit=${esc(current.id)}">${h("edit")}</a></div>` : `<p class="small">${h("ldap_group_group", { group: current.ldap_group || "—" })}</p>`}
+      ${current.role === "owner" || me.is_admin ? `<div class="row"><a class="btn" href="#/team?edit=${esc(current.id)}">${h("edit")}</a></div>` : `<p class="small">${h("ldap_group_group", { group: current.ldap_group || "—" })}</p>`}
     </section>
     <section class="card">
       <h2>${h("members")}</h2>
@@ -6268,7 +6268,7 @@ async function pageTeam() {
   } else if (request.edit) {
     const item = teams.find((team) => team.id === request.edit);
     if (!item) clearEditHash();
-    else if (item.role === "owner") openTeamDialog(item, organizations);
+    else if (item.role === "owner" || me.is_admin) openTeamDialog(item, organizations);
   }
   document.querySelectorAll("[data-member-role]").forEach((select) => {
     select.addEventListener("change", async () => {
