@@ -321,6 +321,7 @@
   "netbox_2": "+ NetBox",
   "netbox_is_not_reachable_err": "NetBox ist nicht erreichbar: {err}",
   "netbox_needs_a_token": "NetBox braucht token.",
+  "netbox_token_required_for_endpoint_change": "Bei geänderter NetBox-Adresse oder Zertifikatseinstellung ist ein neues Token erforderlich.",
   "network": "Netzwerk",
   "network_needs_a_username_or_a_password": "Netzwerk braucht einen Benutzer oder ein Passwort.",
   "never": "Nie",

@@ -384,6 +384,7 @@ const ERROR_FIELD = {
   the_netbox_token_is_invalid: "token",
   the_netbox_token_is_missing: "token",
   the_netbox_token_belongs_to_another_team: "token",
+  netbox_token_required_for_endpoint_change: "token",
   path_is_missing: "path",
   the_file_is_not_an_inventory: "path",
   file_is_missing_from_the_project: "path",
@@ -3729,6 +3730,7 @@ function mountSourceDraft(container, projects, kind, preset, options = {}) {
         : "";
     fields = `<label class="field required"><span>${h("api_address")}</span><input name="api_endpoint" required value="${esc(data.api_endpoint || "")}" placeholder="https://netbox.example.com"></label>
       <label class="field${editing ? "" : " required"}"><span>${h("token")}</span><input name="token" type="password"${editing ? "" : " required"} autocomplete="off" placeholder="${editing ? h("leave_empty_to_keep_the_stored_value") : ""}"></label>
+      ${editing ? `<p class="small muted" data-token-hint hidden>${h("netbox_token_required_for_endpoint_change")}</p>` : ""}
       <label class="field"><span>${h("group_by")}</span><input name="group_by" value="${esc(groupBy)}" placeholder="sites, device_roles"></label>
       <label class="field"><span>${h("filters_one_key_value_per_line")}</span><textarea name="query">${esc(filters)}</textarea></label>
       <label class="field check"><span>${h("verify_certificate")}</span><input name="validate_certs" type="checkbox"${data.validate_certs === false ? "" : " checked"}></label>
@@ -3745,8 +3747,22 @@ function mountSourceDraft(container, projects, kind, preset, options = {}) {
     </div>`;
   container.appendChild(card);
   if (editing) {
-    card.addEventListener("input", () => { card.dataset.dirty = "1"; });
-    card.addEventListener("change", () => { card.dataset.dirty = "1"; });
+    const refreshToken = () => {
+      if (kind !== "netbox") return;
+      const endpoint = card.querySelector("[name=api_endpoint]").value.trim().replace(/\/+$/, "");
+      const caFile = card.querySelector("[name=ca_file]").value.trim();
+      const verify = card.querySelector("[name=validate_certs]").checked;
+      const changed = endpoint !== String(data.api_endpoint || "").trim().replace(/\/+$/, "")
+        || caFile !== String(data.ca_file || "").trim()
+        || (data.validate_certs !== false && !verify);
+      const token = card.querySelector("[name=token]");
+      token.required = changed;
+      const hint = card.querySelector("[data-token-hint]");
+      if (hint) hint.hidden = !(changed && !token.value.trim());
+    };
+    card.addEventListener("input", () => { card.dataset.dirty = "1"; refreshToken(); });
+    card.addEventListener("change", () => { card.dataset.dirty = "1"; refreshToken(); });
+    refreshToken();
   }
   card.querySelector("[data-remove-draft]").addEventListener("click", () => card.remove());
   if (kind === "netbox") {

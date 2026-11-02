@@ -846,10 +846,6 @@ async fn resolve_netbox_update(
         .as_deref()
         .map(str::trim)
         .filter(|token| !token.is_empty());
-    let token = match new_token {
-        Some(token) => token.to_string(),
-        None => stored_token(state, &source.credential_id, team)?,
-    };
     let query = match &body.query_filters {
         Some(filters) => netbox::parse_filters(filters).map_err(ApiError::bad)?,
         None => stored.query.clone(),
@@ -862,6 +858,16 @@ async fn resolve_netbox_update(
         query,
         body.virtual_machines.unwrap_or(stored.virtual_machines),
     )?;
+    let changes_destination = parsed.api_endpoint != stored.api_endpoint
+        || parsed.ca_file != stored.ca_file
+        || (stored.validate_certs && !parsed.validate_certs);
+    if changes_destination && new_token.is_none() {
+        return Err(ApiError::bad("netbox_token_required_for_endpoint_change"));
+    }
+    let token = match new_token {
+        Some(token) => token.to_string(),
+        None => stored_token(state, &source.credential_id, team)?,
+    };
     let name = updated_name(body.name.clone(), &source.name, "netbox")?;
     let ini = fetch_netbox(state, &parsed, &token).await?;
     let credential_blob = match new_token {
