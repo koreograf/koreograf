@@ -488,7 +488,7 @@ fn parameters_for_launch(
         effective.inventory_id = inventory_id;
     }
     let credential_ids = if let Some(ids) = &req.overrides.credential_ids {
-        let chosen = credentials_for_launch(state, db, &template.team_id, ids)?;
+        let chosen = credentials_for_launch(state, db, &template.team_id, &template.tool, ids)?;
         effective.credential_id = chosen.primary_id;
         Some(chosen.ids)
     } else {
@@ -533,6 +533,7 @@ fn credentials_for_launch(
     state: &Shared,
     db: &rusqlite::Connection,
     team_id: &str,
+    tool: &str,
     ids: &[String],
 ) -> AppResult<crate::credentials::AssignedSet> {
     let mut loaded = Vec::with_capacity(ids.len());
@@ -543,6 +544,9 @@ fn credentials_for_launch(
         }
         let credential =
             db::credential(db, id)?.ok_or_else(|| ApiError::bad("credential_is_missing"))?;
+        if !crate::credentials::kind_fits_tool(tool, &credential.kind) {
+            return Err(ApiError::bad("this_credential_kind_does_not_fit_the_tool"));
+        }
         loaded.push(credential);
     }
     crate::credentials::assign_loaded(state, team_id, &loaded).map_err(ApiError::bad)

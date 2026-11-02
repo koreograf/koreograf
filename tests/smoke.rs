@@ -9443,6 +9443,179 @@ async fn template_credential_kinds_follow_the_tool() {
 }
 
 #[tokio::test]
+async fn launch_overrides_follow_the_tool_credential_kinds() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-launch-kinds-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let db_state = state.clone();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let ssh = create_credential(
+        &app,
+        &cookie,
+        &team,
+        "Launch SSH",
+        "ssh",
+        json!({"username": "deploy", "password": "launch-ssh-geheim"}),
+    )
+    .await;
+    let aws = create_credential(
+        &app,
+        &cookie,
+        &team,
+        "Launch AWS",
+        "aws",
+        json!({"access_key": "AKIAEXAMPLE", "secret_key": "launch-aws-geheim"}),
+    )
+    .await;
+    let netbox = create_credential(
+        &app,
+        &cookie,
+        &team,
+        "Launch NetBox",
+        "netbox",
+        json!({"token": "launch-netbox-geheim", "url": "https://netbox.example.com"}),
+    )
+    .await;
+    let (status, inventory, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Launch hosts", "body": "[web]\nweb-1\n"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{inventory}");
+    let inventory_id = inventory["id"].as_str().unwrap().to_string();
+
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Launch kinds",
+            "tool": "ansible",
+            "entrypoint": "site.yml",
+            "inventory_id": inventory_id,
+            "prompt_on_launch": true
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().unwrap().to_string();
+    {
+        let db = db_state.db().unwrap();
+        db.execute(
+            "INSERT INTO template_credentials (template_id, credential_id, position) VALUES (?1, ?2, 0)",
+            rusqlite::params![template_id, netbox],
+        )
+        .unwrap();
+    }
+
+    let (status, launched, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"extra_vars": {}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{launched}");
+    assert_eq!(
+        launched["parameters"]["credentials"][0]["id"],
+        Value::String(netbox.clone())
+    );
+    let job_id = launched["id"].as_str().unwrap();
+    let _ = call(
+        &app,
+        "POST",
+        &format!("/api/jobs/{job_id}/cancel"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+
+    let (status, refused, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"extra_vars": {}, "credential_ids": [aws]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(
+        refused["error"],
+        "this_credential_kind_does_not_fit_the_tool"
+    );
+
+    let (status, overridden, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"extra_vars": {}, "credential_ids": [ssh]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{overridden}");
+    assert_eq!(overridden["parameters"]["credentials"][0]["id"], ssh);
+    let job_id = overridden["id"].as_str().unwrap();
+    let _ = call(
+        &app,
+        "POST",
+        &format!("/api/jobs/{job_id}/cancel"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+
+    let (status, stored, _) = call(
+        &app,
+        "GET",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{stored}");
+    let row = stored
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == template_id)
+        .unwrap();
+    assert_eq!(row["credential_ids"], json!([netbox]));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn admin_settings_hide_secrets_and_apply_without_restart() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
