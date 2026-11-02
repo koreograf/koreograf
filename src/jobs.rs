@@ -190,6 +190,12 @@ pub fn relaunch(
                 settings.default_environment(&template.tool),
             )
         };
+        let mut parsed = db::json_object(&parameters);
+        if let Some(map) = parsed.as_object_mut() {
+            map.remove("project_commit");
+            map.remove("project_commit_full");
+            parameters = parsed.to_string();
+        }
         if only_failed_hosts {
             if job.tool != "ansible" {
                 return Err(ApiError::bad("only_ansible_jobs_have_failed_hosts"));
@@ -1320,7 +1326,9 @@ mod tests {
                         "inventory_id": inventory_id,
                         "entrypoint": "missing.yml",
                         "extra_vars": {"alertname": "manual"},
-                        "spec": {"tags": "heal"}
+                        "spec": {"tags": "heal"},
+                        "project_commit": "1234567",
+                        "project_commit_full": "1234567890abcdef1234567890abcdef12345678"
                     })
                     .to_string(),
                     failed_hosts: json!({"hosts": ["web-1", "db-1"], "recap": true}).to_string(),
@@ -1340,6 +1348,8 @@ mod tests {
         assert_eq!(params["spec"]["limit"], "web-1,db-1");
         assert_eq!(params["spec"]["tags"], "heal");
         assert_eq!(params["extra_vars"]["alertname"], "manual");
+        assert!(params.get("project_commit").is_none());
+        assert!(params.get("project_commit_full").is_none());
         {
             let db = state.db().expect("db");
             db.execute("UPDATE jobs SET tool = 'shell' WHERE id = 'src-failed'", [])
