@@ -52,6 +52,16 @@ impl RunnerMode {
         }
     }
 
+    /// The image has no local tool set, so a saved `local` mode runs in a
+    /// container there. Outside the image every mode stays as configured.
+    pub fn in_container(self, container_image: bool) -> Self {
+        if container_image && self == Self::Local {
+            Self::Docker
+        } else {
+            self
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Auto => "auto",

@@ -3,8 +3,19 @@ services:
     # Published image. A local build uses docker-compose.build.yml and the tag koreograf:local.
     image: ghcr.io/koreograf/koreograf:0.1.0-alpha.7 # x-release-please-version
     pull_policy: missing
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Bounds for a host that runs untrusted templates. Raise when a job needs more.
+    pids_limit: 512
+    mem_limit: 2g
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${KOREOGRAF_PORT:-8080}:8080"
     environment:
       KOREOGRAF_BIND: 0.0.0.0:8080
       KOREOGRAF_DATA: /var/lib/koreograf
@@ -61,6 +72,10 @@ services:
       # The published image can be older than this checkout.
       # Use docker-compose.build.yml for that build.
       # - /var/run/docker.sock:/var/run/docker.sock
+    # Without root the process cannot join the socket group itself. Add the
+    # host socket group when the socket line is enabled:
+    # group_add:
+    #   - "${KOREOGRAF_DOCKER_SOCKET_GID:-999}"
 
 volumes:
   koreograf-data:

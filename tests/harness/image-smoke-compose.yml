@@ -1,0 +1,20 @@
+# Socket override for tests/harness/scripts/image-smoke.sh.
+services:
+  koreograf:
+    group_add:
+      - "${KOREOGRAF_DOCKER_SOCKET_GID:?set KOREOGRAF_DOCKER_SOCKET_GID}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      git-ssh:
+        condition: service_healthy
+  git-ssh:
+    build:
+      context: tests/harness/ssh-git
+    environment:
+      HARNESS_SSH_PUBLIC_KEY: "${KOREOGRAF_SMOKE_SSH_PUBLIC_KEY:?set KOREOGRAF_SMOKE_SSH_PUBLIC_KEY}"
+    healthcheck:
+      test: ["CMD-SHELL", "ssh-keyscan -T 2 -p 22 127.0.0.1 >/dev/null 2>&1"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

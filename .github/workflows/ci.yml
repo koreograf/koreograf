@@ -64,6 +64,8 @@ jobs:
           node-version: 26
       - name: Parse the web UI
         run: node --check web/app.js
+      - name: Parse the image harness
+        run: python3 -m py_compile tests/harness/scripts/image-smoke.py tests/harness/scripts/unix-socket.py
 
   shell:
     name: shell
@@ -74,7 +76,7 @@ jobs:
         run: |
           curl -fsSL -o /tmp/shellcheck.tar.xz https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
           tar -xJf /tmp/shellcheck.tar.xz -C /tmp
-          /tmp/shellcheck-v0.11.0/shellcheck src/wrapper.sh entrypoint.sh examples/demo/health.sh examples/demo/escalate.sh
+          /tmp/shellcheck-v0.11.0/shellcheck src/wrapper.sh examples/demo/health.sh examples/demo/escalate.sh tests/harness/scripts/image-entrypoint.sh tests/harness/scripts/image-smoke.sh
 
   hooks:
     name: pre-commit
@@ -215,6 +217,37 @@ jobs:
           test "$revision" = "${GITHUB_SHA:0:7}"
           line="$(docker run --rm --entrypoint "" koreograf:ci koreograf --version)"
           test "$line" = "$expected (${GITHUB_SHA:0:7}, built $BUILT_AT)"
+      - name: Scan the image
+        if: github.event_name != 'workflow_call'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: koreograf:ci
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          vuln-type: os,library
+      - name: Assert the image contents
+        if: github.event_name != 'workflow_call'
+        run: |
+          docker create --name koreograf-image-check koreograf:ci
+          docker export koreograf-image-check | tar -tf - >/tmp/koreograf-image-files
+          docker rm koreograf-image-check
+          for name in ansible-playbook ansible python3 tofu dockerd apt apk apt-get unzip; do
+            if grep -Eq "(^|/)$name$" /tmp/koreograf-image-files; then
+              echo "$name must not be in the image" >&2
+              exit 1
+            fi
+          done
+          for name in usr/local/bin/koreograf usr/bin/git usr/bin/ssh usr/local/bin/docker etc/ssl/certs/ca-certificates.crt; do
+            grep -qx "$name" /tmp/koreograf-image-files
+          done
+      - name: Check the entrypoint
+        if: github.event_name != 'workflow_call'
+        run: sh tests/harness/scripts/image-entrypoint.sh koreograf:ci
+      - name: Smoke the Compose file
+        if: github.event_name != 'workflow_call'
+        run: sh tests/harness/scripts/image-smoke.sh
       - name: Start on a root-owned data volume
         if: github.event_name != 'workflow_call'
         run: |
@@ -227,10 +260,10 @@ jobs:
           trap cleanup EXIT
           docker run --rm -v koreograf-upgrade:/var/lib/koreograf "debian:bookworm-slim@${digest}" \
             sh -c 'printf secret > /var/lib/koreograf/secret.key && chmod 600 /var/lib/koreograf/secret.key && chown 0:0 /var/lib/koreograf /var/lib/koreograf/secret.key'
-          docker run -d --name koreograf-upgrade -v koreograf-upgrade:/var/lib/koreograf koreograf:ci
+          docker run -d --name koreograf-upgrade --user 0 -v koreograf-upgrade:/var/lib/koreograf koreograf:ci
           ok=0
           for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-            if docker exec koreograf-upgrade python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"; then
+            if docker run --rm --network container:koreograf-upgrade --entrypoint /usr/local/bin/koreograf koreograf:ci healthcheck; then
               ok=1
               break
             fi

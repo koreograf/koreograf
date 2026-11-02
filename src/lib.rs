@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+mod askpass;
 mod auth;
 mod backup;
 mod cacheinfo;
@@ -13,7 +14,9 @@ mod config;
 mod credentials;
 mod crypto;
 mod db;
+mod entrypoint;
 mod error;
+mod health;
 mod hooks;
 mod http;
 mod inventory;
@@ -38,7 +41,10 @@ use rusqlite::Connection;
 use crate::error::ApiError;
 use crate::runner::RunningProc;
 
+pub use askpass::{askpass, askpass_kind, git_ssh, git_ssh_requested, AskpassKind};
 pub use config::{Config, CookieSecure, LdapConfig, LocalJobs, RunnerMode};
+pub use entrypoint::{entrypoint, entrypoint_requested};
+pub use health::{healthcheck, healthcheck_requested};
 
 /// Shared process state. Cheap to clone because it is an `Arc`.
 pub struct AppState {

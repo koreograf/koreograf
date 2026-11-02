@@ -32,7 +32,7 @@ Environment variables, including the runner mode, are in [Configuration](configu
 
 ## Docker Compose
 
-Docker Engine 20.10 or newer, and Docker Compose v2. The published image is `linux/amd64`.
+Docker Engine 20.10 or newer, and Docker Compose v2. The published image is `linux/amd64` and `linux/arm64`.
 
 ```bash
 git clone https://github.com/koreograf/koreograf.git
@@ -55,9 +55,23 @@ It does not compile. Build this checkout without replacing that published tag:
 docker compose -f docker-compose.yml -f docker-compose.build.yml up --build -d
 ```
 
-The local image is tagged `koreograf:local`. buildx is only for publishing a multi-architecture image. Ansible, the Docker client, and OpenTofu in the published image are the versions from the Dockerfile at that tag. The image sets `KOREOGRAF_CONTAINER_IMAGE=1`. Its preflight checks only the container CLI and socket and reports that local tools are not part of the image. The process starts as root, gives `/var/lib/koreograf` and every file already in it to uid 10001, and then drops to that user. An older volume keeps `secret.key` mode `0600` owned by root; without that hand-over the new process cannot read it. A mounted `/var/run/docker.sock` changes nothing about that ownership: the process still runs as uid 10001 and gets the socket's group as a supplementary group.
+The local image is tagged `koreograf:local`. buildx is only for publishing a multi-architecture image. The published image holds the server binary, `git`, an SSH client, the static Docker CLI, a static `tini`, and CA certificates. Ansible, OpenTofu, and shell jobs run in the execution environments the first start seeds, so the image has no `ansible-playbook`, `tofu`, `python3`, or shell. The image sets `KOREOGRAF_CONTAINER_IMAGE=1`, and its runner preflight checks only the container CLI and socket. A saved `local` runner mode runs in a container there; the image has no local mode.
 
-PID 1 in the image is [tini](https://github.com/krallin/tini). It reaps processes a job leaves behind, including an SSH control master, and it forwards stop signals to Koreograf. `cargo run` and a service manager already reap those processes, so they do not need tini. A custom image command, Compose `entrypoint`, or Helm `command` replaces tini. Keep an init in that command, for example `tini -- /usr/local/bin/entrypoint.sh`.
+### Upgrading from an earlier image
+
+An existing Docker install needs the Docker socket mounted and the socket's host group under `group_add` when a job should run in an image; without the group the container stops at start with one English line. The local runner mode is removed from the image, and a saved `local` mode is switched to `docker`. A job then needs a reachable socket and fails at start with a line that names `/var/run/docker.sock` when it is missing. An older root-owned data volume still needs the one-time ownership fix below.
+
+The process starts as uid 10001. A fresh named volume inherits the ownership of `/var/lib/koreograf` from the image. An older volume that is still owned by root needs a one-time ownership fix, and that is the only step that needs root:
+
+```bash
+docker compose run --rm -T --user 0 koreograf koreograf --version
+```
+
+`docker-compose.yml` sets `user: "10001:10001"`, so the entrypoint never starts as root and cannot fix an older root-owned volume on its own. Run the command above once after upgrading such a volume.
+
+The entrypoint in the binary creates the data directory, gives an existing volume and its files to uid 10001, joins the Docker socket group, sets `no_new_privs`, and drops to uid 10001 before it starts the server. It needs no shell, `setpriv`, `find`, or `chown`. A mounted `/var/run/docker.sock` changes nothing about the volume ownership: the process still runs as uid 10001 and needs the socket's group through `group_add`.
+
+`/sbin/tini` is PID 1 and starts `/usr/local/bin/koreograf entrypoint`. It forwards SIGTERM, so `docker stop` returns promptly, and it reaps orphaned processes. The server runs as its child, and the container stops when the server exits. A custom image command, Compose `entrypoint`, or Helm `command` replaces the tini entrypoint; start the binary with `entrypoint` when a command should still fix the volume.
 
 The UI is published on `127.0.0.1` only. To listen on every interface, change the port mapping to `8080:8080`. Use a reverse proxy with TLS when other machines should open the UI.
 
@@ -84,9 +98,11 @@ docker push registry.example.com/koreograf/ansible-ee:2.21.5-2
 
 Set `KOREOGRAF_SEED_ENVIRONMENTS=0` when the curated images are not available. Create the three global environments with the registry image names instead, then choose them as the defaults under **Settings → Jobs**. Image pulls use the Docker daemon, so sign in on the host with `docker login registry.example.com`. The `registry` credential in **Credentials** passes a host, user, and password to a job; Koreograf does not run `docker login` and does not pull with that credential.
 
-The socket line in `docker-compose.yml` is commented out. Uncomment it when a job should run in an image. Without the socket the runner stays local, and the demo health check still runs.
+The socket line in `docker-compose.yml` is commented out. Uncomment it when a job should run in an image. The image has no local runner, so a job without a reachable socket fails at start with a line that names `/var/run/docker.sock` and points to this page. `auto` uses the container runtime; `local` is not available in the image.
 
-That line mounts `/var/run/docker.sock`. The socket is root on the Docker host. The process still runs as uid 10001 and gets the socket's group as a supplementary group, so adding or removing the socket needs no ownership change for the data directory or `checkouts/`. If the entrypoint cannot read the socket's group, or the socket is not readable for uid 10001, it stops with one English line that names the group and the mode to set. An owner creates an execution environment. A global environment needs an administrator. An operator can select an environment the team can see and store it on a template. A viewer cannot. Those people choose an image that the host daemon starts. The job container does not receive the socket. It does receive the job directory, which holds the decrypted credential files for that job at mode `0600`. The job can read them. They are removed when the job ends.
+That line mounts `/var/run/docker.sock`. The socket is root on the Docker host. The process runs as uid 10001, so add the socket's host group under `group_add` as the comment in the Compose file shows, for example `KOREOGRAF_DOCKER_SOCKET_GID=$(stat -c '%g' /var/run/docker.sock) docker compose up -d`. A wrong or missing group stops the container with one English line that names the group and the mode to set. An owner creates an execution environment. A global environment needs an administrator. An operator can select an environment the team can see and store it on a template. A viewer cannot. Those people choose an image that the host daemon starts. The job container does not receive the socket. It does receive the job directory, which holds the decrypted credential files for that job at mode `0600`. The job can read them. They are removed when the job ends.
+
+The Compose service runs with a read-only root filesystem, a `tmpfs` on `/tmp`, `cap_drop: [ALL]`, `no-new-privileges`, and process and memory bounds. The data volume stays writable. A path that needs another writable directory needs its own volume or `tmpfs`.
 
 Uncomment the socket line, then build this checkout. The image tag in `docker-compose.yml` is the last published release and can be older than these steps:
 
@@ -96,7 +112,7 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up --build -d
 
 Leave `KOREOGRAF_DATA_HOST` empty. Koreograf reads the daemon path of the `koreograf-data` volume and uses that path as the mount source. A path inside this container is not a path the daemon can mount. Set `KOREOGRAF_DATA_HOST` only when the lookup is wrong. A path the daemon cannot see fails the job before a container starts, so the daemon does not create empty `jobs/` or `cache/` directories on the host.
 
-`KOREOGRAF_RUNNER=auto` uses Docker when the socket answers. `docker` fails the job instead of running it on the controller. `local` ignores the image. Mount details are in [Jobs](jobs.md#execution-environments). `tests/harness/scripts/ee-socket.sh` and `tests/harness/scripts/ee-awx.sh` run this setup. They are not part of `cargo test`, and CI does not start them.
+`KOREOGRAF_RUNNER=auto` uses Docker when the socket answers. The image has no local fallback, so a job fails with the socket line and the link to this page when the socket is missing. `local` is not available in the image. Mount details are in [Jobs](jobs.md#execution-environments). `tests/harness/scripts/ee-socket.sh` and `tests/harness/scripts/ee-awx.sh` run this setup. They are not part of `cargo test`, and CI does not start them.
 
 The named volume in the file is `koreograf-data`. Compose prefixes the project name, so `docker volume ls` shows `<project>_koreograf-data`. The project name is the directory name in lowercase unless `COMPOSE_PROJECT_NAME` is set. A checkout named `Koreograf` therefore uses `koreograf_koreograf-data`.
 
@@ -121,14 +137,14 @@ helm upgrade --install koreograf deploy/helm/koreograf
 
 The chart version, `appVersion`, and `image.tag` are `0.1.0-alpha.7`. <!-- x-release-please-version -->
 The chart pulls `ghcr.io/koreograf/koreograf:0.1.0-alpha.7`, the same image Compose uses. <!-- x-release-please-version -->
-It is `linux/amd64`. On another architecture, build the image and set `image.repository` and `image.tag` to that build.
+It is published for `linux/amd64` and `linux/arm64`. On another architecture, build the image and set `image.repository` and `image.tag` to that build.
 
-By default the pod runs as uid and gid 10001, with `fsGroup` 10001, `runAsNonRoot`, a dropped capability set, and the runtime default seccomp profile. `fsGroup` is what makes an existing volume readable. A volume driver that ignores `fsGroup` leaves root-owned files, and this pod cannot change them because it does not start as root. Set `runner.dockerSocket.enabled` and `runner.dockerSocket.group` to the socket's gid (`stat -c '%g' /var/run/docker.sock` on the host). The chart keeps uid 10001 and puts that gid in `supplementalGroups`; it does not switch to root. A wrong group stops the container with a clear line in the pod log. A non-empty `podSecurityContext` or `securityContext` replaces that default completely, so it then has to include the supplemental group itself. The chart does not set a container command, so tini stays PID 1 for uid 10001 as well. Kubernetes has no Compose `init: true`. A pod `command` replaces tini and has to start an init.
+By default the pod runs as uid and gid 10001, with `fsGroup` 10001, `runAsNonRoot`, a read-only root filesystem, a `tmpfs` on `/tmp`, a dropped capability set, no privilege escalation, and the runtime default seccomp profile. `fsGroup` is what makes an existing volume readable. A volume driver that ignores `fsGroup` leaves root-owned files, and this pod cannot change them because it does not start as root. Set `runner.dockerSocket.enabled` and `runner.dockerSocket.group` to the socket's gid (`stat -c '%g' /var/run/docker.sock` on the host). The chart keeps uid 10001 and puts that gid in `supplementalGroups`; it does not switch to root. A wrong group stops the container with a clear line in the pod log. A non-empty `podSecurityContext` or `securityContext` replaces that default completely, so it then has to include the supplemental group, `readOnlyRootFilesystem`, and the `/tmp` mount itself. The chart does not set a container command, so the binary entrypoint prepares the volume for uid 10001. A pod `command` replaces that entrypoint and has to start `koreograf entrypoint` when it should still fix an existing volume.
 
 Set `existingSecret` to a Secret managed outside this chart. The chart then skips its own Secret. The Deployment reads `existingSecretKeys.adminPassword` and `existingSecretKeys.secretKey`. When `ldap.url` is set it also reads `existingSecretKeys.ldapBindPassword`. Those keys have to exist in the Secret. The defaults are `admin-password`, `secret-key`, and `ldap-bind-password`.
 
 `replicaCount` is 1. A second pod on the same SQLite file loses writes. The Docker socket is off by default (`runner.dockerSocket.enabled`).
 
-Probes call `/healthz`. Prometheus can scrape `GET /metrics` on the same port. The counters belong to this one replica and live only in memory. If `admin.password` is empty, the first password is in the volume at `/var/lib/koreograf/initial-admin-password`. Delete that file after the first sign-in. The chart does not remove it.
+Probes run `koreograf healthcheck`, which calls `/healthz`. Prometheus can scrape `GET /metrics` on the same port. The counters belong to this one replica and live only in memory. If `admin.password` is empty, the first password is in the volume at `/var/lib/koreograf/initial-admin-password`. Delete that file after the first sign-in. The chart does not remove it.
 
 The chart has no extra-volume value. A path project needs a volume and a volume mount added to the deployment, plus `KOREOGRAF_PROJECT_ROOTS` set to that directory. A path outside an allowed root can be saved by an administrator and still does not run. The examples directory in the image is already allowed.

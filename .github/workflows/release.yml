@@ -39,6 +39,9 @@ jobs:
       contents: read
       packages: write
       id-token: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      tag: ${{ steps.tags.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -91,3 +94,30 @@ jobs:
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: cosign sign --yes "ghcr.io/koreograf/koreograf@${DIGEST}"
+
+  notes:
+    name: release notes
+    needs: image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Add the digest to the release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DIGEST: ${{ needs.image.outputs.digest }}
+          TAG: ${{ needs.image.outputs.tag }}
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            exit 0
+          fi
+          gh release view "$TAG" --json body -q .body >/tmp/koreograf-release-notes.md
+          image="ghcr.io/koreograf/koreograf@${DIGEST}"
+          if grep -qF "\`${image}\`" /tmp/koreograf-release-notes.md; then
+            exit 0
+          fi
+          {
+            printf '\n\nImage: `%s`\n' "$image"
+            printf 'Signed with cosign keyless.\n'
+          } >>/tmp/koreograf-release-notes.md
+          gh release edit "$TAG" --notes-file /tmp/koreograf-release-notes.md

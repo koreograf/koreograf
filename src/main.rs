@@ -5,6 +5,36 @@ use tracing_subscriber::EnvFilter;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
+    if let Some(kind) = koreograf::askpass_kind(&args) {
+        let prompt = args.get(1).map(String::as_str).unwrap_or_default();
+        match koreograf::askpass(kind, prompt) {
+            Ok(answer) => println!("{answer}"),
+            Err(err) => {
+                eprintln!("{err}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+    if koreograf::git_ssh_requested(&args) {
+        let rest = args.iter().skip(1).map(String::as_str);
+        if let Err(err) = koreograf::git_ssh(rest) {
+            eprintln!("{err}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    if koreograf::entrypoint_requested(&args) {
+        if let Err(err) = koreograf::entrypoint(&args) {
+            eprintln!("{err}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+    if koreograf::healthcheck_requested(&args) {
+        let code = koreograf::healthcheck().await?;
+        std::process::exit(code);
+    }
     if koreograf::version_requested(&args) {
         println!("{}", koreograf::version_line());
         return Ok(());
@@ -28,7 +58,7 @@ async fn main() -> anyhow::Result<()> {
     }
     let cfg = koreograf::Config::from_env();
     tracing::info!(
-        mode = cfg.runner.as_str(),
+        mode = cfg.runner.in_container(cfg.container_image).as_str(),
         ldap = cfg.ldap.is_some(),
         "configuration loaded"
     );

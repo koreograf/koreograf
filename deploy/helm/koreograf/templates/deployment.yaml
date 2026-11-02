@@ -43,6 +43,7 @@ spec:
             runAsUser: 10001
             runAsGroup: 10001
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop:
                 - ALL
@@ -113,18 +114,22 @@ spec:
               value: {{ .Values.ldap.caFile | quote }}
             {{- end }}
           readinessProbe:
-            httpGet:
-              path: /healthz
-              port: http
+            exec:
+              command:
+                - /usr/local/bin/koreograf
+                - healthcheck
             initialDelaySeconds: 3
           livenessProbe:
-            httpGet:
-              path: /healthz
-              port: http
+            exec:
+              command:
+                - /usr/local/bin/koreograf
+                - healthcheck
             initialDelaySeconds: 10
           volumeMounts:
             - name: data
               mountPath: /var/lib/koreograf
+            - name: tmp
+              mountPath: /tmp
             {{- if .Values.runner.dockerSocket.enabled }}
             - name: docker-sock
               mountPath: /var/run/docker.sock
@@ -137,6 +142,8 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "koreograf.fullname" . }}
+        - name: tmp
+          emptyDir: {}
         {{- if .Values.runner.dockerSocket.enabled }}
         - name: docker-sock
           hostPath:
