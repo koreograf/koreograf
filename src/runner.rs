@@ -2054,7 +2054,7 @@ pub fn project_credential_secret(
     if credential.disabled {
         return Err("The source control credential is disabled.".into());
     }
-    if credential.team_id != project.team_id && !project.team_ids.contains(&credential.team_id) {
+    if credential.team_id != project.team_id {
         return Err("The credential belongs to another team.".into());
     }
     let plain = state

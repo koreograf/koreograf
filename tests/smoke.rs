@@ -2654,6 +2654,269 @@ async fn projects_use_a_source_control_credential() {
 }
 
 #[tokio::test]
+async fn project_credentials_stay_with_the_project_team() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-project-credential-team-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let admin_team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, org, _) = call(
+        &app,
+        "POST",
+        "/api/organizations",
+        Some(&cookie),
+        Some(&admin_team),
+        Some(json!({"name": "Credential projects"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{org}");
+    let org_id = org["id"].as_str().unwrap();
+    let (status, owners, _) = call(
+        &app,
+        "POST",
+        "/api/teams",
+        Some(&cookie),
+        Some(&admin_team),
+        Some(json!({"name": "Credential owners", "organization_id": org_id})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{owners}");
+    let owner_team = owners["id"].as_str().unwrap().to_string();
+    let (status, guests, _) = call(
+        &app,
+        "POST",
+        "/api/teams",
+        Some(&cookie),
+        Some(&admin_team),
+        Some(json!({"name": "Credential guests", "organization_id": org_id})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{guests}");
+    let guest_team = guests["id"].as_str().unwrap().to_string();
+
+    for (username, team) in [
+        ("credential-owner", &owner_team),
+        ("credential-guest", &guest_team),
+    ] {
+        let (status, _user, _) = call(
+            &app,
+            "POST",
+            "/api/users",
+            Some(&cookie),
+            None,
+            Some(json!({
+                "username": username,
+                "display_name": username,
+                "password": "operator-pass"
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let (status, _, _) = call(
+            &app,
+            "POST",
+            &format!("/api/teams/{team}/members"),
+            Some(&cookie),
+            Some(team),
+            Some(json!({"username": username, "role": "operator"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+
+    let (status, owner_me, owner_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "credential-owner", "password": "operator-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{owner_me}");
+    let owner_cookie = owner_cookie.expect("owner cookie");
+    let (status, guest_me, guest_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "credential-guest", "password": "operator-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{guest_me}");
+    let guest_cookie = guest_cookie.expect("guest cookie");
+
+    let (status, owner_credential, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&owner_team),
+        Some(json!({
+            "name": "Owner Git",
+            "kind": "scm",
+            "secret": {"username": "deploy", "password": "owner-token"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{owner_credential}");
+    let owner_credential = owner_credential["id"].as_str().unwrap().to_string();
+    let (status, guest_credential, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&guest_team),
+        Some(json!({
+            "name": "Guest Git",
+            "kind": "scm",
+            "secret": {"password": "guest-token"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{guest_credential}");
+    let guest_credential = guest_credential["id"].as_str().unwrap().to_string();
+
+    let (status, foreign, _) = call(
+        &app,
+        "POST",
+        "/api/projects",
+        Some(&owner_cookie),
+        Some(&owner_team),
+        Some(json!({
+            "name": "Foreign credential project",
+            "source_type": "git",
+            "source": "https://example.com/owner.git",
+            "team_ids": [guest_team],
+            "credential_id": guest_credential
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{foreign}");
+    assert_eq!(foreign["error"], "the_credential_belongs_to_another_team");
+
+    let demo = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("examples/demo")
+        .display()
+        .to_string();
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/projects",
+        Some(&owner_cookie),
+        Some(&owner_team),
+        Some(json!({
+            "name": "Owner credential project",
+            "source_type": "path",
+            "source": demo,
+            "team_ids": [owner_team, guest_team],
+            "credential_id": owner_credential
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let project_id = created["id"].as_str().unwrap().to_string();
+    assert_eq!(created["credential_id"], owner_credential);
+
+    let (status, guest_view, _) = call(
+        &app,
+        "GET",
+        &format!("/api/projects/{project_id}"),
+        Some(&guest_cookie),
+        Some(&guest_team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{guest_view}");
+    assert!(guest_view["credential_id"].is_null(), "{guest_view}");
+    let (status, guest_list, _) = call(
+        &app,
+        "GET",
+        "/api/projects",
+        Some(&guest_cookie),
+        Some(&guest_team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{guest_list}");
+    assert!(guest_list
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| { item["id"] == project_id && item["credential_id"].is_null() }));
+
+    let inventory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("examples/demo/inventory")
+        .display()
+        .to_string();
+    let (status, changed, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/projects/{project_id}"),
+        Some(&guest_cookie),
+        Some(&guest_team),
+        Some(json!({"source": inventory})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    assert!(changed["credential_id"].is_null(), "{changed}");
+    let (status, owner_view, _) = call(
+        &app,
+        "GET",
+        &format!("/api/projects/{project_id}"),
+        Some(&owner_cookie),
+        Some(&owner_team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{owner_view}");
+    assert!(owner_view["credential_id"].is_null(), "{owner_view}");
+
+    let (status, kept, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/projects/{project_id}"),
+        Some(&owner_cookie),
+        Some(&owner_team),
+        Some(json!({"source": demo, "credential_id": owner_credential})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{kept}");
+    assert_eq!(kept["credential_id"], owner_credential);
+    let (status, synced_owner, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/projects/{project_id}"),
+        Some(&owner_cookie),
+        Some(&owner_team),
+        Some(json!({"source": inventory})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{synced_owner}");
+    assert_eq!(synced_owner["credential_id"], owner_credential);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn playbooks_project_inventory_and_netbox() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

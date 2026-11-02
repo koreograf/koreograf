@@ -325,7 +325,7 @@ pub async fn get_project(
         return Err(ApiError::NotFound);
     }
     let project = db::project(&db, &id)?.ok_or(ApiError::NotFound)?;
-    Ok(Json(json!(project)))
+    Ok(Json(project_json(&project, &team)))
 }
 
 pub async fn list_projects(
@@ -336,7 +336,12 @@ pub async fn list_projects(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     let db = state.db()?;
-    Ok(Json(json!(db::list_projects(&db, &team)?)))
+    Ok(Json(Value::Array(
+        db::list_projects(&db, &team)?
+            .iter()
+            .map(|project| project_json(project, &team))
+            .collect(),
+    )))
 }
 
 pub async fn update_project(
@@ -379,9 +384,20 @@ pub async fn update_project(
         };
         let team_ids = body.team_ids.unwrap_or_else(|| project.team_ids.clone());
         check_team_ids(&db, &organization_id, &team_ids)?;
+        let source_changed = project.source_type != source_type || project.source != source;
+        let owner = team == project.team_id;
         let credential_id = match body.credential_id {
             Some(raw) => {
-                validate_project_credential(&db, &team, &team_ids, blank(Some(raw)).as_deref())?
+                let requested = blank(Some(raw));
+                if requested.is_none() && !owner && !source_changed {
+                    project.credential_id.clone()
+                } else {
+                    validate_project_credential(&db, &team, requested.as_deref())?
+                }
+            }
+            None if source_changed && !owner => None,
+            None if source_changed => {
+                validate_project_credential(&db, &team, project.credential_id.as_deref())?
             }
             None => project.credential_id.clone(),
         };
@@ -397,14 +413,14 @@ pub async fn update_project(
         let updated = db::project(&db, &id)?.ok_or(ApiError::NotFound)?;
         (updated, changed && source_type == "git", discard)
     };
-    let mut value = json!(updated);
+    let mut value = project_json(&updated, &team);
     if discard_checkout {
         jobs::discard_project_checkout(&state, &updated);
     }
     if sync_changed {
         let sync = sync_json(jobs::sync_project(&state, &updated).await);
         let db = state.db()?;
-        value = json!(db::project(&db, &id)?.ok_or(ApiError::NotFound)?);
+        value = project_json(&db::project(&db, &id)?.ok_or(ApiError::NotFound)?, &team);
         value["sync"] = sync;
     }
     Ok(Json(value))
@@ -440,12 +456,8 @@ pub async fn create_project(
         None => current.organization_id,
     };
     check_team_ids(&db, &organization_id, &body.team_ids)?;
-    let credential_id = validate_project_credential(
-        &db,
-        &team,
-        &body.team_ids,
-        blank(body.credential_id).as_deref(),
-    )?;
+    let credential_id =
+        validate_project_credential(&db, &team, blank(body.credential_id).as_deref())?;
     let project = Project {
         id: Uuid::new_v4().to_string(),
         team_id: team,
@@ -541,10 +553,17 @@ fn project_path_error(err: runner::ProjectPathError) -> ApiError {
     }
 }
 
+fn project_json(project: &Project, team: &str) -> Value {
+    let mut value = json!(project);
+    if project.team_id != team {
+        value["credential_id"] = Value::Null;
+    }
+    value
+}
+
 fn validate_project_credential(
     db: &Connection,
     team: &str,
-    team_ids: &[String],
     credential_id: Option<&str>,
 ) -> AppResult<Option<String>> {
     let Some(id) = credential_id else {
@@ -560,7 +579,7 @@ fn validate_project_credential(
     if credential.disabled {
         return Err(ApiError::bad("the_source_control_credential_is_disabled"));
     }
-    if credential.team_id != team && !team_ids.contains(&credential.team_id) {
+    if credential.team_id != team {
         return Err(ApiError::bad("the_credential_belongs_to_another_team"));
     }
     Ok(Some(credential.id))
