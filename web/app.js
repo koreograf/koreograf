@@ -371,6 +371,10 @@ const ERROR_FIELD = {
   limit_contains_an_invalid_character: "limit",
   revision_may_contain_only_letters_digits_dot_slash: "revision",
   the_git_address_must_be_http_s_ssh: "source",
+  the_git_address_contains_credentials: "credential_id",
+  the_credential_is_not_a_source_control_credential: "credential_id",
+  the_source_control_credential_is_disabled: "credential_id",
+  the_credential_belongs_to_another_team: "credential_id",
   source_is_path_or_git: "source_type",
   the_project_path_is_not_a_directory: "source",
   the_project_path_is_not_allowed: "source",
@@ -3519,6 +3523,43 @@ function teamBoxes(teams, selected) {
   ).join("");
 }
 
+function projectCredentialField(credentials, selectedId) {
+  const rows = credentials.filter((row) => row.kind === "scm");
+  return `<label class="field"><span>${h("source_control_credential")}</span>
+    <div class="row">
+      <select class="fit" name="credential_id">${selectOptions(rows, selectedId || "", true, (row) => row.name)}</select>
+      ${can("owner") ? `<button class="btn pill" type="button" data-new-scm-credential>${h("credential")}</button>` : ""}
+    </div>
+  </label>
+  <p class="small muted">${h("source_control_credential_hint")}</p>
+  <p class="small muted" id="scm-key-hint" hidden>${h("source_control_key_hint")}</p>`;
+}
+
+function bindProjectCredential(form, credentials) {
+  const select = form.elements.credential_id;
+  const source = form.elements.source;
+  const keyHint = form.querySelector("#scm-key-hint");
+  const refreshHint = () => {
+    const value = source.value.trim();
+    if (keyHint) keyHint.hidden = !(value.startsWith("ssh://") || value.startsWith("git@"));
+  };
+  source.addEventListener("input", refreshHint);
+  refreshHint();
+  const add = form.querySelector("[data-new-scm-credential]");
+  if (add && select) {
+    add.addEventListener("click", () => {
+      openCredentialCreator("scm", (created) => {
+        credentials.push(created);
+        const option = document.createElement("option");
+        option.value = created.id;
+        option.textContent = created.name;
+        select.appendChild(option);
+        select.value = created.id;
+      });
+    });
+  }
+}
+
 async function pageProjects() {
   if (!needTeam()) return;
   const projects = await api("GET", "/api/projects");
@@ -3545,7 +3586,10 @@ async function pageProjectNew() {
     deny("project", "operator");
     return;
   }
-  const organizations = me.is_admin ? await api("GET", "/api/organizations") : [];
+  const [organizations, credentials] = await Promise.all([
+    me.is_admin ? api("GET", "/api/organizations") : Promise.resolve([]),
+    api("GET", "/api/credentials"),
+  ]);
   const current = (me.teams || []).find((team) => team.id === teamId);
   shell(t("new_project"), `
     <form class="card form" id="project-form">
@@ -3555,12 +3599,14 @@ async function pageProjectNew() {
         <label class="field"><span>${h("revision")}</span><input class="fit" name="revision" placeholder="${h("branch_tag_or_commit")}"></label>
       </div>
       <label class="field"><span>${h("source_2")}</span><input name="source" required placeholder="${h("https_or_file")}"></label>
+      ${projectCredentialField(credentials, "")}
       ${me.is_admin ? `<label class="field"><span>${h("organization")}</span><select name="organization_id">${orgOptions(organizations, current && current.organization_id)}</select></label>` : ""}
       <button class="btn pill primary" type="submit">${h("create")}</button>
     </form>`);
-  document.querySelector("#project-form").addEventListener("submit", async (event) => {
+  const form = document.querySelector("#project-form");
+  bindProjectCredential(form, credentials);
+  form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const form = event.currentTarget;
     try {
       const payload = {
         name: form.name.value,
@@ -3568,6 +3614,7 @@ async function pageProjectNew() {
         source: form.source.value,
         revision: form.revision.value,
         team_ids: [],
+        credential_id: form.credential_id.value,
       };
       if (form.organization_id) payload.organization_id = form.organization_id.value;
       const created = await api("POST", "/api/projects", payload);
@@ -3602,7 +3649,10 @@ async function pageProject(id) {
     </section>`);
     return;
   }
-  const organizations = await api("GET", "/api/organizations");
+  const [organizations, credentials] = await Promise.all([
+    api("GET", "/api/organizations"),
+    api("GET", "/api/credentials"),
+  ]);
   const org = await api("GET", `/api/organizations/${encodeURIComponent(project.organization_id)}`);
   shell(t("edit_project"), `
     <form class="card form" id="project-form">
@@ -3621,6 +3671,7 @@ async function pageProject(id) {
           <label class="field"><span>${h("revision")}</span><input class="fit" name="revision" value="${esc(project.revision)}" placeholder="${h("branch_tag_or_commit")}"></label>
         </div>
         <label class="field required"><span>${h("source_2")}</span><input name="source" required value="${esc(project.source)}" placeholder="${h("https_or_file")}"></label>
+        ${projectCredentialField(credentials, project.credential_id)}
         ${project.source_type === "git" ? `<p class="small muted" id="last-sync">${esc(projectSyncText(project))}</p>
         <div class="row"><button class="btn" id="sync" type="button">${h("sync")}</button></div>` : ""}
       </div>
@@ -3638,12 +3689,14 @@ async function pageProject(id) {
       <button class="btn danger" id="delete-project" type="button">${h("delete")}</button>
     </section>`);
   const form = document.querySelector("#project-form");
+  bindProjectCredential(form, credentials);
   const chosenTeams = () => [...form.querySelectorAll("input[name=team_ids]:checked")].map((input) => input.value).sort();
   const snapshot = () => JSON.stringify({
     name: form.name.value,
     source_type: form.source_type.value,
     source: form.source.value,
     revision: form.revision.value,
+    credential_id: form.credential_id.value,
     organization_id: form.organization_id.value,
     team_ids: chosenTeams(),
   });
@@ -3666,6 +3719,7 @@ async function pageProject(id) {
         source_type: form.source_type.value,
         source: form.source.value,
         revision: form.revision.value,
+        credential_id: form.credential_id.value,
         organization_id: form.organization_id.value,
         team_ids: chosenTeams(),
       });
@@ -4719,7 +4773,7 @@ async function pageInventoryGroup(id, name) {
 const CREDENTIAL_KINDS = [
   ["ssh", "machine_ssh", "a_key_or_a_password_or_both"],
   ["vault", "ansible_vault", ""],
-  ["scm", "source_control", "applies_to_the_job_project_sync_does_not"],
+  ["scm", "source_control", "source_control_credential_hint"],
   ["net", "network", ""],
   ["aws", "amazon_web_services", ""],
   ["azure", "microsoft_azure", ""],
@@ -4747,7 +4801,7 @@ function selectedCredentialIds(item) {
 }
 
 function credentialUsageNames(item) {
-  return (item.usages || []).map((usage) => `${usage.inventory_name} / ${usage.source_name}`).join(", ");
+  return (item.usages || []).map((usage) => usage.project_name || `${usage.inventory_name} / ${usage.source_name}`).join(", ");
 }
 
 function credentialUsageCard(item) {

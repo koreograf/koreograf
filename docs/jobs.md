@@ -52,7 +52,7 @@ A template stores one credential of each kind. Ansible Vault is the exception: s
 | --- | --- |
 | `ssh` | Machine login. A private key, a password, or both. Optional username, key passphrase, and become (`sudo`, `su`, `pbrun`, `pfexec`, `doas`, `dzdo`, `ksu`, `runas`). The password is a file with mode `0600`, not a command argument. |
 | `vault` | Ansible Vault password, and an optional vault id. |
-| `scm` | Git username and password, or an SSH key, for commands inside the job. The project Sync button does not use this credential. |
+| `scm` | Git username and password, or an SSH key, for commands inside the job and for the Sync button of a project that selects it. |
 | `net` | Network username, password, optional key, and an enable password. |
 | `aws`, `azure`, `gce`, `vmware`, `openstack` | Cloud credentials as environment variables. Google is a service-account file. |
 | `registry` | Host, username, and password visible to the job. Koreograf does not run `docker login`. |
@@ -89,7 +89,7 @@ A public git project needs no mount. `revision` is optional. An empty revision f
 }
 ```
 
-Allowed git addresses are `http(s)`, `ssh`, `git@`, and `file`. A `file://` URL is accepted for an empty host or `localhost` and then follows the same root rules as a path project. The repository must be owned by or readable for uid 10001 as well, or git reports `dubious ownership`; see [Path projects](#path-projects). The project Sync button does not use an `scm` credential. That credential applies to git commands inside a job.
+Allowed git addresses are `http(s)`, `ssh`, `git@`, and `file`. A `file://` URL is accepted for an empty host or `localhost` and then follows the same root rules as a path project. The repository must be owned by or readable for uid 10001 as well, or git reports `dubious ownership`; see [Path projects](#path-projects). A project may select one `scm` credential. Sync and **Update the project on launch** then use it. An HTTPS credential uses a temporary askpass helper and a password file with mode `0600`. An SSH key is used through `GIT_SSH_COMMAND` with `IdentitiesOnly=yes` and `StrictHostKeyChecking=accept-new`, and a passphrase comes from a temporary askpass helper. The temporary directory is private and removed after git, including on failure. A token-only credential uses `oauth2` for GitLab and `x-access-token` for GitHub when the username is empty. Do not put credentials in the URL; the API rejects `user:secret@host` and points at the credential field.
 
 A template updates its git project on every launch. Turn **Update the project on launch** off to run the checkout from the last sync, including when the remote cannot be reached. A revision pinned on the project stays as it is on disk until the next sync. In the German UI the checkbox is **Projekt vor dem Start aktualisieren**. The project still needs one successful sync. Changing the type, source, or revision on the project page discards the old checkout and syncs again. A failed sync keeps the new settings and shows the error. The page also shows the time, commit, and status of the last sync. The Sync button stays available.
 

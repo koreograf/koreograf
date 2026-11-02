@@ -2381,6 +2381,279 @@ async fn a_project_can_be_edited_and_syncs_a_new_revision() {
 }
 
 #[tokio::test]
+async fn projects_use_a_source_control_credential() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-project-credential-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, scm, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Git access",
+            "kind": "scm",
+            "secret": {"username": "deploy", "password": "glpat-token"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{scm}");
+    let scm_id = scm["id"].as_str().unwrap().to_string();
+    let (status, second, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Git access two",
+            "kind": "scm",
+            "secret": {"password": "second-token"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{second}");
+    let second_id = second["id"].as_str().unwrap().to_string();
+
+    let source = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("examples/demo")
+        .display()
+        .to_string();
+    let (status, project, _) = call(
+        &app,
+        "POST",
+        "/api/projects",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Private project",
+            "source_type": "path",
+            "source": source,
+            "credential_id": scm_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{project}");
+    let project_id = project["id"].as_str().unwrap().to_string();
+    assert_eq!(project["credential_id"], scm_id);
+    assert!(!project.to_string().contains("glpat-token"));
+
+    let (status, stored, _) = call(
+        &app,
+        "GET",
+        &format!("/api/projects/{project_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{stored}");
+    assert_eq!(stored["credential_id"], scm_id);
+    let (status, listed, _) = call(
+        &app,
+        "GET",
+        "/api/projects",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert!(listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["id"] == project_id && item["credential_id"] == scm_id));
+
+    let (status, updated, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/projects/{project_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"credential_id": second_id})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["credential_id"], second_id);
+
+    let (status, ssh, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "SSH access",
+            "kind": "ssh",
+            "secret": {"username": "deploy", "password": "ssh-pass"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{ssh}");
+    let ssh_id = ssh["id"].as_str().unwrap();
+    let (status, wrong_kind, _) = call(
+        &app,
+        "POST",
+        "/api/projects",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Wrong kind",
+            "source_type": "path",
+            "source": source,
+            "credential_id": ssh_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{wrong_kind}");
+    assert_eq!(
+        wrong_kind["error"],
+        "the_credential_is_not_a_source_control_credential"
+    );
+
+    let (status, other_team, _) = call(
+        &app,
+        "POST",
+        "/api/teams",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Other Git team"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{other_team}");
+    let other = other_team["id"].as_str().unwrap();
+    let (status, foreign, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&cookie),
+        Some(other),
+        Some(json!({
+            "name": "Foreign Git access",
+            "kind": "scm",
+            "secret": {"password": "foreign-token"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{foreign}");
+    let foreign_id = foreign["id"].as_str().unwrap();
+    let (status, wrong_team, _) = call(
+        &app,
+        "POST",
+        "/api/projects",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Wrong team",
+            "source_type": "path",
+            "source": source,
+            "credential_id": foreign_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{wrong_team}");
+    assert_eq!(
+        wrong_team["error"],
+        "the_credential_belongs_to_another_team"
+    );
+
+    let (status, embedded, _) = call(
+        &app,
+        "POST",
+        "/api/projects",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Embedded",
+            "source_type": "git",
+            "source": "https://user:secret@example.com/repo.git"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{embedded}");
+    assert_eq!(embedded["error"], "the_git_address_contains_credentials");
+    assert_eq!(embedded["vars"]["field"], "credential_id");
+    let (status, embedded_update, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/projects/{project_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"source_type": "git", "source": "https://user:secret@example.com/repo.git"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{embedded_update}");
+    assert_eq!(
+        embedded_update["error"],
+        "the_git_address_contains_credentials"
+    );
+
+    let (status, credentials, _) = call(
+        &app,
+        "GET",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{credentials}");
+    let row = credentials
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == second_id)
+        .expect("used credential");
+    assert!(row["usages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|usage| usage["project_id"] == project_id));
+
+    let (status, refused, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/credentials/{second_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["error"], "credential_is_in_use");
+    assert!(
+        refused["vars"]["names"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Private project"),
+        "{refused}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn playbooks_project_inventory_and_netbox() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -7779,7 +8052,7 @@ async fn owner_can_store_an_ssh_password_without_a_key() {
     assert!(script.contains("machine_ssh"));
     assert!(script.contains("amazon_web_services"));
     assert!(script.contains("a_key_or_a_password_or_both"));
-    assert!(script.contains("applies_to_the_job_project_sync_does_not"));
+    assert!(script.contains("source_control_credential_hint"));
     assert!(script.contains("leave_empty_to_keep_the_stored_value"));
     assert!(script.contains("data-stored-mask=\"1\""));
     assert!(script.contains("class=\"secret-mask\""));
@@ -9891,7 +10164,7 @@ async fn unknown_fields_are_rejected_on_write_endpoints() {
         "source": format!("file://{}", origin.display())
     });
     let mut rejected = project.clone();
-    rejected["credential_id"] = json!("ignored");
+    rejected["credential_name"] = json!("ignored");
     expect_unknown_field(
         &app,
         "POST",
@@ -9899,7 +10172,7 @@ async fn unknown_fields_are_rejected_on_write_endpoints() {
         Some(&cookie),
         Some(&team),
         &rejected,
-        "credential_id",
+        "credential_name",
     )
     .await;
     let (status, project, _) = call(
@@ -9916,7 +10189,7 @@ async fn unknown_fields_are_rejected_on_write_endpoints() {
 
     let assignment = json!({"organization_id": organization, "team_ids": []});
     let mut rejected = assignment.clone();
-    rejected["credential_id"] = json!("ignored");
+    rejected["credential_name"] = json!("ignored");
     expect_unknown_field(
         &app,
         "PUT",
@@ -9924,7 +10197,7 @@ async fn unknown_fields_are_rejected_on_write_endpoints() {
         Some(&cookie),
         Some(&team),
         &rejected,
-        "credential_id",
+        "credential_name",
     )
     .await;
     let (status, assigned, _) = call(

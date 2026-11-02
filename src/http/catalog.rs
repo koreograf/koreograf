@@ -50,6 +50,7 @@ pub struct ProjectBody {
     organization_id: Option<String>,
     #[serde(default)]
     team_ids: Vec<String>,
+    credential_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -62,6 +63,7 @@ pub struct ProjectUpdateBody {
     organization_id: Option<String>,
     #[serde(default)]
     team_ids: Option<Vec<String>>,
+    credential_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -377,9 +379,16 @@ pub async fn update_project(
         };
         let team_ids = body.team_ids.unwrap_or_else(|| project.team_ids.clone());
         check_team_ids(&db, &organization_id, &team_ids)?;
+        let credential_id = match body.credential_id {
+            Some(raw) => {
+                validate_project_credential(&db, &team, &team_ids, blank(Some(raw)).as_deref())?
+            }
+            None => project.credential_id.clone(),
+        };
         db::set_project_details(&db, &id, &name, &source_type, &source, &revision)?;
         db::set_project_organization(&db, &id, &organization_id)?;
         db::replace_project_teams(&db, &id, &team_ids)?;
+        db::set_project_credential(&db, &id, credential_id.as_deref())?;
         db::set_project_admin_saved(&db, &id, user.is_admin)?;
         let changed = project.source_type != source_type
             || project.source != source
@@ -431,6 +440,12 @@ pub async fn create_project(
         None => current.organization_id,
     };
     check_team_ids(&db, &organization_id, &body.team_ids)?;
+    let credential_id = validate_project_credential(
+        &db,
+        &team,
+        &body.team_ids,
+        blank(body.credential_id).as_deref(),
+    )?;
     let project = Project {
         id: Uuid::new_v4().to_string(),
         team_id: team,
@@ -440,6 +455,7 @@ pub async fn create_project(
         source_type: body.source_type,
         source,
         revision,
+        credential_id,
         created_at: db::now(),
         team_ids: body.team_ids,
         last_sync_at: String::new(),
@@ -481,6 +497,12 @@ fn validate_project_source(
             if !runner::valid_git(source) {
                 return Err(ApiError::bad("the_git_address_must_be_http_s_ssh"));
             }
+            if runner::git_address_has_credentials(source) {
+                return Err(ApiError::bad_vars(
+                    "the_git_address_contains_credentials",
+                    [("field", "credential_id")],
+                ));
+            }
             if source.starts_with("file://") {
                 runner::authorize_project_source(
                     "git",
@@ -517,6 +539,31 @@ fn project_path_error(err: runner::ProjectPathError) -> ApiError {
             ApiError::bad("path_projects_are_limited_to_administrators")
         }
     }
+}
+
+fn validate_project_credential(
+    db: &Connection,
+    team: &str,
+    team_ids: &[String],
+    credential_id: Option<&str>,
+) -> AppResult<Option<String>> {
+    let Some(id) = credential_id else {
+        return Ok(None);
+    };
+    let credential =
+        db::credential(db, id)?.ok_or_else(|| ApiError::bad("credential_is_missing"))?;
+    if credential.kind != "scm" {
+        return Err(ApiError::bad(
+            "the_credential_is_not_a_source_control_credential",
+        ));
+    }
+    if credential.disabled {
+        return Err(ApiError::bad("the_source_control_credential_is_disabled"));
+    }
+    if credential.team_id != team && !team_ids.contains(&credential.team_id) {
+        return Err(ApiError::bad("the_credential_belongs_to_another_team"));
+    }
+    Ok(Some(credential.id))
 }
 
 fn check_team_ids(
@@ -1141,7 +1188,7 @@ pub async fn delete_credential(
     let db = state.db()?;
     let names = db::credential_usages(&db, &id, &team)?
         .into_iter()
-        .map(|usage| format!("{} / {}", usage.inventory_name, usage.source_name))
+        .map(|usage| usage_label(&usage))
         .collect::<Vec<_>>();
     if !names.is_empty() {
         return Err(ApiError::conflict_vars(
@@ -1153,6 +1200,17 @@ pub async fn delete_credential(
     Ok(no_content())
 }
 
+fn usage_label(usage: &db::CredentialUsage) -> String {
+    match (&usage.project_id, &usage.project_name) {
+        (Some(_), Some(name)) => name.clone(),
+        _ => format!(
+            "{} / {}",
+            usage.inventory_name.as_deref().unwrap_or(""),
+            usage.source_name.as_deref().unwrap_or("")
+        ),
+    }
+}
+
 fn usage_json(c: &Connection, id: &str, team: &str) -> AppResult<Value> {
     Ok(json!(db::credential_usages(c, id, team)?
         .into_iter()
@@ -1161,6 +1219,8 @@ fn usage_json(c: &Connection, id: &str, team: &str) -> AppResult<Value> {
             "inventory_name": usage.inventory_name,
             "source_id": usage.source_id,
             "source_name": usage.source_name,
+            "project_id": usage.project_id,
+            "project_name": usage.project_name,
         }))
         .collect::<Vec<_>>()))
 }
