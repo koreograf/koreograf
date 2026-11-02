@@ -153,6 +153,7 @@
   "delete_inventory": "Inventar löschen",
   "delete_node": "Knoten löschen",
   "delete_this_account": "Konto \"{name}\" löschen? Der Benutzer wird aus allen Teams entfernt.",
+  "delete_this_credential": "Zugang \"{name}\" löschen? Sein Geheimnis wird entfernt.",
   "delete_this_inventory": "Inventar \"{name}\" löschen? Seine Quellen und Hosts werden entfernt.",
   "delete_this_node": "Knoten \"{name}\" löschen? Seine Verbindungen werden entfernt.",
   "delete_this_project": "Projekt \"{name}\" löschen? Vorlagen, die es verwenden, können nicht mehr starten.",

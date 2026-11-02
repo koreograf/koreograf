@@ -13823,12 +13823,19 @@ fn credentials_and_admin_objects_use_the_edit_overlay() {
     assert!(credentials.contains("openCredentialDialog(null)"));
     assert!(credentials.contains("#/credentials?edit="));
     assert!(credentials.contains("#/credentials?new=1"));
+    assert!(credentials.contains("aria-label=\"${h(\"search_credentials\")}\""));
+    assert!(credentials.contains(
+        "confirm(t(\"delete_this_credential\", { name: button.dataset.credentialName }))"
+    ));
     let credential = extract_braced_function(&script, "function openCredentialDialog");
     assert!(credential.contains("openEditDialog({"));
     assert!(credential.contains("api(\"POST\", \"/api/credentials\""));
     assert!(credential.contains("api(\"PUT\", `/api/credentials/"));
     assert!(credential.contains("api(\"DELETE\", `/api/credentials/"));
     assert!(credential.contains("data-credential-delete"));
+    assert!(credential.contains("hint: \"fields_marked_with_a_star_are_required\""));
+    assert!(credential.contains("hint: \"\","));
+    assert!(credential.contains("confirm(t(\"delete_this_credential\", { name: item.name }))"));
     assert!(credential.contains("markSaved();"));
     assert!(credential.contains("close();"));
     assert!(credential.contains("await route();"));

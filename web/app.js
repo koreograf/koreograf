@@ -6078,18 +6078,19 @@ async function pageCredentials() {
   shell(t("credentials"), `
     <section class="card">
       <p class="small muted">${h("secrets_are_stored_encrypted_and_are_not_shown")}</p>
-      <input class="search" id="credential-search" placeholder="${h("search_credentials")}" autocomplete="off">
+      <input class="search" id="credential-search" placeholder="${h("search_credentials")}" aria-label="${h("search_credentials")}" autocomplete="off">
       <div id="credential-table"></div>
     </section>`,
     can("owner") ? addLink("#/credentials?new=1", "credential") : "");
   const drawCredentials = () => {
     const needle = document.querySelector("#credential-search").value.trim().toLowerCase();
     const rows = credentials.filter((item) => !needle || `${item.name} ${item.kind} ${credentialKindLabel(item.kind)} ${credentialUsageNames(item)}`.toLowerCase().includes(needle)).map((item) =>
-      `<tr><td><a href="#/credentials?edit=${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(credentialKindLabel(item.kind))}</td><td>${esc(credentialUsageNames(item) || t("not_used"))}</td><td>${can("owner") ? `<button class="btn danger" type="button" data-credential="${esc(item.id)}">${h("delete")}</button>` : ""}</td></tr>`
+      `<tr><td><a href="#/credentials?edit=${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(credentialKindLabel(item.kind))}</td><td>${esc(credentialUsageNames(item) || t("not_used"))}</td><td>${can("owner") ? `<button class="btn danger" type="button" data-credential="${esc(item.id)}" data-credential-name="${esc(item.name)}">${h("delete")}</button>` : ""}</td></tr>`
     );
     document.querySelector("#credential-table").innerHTML = table([t("name"), t("type"), t("used_by"), ""], rows);
     document.querySelectorAll("[data-credential]").forEach((button) => {
       button.addEventListener("click", async () => {
+        if (!confirm(t("delete_this_credential", { name: button.dataset.credentialName }))) return;
         try {
           await api("DELETE", `/api/credentials/${encodeURIComponent(button.dataset.credential)}`);
           route();
@@ -6209,6 +6210,7 @@ function openCredentialDialog(item, readOnly = false, initialTab = "") {
       <div id="credential-fields">${editing ? credentialFields(item.kind, item) : ""}</div>
       ${editing ? credentialUsageCard(item) : ""}`,
     submit: editing ? t("save") : t("create"),
+    hint: "fields_marked_with_a_star_are_required",
     danger: editing ? `<button class="btn danger" type="button" data-credential-delete>${h("delete")}</button>` : "",
     onSubmit: async ({ form, close }) => {
       if (editing) {
@@ -6243,6 +6245,7 @@ function openCredentialDialog(item, readOnly = false, initialTab = "") {
     });
     const remove = dialog.overlay.querySelector("[data-credential-delete]");
     remove.addEventListener("click", async () => {
+      if (!confirm(t("delete_this_credential", { name: item.name }))) return;
       try {
         await api("DELETE", `/api/credentials/${encodeURIComponent(item.id)}`);
         markSaved();
