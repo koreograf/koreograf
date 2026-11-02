@@ -13503,6 +13503,236 @@ fn hooks_environments_and_team_members_use_the_edit_overlay() {
 }
 
 #[test]
+fn template_create_and_edit_use_the_tabbed_overlay() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let templates = extract_braced_function(&script, "async function pageTemplates");
+    assert!(templates.contains("openTemplateDialog(item, request.tab)"));
+    assert!(templates.contains("openTemplateDialog(null, request.tab)"));
+    assert!(templates.contains("#/templates?edit="));
+    assert!(templates.contains("#/templates?new=1"));
+    assert!(templates.contains("clearEditHash();"));
+    assert!(script.contains("addLink(\"#/templates?new=1\", \"template_2\")"));
+    assert!(!script.contains("addLink(\"#/templates/new\""));
+    assert!(!script.contains("href=\"#/templates/${"));
+    let dialog = extract_braced_function(&script, "async function openTemplateDialog");
+    assert!(dialog.contains("openEditDialog({"));
+    assert!(dialog.contains("wide: true"));
+    assert!(dialog.contains("{ id: \"general\", label: t(\"general\")"));
+    assert!(dialog.contains("{ id: \"target\", label: t(\"target\")"));
+    assert!(dialog.contains("{ id: \"options\", label: t(\"options\")"));
+    assert!(dialog.contains("{ id: \"variables\", label: t(\"variables\")"));
+    assert!(dialog.contains("input[name=vault_ids]:checked"));
+    assert!(!dialog.contains("openVaultPicker("));
+    assert!(dialog.contains("showToolSections"));
+    assert!(dialog.contains("#ansible-options"));
+    assert!(dialog.contains("#tofu-options"));
+    assert!(dialog.contains("#shell-options"));
+    assert!(dialog.contains("environmentOptions(tool, selected)"));
+    assert!(dialog.contains("api(\"POST\", \"/api/templates\""));
+    assert!(dialog.contains("api(\"PUT\", `/api/templates/"));
+    assert!(dialog.contains("markSaved();"));
+    assert!(dialog.contains("close();"));
+    assert!(dialog.contains("await route();"));
+    assert!(dialog.contains("onTab: (tab) => rememberEditHash("));
+    assert!(!dialog.contains("handle(error)"));
+    let submit = dialog
+        .find("onSubmit: readOnly ? undefined : async")
+        .expect("template submit");
+    let tab = dialog[submit..].find("onTab:").expect("template tab") + submit;
+    assert!(dialog[submit..tab].contains("throw error"));
+    assert!(!dialog[submit..tab].contains("handle(error)"));
+    let remove = extract_braced_function(&script, "async function deleteTemplate");
+    assert!(remove.contains("api(\"DELETE\", `/api/templates/"));
+    assert!(remove.contains("markSaved();"));
+    assert!(remove.contains("dialog.close();"));
+    assert!(remove.contains("await route();"));
+    let fields = extract_braced_function(&script, "function templateCredentialFields");
+    assert!(fields.contains("inlineVault"));
+    assert!(fields.contains("name=\"vault_ids\""));
+    assert!(fields.contains("id=\"vault-pills\""));
+    let bind = extract_braced_function(&script, "function bindVaultChoices");
+    assert!(bind.contains("classList.toggle(\"selected\", input.checked)"));
+    let helper = extract_function_with_destructured_params(&script, "function openEditDialog");
+    assert!(helper.contains("panel.hidden = panel.dataset.dialogPanel !== current;"));
+    assert!(!helper.contains("panel.innerHTML ="));
+}
+
+#[test]
+fn viewers_open_templates_in_a_read_only_overlay() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let templates = extract_braced_function(&script, "async function pageTemplates");
+    assert!(templates.contains("await openTemplateDialog(item, request.tab);"));
+    assert!(
+        !templates.contains("if (can(\"operator\")) await openTemplateDialog(item, request.tab);")
+    );
+    assert!(templates.contains("<a href=\"#/templates?edit=${esc(item.id)}\">"));
+    let dialog = extract_braced_function(&script, "async function openTemplateDialog");
+    assert!(dialog.contains("const readOnly = !can(\"operator\");"));
+    assert!(dialog.contains("title: readOnly ? t(\"read_only_template\", { name: item.name })"));
+    assert!(dialog.contains("hint: readOnly ? \"read_only_template_hint\" : undefined"));
+    assert!(dialog.contains("form: true"));
+    assert!(dialog.contains("submit: readOnly ? undefined : editing ? t(\"save\") : t(\"create\")"));
+    assert!(dialog.contains("onSubmit: readOnly ? undefined : async"));
+    assert!(dialog.contains("!readOnly && editing"));
+    assert!(dialog.contains("if (readOnly) {"));
+    assert!(dialog.contains("control.disabled = true;"));
+    assert!(dialog.contains("button.hasAttribute(\"data-dialog-cancel\")"));
+    assert!(dialog.contains("button.classList.contains(\"dialog-close\")"));
+    let helper = extract_function_with_destructured_params(&script, "function openEditDialog");
+    assert!(helper.contains("form = Boolean(onSubmit)"));
+    assert!(helper.contains("    form,\n    actions,"));
+    let probe = format!(
+        r#"{helper}
+let editSerial = 0;
+let leaveGuard = null;
+function clearEditHash() {{}}
+function h(value) {{ return value; }}
+let captured = null;
+function openDialog(options) {{
+  captured = options;
+  return {{
+    overlay: {{ setAttribute() {{}}, querySelectorAll() {{ return []; }} }},
+    form: {{ addEventListener() {{}} }},
+    dirty() {{ return false; }},
+  }};
+}}
+openEditDialog({{ title: "read only", body: "" }});
+if (captured.form !== false) {{ console.error("missing submit dialog defaulted to a form"); process.exit(1); }}
+openEditDialog({{ title: "read only", body: "", form: true }});
+if (captured.form !== true) {{ console.error("explicit form was not forwarded"); process.exit(1); }}
+openEditDialog({{ title: "edit", body: "", onSubmit: async () => {{}} }});
+if (captured.form !== true) {{ console.error("submit dialog did not default to a form"); process.exit(1); }}
+"#
+    );
+    run_node_probe("edit-dialog-form", &probe);
+}
+
+#[test]
+fn template_overlay_addresses_round_trip_and_old_pages_redirect() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    for redirect in [
+        "location.replace(\"#/templates?new=1\")",
+        "location.replace(`#/templates?edit=${encodeURIComponent(parts[1])}`)",
+    ] {
+        assert!(script.contains(redirect), "missing redirect {redirect}");
+    }
+    let functions = format!(
+        "{}\n{}\n{}\n{}",
+        extract_braced_function(&script, "function editQuery"),
+        extract_braced_function(&script, "function editAddress"),
+        extract_braced_function(&script, "function rememberEditHash"),
+        extract_braced_function(&script, "function clearEditHash")
+    );
+    let probe = format!(
+        r##"{functions}
+let location = {{ hash: "#/templates" }};
+let shownHash = null;
+let pushed = 0;
+let replaced = 0;
+const history = {{
+  pushState(_state, _title, url) {{ pushed += 1; location.hash = url; }},
+  replaceState(_state, _title, url) {{ replaced += 1; location.hash = url; }},
+}};
+function check(ok, message) {{
+  if (!ok) {{ console.error(message); process.exit(1); }}
+}}
+const edit = editQuery("#/templates?edit=t1&tab=target");
+check(edit.edit === "t1" && edit.tab === "target" && edit.create === null, "template edit and tab were not read");
+const create = editQuery("#/templates?new=1&tab=options");
+check(create.create === "1" && create.edit === "" && create.tab === "options", "template new and tab were not read");
+check(editAddress({{ edit: "t1", tab: "target" }}, "#/templates") === "#/templates?edit=t1&tab=target", "template edit address was not built");
+check(editAddress({{ create: "1", tab: "variables" }}, "#/templates") === "#/templates?new=1&tab=variables", "template new address was not built");
+check(editAddress({{ edit: "t1" }}, "#/templates?tab=target&page=2") === "#/templates?page=2&edit=t1", "old tab was not cleared");
+rememberEditHash({{ create: "1", tab: "general" }});
+check(pushed === 1 && location.hash === "#/templates?new=1&tab=general" && shownHash === location.hash, "template open did not push the address");
+rememberEditHash({{ edit: "t1", tab: "target" }}, false);
+check(pushed === 1 && replaced === 1 && location.hash === "#/templates?edit=t1&tab=target", "template tab did not replace the address");
+clearEditHash();
+check(replaced === 2 && location.hash === "#/templates" && shownHash === "#/templates", "template close did not clear the address");
+"##
+    );
+    run_node_probe("template-address", &probe);
+}
+
+#[test]
+fn template_tool_switch_changes_options_and_environments() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let dialog = extract_braced_function(&script, "async function openTemplateDialog");
+    assert!(dialog.contains("form.tool.addEventListener(\"change\""));
+    assert!(dialog.contains("showToolSections();"));
+    assert!(dialog.contains("loadPlaybooks();"));
+    assert!(dialog.contains(
+        "dialog.overlay.querySelector(\"#ansible-options\").hidden = tool !== \"ansible\""
+    ));
+    assert!(dialog.contains(
+        "dialog.overlay.querySelector(\"#tofu-options\").hidden = tool !== \"opentofu\""
+    ));
+    assert!(dialog
+        .contains("dialog.overlay.querySelector(\"#shell-options\").hidden = tool !== \"shell\""));
+    assert!(dialog.contains(
+        "dialog.overlay.querySelector(\"#inventory-field\").hidden = tool !== \"ansible\""
+    ));
+    assert!(dialog.contains("form.environment_id.innerHTML = environmentOptions(tool, selected)"));
+    assert!(dialog.contains("default_environment_${tool}"));
+    let environments_for = extract_braced_function(&script, "const environmentsFor = (tool) =>");
+    let probe = format!(
+        r#"{environments_for}
+const environments = [
+  {{ id: "a1", tool: "ansible" }},
+  {{ id: "t1", tool: "opentofu" }},
+  {{ id: "s1", tool: "shell" }},
+  {{ id: "any1", tool: "any" }},
+  {{ id: "legacy" }}
+];
+function check(ok, message) {{
+  if (!ok) {{ console.error(message); process.exit(1); }}
+}}
+check(environmentsFor("ansible").map((row) => row.id).join(",") === "a1,any1,legacy", "ansible environments do not match");
+check(environmentsFor("opentofu").map((row) => row.id).join(",") === "t1,any1,legacy", "opentofu environments do not match");
+check(environmentsFor("shell").map((row) => row.id).join(",") === "s1,any1,legacy", "shell environments do not match");
+"#
+    );
+    run_node_probe("template-environments", &probe);
+}
+
+#[test]
+fn template_validation_errors_open_the_matching_tab() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let helper = extract_function_with_destructured_params(&script, "function openEditDialog");
+    assert!(helper.contains("mark(panel.dataset.dialogPanel);"));
+    assert!(helper.contains("choose(panel.dataset.dialogPanel, false);"));
+    let mapping = extract_braced_function(&script, "const ERROR_FIELD =");
+    let probe = format!(
+        r#"{mapping}
+function check(key, want) {{
+  if (ERROR_FIELD[key] !== want) {{
+    console.error(key, ERROR_FIELD[key], want);
+    process.exit(1);
+  }}
+}}
+check("tool_is_ansible_opentofu_or_shell", "tool");
+check("project_is_missing", "project_id");
+check("inventory_is_missing", "inventory_id");
+check("execution_environment_is_missing", "environment_id");
+check("the_execution_environment_is_for_another_tool", "environment_id");
+check("action_is_plan_or_apply", "action");
+check("ansible_needs_a_playbook_as_the_entry", "entrypoint");
+check("opentofu_needs_a_module_directory", "entrypoint");
+check("shell_needs_a_path_or_spec_script", "entrypoint");
+check("the_entry_path_must_be_relative_and_must", "entrypoint");
+check("extra_variables_must_be_a_json_object", "extra_vars");
+check("template.vars_not_objects", "extra_vars");
+"#
+    );
+    run_node_probe("template-error-tabs", &probe);
+}
+
+#[test]
 fn template_form_saves_the_visible_playbook_path() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
