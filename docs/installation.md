@@ -10,7 +10,19 @@ Rust 1.89 is the minimum (`rust-version` in `Cargo.toml`). This repository pins 
 cargo run
 ```
 
-`koreograf --version` prints that same version and exits before the server starts.
+`koreograf --version` prints that same version and exits before the server starts. `koreograf doctor` prints the runner preflight in the same block as the startup log and exits with code 2 when the configured mode lacks something. It reads the saved runner mode from `KOREOGRAF_DATA` when that database exists and otherwise uses `KOREOGRAF_RUNNER`. Koreograf never installs a tool and never runs `sudo`.
+
+The preflight checks `ansible-playbook` 2.14 or newer, `tofu` 1.6 or newer, a POSIX `sh`, and a Docker or Podman CLI whose daemon answers. Each check has a two second timeout. The startup log prints the result once. Administrators also see it under **Settings → Jobs** and as a notice on the **Overview** page. The API endpoint is `GET /api/runner/preflight`.
+
+| Tool | Debian and Ubuntu | Fedora and RHEL | macOS | Alpine | Vendor |
+| --- | --- | --- | --- | --- | --- |
+| Ansible | `apt install ansible`, then `/usr/bin/ansible-playbook` | `dnf install ansible-core`, then `/usr/bin/ansible-playbook` | `brew install ansible`, then `/opt/homebrew/bin/ansible-playbook` on Apple silicon or `/usr/local/bin/ansible-playbook` on Intel | `apk add ansible`, then `/usr/bin/ansible-playbook` | [Ansible installation guide](https://docs.ansible.com/ansible/latest/installation_guide/) |
+| OpenTofu | the vendor `.deb`, then `/usr/bin/tofu` | the vendor DNF repository, then `/usr/bin/tofu` | `brew install opentofu`, then `/opt/homebrew/bin/tofu` on Apple silicon or `/usr/local/bin/tofu` on Intel | `apk add opentofu`, then `/usr/bin/tofu` | [OpenTofu installation](https://opentofu.org/docs/intro/install/) |
+| Shell | `apt install dash`, then `/bin/sh` | `dnf install bash`, then `/bin/sh` | `/bin/sh` is part of macOS | BusyBox provides `/bin/sh` | [POSIX shell](https://pubs.opengroup.org/onlinepubs/9699919799/utilities/sh.html) |
+| Docker | [Docker Engine packages](https://docs.docker.com/engine/install/), then `/usr/bin/docker` | `dnf install docker`, then `/usr/bin/docker` | Docker Desktop or `brew install docker` | `apk add docker`, then `/usr/bin/docker` | [Docker Engine installation](https://docs.docker.com/engine/install/) |
+| Podman | `apt install podman`, then `/usr/bin/podman` | `dnf install podman`, then `/usr/bin/podman` | `brew install podman` | `apk add podman`, then `/usr/bin/podman` | [Podman installation](https://podman.io/docs/installation) |
+
+The paths differ when a package manager or Homebrew prefix installs elsewhere. The preflight reports the path it found, not the contents of `PATH`.
 
 The UI is at `http://127.0.0.1:8080`. The language menu at the bottom of the sidebar and on the sign-in page switches the language. Create-lists share the same pill button, for example `+ Projekt`, `+ Zugang`, and `+ Umgebung` (English: `+ Project`, `+ Credential`, `+ Environment`). Without `KOREOGRAF_ADMIN_PASSWORD`, the first start writes the password to `data/initial-admin-password` (mode `0600`) and logs the path. The password is not in the log. The process does not delete the file. Remove it after the first sign-in, and set a new password of at least 8 characters on the account page.
 
@@ -41,7 +53,7 @@ It does not compile. Build this checkout without replacing that published tag:
 docker compose -f docker-compose.yml -f docker-compose.build.yml up --build -d
 ```
 
-The local image is tagged `koreograf:local`. buildx is only for publishing a multi-architecture image. Ansible, the Docker client, and OpenTofu in the published image are the versions from the Dockerfile at that tag. The process starts as root, gives `/var/lib/koreograf` and every file already in it to uid 10001, and then drops to that user. An older volume keeps `secret.key` mode `0600` owned by root; without that hand-over the new process cannot read it. A mounted `/var/run/docker.sock` changes nothing about that ownership: the process still runs as uid 10001 and gets the socket's group as a supplementary group.
+The local image is tagged `koreograf:local`. buildx is only for publishing a multi-architecture image. Ansible, the Docker client, and OpenTofu in the published image are the versions from the Dockerfile at that tag. The image sets `KOREOGRAF_CONTAINER_IMAGE=1`. Its preflight checks only the container CLI and socket and reports that local tools are not part of the image. The process starts as root, gives `/var/lib/koreograf` and every file already in it to uid 10001, and then drops to that user. An older volume keeps `secret.key` mode `0600` owned by root; without that hand-over the new process cannot read it. A mounted `/var/run/docker.sock` changes nothing about that ownership: the process still runs as uid 10001 and gets the socket's group as a supplementary group.
 
 PID 1 in the image is [tini](https://github.com/krallin/tini). It reaps processes a job leaves behind, including an SSH control master, and it forwards stop signals to Koreograf. `cargo run` and a service manager already reap those processes, so they do not need tini. A custom image command, Compose `entrypoint`, or Helm `command` replaces tini. Keep an init in that command, for example `tini -- /usr/local/bin/entrypoint.sh`.
 

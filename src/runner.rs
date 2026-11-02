@@ -795,6 +795,14 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
     }
     check_relative(&template.entrypoint)?;
 
+    let settings = crate::settings::load(state).map_err(|err| err.to_string())?;
+    if settings.runner == RunnerMode::Auto {
+        let preflight = crate::preflight::check(settings.runner, state.cfg.container_image).await;
+        if let Some(problem) = preflight.job_problem(&template.tool) {
+            return Err(problem);
+        }
+    }
+
     let work = state.cfg.data_dir.join("jobs").join(job_id);
     let stage = work.join("project");
     fs::create_dir_all(&stage).map_err(|e| e.to_string())?;
@@ -808,7 +816,6 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
         }
     }
 
-    let settings = crate::settings::load(state).map_err(|err| err.to_string())?;
     if settings.proxy.explicit && settings.proxy.is_set() {
         log(
             state,
@@ -4909,6 +4916,7 @@ exit 0
             admin_user: "admin".into(),
             admin_password: Some("test-admin-pass".into()),
             runner: crate::config::RunnerMode::Local,
+            container_image: false,
             job_timeout_secs: 60,
             job_output_lines: lines,
             local_jobs: crate::config::LocalJobs::All,

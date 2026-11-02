@@ -45,6 +45,7 @@ pub fn router(state: Shared) -> Router {
         )
         .route("/overview", get(catalog::overview))
         .route("/runner", get(catalog::runner_status))
+        .route("/runner/preflight", get(catalog::runner_preflight))
         .route(
             "/teams",
             get(catalog::list_teams).post(catalog::create_team),

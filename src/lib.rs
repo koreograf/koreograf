@@ -21,6 +21,7 @@ mod jobs;
 mod ldap;
 mod metrics;
 mod netbox;
+mod preflight;
 mod runner;
 mod scan;
 mod schedule;
@@ -116,6 +117,24 @@ where
         .any(|arg| arg.as_ref() == "--version")
 }
 
+/// True when argv asks for `doctor`. The first value is the program name.
+pub fn doctor_requested<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter().skip(1).any(|arg| arg.as_ref() == "doctor")
+}
+
+/// Print the runner preflight and return the process exit code.
+pub async fn doctor() -> anyhow::Result<i32> {
+    let cfg = Config::from_env();
+    let mode = settings::configured_mode(&cfg);
+    let report = preflight::check(mode, cfg.container_image).await;
+    println!("{}", report.log_block());
+    Ok(if report.ok() { 0 } else { 2 })
+}
+
 impl AppState {
     pub fn db(&self) -> Result<std::sync::MutexGuard<'_, Connection>, ApiError> {
         self.conn
@@ -176,9 +195,15 @@ pub async fn serve(cfg: Config) -> anyhow::Result<()> {
     let url = std::env::var("KOREOGRAF_DATABASE_URL").unwrap_or_default();
     config::database_choice(&url).map_err(anyhow::Error::msg)?;
     let state = boot(cfg)?;
-    if let Ok(effective) = settings::load(&state) {
-        tls::warn_directory(&effective.ldap);
-    }
+    let mode = match settings::load(&state) {
+        Ok(effective) => {
+            tls::warn_directory(&effective.ldap);
+            effective.runner
+        }
+        Err(_) => state.cfg.runner,
+    };
+    let report = preflight::check(mode, state.cfg.container_image).await;
+    tracing::info!("{}", report.log_block());
     schedule::spawn(state.clone());
     let bind = state.cfg.bind.clone();
     let data_dir = state.cfg.data_dir.display().to_string();

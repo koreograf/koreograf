@@ -20,6 +20,7 @@ See `.env.example`. Comments in that file are English. Copy it to `.env` before 
 | `KOREOGRAF_ADMIN_USER` | `admin` |
 | `KOREOGRAF_ADMIN_PASSWORD` | empty, then generated once |
 | `KOREOGRAF_RUNNER` | `auto` (`local` or `docker`) |
+| `KOREOGRAF_CONTAINER_IMAGE` | off (the image build sets `1`) |
 | `KOREOGRAF_LOCAL_RUNNER_FOR` | `admins` (`all` on a trusted network) |
 | `KOREOGRAF_PROJECT_ROOTS` | empty, plus the examples directory. Comma-separated absolute directories |
 | `KOREOGRAF_JOB_TIMEOUT_SECS` | `1800` (30–86400) |
@@ -39,7 +40,9 @@ See `.env.example`. Comments in that file are English. Copy it to `.env` before 
 
 Directory sign-in, including these four variables, is described in [Organizations, teams, LDAP, and Active Directory](authentication.md).
 
-`auto` looks for `docker` and `podman`. That check stops after ten seconds and then treats the runtime as unreachable. If it is missing, the job still runs on the controller and the log says to mount the Docker socket or to set the runner mode to `docker` so the job fails instead. `local` ignores execution environments and writes that into the job log. `docker` fails a run that has an image set when no runtime is reachable. Templates without an environment always run locally. The overview and `GET /api/runner` name the runtime that answered, or that none did. The template overlay reads `/api/runner` and warns while an environment is set and no runtime is reachable.
+Startup runs the runner preflight and logs one block. `koreograf doctor` prints the same block and exits with code 2 when the configured mode lacks a tool or runtime. The check covers `ansible-playbook` 2.14 or newer, `tofu` 1.6 or newer, `sh`, and a Docker or Podman CLI whose daemon answers, each with a two second timeout. The result is also `GET /api/runner/preflight`, which is administrator-only. It contains binary paths and versions but never an environment variable or the value of `PATH`. `KOREOGRAF_CONTAINER_IMAGE=1` reduces the check to the container CLI and socket. The image build sets it.
+
+`auto` looks for `docker` and `podman`. That check stops after ten seconds and then treats the runtime as unreachable. Without a runtime, a job still runs on the controller when its tool exists locally; the log says to mount the Docker socket or to set the runner mode to `docker` so the job fails instead. Before any work, a job in `auto` or `local` fails when its tool is missing locally and no runtime answers. The failure line is the same text as the overview notice. `local` ignores execution environments and writes that into the job log. `docker` fails a run that has an image set when no runtime is reachable. Templates without an environment always run locally. The overview and `GET /api/runner` name the runtime that answered, or that none did. The template overlay reads `/api/runner` and warns while an environment is set and no runtime is reachable.
 
 `KOREOGRAF_DATA_HOST` is the absolute path the container daemon uses for `KOREOGRAF_DATA`. Leave it empty. Koreograf reads the mounts of its own container and uses that path. Set it only when the lookup is wrong. A relative path is ignored. A path the daemon cannot see fails the job before the container starts, and the daemon does not create `jobs/` or `cache/` on its host.
 

@@ -18,6 +18,7 @@ fn config(dir: &std::path::Path) -> Config {
         admin_user: "admin".into(),
         admin_password: Some("test-admin-pass".into()),
         runner: RunnerMode::Local,
+        container_image: false,
         job_timeout_secs: 60,
         job_output_lines: 8_000,
         local_jobs: LocalJobs::All,
@@ -14441,6 +14442,160 @@ function check(ok, message) {{
 "##
     );
     run_node_probe("route-leave-guard", &probe);
+}
+
+#[tokio::test]
+async fn runner_preflight_is_admin_only_and_leaks_no_secrets() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-preflight-smoke-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, denied, _) = call(&app, "GET", "/api/runner/preflight", None, None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{denied}");
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("admin cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, report, _) = call(
+        &app,
+        "GET",
+        "/api/runner/preflight",
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    assert_eq!(report["mode"], "local");
+    assert!(report["tools"]
+        .as_array()
+        .is_some_and(|tools| tools.len() == 3));
+    assert!(report["runtime"].is_object());
+    assert!(report["missing"].is_array());
+    let body = report.to_string();
+    assert!(!body.contains("KOREOGRAF_"), "{body}");
+    assert!(!body.contains("\"PATH\""), "{body}");
+    if let Ok(path) = std::env::var("PATH") {
+        assert!(!body.contains(&path), "{body}");
+    }
+
+    let (status, overview, _) = call(
+        &app,
+        "GET",
+        "/api/overview",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{overview}");
+    assert!(overview["preflight"].is_object(), "{overview}");
+    assert_eq!(overview["preflight"]["ok"], report["ok"]);
+
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "username": "preflight-viewer",
+            "display_name": "Preflight Viewer",
+            "password": "viewer-pass",
+            "is_admin": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let (status, member, _) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{team}/members"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"username": "preflight-viewer", "role": "viewer"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{member}");
+    let (status, viewer_me, viewer_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "preflight-viewer", "password": "viewer-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{viewer_me}");
+    let viewer_cookie = viewer_cookie.expect("viewer cookie");
+    let (status, forbidden, _) = call(
+        &app,
+        "GET",
+        "/api/runner/preflight",
+        Some(&viewer_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{forbidden}");
+    assert_eq!(forbidden["error"], "you_are_not_allowed_to_do_this");
+    let (status, viewer_overview, _) = call(
+        &app,
+        "GET",
+        "/api/overview",
+        Some(&viewer_cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{viewer_overview}");
+    assert!(viewer_overview["preflight"].is_null(), "{viewer_overview}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_preflight_notice_uses_the_missing_tool_and_runtime() {
+    let script = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("web/app.js"))
+        .expect("app.js");
+    assert!(script.contains("id=\"preflight-check\""));
+    assert!(script.contains("api(\"GET\", \"/api/runner/preflight\")"));
+    let function = extract_braced_function(&script, "function preflightNotices(report)");
+    let probe = format!(
+        r#"{function}
+const cases = [
+  [null, []],
+  [{{ok: true, missing: []}}, []],
+  [{{ok: false, missing: [{{kind: "tool", tool: "ansible-playbook", template_tool: "ansible", reason: "missing"}}]}}, ["preflight_tool_missing"]],
+  [{{ok: false, missing: [{{kind: "runtime", tool: "docker/podman", template_tool: "", reason: "missing"}}, {{kind: "tool", tool: "ansible-playbook", template_tool: "ansible", reason: "missing"}}]}}, ["preflight_runtime_missing", "preflight_no_runtime_and_tool_missing"]],
+  [{{ok: false, missing: [{{kind: "tool", tool: "tofu", template_tool: "opentofu", reason: "version", version: "1.5.0", minimum: "1.6"}}]}}, ["preflight_tool_too_old"]],
+  [{{ok: false, missing: [{{kind: "tool", tool: "sh", template_tool: "shell", reason: "timeout"}}]}}, ["preflight_tool_unusable"]]
+];
+for (const [report, want] of cases) {{
+  const got = preflightNotices(report).map((item) => item.key);
+  if (JSON.stringify(got) !== JSON.stringify(want)) {{
+    console.error(JSON.stringify({{report, want, got}}));
+    process.exit(1);
+  }}
+}}
+"#
+    );
+    run_node_probe("preflight-notice", &probe);
 }
 
 fn extract_braced_function(script: &str, needle: &str) -> String {

@@ -42,6 +42,8 @@ Runner modes are in [Configuration](configuration.md#environment-variables).
 
 ## Tools
 
+Before a job does any work, the runner checks the tool it needs. In `auto` and `local`, a job fails at start when its tool is missing locally and no container runtime answers. The failure line is the same as the overview notice and names the tool, the affected templates, and what to install. `koreograf doctor` prints the complete check, and `GET /api/runner/preflight` returns it for an administrator. Installation paths are in [Installation](installation.md#run-on-a-machine).
+
 The registry lives in `runner::tools()`. Another CLI tool needs an entry there and a branch in `src/wrapper.sh`. The three built-in tools:
 
 | Id | Run |

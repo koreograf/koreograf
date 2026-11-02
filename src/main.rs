@@ -4,9 +4,14 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    if koreograf::version_requested(std::env::args()) {
+    let args: Vec<String> = std::env::args().collect();
+    if koreograf::version_requested(&args) {
         println!("{}", koreograf::version_line());
         return Ok(());
+    }
+    if koreograf::doctor_requested(&args) {
+        let code = koreograf::doctor().await?;
+        std::process::exit(code);
     }
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("koreograf=info,tower_http=info"));
