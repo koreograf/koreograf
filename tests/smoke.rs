@@ -6896,6 +6896,46 @@ async fn admin_backup_roundtrip_replaces_the_installation() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn backup_page_carries_the_state_flag_and_the_overview_shows_missing_paths() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    assert!(script.contains("id=\"backup-tofu-state\""));
+    assert!(script.contains("include_opentofu_state"));
+    assert!(script.contains("opentofu_state_can_contain_secrets"));
+    assert!(script.contains("importNoticeHtml(data.import)"));
+    let functions = format!(
+        "{}\n{}",
+        extract_braced_function(&script, "function backupDownloadUrl"),
+        extract_braced_function(&script, "function importNoticeHtml")
+    );
+    let probe = functions
+        + r##"
+function esc(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (ch) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
+}
+function h(text) { return esc(text); }
+if (backupDownloadUrl(true) !== "/api/admin/backup?tofu_state=true") {
+  console.error(backupDownloadUrl(true));
+  process.exit(1);
+}
+if (backupDownloadUrl(false) !== "/api/admin/backup") {
+  console.error(backupDownloadUrl(false));
+  process.exit(1);
+}
+const notice = importNoticeHtml({missing_paths: ["/home/user/projects/demo"]});
+if (!notice.includes("imported_paths_need_a_mount_or_a_change") || !notice.includes("/home/user/projects/demo")) {
+  console.error(notice);
+  process.exit(1);
+}
+if (importNoticeHtml({missing_paths: []}) !== "") {
+  console.error("empty import notice");
+  process.exit(1);
+}
+"##;
+    run_node_probe("backup-import-ui", &probe);
+}
+
 #[tokio::test]
 async fn admin_can_list_and_update_users() {
     let nanos = SystemTime::now()

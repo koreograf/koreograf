@@ -94,6 +94,7 @@ pub(crate) fn restore(state: &Shared, bytes: &[u8]) -> AppResult<()> {
     }
     let cipher = crypto::install_key(&state.cfg.data_dir, &incoming.key)?;
     state.replace_cipher(cipher)?;
+    clear_state_dirs(&state.cfg.data_dir)?;
     write_extra_files(&state.cfg.data_dir, &incoming.files)?;
     tracing::info!("backup restored");
     Ok(())
@@ -105,20 +106,102 @@ pub(crate) struct RestoreSummary {
     pub(crate) includes: Vec<String>,
 }
 
-pub(crate) fn restore_startup(data_dir: &Path, bytes: &[u8]) -> AppResult<RestoreSummary> {
-    let incoming = prepare_incoming(data_dir, bytes)?;
+pub(crate) fn restore_startup(
+    data_dir: &Path,
+    bytes: &[u8],
+    container_image: bool,
+) -> AppResult<RestoreSummary> {
     let target = data_dir.join(DATABASE);
     if target.exists() {
         return Err(ApiError::bad("the_data_directory_is_not_empty"));
     }
+    fs::create_dir_all(data_dir).map_err(|err| ApiError::Internal(err.to_string()))?;
+    let staging = new_staging(data_dir, ".restore");
+    fs::create_dir_all(&staging).map_err(|err| ApiError::Internal(err.to_string()))?;
+    let result = restore_startup_into(&staging, bytes).and_then(|summary| {
+        promote(&staging, data_dir)?;
+        Ok(summary)
+    });
+    match result {
+        Ok(summary) => {
+            let _ = fs::remove_dir_all(&staging);
+            own_imported(data_dir, container_image);
+            Ok(summary)
+        }
+        Err(err) => {
+            let _ = fs::remove_dir_all(&staging);
+            Err(err)
+        }
+    }
+}
+
+fn restore_startup_into(staging: &Path, bytes: &[u8]) -> AppResult<RestoreSummary> {
+    let incoming = prepare_incoming(staging, bytes)?;
+    let target = staging.join(DATABASE);
+    if target.exists() {
+        return Err(ApiError::bad("the_data_directory_is_not_empty"));
+    }
     fs::rename(&incoming.path, &target).map_err(|err| ApiError::Internal(err.to_string()))?;
-    crypto::install_key(data_dir, &incoming.key)?;
-    write_extra_files(data_dir, &incoming.files)?;
-    own_imported(data_dir);
+    crypto::install_key(staging, &incoming.key)?;
+    write_extra_files(staging, &incoming.files)?;
     Ok(RestoreSummary {
         koreograf: incoming.koreograf.clone(),
         includes: incoming.includes.clone(),
     })
+}
+
+pub(crate) fn new_staging(data_dir: &Path, prefix: &str) -> PathBuf {
+    data_dir.join(format!("{prefix}-{}", Uuid::new_v4()))
+}
+
+pub(crate) fn remove_stale_staging(data_dir: &Path) {
+    let Ok(entries) = fs::read_dir(data_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with(".import-") && !name.starts_with(".restore-") {
+            continue;
+        }
+        let path = entry.path();
+        if fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir()) {
+            let _ = fs::remove_dir_all(path);
+        }
+    }
+}
+
+pub(crate) fn promote(staging: &Path, data_dir: &Path) -> AppResult<()> {
+    let mut moved = Vec::new();
+    let entries = fs::read_dir(staging).map_err(|err| ApiError::Internal(err.to_string()))?;
+    let mut entries: Vec<_> = entries.filter_map(Result::ok).collect();
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let target = data_dir.join(entry.file_name());
+        if fs::symlink_metadata(&target).is_ok() {
+            remove_moved(&moved);
+            return Err(ApiError::Internal(format!(
+                "{} already exists",
+                target.display()
+            )));
+        }
+        if let Err(err) = fs::rename(entry.path(), &target) {
+            remove_moved(&moved);
+            return Err(ApiError::Internal(err.to_string()));
+        }
+        moved.push(target);
+    }
+    Ok(())
+}
+
+fn remove_moved(paths: &[PathBuf]) {
+    for path in paths.iter().rev() {
+        if fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir()) {
+            let _ = fs::remove_dir_all(path);
+        } else {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
 
 fn lock_maintenance(state: &Shared) -> AppResult<std::sync::MutexGuard<'_, ()>> {
@@ -159,7 +242,7 @@ fn prepare_incoming(data_dir: &Path, bytes: &[u8]) -> AppResult<Incoming> {
         if name == MANIFEST || name == DATABASE || name == SECRET {
             continue;
         }
-        if !safe_relative(name) || !name.starts_with("cache/") {
+        if state_file_parts(name).is_none() {
             return Err(ApiError::bad("the_backup_cannot_be_read"));
         }
         files.push((name.clone(), bytes.clone()));
@@ -256,12 +339,21 @@ fn snapshot_zip_from_file(
     for (name, bytes) in &extras {
         files.push((name.as_str(), bytes.as_slice()));
     }
-    pack(&files)
+    let total: u64 = files.iter().map(|(_, bytes)| bytes.len() as u64).sum();
+    if total > MAX_BYTES {
+        return Err(ApiError::bad("the_backup_is_empty_or_too_large"));
+    }
+    let packed = pack(&files)?;
+    if packed.len() as u64 > MAX_BYTES {
+        return Err(ApiError::bad("the_backup_is_empty_or_too_large"));
+    }
+    Ok(packed)
 }
 
 fn collect_tofu_state(data_dir: &Path) -> AppResult<Vec<(String, Vec<u8>)>> {
     let cache = data_dir.join("cache");
     let mut out = Vec::new();
+    let mut total = 0u64;
     let Ok(teams) = fs::read_dir(&cache) else {
         return Ok(out);
     };
@@ -276,12 +368,22 @@ fn collect_tofu_state(data_dir: &Path) -> AppResult<Vec<(String, Vec<u8>)>> {
         if !fs::symlink_metadata(&state).is_ok_and(|meta| meta.is_dir()) {
             continue;
         }
-        collect_files(&state, &format!("cache/{name}/tofu-state"), &mut out)?;
+        collect_files(
+            &state,
+            &format!("cache/{name}/tofu-state"),
+            &mut out,
+            &mut total,
+        )?;
     }
     Ok(out)
 }
 
-fn collect_files(dir: &Path, prefix: &str, out: &mut Vec<(String, Vec<u8>)>) -> AppResult<()> {
+fn collect_files(
+    dir: &Path,
+    prefix: &str,
+    out: &mut Vec<(String, Vec<u8>)>,
+    total: &mut u64,
+) -> AppResult<()> {
     let entries = fs::read_dir(dir).map_err(|err| ApiError::Internal(err.to_string()))?;
     let mut entries: Vec<_> = entries.filter_map(Result::ok).collect();
     entries.sort_by_key(|entry| entry.file_name());
@@ -298,12 +400,16 @@ fn collect_files(dir: &Path, prefix: &str, out: &mut Vec<(String, Vec<u8>)>) -> 
         }
         let child = entry.path();
         if metadata.is_dir() {
-            collect_files(&child, &format!("{prefix}/{name}"), out)?;
+            collect_files(&child, &format!("{prefix}/{name}"), out, total)?;
         } else if metadata.is_file() {
             if metadata.len() > MAX_BYTES {
                 return Err(ApiError::bad("the_backup_is_empty_or_too_large"));
             }
             let bytes = fs::read(&child).map_err(|err| ApiError::Internal(err.to_string()))?;
+            *total = total.saturating_add(bytes.len() as u64);
+            if *total > MAX_BYTES {
+                return Err(ApiError::bad("the_backup_is_empty_or_too_large"));
+            }
             out.push((format!("{prefix}/{name}"), bytes));
         }
     }
@@ -325,29 +431,88 @@ fn safe_relative(name: &str) -> bool {
 
 fn write_extra_files(data_dir: &Path, files: &[(String, Vec<u8>)]) -> AppResult<()> {
     for (name, bytes) in files {
-        if !safe_relative(name) {
-            return Err(ApiError::bad("the_backup_cannot_be_read"));
+        let parts =
+            state_file_parts(name).ok_or_else(|| ApiError::bad("the_backup_cannot_be_read"))?;
+        let mut dir = ensure_dir(data_dir, "cache")?;
+        dir = ensure_dir(&dir, parts[1])?;
+        dir = ensure_dir(&dir, "tofu-state")?;
+        for part in &parts[3..parts.len() - 1] {
+            dir = ensure_dir(&dir, part)?;
         }
-        let target = data_dir.join(name);
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).map_err(|err| ApiError::Internal(err.to_string()))?;
+        let target = dir.join(parts[parts.len() - 1]);
+        match fs::symlink_metadata(&target) {
+            Ok(meta) if meta.is_file() => {}
+            Ok(_) => return Err(ApiError::bad("the_backup_cannot_be_read")),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(ApiError::Internal(err.to_string())),
         }
         write_private(&target, bytes)?;
     }
     Ok(())
 }
 
-pub(crate) fn own_imported(data_dir: &Path) {
+fn clear_state_dirs(data_dir: &Path) -> AppResult<()> {
+    let cache = data_dir.join("cache");
+    match fs::symlink_metadata(&cache) {
+        Ok(meta) if meta.is_dir() => {}
+        Ok(_) => return Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(ApiError::Internal(err.to_string())),
+    }
+    let teams = fs::read_dir(&cache).map_err(|err| ApiError::Internal(err.to_string()))?;
+    for team in teams.filter_map(Result::ok) {
+        let state = team.path().join("tofu-state");
+        match fs::symlink_metadata(&state) {
+            Ok(meta) if meta.is_dir() => {
+                fs::remove_dir_all(&state).map_err(|err| ApiError::Internal(err.to_string()))?;
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(ApiError::Internal(err.to_string())),
+        }
+    }
+    Ok(())
+}
+
+fn state_file_parts(name: &str) -> Option<Vec<&str>> {
+    if !safe_relative(name) {
+        return None;
+    }
+    let parts: Vec<&str> = name.split('/').collect();
+    if parts.len() < 4
+        || parts[0] != "cache"
+        || parts[2] != "tofu-state"
+        || !parts.iter().all(|part| safe_component(part))
+    {
+        return None;
+    }
+    Some(parts)
+}
+
+fn ensure_dir(parent: &Path, name: &str) -> AppResult<PathBuf> {
+    let path = parent.join(name);
+    match fs::symlink_metadata(&path) {
+        Ok(meta) if meta.is_dir() => Ok(path),
+        Ok(_) => Err(ApiError::bad("the_backup_cannot_be_read")),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir(&path).map_err(|err| ApiError::Internal(err.to_string()))?;
+            Ok(path)
+        }
+        Err(err) => Err(ApiError::Internal(err.to_string())),
+    }
+}
+
+pub(crate) fn own_imported(data_dir: &Path, container_image: bool) {
     #[cfg(unix)]
     {
         use nix::unistd::Uid;
-        if !Uid::effective().is_root() {
+        if !container_image || !Uid::effective().is_root() {
             return;
         }
         let _ = crate::entrypoint::own_tree(data_dir, 10001, 10001);
     }
     #[cfg(not(unix))]
-    let _ = data_dir;
+    let _ = (data_dir, container_image);
 }
 
 fn rollback(snapshot: &Path, live: &mut Connection) -> AppResult<()> {
@@ -646,7 +811,7 @@ mod tests {
 
         let dest = temp_dir("startup-dest");
         fs::create_dir_all(&dest).expect("dest");
-        let summary = restore_startup(&dest, &archive).expect("restore");
+        let summary = restore_startup(&dest, &archive, false).expect("restore");
         assert_eq!(summary.koreograf, env!("CARGO_PKG_VERSION"));
         assert!(dest.join(DATABASE).is_file());
         assert!(dest.join(SECRET).is_file());
@@ -683,7 +848,7 @@ mod tests {
             }
         }
         let crafted = pack(&files).expect("pack");
-        let err = restore_startup(&dir.join("dest"), &crafted).expect_err("format");
+        let err = restore_startup(&dir.join("dest"), &crafted, false).expect_err("format");
         assert!(
             err.to_string().contains("the_backup_has_an_unknown_format"),
             "{err}"
@@ -698,7 +863,8 @@ mod tests {
         let archive = export(&state, false).expect("export");
         let dest = dir.join("dest");
         fs::create_dir_all(&dest).expect("dest");
-        let err = restore_startup(&dest, &archive[..archive.len() / 2]).expect_err("truncated");
+        let err =
+            restore_startup(&dest, &archive[..archive.len() / 2], false).expect_err("truncated");
         assert!(
             err.to_string().contains("the_backup_cannot_be_read"),
             "{err}"
@@ -721,7 +887,7 @@ mod tests {
         let crafted = pack(&files).expect("pack");
         let dest = dir.join("dest");
         fs::create_dir_all(&dest).expect("dest");
-        let err = restore_startup(&dest, &crafted).expect_err("traversal");
+        let err = restore_startup(&dest, &crafted, false).expect_err("traversal");
         assert!(
             err.to_string().contains("the_backup_cannot_be_read"),
             "{err}"
@@ -742,12 +908,128 @@ mod tests {
             writer.finish().expect("finish");
         }
         let symlink_archive = cursor.into_inner();
-        let err = restore_startup(&dest, &symlink_archive).expect_err("symlink");
+        let err = restore_startup(&dest, &symlink_archive, false).expect_err("symlink");
         assert!(
             err.to_string().contains("the_backup_cannot_be_read"),
             "{err}"
         );
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn export_refuses_state_over_the_total_limit() {
+        let dir = temp_dir("backup-total-limit");
+        let state = crate::boot(config(&dir)).expect("boot");
+        let team: String = state
+            .db()
+            .expect("db")
+            .query_row("SELECT id FROM teams LIMIT 1", [], |row| row.get(0))
+            .expect("team");
+        let state_dir = dir.join("cache").join(&team).join("tofu-state");
+        for name in ["one.tfstate", "two.tfstate"] {
+            let path = state_dir.join(name);
+            fs::create_dir_all(&state_dir).expect("state dir");
+            let file = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&path)
+                .expect("state file");
+            file.set_len(MAX_BYTES / 2 + 1).expect("large state");
+        }
+        let err = export(&state, true).expect_err("too large");
+        assert!(
+            err.to_string().contains("the_backup_is_empty_or_too_large"),
+            "{err}"
+        );
+        drop(state);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn http_restore_replaces_state_directories() {
+        let dir = temp_dir("backup-state-replace");
+        let state = crate::boot(config(&dir)).expect("boot");
+        let team: String = state
+            .db()
+            .expect("db")
+            .query_row("SELECT id FROM teams LIMIT 1", [], |row| row.get(0))
+            .expect("team");
+        let state_dir = dir.join("cache").join(&team).join("tofu-state");
+        let kept = state_dir.join("keep").join("terraform.tfstate");
+        fs::create_dir_all(kept.parent().expect("parent")).expect("state dir");
+        fs::write(&kept, b"kept").expect("state");
+        let archive = export(&state, true).expect("export");
+
+        let stale = state_dir.join("stale").join("terraform.tfstate");
+        fs::create_dir_all(stale.parent().expect("parent")).expect("stale dir");
+        fs::write(&stale, b"stale").expect("stale");
+        let other = dir
+            .join("cache")
+            .join("other-team")
+            .join("tofu-state")
+            .join("terraform.tfstate");
+        fs::create_dir_all(other.parent().expect("parent")).expect("other dir");
+        fs::write(&other, b"other").expect("other");
+
+        restore(&state, &archive).expect("restore");
+        assert_eq!(fs::read(&kept).expect("kept state"), b"kept");
+        assert!(!stale.exists());
+        assert!(!other.exists());
+        drop(state);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extra_files_stay_under_the_tofu_state_and_refuse_symlinked_directories() {
+        use std::os::unix::fs::symlink;
+
+        let dir = temp_dir("backup-extra-paths");
+        let outside = temp_dir("backup-extra-outside");
+        fs::create_dir_all(dir.join("cache")).expect("cache");
+        fs::create_dir_all(&outside).expect("outside");
+        symlink(&outside, dir.join("cache").join("team")).expect("symlink");
+
+        let invalid = vec![("cache/team/other/file".to_string(), b"value".to_vec())];
+        let err = write_extra_files(&dir, &invalid).expect_err("invalid path");
+        assert!(
+            err.to_string().contains("the_backup_cannot_be_read"),
+            "{err}"
+        );
+
+        let linked = vec![("cache/team/tofu-state/file".to_string(), b"value".to_vec())];
+        let err = write_extra_files(&dir, &linked).expect_err("symlink");
+        assert!(
+            err.to_string().contains("the_backup_cannot_be_read"),
+            "{err}"
+        );
+        assert!(!outside.join("tofu-state").exists());
+        let _ = fs::remove_dir_all(dir);
+        let _ = fs::remove_dir_all(outside);
+    }
+
+    #[test]
+    fn startup_restore_rolls_back_when_a_target_entry_blocks_the_move() {
+        let source = temp_dir("startup-rollback-source");
+        let state = crate::boot(config(&source)).expect("boot");
+        let archive = export(&state, false).expect("export");
+        drop(state);
+
+        let dest = temp_dir("startup-rollback-dest");
+        fs::create_dir_all(dest.join(SECRET)).expect("blocker");
+        let err = restore_startup(&dest, &archive, false).expect_err("blocked");
+        assert!(err.to_string().contains("already exists"), "{err}");
+        assert!(!dest.join(DATABASE).exists());
+        assert!(!dest.join(SECRET).join("x").exists());
+        assert!(dest.join(SECRET).is_dir());
+        assert!(fs::read_dir(&dest).expect("dest").all(|entry| !entry
+            .expect("entry")
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".restore-")));
+        let _ = fs::remove_dir_all(source);
+        let _ = fs::remove_dir_all(dest);
     }
 
     #[test]

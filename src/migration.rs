@@ -51,6 +51,7 @@ pub(crate) fn prepare(cfg: &Config) -> anyhow::Result<()> {
 pub(crate) fn prepare_with(cfg: &Config, options: &Options) -> anyhow::Result<()> {
     fs::create_dir_all(&cfg.data_dir)?;
     let data_dir = std::path::absolute(&cfg.data_dir)?;
+    backup::remove_stale_staging(&data_dir);
     if let Some(file) = &options.restore_from {
         if !is_empty(&data_dir) {
             tracing::warn!(
@@ -61,9 +62,10 @@ pub(crate) fn prepare_with(cfg: &Config, options: &Options) -> anyhow::Result<()
             let bytes = fs::read(file).map_err(|err| {
                 anyhow::anyhow!("The restore file {} cannot be read: {err}", file.display())
             })?;
-            let summary = backup::restore_startup(&data_dir, &bytes).map_err(|err| {
-                anyhow::anyhow!("Restore from {} failed: {}", file.display(), describe(&err))
-            })?;
+            let summary =
+                backup::restore_startup(&data_dir, &bytes, cfg.container_image).map_err(|err| {
+                    anyhow::anyhow!("Restore from {} failed: {}", file.display(), describe(&err))
+                })?;
             tracing::info!(
                 file = %file.display(),
                 koreograf = %summary.koreograf,
@@ -135,16 +137,7 @@ pub(crate) fn import_directory(
             "The data directory already contains a database; nothing was imported"
         ));
     }
-    let source_conn = Connection::open_with_flags(
-        &source_db,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .map_err(|err| {
-        anyhow::anyhow!(
-            "The database {} cannot be opened read-only: {err}",
-            source_db.display()
-        )
-    })?;
+    let source_conn = open_source_database(&source_db)?;
     source_conn.busy_timeout(Duration::from_secs(5))?;
     let version = db::schema_version(&source_conn)?;
     if version > db::SCHEMA_VERSION {
@@ -154,17 +147,45 @@ pub(crate) fn import_directory(
             db::SCHEMA_VERSION
         ));
     }
+    let staging = backup::new_staging(&cfg.data_dir, ".import");
+    fs::create_dir_all(&staging)?;
+    let result = import_into(&staging, &source_conn, source, cfg, &key, options);
+    match result {
+        Ok(report) => {
+            if let Err(err) = backup::promote(&staging, &cfg.data_dir) {
+                let _ = fs::remove_dir_all(&staging);
+                return Err(err.into());
+            }
+            let _ = fs::remove_dir_all(&staging);
+            backup::own_imported(&cfg.data_dir, cfg.container_image);
+            Ok(report)
+        }
+        Err(err) => {
+            let _ = fs::remove_dir_all(&staging);
+            Err(err)
+        }
+    }
+}
+
+fn import_into(
+    staging: &Path,
+    source_conn: &Connection,
+    source: &Path,
+    cfg: &Config,
+    key: &[u8],
+    options: &Options,
+) -> anyhow::Result<ImportReport> {
+    let dest_db = staging.join(DATABASE);
     let mut dest_conn = Connection::open(&dest_db)?;
     dest_conn.busy_timeout(Duration::from_secs(5))?;
-    backup::copy_database(&source_conn, &mut dest_conn)?;
+    backup::copy_database(source_conn, &mut dest_conn)?;
     db::ensure_schema(&dest_conn)?;
-    drop(source_conn);
-    crypto::install_key(&cfg.data_dir, &key)?;
+    crypto::install_key(staging, key)?;
     let mapped = apply_path_map(&dest_conn, &options.path_map)?;
     if mapped == 0 && !options.path_map.is_empty() {
         tracing::warn!("KOREOGRAF_PATH_MAP is already recorded and was not applied again");
     }
-    let tofu_files = copy_state(source, &cfg.data_dir, options.copy_cache)?;
+    let tofu_files = copy_state(source, staging, options.copy_cache)?;
     let missing_paths = missing_paths(&dest_conn, cfg)?;
     let report = json!({
         "imported_at": db::now(),
@@ -182,12 +203,53 @@ pub(crate) fn import_directory(
         &serde_json::to_string(&report).map_err(|err| ApiError::Internal(err.to_string()))?,
     )?;
     drop(dest_conn);
-    backup::own_imported(&cfg.data_dir);
     Ok(ImportReport {
         missing_paths,
         tofu_files,
         path_map: options.path_map.iter().map(pair_text).collect(),
     })
+}
+
+fn open_source_database(source_db: &Path) -> anyhow::Result<Connection> {
+    let mut wal = source_db.as_os_str().to_os_string();
+    wal.push("-wal");
+    let wal = PathBuf::from(wal);
+    let conn = if wal.is_file() {
+        Connection::open_with_flags(
+            source_db,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+    } else {
+        Connection::open_with_flags(
+            read_only_uri(source_db),
+            OpenFlags::SQLITE_OPEN_READ_ONLY
+                | OpenFlags::SQLITE_OPEN_NO_MUTEX
+                | OpenFlags::SQLITE_OPEN_URI,
+        )
+    };
+    conn.map_err(|err| {
+        anyhow::anyhow!(
+            "The database {} cannot be opened read-only: {err}",
+            source_db.display()
+        )
+    })
+}
+
+fn read_only_uri(path: &Path) -> String {
+    let mut uri = String::from("file:");
+    for byte in path.to_string_lossy().bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'_' | b'.' | b'~' => {
+                uri.push(byte as char);
+            }
+            _ => {
+                uri.push('%');
+                uri.push_str(&format!("{byte:02X}"));
+            }
+        }
+    }
+    uri.push_str("?mode=ro&immutable=1");
+    uri
 }
 
 pub(crate) fn report(db: &Connection) -> AppResult<Option<Value>> {
@@ -657,6 +719,100 @@ mod tests {
         let _ = fs::remove_dir_all(source);
         let _ = fs::remove_dir_all(dest);
         let _ = fs::remove_dir_all(mapped_root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn import_reads_a_stopped_database_from_a_read_only_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let source = temp_dir("import-stopped");
+        {
+            let state = crate::boot(config(&source)).expect("boot");
+            project(&state.db().expect("db"), "/home/user/projects/demo");
+        }
+        assert!(!source.join("koreograf.db-wal").exists());
+        assert!(!source.join("koreograf.db-shm").exists());
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o555)).expect("read-only");
+
+        let dest = temp_dir("import-stopped-dest");
+        let options = Options {
+            import_from: Some(source.clone()),
+            ..Options::default()
+        };
+        let report = import_directory(&config(&dest), &source, &options).expect("import");
+        assert!(report
+            .missing_paths
+            .iter()
+            .any(|path| path.contains("/demo")));
+        let conn = Connection::open(dest.join(DATABASE)).expect("dest db");
+        let stored: String = conn
+            .query_row(
+                "SELECT source FROM projects WHERE id = 'import-project'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("project");
+        assert_eq!(stored, "/home/user/projects/demo");
+        drop(conn);
+
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o755)).expect("writable");
+        let _ = fs::remove_dir_all(source);
+        let _ = fs::remove_dir_all(dest);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_import_leaves_no_partial_data_and_the_next_start_retries() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if nix::unistd::Uid::effective().is_root() {
+            return;
+        }
+        let (source, state) = source_with_wal("import-failure");
+        let team: String = state
+            .db()
+            .expect("db")
+            .query_row("SELECT id FROM teams LIMIT 1", [], |row| row.get(0))
+            .expect("team");
+        let state_file = source
+            .join("cache")
+            .join(&team)
+            .join("tofu-state")
+            .join("tpl-1")
+            .join("terraform.tfstate");
+        fs::set_permissions(&state_file, fs::Permissions::from_mode(0o000)).expect("unreadable");
+
+        let dest = temp_dir("import-failure-dest");
+        let options = Options {
+            import_from: Some(source.clone()),
+            ..Options::default()
+        };
+        prepare_with(&config(&dest), &options).expect_err("unreadable state");
+        assert!(!dest.join(DATABASE).exists());
+        assert!(!dest.join(SECRET).exists());
+        assert_eq!(fs::read_dir(&dest).expect("dest").count(), 0);
+
+        prepare_with(&config(&dest), &options).expect_err("second start retries");
+        assert!(!dest.join(DATABASE).exists());
+        assert!(!dest.join(SECRET).exists());
+
+        fs::set_permissions(&state_file, fs::Permissions::from_mode(0o644)).expect("readable");
+        prepare_with(&config(&dest), &options).expect("third start imports");
+        assert!(dest.join(DATABASE).is_file());
+        assert!(dest.join(SECRET).is_file());
+        assert!(report_or_none(&dest).is_some());
+        assert!(dest
+            .join("cache")
+            .join(&team)
+            .join("tofu-state")
+            .join("tpl-1")
+            .join("terraform.tfstate")
+            .is_file());
+
+        drop(state);
+        let _ = fs::remove_dir_all(source);
+        let _ = fs::remove_dir_all(dest);
     }
 
     fn report_or_none(dir: &Path) -> Option<Value> {

@@ -96,6 +96,16 @@ python3 "$ROOT/tests/harness/scripts/migration-smoke.py" seed
 kill "$LOCAL_PID"
 wait "$LOCAL_PID" >/dev/null 2>&1 || true
 LOCAL_PID=
+python3 - "$OLD/koreograf.db" <<'PY'
+import sqlite3
+import sys
+
+with sqlite3.connect(sys.argv[1]) as connection:
+    connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    connection.execute("PRAGMA journal_mode=DELETE")
+PY
+[ ! -e "$OLD/koreograf.db-wal" ]
+[ ! -e "$OLD/koreograf.db-shm" ]
 chmod -R a+rX "$OLD"
 
 docker run -d --name "$RESTORE_NAME" \

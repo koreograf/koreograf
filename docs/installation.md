@@ -186,7 +186,7 @@ docker compose up -d
 docker compose logs -f koreograf
 ```
 
-Koreograf validates `koreograf.db` and `secret.key`, copies the database with the SQLite backup API (consistent while the old service still runs and writes its WAL), copies the key and the OpenTofu state, and writes a report. It never writes to `/import`. If the volume already has data, it logs a warning and imports nothing.
+Koreograf validates `koreograf.db` and `secret.key`, copies the database with the SQLite backup API (consistent while the old service still runs and writes its WAL), copies the key and the OpenTofu state, and writes a report. A cleanly stopped old service without a WAL file works as well. The import is all or nothing: it writes into a staging directory and moves the result into the volume only when everything is complete, so a failed start leaves the volume empty and retries on the next start. It never writes to `/import`. If the volume already has data, it logs a warning and imports nothing.
 
 The log and **Overview** list stored paths that do not exist in the container, for example `/home/user/projects/demo`. Mount them at the same path or map the prefix with `KOREOGRAF_PATH_MAP=OLD=NEW`. A mapping is applied once during the import and stored in the database; a later start does not apply it again. Paths that are not mapped stay unchanged.
 
