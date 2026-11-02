@@ -186,7 +186,10 @@ pub fn router(state: Shared) -> Router {
         .route("/workflows/{id}/launch", post(work::launch_workflow))
         .route("/workflow-jobs/{id}", get(work::get_workflow_job))
         .route("/hooks", get(work::list_hooks).post(work::create_hook))
-        .route("/hooks/{id}", axum::routing::delete(work::delete_hook))
+        .route(
+            "/hooks/{id}",
+            axum::routing::delete(work::delete_hook).put(work::update_hook),
+        )
         .route("/hooks/{id}/test", post(work::test_hook))
         .route("/hooks/{id}/deliveries", get(work::list_deliveries))
         .route(

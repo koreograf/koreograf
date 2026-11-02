@@ -2832,6 +2832,28 @@ fn map_hook(row: &rusqlite::Row<'_>) -> rusqlite::Result<Hook> {
     })
 }
 
+pub fn update_hook(c: &Connection, item: &Hook) -> AppResult<()> {
+    let n = c.execute(
+        "UPDATE hooks SET name = ?3, match_alertname = ?4, match_status = ?5,
+                template_id = ?6, workflow_id = ?7, extra_vars = ?8
+         WHERE id = ?1 AND team_id = ?2",
+        params![
+            item.id,
+            item.team_id,
+            item.name,
+            item.match_alertname,
+            item.match_status,
+            item.template_id,
+            item.workflow_id,
+            item.extra_vars
+        ],
+    )?;
+    if n == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(())
+}
+
 pub fn delete_hook(c: &Connection, id: &str, team_id: &str) -> AppResult<()> {
     let n = c.execute(
         "DELETE FROM hooks WHERE id = ?1 AND team_id = ?2",
