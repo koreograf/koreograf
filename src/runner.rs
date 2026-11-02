@@ -78,6 +78,10 @@ pub fn known_tool(tool: &str) -> bool {
     TOOLS.iter().any(|item| item.id == tool)
 }
 
+pub fn environment_fits_tool(tool: &str, environment_tool: &str) -> bool {
+    environment_tool == "any" || environment_tool == tool
+}
+
 pub fn check_ansible_spec(spec: &Value) -> Result<(), String> {
     if !spec.is_object() {
         return Err("spec_must_be_an_object".into());
@@ -1485,6 +1489,9 @@ fn load_environment(
         .ok_or_else(|| "team_is_missing".to_string())?;
     if !db::environment_visible(&environment, &team) {
         return Err("the_execution_environment_is_not_visible_to_this".into());
+    }
+    if !environment_fits_tool(&template.tool, &environment.tool) {
+        return Err("the_execution_environment_is_for_another_tool".into());
     }
     if !valid_image(&environment.image) {
         return Err("the_image_name_is_invalid".into());
@@ -3568,6 +3575,15 @@ mod tests {
     fn auto_without_a_runtime_names_the_remedy() {
         assert!(AUTO_WITHOUT_RUNTIME.contains("Mount the Docker socket"));
         assert!(AUTO_WITHOUT_RUNTIME.contains("set the runner mode to docker to fail instead"));
+    }
+
+    #[test]
+    fn an_environment_fits_any_or_its_own_tool() {
+        assert!(environment_fits_tool("ansible", "any"));
+        assert!(environment_fits_tool("opentofu", "opentofu"));
+        assert!(environment_fits_tool("shell", "shell"));
+        assert!(!environment_fits_tool("ansible", "opentofu"));
+        assert!(!environment_fits_tool("shell", "ansible"));
     }
 
     #[tokio::test]

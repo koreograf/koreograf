@@ -745,6 +745,11 @@ fn build_template(
                     "the_execution_environment_is_not_visible_to_this",
                 ));
             }
+            if !runner::environment_fits_tool(&body.tool, &environment.tool) {
+                return Err(ApiError::bad(
+                    "the_execution_environment_is_for_another_tool",
+                ));
+            }
         }
         let created_at = if let Some(id) = &id {
             db::template(&db, id)?

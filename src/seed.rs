@@ -158,6 +158,7 @@ fn seed_demo(conn: &Connection, cfg: &Config) -> AppResult<()> {
             team_id: Some(team_id.clone()),
             organization_id: None,
             name: "AWX-EE".into(),
+            tool: "any".into(),
             image: "quay.io/ansible/awx-ee:latest".into(),
             pull_policy: "if_not_present".into(),
             network: String::new(),

@@ -103,6 +103,7 @@ CREATE TABLE IF NOT EXISTS environments (
   team_id TEXT REFERENCES teams(id) ON DELETE CASCADE,
   organization_id TEXT,
   name TEXT NOT NULL,
+  tool TEXT NOT NULL DEFAULT 'any',
   image TEXT NOT NULL,
   pull_policy TEXT NOT NULL,
   network TEXT NOT NULL DEFAULT '',
@@ -411,6 +412,12 @@ fn migrate(c: &Connection) -> AppResult<()> {
             [],
         )?;
     }
+    if !column_exists(c, "environments", "tool")? {
+        c.execute(
+            "ALTER TABLE environments ADD COLUMN tool TEXT NOT NULL DEFAULT 'any'",
+            [],
+        )?;
+    }
     if !column_exists(c, "templates", "update_on_launch")? {
         c.execute(
             "ALTER TABLE templates ADD COLUMN update_on_launch INTEGER NOT NULL DEFAULT 1",
@@ -636,6 +643,7 @@ pub struct Environment {
     pub team_id: Option<String>,
     pub organization_id: Option<String>,
     pub name: String,
+    pub tool: String,
     pub image: String,
     pub pull_policy: String,
     pub network: String,
@@ -1978,13 +1986,14 @@ pub fn delete_credential(c: &Connection, id: &str, team_id: &str) -> AppResult<(
 pub fn insert_environment(c: &Connection, item: &Environment) -> AppResult<()> {
     c.execute(
         "INSERT INTO environments (
-            id, team_id, organization_id, name, image, pull_policy, network, description, created_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            id, team_id, organization_id, name, tool, image, pull_policy, network, description, created_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             item.id,
             item.team_id,
             item.organization_id,
             item.name,
+            item.tool,
             item.image,
             item.pull_policy,
             item.network,
@@ -1997,7 +2006,7 @@ pub fn insert_environment(c: &Connection, item: &Environment) -> AppResult<()> {
 
 const ENVIRONMENT_SELECT: &str = "\
 SELECT e.id, e.team_id, e.organization_id, e.name, e.image, e.pull_policy, \
-       e.network, e.description, e.created_at, COALESCE(o.name, ''), COALESCE(t.name, '') \
+       e.network, e.description, e.created_at, COALESCE(o.name, ''), COALESCE(t.name, ''), e.tool \
 FROM environments e \
 LEFT JOIN organizations o ON o.id = e.organization_id \
 LEFT JOIN teams t ON t.id = e.team_id";
@@ -2062,6 +2071,7 @@ fn map_environment(row: &rusqlite::Row<'_>) -> rusqlite::Result<Environment> {
         team_id,
         organization_id,
         name: row.get(3)?,
+        tool: row.get(11)?,
         image: row.get(4)?,
         pull_policy: row.get(5)?,
         network: row.get(6)?,
@@ -2095,13 +2105,14 @@ fn optional_id(value: Option<String>) -> Option<String> {
 pub fn update_environment(c: &Connection, item: &Environment) -> AppResult<()> {
     let n = c.execute(
         "UPDATE environments
-         SET team_id=?2, organization_id=?3, name=?4, image=?5, pull_policy=?6, network=?7, description=?8
+         SET team_id=?2, organization_id=?3, name=?4, tool=?5, image=?6, pull_policy=?7, network=?8, description=?9
          WHERE id=?1",
         params![
             item.id,
             item.team_id,
             item.organization_id,
             item.name,
+            item.tool,
             item.image,
             item.pull_policy,
             item.network,
@@ -3259,6 +3270,7 @@ mod tests {
             team_id: team_id.map(str::to_string),
             organization_id: organization_id.map(str::to_string),
             name: name.to_string(),
+            tool: "any".into(),
             image: "quay.io/example/ee:1".into(),
             pull_policy: "if_not_present".into(),
             network: String::new(),
@@ -3367,6 +3379,7 @@ mod tests {
         assert_eq!(item.team_id.as_deref(), Some("team-a"));
         assert!(item.organization_id.is_none());
         assert_eq!(item.network, "");
+        assert_eq!(item.tool, "any");
         drop(conn);
         let _ = std::fs::remove_dir_all(&dir);
     }

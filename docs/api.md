@@ -145,6 +145,20 @@ Every inventory source that uses a NetBox credential uses the same credential ro
 
 `PUT /api/credentials/{id}` takes `name`, an optional `secret` object, and optional `clear` (names of secret fields to drop). Omitting a stored secret keeps it. `GET /api/credentials` and `GET /api/credentials/{id}` include `usages`, a list of `{inventory_id, inventory_name, source_id, source_name}` for inventory sources and `{project_id, project_name}` for projects that reference the credential. `DELETE /api/credentials/{id}` answers 409 `credential_is_in_use` with the names in `vars.names` while any source or project still uses it.
 
+### Environments
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `name` | yes | |
+| `image` | yes | Must contain the binaries for `tool` |
+| `tool` | no | `any` (default), `ansible`, `opentofu`, or `shell` |
+| `pull_policy` | no | `if_not_present` (default), `always`, or `never` |
+| `network` | no | Empty keeps the container default |
+| `description` | no | |
+| `scope` | no | `team` (default), `organization`, or `global` |
+
+`GET /api/environments` and `GET /api/environments/{id}` include `tool`. A template may only use an environment whose tool is `any` or matches the template's tool. The API rejects a mismatch with `the_execution_environment_is_for_another_tool`.
+
 ### Templates
 
 | Field | Required | Notes |
@@ -156,7 +170,7 @@ Every inventory source that uses a NetBox credential uses the same credential ro
 | `inventory_id` | no | |
 | `credential_id` | no | One id. Ignored when `credential_ids` is present |
 | `credential_ids` | no | |
-| `environment_id` | no | |
+| `environment_id` | no | Must be `any` or match `tool` |
 | `entrypoint` | for ansible and opentofu | Playbook path, or the OpenTofu module directory |
 | `extra_vars` | no | Object. Default `{}` |
 | `spec` | no | Object. Default `{}` |
