@@ -424,6 +424,7 @@ pub async fn preview_netbox(
         })).collect::<Vec<_>>(),
         "sample_host": sample,
         "collisions": fetched.collisions,
+        "dropped_vars": fetched.dropped_vars,
     })))
 }
 
@@ -451,6 +452,7 @@ pub async fn sync_inventory(
                 netbox::NetboxResult {
                     body: refresh_project(&state, &team, &source.source_json)?,
                     collisions: Vec::new(),
+                    dropped_vars: Vec::new(),
                 },
             )),
             "netbox" => fresh.push((
@@ -467,6 +469,10 @@ pub async fn sync_inventory(
         .iter()
         .flat_map(|(_, fetched)| fetched.collisions.clone())
         .collect();
+    let dropped_vars: Vec<String> = fresh
+        .iter()
+        .flat_map(|(_, fetched)| fetched.dropped_vars.clone())
+        .collect();
     let db = state.db()?;
     for (source_id, fetched) in &fresh {
         db::set_inventory_source_body(&db, source_id, &fetched.body)?;
@@ -476,6 +482,7 @@ pub async fn sync_inventory(
     let item = db::inventory(&db, &id)?.ok_or(ApiError::NotFound)?;
     let mut value = inventory_json(&db, &item)?;
     value["collisions"] = json!(collisions);
+    value["dropped_vars"] = json!(dropped_vars);
     Ok(Json(value))
 }
 
@@ -1033,6 +1040,7 @@ pub async fn update_source(
         let after = value["host_count"].as_u64().unwrap_or(0);
         value["sync"] = json!({"ok": true, "before": before, "after": after});
         value["collisions"] = json!(resolved.collisions);
+        value["dropped_vars"] = json!(resolved.dropped_vars);
     }
     Ok(Json(value))
 }
@@ -1075,6 +1083,7 @@ pub async fn sync_source(
         "project" => netbox::NetboxResult {
             body: refresh_project(&state, &team, &source.source_json)?,
             collisions: Vec::new(),
+            dropped_vars: Vec::new(),
         },
         "netbox" => {
             refresh_netbox(&state, &source.credential_id, &team, &source.source_json).await?
@@ -1088,6 +1097,7 @@ pub async fn sync_source(
     let item = db::inventory(&db, &inventory_id)?.ok_or(ApiError::NotFound)?;
     let mut value = inventory_json(&db, &item)?;
     value["collisions"] = json!(fetched.collisions);
+    value["dropped_vars"] = json!(fetched.dropped_vars);
     Ok(Json(value))
 }
 
@@ -1134,6 +1144,7 @@ struct ResolvedUpdate {
     credential_name: Option<String>,
     credential_blob: Option<String>,
     collisions: Vec<String>,
+    dropped_vars: Vec<String>,
 }
 
 fn reject_foreign_fields(kind: &str, body: &SourceUpdate) -> AppResult<()> {
@@ -1213,6 +1224,7 @@ fn resolve_ini_update(
         credential_name: None,
         credential_blob: None,
         collisions: Vec::new(),
+        dropped_vars: Vec::new(),
     })
 }
 
@@ -1250,6 +1262,7 @@ fn resolve_project_update(
         credential_name: None,
         credential_blob: None,
         collisions: Vec::new(),
+        dropped_vars: Vec::new(),
     })
 }
 
@@ -1347,6 +1360,7 @@ async fn resolve_netbox_update(
         source_json: netbox::source_json_with_collisions(&parsed, &fetched.collisions).to_string(),
         body: fetched.body,
         collisions: fetched.collisions,
+        dropped_vars: fetched.dropped_vars,
     })
 }
 

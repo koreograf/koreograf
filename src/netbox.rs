@@ -25,6 +25,7 @@ pub struct NetboxSource {
 pub struct NetboxResult {
     pub body: String,
     pub collisions: Vec<String>,
+    pub dropped_vars: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -42,6 +43,7 @@ struct NbHost {
     groups: Vec<String>,
     group_keys: Vec<(String, String)>,
     vars: BTreeMap<String, Value>,
+    dropped_vars: Vec<String>,
 }
 
 pub fn valid_endpoint(url: &str) -> bool {
@@ -69,6 +71,13 @@ pub fn source_json_with_collisions(source: &NetboxSource, collisions: &[String])
     let mut value = source_json(source);
     value["collisions"] = json!(collisions);
     value
+}
+
+pub fn loads_config_context(source_json: &str) -> bool {
+    serde_json::from_str::<Value>(source_json)
+        .ok()
+        .and_then(|value| value.get("load_config_context").and_then(Value::as_bool))
+        == Some(true)
 }
 
 pub fn valid_token(token: &str) -> bool {
@@ -176,12 +185,22 @@ pub async fn fetch(
         collect(&machines, &mut hosts).await?;
     }
     let collisions = collisions(&hosts);
+    let mut dropped_vars: Vec<String> = hosts
+        .iter()
+        .flat_map(|host| host.dropped_vars.iter().cloned())
+        .collect();
+    dropped_vars.sort();
+    dropped_vars.dedup();
     let body = if source.load_config_context {
         render_yaml(&hosts)
     } else {
         render_ini(&hosts)
     };
-    Ok(NetboxResult { body, collisions })
+    Ok(NetboxResult {
+        body,
+        collisions,
+        dropped_vars,
+    })
 }
 
 #[cfg(test)]
@@ -309,12 +328,16 @@ struct PageQuery<'a> {
 
 async fn collect(page: &PageQuery<'_>, hosts: &mut Vec<NbHost>) -> Result<(), String> {
     let mut url = Some(page_url(page.endpoint, page.path, page.query));
+    let mut seen = std::collections::BTreeSet::new();
     let mut pages = 0usize;
     let max_pages = page.max_hosts.div_ceil(PAGE_SIZE).max(1);
     while let Some(current) = url.take() {
         pages += 1;
         if pages > max_pages {
             return Err(limit_error(page.max_hosts));
+        }
+        if !seen.insert(current.clone()) {
+            break;
         }
         let body = get_json(page.client, &current, page.token).await?;
         let results = body
@@ -334,6 +357,9 @@ async fn collect(page: &PageQuery<'_>, hosts: &mut Vec<NbHost>) -> Result<(), St
             ) {
                 hosts.push(host);
             }
+        }
+        if results.len() < PAGE_SIZE {
+            break;
         }
         url = match body.get("next") {
             Some(Value::String(next)) if !next.is_empty() => {
@@ -376,6 +402,7 @@ fn host_from_json(
             group_keys.push((group, key.clone()));
         }
     }
+    let mut dropped_vars = Vec::new();
     let vars = if load_config_context {
         value
             .get("config_context")
@@ -383,7 +410,14 @@ fn host_from_json(
             .map(|items| {
                 items
                     .iter()
-                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .filter_map(|(key, value)| {
+                        if config_context_key_allowed(key) {
+                            Some((key.clone(), value.clone()))
+                        } else {
+                            dropped_vars.push(key.clone());
+                            None
+                        }
+                    })
                     .collect()
             })
             .unwrap_or_default()
@@ -397,7 +431,12 @@ fn host_from_json(
         groups,
         group_keys,
         vars,
+        dropped_vars,
     })
+}
+
+fn config_context_key_allowed(key: &str) -> bool {
+    !key.to_ascii_lowercase().starts_with("ansible_")
 }
 
 fn group_names(key: &str, value: &Value, is_virtual: bool, raw: bool) -> Vec<String> {
@@ -585,7 +624,7 @@ fn render_yaml(hosts: &[NbHost]) -> String {
         if let Some(id) = host.netbox_id {
             vars.insert("netbox_id".into(), Value::Number(id.into()));
         }
-        write_yaml_vars(&mut out, 6, &vars);
+        write_yaml_vars(&mut out, 6, &vars, &host.vars, false);
     }
     let mut grouped: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for host in hosts {
@@ -609,22 +648,32 @@ fn render_yaml(hosts: &[NbHost]) -> String {
     out
 }
 
-fn write_yaml_vars(out: &mut String, indent: usize, vars: &BTreeMap<String, Value>) {
+fn write_yaml_vars(
+    out: &mut String,
+    indent: usize,
+    vars: &BTreeMap<String, Value>,
+    config: &BTreeMap<String, Value>,
+    nested: bool,
+) {
     for (key, value) in vars {
         out.push_str(&" ".repeat(indent));
         out.push_str(&yaml_key(key));
         match value {
             Value::Object(items) if !items.is_empty() => {
                 out.push_str(":\n");
-                let nested = items
+                let nested_items = items
                     .iter()
                     .map(|(key, value)| (key.clone(), value.clone()))
                     .collect();
-                write_yaml_vars(out, indent + 2, &nested);
+                write_yaml_vars(out, indent + 2, &nested_items, config, true);
             }
             _ => {
                 out.push_str(": ");
-                out.push_str(&yaml_value(value));
+                let unsafe_tag = nested
+                    || config.get(key).is_some_and(|value| {
+                        matches!(value, Value::String(_) | Value::Array(_) | Value::Object(_))
+                    });
+                out.push_str(&yaml_value(value, unsafe_tag));
                 out.push('\n');
             }
         }
@@ -639,15 +688,21 @@ fn yaml_key(value: &str) -> String {
     }
 }
 
-fn yaml_value(value: &Value) -> String {
+fn yaml_value(value: &Value, unsafe_tag: bool) -> String {
     match value {
+        Value::String(text) if unsafe_tag => format!("!unsafe {}", yaml_key(text)),
         Value::String(text) => yaml_key(text),
         Value::Number(number) => number.to_string(),
         Value::Bool(flag) => flag.to_string(),
         Value::Null => "null".into(),
         Value::Array(_) | Value::Object(_) => {
             let text = serde_json::to_string(value).unwrap_or_else(|_| "null".into());
-            yaml_key(&text)
+            let quoted = yaml_key(&text);
+            if unsafe_tag {
+                format!("!unsafe {quoted}")
+            } else {
+                quoted
+            }
         }
     }
 }
@@ -657,7 +712,7 @@ fn plain_yaml(value: &str) -> bool {
         && !value.chars().next().is_some_and(|ch| ch.is_ascii_digit())
         && !matches!(
             value.to_ascii_lowercase().as_str(),
-            "null" | "true" | "false" | "yes" | "no" | "on" | "off"
+            "null" | "true" | "false" | "yes" | "no" | "on" | "off" | ".inf" | "-.inf" | ".nan"
         )
         && value
             .chars()
@@ -1173,7 +1228,7 @@ mod tests {
         assert!(!body.contains("[tags_webserver]"));
         assert!(body.contains("      http_port: 8080\n"), "{body}");
         assert!(
-            body.contains("      ntp:\n        server: pool.ntp.org\n"),
+            body.contains("      ntp:\n        server: !unsafe pool.ntp.org\n"),
             "{body}"
         );
         let parsed = crate::inventory::parse_hosts(&body);
@@ -1192,6 +1247,139 @@ mod tests {
             Some("pool.ntp.org")
         );
         assert_eq!(parsed[0].groups, vec!["all", "tags_webserver"]);
+    }
+
+    #[test]
+    fn keeps_a_templated_config_context_value_as_an_unsafe_string() {
+        let device = json!({
+            "id": 33,
+            "name": "web-1",
+            "config_context": {
+                "motd": "{{ lookup('pipe', 'id') }}",
+                "ntp": {"server": "{% for x in [] %}{% endfor %}"}
+            }
+        });
+        let host = host_from_json(&device, false, &[], false, true).unwrap();
+        let body = render_yaml(&[host]);
+        assert!(
+            body.contains(r#"motd: !unsafe "{{ lookup('pipe', 'id') }}""#),
+            "{body}"
+        );
+        assert!(
+            body.contains(r#"server: !unsafe "{% for x in [] %}{% endfor %}""#),
+            "{body}"
+        );
+        let parsed = crate::inventory::parse_hosts(&body);
+        assert_eq!(
+            parsed[0].vars.get("motd").map(String::as_str),
+            Some("{{ lookup('pipe', 'id') }}")
+        );
+        assert_eq!(
+            parsed[0].vars.get("ntp.server").map(String::as_str),
+            Some("{% for x in [] %}{% endfor %}")
+        );
+    }
+
+    #[test]
+    fn drops_and_reports_ansible_keys_from_config_context() {
+        let device = json!({
+            "id": 34,
+            "name": "web-1",
+            "config_context": {
+                "ansible_connection": "local",
+                "ansible_ssh_common_args": "-o ProxyCommand=curl evil",
+                "ansible_python_interpreter": "/tmp/evil",
+                "http_port": 8080
+            }
+        });
+        let host = host_from_json(&device, false, &[], false, true).unwrap();
+        assert_eq!(
+            host.dropped_vars,
+            vec![
+                "ansible_connection".to_string(),
+                "ansible_python_interpreter".to_string(),
+                "ansible_ssh_common_args".to_string(),
+            ]
+        );
+        assert_eq!(host.vars.len(), 1);
+        assert!(host.vars.contains_key("http_port"));
+        let body = render_yaml(&[host]);
+        assert!(!body.contains("ansible_connection"), "{body}");
+        assert!(!body.contains("ansible_ssh_common_args"), "{body}");
+        assert!(!body.contains("ansible_python_interpreter"), "{body}");
+        assert!(body.contains("http_port: 8080"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn reports_dropped_config_context_keys_in_the_result() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new().route(
+            "/api/dcim/devices/",
+            get(|| async {
+                axum::Json(json!({
+                    "next": null,
+                    "results": [{
+                        "id": 1,
+                        "name": "web-1",
+                        "config_context": {
+                            "ansible_connection": "local",
+                            "ansible_ssh_common_args": "-o ProxyCommand=curl evil"
+                        }
+                    }]
+                }))
+            }),
+        );
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let source = NetboxSource {
+            api_endpoint: format!("http://{addr}"),
+            validate_certs: true,
+            ca_file: String::new(),
+            group_by: Vec::new(),
+            group_names_raw: false,
+            load_config_context: true,
+            max_hosts: DEFAULT_MAX_HOSTS,
+            query: Vec::new(),
+            virtual_machines: false,
+        };
+        let proxy = crate::settings::ProxySettings::inherit();
+        let result = fetch(&source, "token", &proxy).await.unwrap();
+        assert_eq!(
+            result.dropped_vars,
+            vec![
+                "ansible_connection".to_string(),
+                "ansible_ssh_common_args".to_string(),
+            ]
+        );
+        assert!(
+            !result.body.contains("ansible_connection"),
+            "{}",
+            result.body
+        );
+        assert!(!result.body.contains("ProxyCommand"), "{}", result.body);
+    }
+
+    #[test]
+    fn quotes_yaml_float_words_and_unsafe_strings() {
+        let device = json!({
+            "id": 35,
+            "name": "web-1",
+            "config_context": {
+                "low": "-.inf",
+                "nan": ".nan",
+                "safe": "pool.ntp.org"
+            }
+        });
+        let host = host_from_json(&device, false, &[], false, true).unwrap();
+        let body = render_yaml(&[host]);
+        assert!(body.contains("low: !unsafe \"-.inf\""), "{body}");
+        assert!(body.contains("nan: !unsafe \".nan\""), "{body}");
+        assert!(body.contains("safe: !unsafe pool.ntp.org"), "{body}");
+        let parsed = crate::inventory::parse_hosts(&body);
+        assert_eq!(parsed[0].vars.get("low").map(String::as_str), Some("-.inf"));
+        assert_eq!(parsed[0].vars.get("nan").map(String::as_str), Some(".nan"));
     }
 
     #[tokio::test]
@@ -1233,6 +1421,76 @@ mod tests {
         );
         assert!(error.contains("\"limit\":\"2\""), "{error}");
         assert!(error.contains("max_hosts"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn stops_paging_on_a_short_page() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new().route(
+            "/api/dcim/devices/",
+            get(|| async {
+                axum::Json(json!({
+                    "next": "http://127.0.0.1:9/api/dcim/devices/?limit=100",
+                    "results": [{"id": 1, "name": "web-1"}]
+                }))
+            }),
+        );
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let source = NetboxSource {
+            api_endpoint: format!("http://{addr}"),
+            validate_certs: true,
+            ca_file: String::new(),
+            group_by: Vec::new(),
+            group_names_raw: false,
+            load_config_context: false,
+            max_hosts: DEFAULT_MAX_HOSTS,
+            query: Vec::new(),
+            virtual_machines: false,
+        };
+        let proxy = crate::settings::ProxySettings::inherit();
+        let ini = fetch_ini(&source, "token", &proxy).await.unwrap();
+        assert!(ini.contains("web-1"), "{ini}");
+    }
+
+    #[tokio::test]
+    async fn stops_paging_on_a_repeated_page() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let base = format!("http://{addr}");
+        let next = format!("{base}/api/dcim/devices/?limit=100");
+        let app = Router::new().route(
+            "/api/dcim/devices/",
+            get(move || {
+                let next = next.clone();
+                async move {
+                    let results: Vec<Value> = (0..PAGE_SIZE)
+                        .map(|id| json!({"id": id, "name": format!("web-{id}")}))
+                        .collect();
+                    axum::Json(json!({"next": next, "results": results}))
+                }
+            }),
+        );
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let source = NetboxSource {
+            api_endpoint: base,
+            validate_certs: true,
+            ca_file: String::new(),
+            group_by: Vec::new(),
+            group_names_raw: false,
+            load_config_context: false,
+            max_hosts: DEFAULT_MAX_HOSTS,
+            query: Vec::new(),
+            virtual_machines: false,
+        };
+        let proxy = crate::settings::ProxySettings::inherit();
+        let ini = fetch_ini(&source, "token", &proxy).await.unwrap();
+        assert!(ini.contains("[all]\nweb-0"), "{ini}");
+        assert!(ini.contains("web-99"), "{ini}");
     }
 
     #[test]
@@ -1356,34 +1614,26 @@ mod tests {
         {
             return (StatusCode::FORBIDDEN, "no").into_response();
         }
-        let host = headers
-            .get("host")
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or("127.0.0.1");
         let query = request.uri().query().unwrap_or("");
         if !query.contains("status=active") {
             return (StatusCode::BAD_REQUEST, "filter").into_response();
         }
-        if query.contains("offset=1") {
-            return axum::Json(json!({
-                "next": null,
-                "results": [{
+        axum::Json(json!({
+            "next": null,
+            "results": [
+                {
+                    "id": 1,
+                    "name": "web-1",
+                    "primary_ip4": {"address": "10.0.0.8/24"},
+                    "site": {"slug": "berlin"}
+                },
+                {
                     "id": 2,
                     "name": "web-2",
                     "primary_ip4": {"address": "10.0.0.9/24"},
                     "site": {"slug": "berlin"}
-                }]
-            }))
-            .into_response();
-        }
-        axum::Json(json!({
-            "next": format!("http://{host}/api/dcim/devices/?limit=1&offset=1&status=active"),
-            "results": [{
-                "id": 1,
-                "name": "web-1",
-                "primary_ip4": {"address": "10.0.0.8/24"},
-                "site": {"slug": "berlin"}
-            }]
+                }
+            ]
         }))
         .into_response()
     }

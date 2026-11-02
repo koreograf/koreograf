@@ -158,7 +158,20 @@ pub fn content_saved_by_admin(
         }
     }
     if let Some(inventory_id) = template.inventory_id.as_deref().filter(|id| !id.is_empty()) {
-        if !db::inventory(c, inventory_id)?.is_some_and(|item| item.admin_saved) {
+        let Some(inventory) = db::inventory(c, inventory_id)? else {
+            return Ok(false);
+        };
+        if !inventory.admin_saved {
+            return Ok(false);
+        }
+        if crate::netbox::loads_config_context(&inventory.source_json)
+            || db::list_inventory_sources(c, inventory_id)?
+                .iter()
+                .any(|source| {
+                    source.kind == "netbox"
+                        && crate::netbox::loads_config_context(&source.source_json)
+                })
+        {
             return Ok(false);
         }
     }
