@@ -47,6 +47,8 @@ pub struct TemplateBody {
     credential_ids: Option<Vec<String>>,
     environment_id: Option<String>,
     #[serde(default)]
+    no_environment: bool,
+    #[serde(default)]
     entrypoint: String,
     extra_vars: Option<Value>,
     spec: Option<Value>,
@@ -721,6 +723,7 @@ fn build_template(
     let project_id = blank(body.project_id);
     let inventory_id = blank(body.inventory_id);
     let environment_id = blank(body.environment_id);
+    let no_environment = environment_id.is_none() && body.no_environment;
     let (created_at, loaded) = {
         let db = state.db()?;
         if let Some(project_id) = &project_id {
@@ -780,6 +783,7 @@ fn build_template(
             inventory_id,
             credential_id,
             environment_id,
+            no_environment,
             entrypoint,
             extra_vars: extra.to_string(),
             spec: spec.to_string(),
@@ -961,6 +965,7 @@ fn template_json(template: &Template, credential_ids: &[String]) -> Value {
         "credential_id": template.credential_id,
         "credential_ids": credential_ids,
         "environment_id": template.environment_id,
+        "no_environment": template.no_environment,
         "entrypoint": template.entrypoint,
         "extra_vars": db::json_object(&template.extra_vars),
         "spec": db::json_object(&template.spec),

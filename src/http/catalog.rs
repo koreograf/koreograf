@@ -115,7 +115,7 @@ pub struct CredentialUpdate {
 pub struct EnvironmentBody {
     name: String,
     image: String,
-    #[serde(default = "default_tool")]
+    #[serde(default)]
     tool: String,
     #[serde(default = "default_pull")]
     pull_policy: String,
@@ -129,10 +129,6 @@ pub struct EnvironmentBody {
 
 fn default_pull() -> String {
     "if_not_present".into()
-}
-
-fn default_tool() -> String {
-    "any".into()
 }
 
 pub async fn runner_status(
@@ -149,6 +145,9 @@ pub async fn runner_status(
         "runner_mode": effective.runner.as_str(),
         "local_jobs": state.cfg.local_jobs.as_str(),
         "runtime": runtime,
+        "default_environment_ansible": effective.default_environment_ansible,
+        "default_environment_opentofu": effective.default_environment_opentofu,
+        "default_environment_shell": effective.default_environment_shell,
     })))
 }
 
@@ -1382,9 +1381,13 @@ fn visible_environment(db: &Connection, id: &str, team: &db::Team) -> AppResult<
 fn environment_fields(
     user: &AuthUser,
     body: &EnvironmentBody,
+    existing: Option<&Environment>,
 ) -> AppResult<(String, String, String, String, String, String)> {
-    if !matches!(body.tool.as_str(), "any" | "ansible" | "opentofu" | "shell") {
-        return Err(ApiError::bad("the_tool_is_any_ansible_opentofu_or_shell"));
+    let legacy_unchanged = existing.is_some_and(|item| {
+        item.tool == "any" && body.tool == "any" && item.image == body.image.trim()
+    });
+    if !legacy_unchanged && !matches!(body.tool.as_str(), "ansible" | "opentofu" | "shell") {
+        return Err(ApiError::bad("choose_a_tool_for_the_environment"));
     }
     if !matches!(
         body.pull_policy.as_str(),
@@ -1421,7 +1424,8 @@ pub async fn create_environment(
 ) -> AppResult<axum::response::Response> {
     let team_id = team_header(&headers)?;
     gate(&state, &user, &team_id, Role::Owner)?;
-    let (name, image, pull_policy, network, description, tool) = environment_fields(&user, &body)?;
+    let (name, image, pull_policy, network, description, tool) =
+        environment_fields(&user, &body, None)?;
     let scope = environment_scope(body.scope.as_deref(), "team")?;
     if !may_manage_environment(&user, &scope) {
         return Err(ApiError::Forbidden);
@@ -1472,10 +1476,11 @@ pub async fn update_environment(
 ) -> AppResult<Json<Value>> {
     let team_id = team_header(&headers)?;
     gate(&state, &user, &team_id, Role::Owner)?;
-    let (name, image, pull_policy, network, description, tool) = environment_fields(&user, &body)?;
     let db = state.db()?;
     let team = db::team_by_id(&db, &team_id)?.ok_or(ApiError::NotFound)?;
     let mut item = visible_environment(&db, &id, &team)?;
+    let (name, image, pull_policy, network, description, tool) =
+        environment_fields(&user, &body, Some(&item))?;
     let scope = environment_scope(body.scope.as_deref(), &item.scope)?;
     if !may_manage_environment(&user, &item.scope) || !may_manage_environment(&user, &scope) {
         return Err(ApiError::Forbidden);
@@ -1640,13 +1645,45 @@ mod tests {
         }
     }
 
+    fn legacy_environment() -> Environment {
+        Environment {
+            id: "legacy".into(),
+            team_id: None,
+            organization_id: None,
+            name: "EE".into(),
+            tool: "any".into(),
+            image: "quay.io/example/ee:1".into(),
+            pull_policy: "if_not_present".into(),
+            network: String::new(),
+            description: String::new(),
+            created_at: String::new(),
+            scope: "global".into(),
+            organization_name: String::new(),
+            team_name: String::new(),
+        }
+    }
+
     #[test]
-    fn environment_tools_are_any_ansible_opentofu_or_shell() {
-        for tool in ["any", "ansible", "opentofu", "shell"] {
-            let (_, _, _, _, _, parsed) = environment_fields(&user(), &body(tool)).unwrap();
+    fn new_environments_need_ansible_opentofu_or_shell() {
+        for tool in ["ansible", "opentofu", "shell"] {
+            let (_, _, _, _, _, parsed) = environment_fields(&user(), &body(tool), None).unwrap();
             assert_eq!(parsed, tool);
         }
-        let err = environment_fields(&user(), &body("docker")).unwrap_err();
-        assert_eq!(err.to_string(), "the_tool_is_any_ansible_opentofu_or_shell");
+        for tool in ["any", "docker", ""] {
+            let err = environment_fields(&user(), &body(tool), None).unwrap_err();
+            assert_eq!(err.to_string(), "choose_a_tool_for_the_environment");
+        }
+    }
+
+    #[test]
+    fn a_legacy_any_environment_survives_an_unchanged_save() {
+        let legacy = legacy_environment();
+        let (_, _, _, _, _, parsed) =
+            environment_fields(&user(), &body("any"), Some(&legacy)).unwrap();
+        assert_eq!(parsed, "any");
+        let mut changed = body("any");
+        changed.image = "quay.io/example/ee:2".into();
+        let err = environment_fields(&user(), &changed, Some(&legacy)).unwrap_err();
+        assert_eq!(err.to_string(), "choose_a_tool_for_the_environment");
     }
 }

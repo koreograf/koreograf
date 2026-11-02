@@ -120,6 +120,7 @@ CREATE TABLE IF NOT EXISTS templates (
   inventory_id TEXT REFERENCES inventories(id) ON DELETE SET NULL,
   credential_id TEXT REFERENCES credentials(id) ON DELETE SET NULL,
   environment_id TEXT REFERENCES environments(id) ON DELETE SET NULL,
+  no_environment INTEGER NOT NULL DEFAULT 0,
   entrypoint TEXT NOT NULL DEFAULT '',
   extra_vars TEXT NOT NULL DEFAULT '{}',
   spec TEXT NOT NULL DEFAULT '{}',
@@ -418,6 +419,17 @@ fn migrate(c: &Connection) -> AppResult<()> {
             [],
         )?;
     }
+    if !column_exists(c, "templates", "no_environment")? {
+        c.execute(
+            "ALTER TABLE templates ADD COLUMN no_environment INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+        c.execute(
+            "UPDATE templates SET no_environment = 1
+             WHERE environment_id IS NULL OR environment_id = ''",
+            [],
+        )?;
+    }
     if !column_exists(c, "templates", "update_on_launch")? {
         c.execute(
             "ALTER TABLE templates ADD COLUMN update_on_launch INTEGER NOT NULL DEFAULT 1",
@@ -665,6 +677,8 @@ pub struct Template {
     pub inventory_id: Option<String>,
     pub credential_id: Option<String>,
     pub environment_id: Option<String>,
+    /// True when the template explicitly runs on the controller.
+    pub no_environment: bool,
     pub entrypoint: String,
     pub extra_vars: String,
     pub spec: String,
@@ -2130,6 +2144,12 @@ pub fn delete_environment(c: &Connection, id: &str) -> AppResult<()> {
     if n == 0 {
         return Err(ApiError::NotFound);
     }
+    for key in crate::settings::DEFAULT_ENVIRONMENT_KEYS {
+        c.execute(
+            "DELETE FROM settings WHERE key = ?1 AND value = ?2",
+            params![key, id],
+        )?;
+    }
     Ok(())
 }
 
@@ -2137,9 +2157,9 @@ pub fn insert_template(c: &Connection, item: &Template) -> AppResult<()> {
     c.execute(
         "INSERT INTO templates (
             id, team_id, name, description, tool, project_id, inventory_id, credential_id,
-            environment_id, entrypoint, extra_vars, spec, created_at, update_on_launch,
+            environment_id, no_environment, entrypoint, extra_vars, spec, created_at, update_on_launch,
             admin_saved, prompt_on_launch
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
         params![
             item.id,
             item.team_id,
@@ -2150,6 +2170,7 @@ pub fn insert_template(c: &Connection, item: &Template) -> AppResult<()> {
             item.inventory_id,
             item.credential_id,
             item.environment_id,
+            item.no_environment as i64,
             item.entrypoint,
             item.extra_vars,
             item.spec,
@@ -2165,8 +2186,8 @@ pub fn insert_template(c: &Connection, item: &Template) -> AppResult<()> {
 pub fn update_template(c: &Connection, item: &Template) -> AppResult<()> {
     let n = c.execute(
         "UPDATE templates SET name=?3, description=?4, tool=?5, project_id=?6, inventory_id=?7,
-         credential_id=?8, environment_id=?9, entrypoint=?10, extra_vars=?11, spec=?12,
-         update_on_launch=?13, admin_saved=?14, prompt_on_launch=?15
+         credential_id=?8, environment_id=?9, no_environment=?10, entrypoint=?11, extra_vars=?12,
+         spec=?13, update_on_launch=?14, admin_saved=?15, prompt_on_launch=?16
          WHERE id=?1 AND team_id=?2",
         params![
             item.id,
@@ -2178,6 +2199,7 @@ pub fn update_template(c: &Connection, item: &Template) -> AppResult<()> {
             item.inventory_id,
             item.credential_id,
             item.environment_id,
+            item.no_environment as i64,
             item.entrypoint,
             item.extra_vars,
             item.spec,
@@ -2195,7 +2217,7 @@ pub fn update_template(c: &Connection, item: &Template) -> AppResult<()> {
 pub fn list_templates(c: &Connection, team_id: &str) -> AppResult<Vec<Template>> {
     let mut stmt = c.prepare(
         "SELECT id, team_id, name, description, tool, project_id, inventory_id, credential_id,
-                environment_id, entrypoint, extra_vars, spec, created_at, update_on_launch,
+                environment_id, no_environment, entrypoint, extra_vars, spec, created_at, update_on_launch,
                 admin_saved, prompt_on_launch
          FROM templates WHERE team_id = ?1 ORDER BY name",
     )?;
@@ -2206,7 +2228,7 @@ pub fn list_templates(c: &Connection, team_id: &str) -> AppResult<Vec<Template>>
 pub fn template(c: &Connection, id: &str) -> AppResult<Option<Template>> {
     c.query_row(
         "SELECT id, team_id, name, description, tool, project_id, inventory_id, credential_id,
-                environment_id, entrypoint, extra_vars, spec, created_at, update_on_launch,
+                environment_id, no_environment, entrypoint, extra_vars, spec, created_at, update_on_launch,
                 admin_saved, prompt_on_launch
          FROM templates WHERE id = ?1",
         [id],
@@ -2227,13 +2249,14 @@ fn map_template(row: &rusqlite::Row<'_>) -> rusqlite::Result<Template> {
         inventory_id: row.get(6)?,
         credential_id: row.get(7)?,
         environment_id: row.get(8)?,
-        entrypoint: row.get(9)?,
-        extra_vars: row.get(10)?,
-        spec: row.get(11)?,
-        created_at: row.get(12)?,
-        update_on_launch: flag(row.get(13)?),
-        admin_saved: flag(row.get(14)?),
-        prompt_on_launch: flag(row.get(15)?),
+        no_environment: flag(row.get(9)?),
+        entrypoint: row.get(10)?,
+        extra_vars: row.get(11)?,
+        spec: row.get(12)?,
+        created_at: row.get(13)?,
+        update_on_launch: flag(row.get(14)?),
+        admin_saved: flag(row.get(15)?),
+        prompt_on_launch: flag(row.get(16)?),
     })
 }
 
@@ -3082,6 +3105,56 @@ pub fn set_schedule_enabled(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_old_template_keeps_running_without_an_environment() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-template-env-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = open(&dir.join("koreograf.db")).unwrap();
+        conn.execute("PRAGMA foreign_keys = OFF", []).unwrap();
+        conn.execute("ALTER TABLE templates DROP COLUMN no_environment", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO templates (
+                id, team_id, name, description, tool, environment_id, entrypoint,
+                extra_vars, spec, created_at
+             ) VALUES
+                ('old', 'team', 'Alt', '', 'shell', NULL, '', '{}', '{}', '2020-01-01T00:00:00Z'),
+                ('with-env', 'team', 'Alt mit Umgebung', '', 'shell', 'ee', '', '{}', '{}', '2020-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO environments (id, name, tool, image, pull_policy, created_at)
+             VALUES ('ee', 'Alt', 'any', 'quay.io/example/ee:1', 'if_not_present', '2020-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        ensure_schema(&conn).unwrap();
+        let old: i64 = conn
+            .query_row(
+                "SELECT no_environment FROM templates WHERE id = 'old'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let with_env: i64 = conn
+            .query_row(
+                "SELECT no_environment FROM templates WHERE id = 'with-env'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(old, 1);
+        assert_eq!(with_env, 0);
+        assert_eq!(environment(&conn, "ee").unwrap().unwrap().tool, "any");
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn an_old_template_updates_on_launch() {

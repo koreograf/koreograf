@@ -334,6 +334,7 @@ mod tests {
             inventory_id: Some("inventory".into()),
             credential_id: None,
             environment_id: None,
+            no_environment: true,
             entrypoint: "site.yml".into(),
             extra_vars: "{}".into(),
             spec: spec.into(),

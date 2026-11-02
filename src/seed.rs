@@ -308,6 +308,7 @@ fn insert_template(conn: &Connection, item: DemoTemplate<'_>) -> AppResult<Strin
             inventory_id: item.inventory_id.map(str::to_string),
             credential_id: None,
             environment_id: None,
+            no_environment: true,
             entrypoint: item.entrypoint.to_string(),
             extra_vars: item.extra_vars.to_string(),
             spec: item.spec.to_string(),

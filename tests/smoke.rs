@@ -7641,6 +7641,7 @@ async fn owner_can_edit_an_execution_environment() {
         Some(json!({
             "name": "EE neu",
             "image": image,
+            "tool": "ansible",
             "pull_policy": "always",
             "network": "koreograf_default",
             "description": "angepasst"
@@ -7676,6 +7677,7 @@ async fn owner_can_edit_an_execution_environment() {
         Some(json!({
             "name": "EE neu",
             "image": "bad image",
+            "tool": "ansible",
             "pull_policy": "always"
         })),
     )
@@ -7691,6 +7693,7 @@ async fn owner_can_edit_an_execution_environment() {
         Some(json!({
             "name": "EE neu",
             "image": image,
+            "tool": "ansible",
             "pull_policy": "always",
             "network": "--net=host"
         })),
@@ -7784,6 +7787,94 @@ async fn an_environment_tool_limits_the_templates_that_can_use_it() {
 }
 
 #[tokio::test]
+async fn an_opentofu_template_without_an_environment_uses_the_tool_default() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-env-default-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap();
+
+    let (status, environment, _) = call(
+        &app,
+        "POST",
+        "/api/environments",
+        Some(&cookie),
+        Some(team),
+        Some(json!({
+            "name": "Tofu default",
+            "image": "ghcr.io/opentofu/opentofu:latest",
+            "tool": "opentofu",
+            "scope": "global"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{environment}");
+    let environment_id = environment["id"].as_str().unwrap();
+
+    let (status, settings, _) = call(
+        &app,
+        "PUT",
+        "/api/settings",
+        Some(&cookie),
+        Some(team),
+        Some(json!({
+            "ldap": {"url": "", "mode": "ldap"},
+            "proxy": {"url": ""},
+            "runner": "local",
+            "job_timeout_secs": 60,
+            "default_environment_opentofu": environment_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{settings}");
+    assert_eq!(settings["default_environment_opentofu"], environment_id);
+
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(team),
+        Some(json!({
+            "name": "Tofu ohne Umgebung",
+            "tool": "opentofu",
+            "entrypoint": "module"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    assert!(template["environment_id"].is_null());
+    assert_eq!(template["no_environment"], false);
+    let template_id = template["id"].as_str().unwrap();
+
+    let job = launch_and_wait(&app, &cookie, team, template_id).await;
+    assert_eq!(job["parameters"]["environment_id"], environment_id);
+    assert_eq!(job["parameters"]["environment_name"], "Tofu default");
+    assert_eq!(
+        job["parameters"]["environment_image"],
+        "ghcr.io/opentofu/opentofu:latest"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn a_changed_environment_tool_fails_the_job_before_the_container_starts() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -7818,7 +7909,7 @@ async fn a_changed_environment_tool_fails_the_job_before_the_container_starts() 
         Some(json!({
             "name": "Any",
             "image": "quay.io/example/any:1",
-            "tool": "any"
+            "tool": "shell"
         })),
     )
     .await;
@@ -8017,6 +8108,7 @@ async fn environment_scopes_follow_the_selected_team() {
         Some(json!({
             "name": "Privat",
             "image": "quay.io/example/private:1",
+            "tool": "ansible",
             "pull_policy": "never"
         })),
     )
@@ -8037,6 +8129,7 @@ async fn environment_scopes_follow_the_selected_team() {
             Some(json!({
                 "name": "Privilegiert",
                 "image": "quay.io/example/private:1",
+                "tool": "ansible",
                 "network": network
             })),
         )
@@ -8053,6 +8146,7 @@ async fn environment_scopes_follow_the_selected_team() {
         Some(json!({
             "name": "Privat",
             "image": "quay.io/example/private:1",
+            "tool": "ansible",
             "network": "host"
         })),
     )
@@ -8068,6 +8162,7 @@ async fn environment_scopes_follow_the_selected_team() {
         Some(json!({
             "name": "Hostnetz",
             "image": "quay.io/example/host:1",
+            "tool": "ansible",
             "network": "host"
         })),
     )
@@ -8084,6 +8179,7 @@ async fn environment_scopes_follow_the_selected_team() {
         Some(json!({
             "name": "Orga",
             "image": "quay.io/example/orga:1",
+            "tool": "shell",
             "scope": "organization"
         })),
     )
@@ -8104,6 +8200,7 @@ async fn environment_scopes_follow_the_selected_team() {
         Some(json!({
             "name": "Nicht global",
             "image": "quay.io/example/nope:1",
+            "tool": "ansible",
             "scope": "global"
         })),
     )
@@ -8119,6 +8216,7 @@ async fn environment_scopes_follow_the_selected_team() {
         Some(json!({
             "name": "Kaputt",
             "image": "quay.io/example/bad:1",
+            "tool": "ansible",
             "scope": "world"
         })),
     )
@@ -8135,6 +8233,7 @@ async fn environment_scopes_follow_the_selected_team() {
         Some(json!({
             "name": "Geteilt",
             "image": "quay.io/example/global:1",
+            "tool": "shell",
             "scope": "global"
         })),
     )
@@ -8233,6 +8332,7 @@ async fn environment_scopes_follow_the_selected_team() {
         Some(json!({
             "name": "Geteilt",
             "image": "quay.io/example/global:1",
+            "tool": "shell",
             "scope": "global"
         })),
     )
@@ -8269,6 +8369,7 @@ async fn environment_scopes_follow_the_selected_team() {
         Some(json!({
             "name": "Orga",
             "image": "quay.io/example/orga:2",
+            "tool": "shell",
             "description": "bleibt"
         })),
     )
@@ -8285,6 +8386,7 @@ async fn environment_scopes_follow_the_selected_team() {
         Some(json!({
             "name": "Orga",
             "image": "quay.io/example/orga:2",
+            "tool": "shell",
             "scope": "global"
         })),
     )
@@ -8310,6 +8412,7 @@ async fn environment_scopes_follow_the_selected_team() {
         Some(json!({
             "name": "Orga",
             "image": "quay.io/example/orga:3",
+            "tool": "shell",
             "description": "geschwister"
         })),
     )
@@ -8440,6 +8543,7 @@ async fn a_privileged_environment_network_is_refused_for_a_non_admin_launch() {
         Some(json!({
             "name": "Hostnetz",
             "image": "quay.io/example/host:1",
+            "tool": "shell",
             "network": "host"
         })),
     )
@@ -12902,7 +13006,7 @@ async fn assert_same_runner(app: &axum::Router, cookie: &str, team: &str, overvi
     assert_eq!(status, StatusCode::OK, "{runner}");
     assert_eq!(runner["runner_mode"], overview["runner_mode"]);
     assert_eq!(runner["runtime"], overview["runtime"]);
-    assert_eq!(runner.as_object().map(|item| item.len()), Some(3));
+    assert_eq!(runner.as_object().map(|item| item.len()), Some(6));
 }
 
 #[test]
