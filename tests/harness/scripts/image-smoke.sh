@@ -25,14 +25,22 @@ cleanup() {
     status=$?
     trap - EXIT INT TERM
     compose down -v >/dev/null 2>&1 || true
+    rm -rf "$SSH_DIR"
     exit "$status"
 }
 
-need docker python3
+need docker python3 ssh-keygen
 if [ ! -S /var/run/docker.sock ]; then
     printf 'missing /var/run/docker.sock\n' >&2
     exit 1
 fi
+
+SSH_DIR=$(mktemp -d)
+ssh-keygen -q -t ed25519 -N '' -f "$SSH_DIR/id_ed25519"
+KOREOGRAF_SMOKE_SSH_PUBLIC_KEY=$(cat "$SSH_DIR/id_ed25519.pub")
+export KOREOGRAF_SMOKE_SSH_PUBLIC_KEY
+KOREOGRAF_SMOKE_SSH_PRIVATE_KEY_FILE="$SSH_DIR/id_ed25519"
+export KOREOGRAF_SMOKE_SSH_PRIVATE_KEY_FILE
 
 KOREOGRAF_DOCKER_SOCKET_GID=$(stat -c '%g' /var/run/docker.sock)
 export KOREOGRAF_DOCKER_SOCKET_GID

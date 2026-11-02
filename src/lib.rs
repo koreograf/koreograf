@@ -41,7 +41,7 @@ use rusqlite::Connection;
 use crate::error::ApiError;
 use crate::runner::RunningProc;
 
-pub use askpass::{askpass, askpass_kind, AskpassKind};
+pub use askpass::{askpass, askpass_kind, git_ssh, git_ssh_requested, AskpassKind};
 pub use config::{Config, CookieSecure, LdapConfig, LocalJobs, RunnerMode};
 pub use entrypoint::{entrypoint, entrypoint_requested};
 pub use health::{healthcheck, healthcheck_requested};

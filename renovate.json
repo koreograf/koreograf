@@ -30,9 +30,9 @@
         "ARG DOCKER_VERSION=(?<currentValue>\\d+\\.\\d+\\.\\d+)"
       ],
       "depNameTemplate": "docker",
-      "packageNameTemplate": "docker/docker",
+      "packageNameTemplate": "moby/moby",
       "datasourceTemplate": "github-releases",
-      "extractVersionTemplate": "^v?(?<version>\\d+\\.\\d+\\.\\d+)$"
+      "extractVersionTemplate": "^docker-v(?<version>\\d+\\.\\d+\\.\\d+)$"
     },
     {
       "customType": "regex",

@@ -22,6 +22,57 @@ where
     }
 }
 
+pub fn git_ssh_requested<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter()
+        .next()
+        .and_then(|arg| {
+            Path::new(arg.as_ref())
+                .file_name()
+                .and_then(|value| value.to_str())
+                .map(|name| name == "git-ssh")
+        })
+        .unwrap_or(false)
+}
+
+pub fn git_ssh<I, S>(args: I) -> Result<(), String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    let key = std::env::var("KOREOGRAF_GIT_SSH_KEY")
+        .map_err(|_| "KOREOGRAF_GIT_SSH_KEY is not set for the git ssh helper.".to_string())?;
+    let mut command = std::process::Command::new("/usr/bin/ssh");
+    command
+        .arg("-i")
+        .arg(key)
+        .arg("-o")
+        .arg("IdentitiesOnly=yes")
+        .arg("-o")
+        .arg("StrictHostKeyChecking=accept-new")
+        .args(args);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let err = command.exec();
+        Err(format!("The git ssh helper could not start ssh ({err})."))
+    }
+    #[cfg(not(unix))]
+    {
+        let status = command
+            .status()
+            .map_err(|err| format!("The git ssh helper could not start ssh ({err})."))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("The git ssh helper exited with {status}."))
+        }
+    }
+}
+
 pub fn askpass(kind: AskpassKind, prompt: &str) -> Result<String, String> {
     askpass_answer(kind, prompt, |name| std::env::var(name).ok())
 }
@@ -67,6 +118,18 @@ mod tests {
             askpass_kind(["/usr/local/bin/koreograf", "entrypoint"]),
             None
         );
+    }
+
+    #[test]
+    fn only_the_git_ssh_name_starts_the_ssh_helper() {
+        assert!(git_ssh_requested(["/tmp/git-ssh"]));
+        assert!(git_ssh_requested([
+            "/usr/local/bin/git-ssh",
+            "git@example.com"
+        ]));
+        assert!(!git_ssh_requested(["/tmp/git-askpass"]));
+        assert!(!git_ssh_requested(["/usr/local/bin/koreograf"]));
+        assert!(!git_ssh_requested(Vec::<String>::new()));
     }
 
     #[test]

@@ -16,6 +16,14 @@ async fn main() -> anyhow::Result<()> {
         }
         return Ok(());
     }
+    if koreograf::git_ssh_requested(&args) {
+        let rest = args.iter().skip(1).map(String::as_str);
+        if let Err(err) = koreograf::git_ssh(rest) {
+            eprintln!("{err}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if koreograf::entrypoint_requested(&args) {
         if let Err(err) = koreograf::entrypoint(&args) {
             eprintln!("{err}");

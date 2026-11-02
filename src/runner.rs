@@ -1662,6 +1662,7 @@ const SECRET_FILES: &[&str] = &[
     "vault.list",
     "container.env",
     "git-askpass",
+    "git-ssh",
     "askpass",
 ];
 
@@ -2277,10 +2278,6 @@ fn default_git_username(url: &str) -> &'static str {
     }
 }
 
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
 fn private_temp_dir() -> Result<PathBuf, String> {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2345,10 +2342,14 @@ fn git_auth_material(secret: &Value, url: &str) -> Result<Option<GitAuth>, Strin
         if !key.is_empty() {
             let key_file = dir.join("git_key");
             write_secret(&key_file, key)?;
-            let command = format!(
-                "ssh -i {} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new",
-                shell_quote(&key_file.display().to_string())
-            );
+            let ssh = dir.join("git-ssh");
+            link_askpass(&ssh)?;
+            env.push(("GIT_SSH".into(), ssh.display().to_string()));
+            env.push(("GIT_SSH_VARIANT".into(), "ssh".into()));
+            env.push((
+                "KOREOGRAF_GIT_SSH_KEY".into(),
+                key_file.display().to_string(),
+            ));
             if !passphrase.is_empty() {
                 let passphrase_file = dir.join("key.pass");
                 write_secret(&passphrase_file, passphrase)?;
@@ -2362,7 +2363,6 @@ fn git_auth_material(secret: &Value, url: &str) -> Result<Option<GitAuth>, Strin
                 env.push(("SSH_ASKPASS_REQUIRE".into(), "force".into()));
                 env.push(("DISPLAY".into(), ":0".into()));
             }
-            env.push(("GIT_SSH_COMMAND".into(), command));
         }
         Ok(env)
     })();
@@ -4285,12 +4285,23 @@ mod tests {
             "{}",
             askpass.display()
         );
-        let command = env.get("GIT_SSH_COMMAND").unwrap();
-        assert!(command.contains("IdentitiesOnly=yes"), "{command}");
+        assert!(!env.contains_key("GIT_SSH_COMMAND"), "{env:?}");
+        assert_eq!(env.get("GIT_SSH_VARIANT").map(String::as_str), Some("ssh"));
+        let ssh = PathBuf::from(env.get("GIT_SSH").unwrap());
         assert!(
-            command.contains("StrictHostKeyChecking=accept-new"),
-            "{command}"
+            std::fs::symlink_metadata(&ssh)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "{}",
+            ssh.display()
         );
+        assert_eq!(
+            std::fs::read_link(&ssh).unwrap(),
+            std::env::current_exe().unwrap()
+        );
+        let ssh_key = PathBuf::from(env.get("KOREOGRAF_GIT_SSH_KEY").unwrap());
+        assert_eq!(ssh_key, dir.join("git_key"));
         assert_eq!(
             env.get("SSH_ASKPASS_REQUIRE").map(String::as_str),
             Some("force")
@@ -5192,12 +5203,14 @@ exit 0
         std::fs::write(work.join("ssh_key"), "secret\n").unwrap();
         std::fs::write(work.join("0-connection.pass"), "secret\n").unwrap();
         std::fs::write(work.join("git-askpass"), "secret\n").unwrap();
+        std::fs::write(work.join("git-ssh"), "secret\n").unwrap();
         std::fs::write(work.join("notes.txt"), "keep\n").unwrap();
         std::fs::write(work.join("extra.json"), "{}\n").unwrap();
         scrub_work_dir(&work);
         assert!(!work.join("ssh_key").exists());
         assert!(!work.join("0-connection.pass").exists());
         assert!(!work.join("git-askpass").exists());
+        assert!(!work.join("git-ssh").exists());
         assert_eq!(
             std::fs::read_to_string(work.join("notes.txt")).unwrap(),
             "keep\n"

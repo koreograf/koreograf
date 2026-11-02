@@ -57,6 +57,10 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up --build -d
 
 The local image is tagged `koreograf:local`. buildx is only for publishing a multi-architecture image. The published image holds the server binary, `git`, an SSH client, the static Docker CLI, a static `tini`, and CA certificates. Ansible, OpenTofu, and shell jobs run in the execution environments the first start seeds, so the image has no `ansible-playbook`, `tofu`, `python3`, or shell. The image sets `KOREOGRAF_CONTAINER_IMAGE=1`, and its runner preflight checks only the container CLI and socket. A saved `local` runner mode runs in a container there; the image has no local mode.
 
+### Upgrading from an earlier image
+
+An existing Docker install needs the Docker socket mounted and the socket's host group under `group_add` when a job should run in an image; without the group the container stops at start with one English line. The local runner mode is removed from the image, and a saved `local` mode is switched to `docker`. A job then needs a reachable socket and fails at start with a line that names `/var/run/docker.sock` when it is missing. An older root-owned data volume still needs the one-time ownership fix below.
+
 The process starts as uid 10001. A fresh named volume inherits the ownership of `/var/lib/koreograf` from the image. An older volume that is still owned by root needs a one-time ownership fix, and that is the only step that needs root:
 
 ```bash

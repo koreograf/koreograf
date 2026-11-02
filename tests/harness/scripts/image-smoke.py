@@ -114,6 +114,34 @@ def main():
         sys.exit("git project sync returned no path")
     print("git over https ok")
 
+    with open(os.environ["KOREOGRAF_SMOKE_SSH_PRIVATE_KEY_FILE"], encoding="utf-8") as key:
+        private_key = key.read()
+    ssh_credential = api.ensure(
+        "/api/credentials",
+        "Image smoke ssh",
+        {
+            "name": "Image smoke ssh",
+            "kind": "scm",
+            "secret": {"private_key": private_key},
+        },
+    )
+    ssh_project = api.ensure(
+        "/api/projects",
+        "Image smoke git ssh",
+        {
+            "name": "Image smoke git ssh",
+            "source_type": "git",
+            "source": "ssh://git@git-ssh/srv/git/smoke.git",
+            "revision": "",
+            "team_ids": [api.team],
+            "credential_id": ssh_credential["id"],
+        },
+    )
+    synced = api.call("POST", f"/api/projects/{ssh_project['id']}/sync")
+    if not synced.get("path"):
+        sys.exit("git project sync over ssh returned no path")
+    print("git over ssh ok")
+
     environment = api.ensure(
         "/api/environments",
         "Image smoke shell",

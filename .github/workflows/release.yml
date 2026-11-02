@@ -112,8 +112,12 @@ jobs:
             exit 0
           fi
           gh release view "$TAG" --json body -q .body >/tmp/koreograf-release-notes.md
+          image="ghcr.io/koreograf/koreograf@${DIGEST}"
+          if grep -qF "\`${image}\`" /tmp/koreograf-release-notes.md; then
+            exit 0
+          fi
           {
-            printf '\n\nImage: `ghcr.io/koreograf/koreograf@%s`\n' "$DIGEST"
+            printf '\n\nImage: `%s`\n' "$image"
             printf 'Signed with cosign keyless.\n'
           } >>/tmp/koreograf-release-notes.md
           gh release edit "$TAG" --notes-file /tmp/koreograf-release-notes.md

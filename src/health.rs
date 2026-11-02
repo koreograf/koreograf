@@ -41,9 +41,11 @@ pub fn healthcheck_url(bind: &str) -> String {
     let (host, port) = bind.rsplit_once(':').unwrap_or(("", "8080"));
     let host = host.trim_matches(['[', ']']);
     let host = if host.is_empty() || host == "0.0.0.0" || host == "::" {
-        "127.0.0.1"
+        "127.0.0.1".to_string()
+    } else if host.contains(':') {
+        format!("[{host}]")
     } else {
-        host
+        host.to_string()
     };
     format!("http://{host}:{port}{HEALTH_PATH}")
 }
@@ -78,5 +80,6 @@ mod tests {
             healthcheck_url("koreograf:8080"),
             "http://koreograf:8080/healthz"
         );
+        assert_eq!(healthcheck_url("[::1]:8080"), "http://[::1]:8080/healthz");
     }
 }

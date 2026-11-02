@@ -62,7 +62,13 @@ EOF
   export GIT_TERMINAL_PROMPT=0
 fi
 if [ -n "${KOREOGRAF_GIT_SSH_KEY:-}" ]; then
-  export GIT_SSH_COMMAND="ssh -i \"$KOREOGRAF_GIT_SSH_KEY\" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+  cat > "$KOREOGRAF_WORK/git-ssh" <<'EOF'
+#!/bin/sh
+exec ssh -i "$KOREOGRAF_GIT_SSH_KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new "$@"
+EOF
+  chmod 700 "$KOREOGRAF_WORK/git-ssh"
+  export GIT_SSH="$KOREOGRAF_WORK/git-ssh"
+  export GIT_SSH_VARIANT=ssh
 fi
 
 list_cols() {
