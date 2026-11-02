@@ -4036,7 +4036,7 @@ mod tests {
         let secret = serde_json::json!({
             "username": "",
             "password": "token-value",
-            "private_key": "-----BEGIN PRIVATE KEY-----",
+            "private_key": "test-key-material",
             "passphrase": "key-phrase"
         });
         let auth = git_auth_material(&secret, "https://gitlab.example.com/group/repo.git")
