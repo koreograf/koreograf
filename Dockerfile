@@ -1,8 +1,8 @@
 # Multi-stage image for the Koreograf prototype.
 # tini is PID 1. It reaps orphaned job processes and forwards stop signals.
 # The entrypoint starts as root so it can hand the data directory to uid 10001,
-# then drops privileges. A mounted docker.sock stays root: that socket is
-# root-equivalent on the host, and the Debian docker client needs to open it.
+# then drops privileges and adds the mounted Docker socket's group for uid 10001.
+# That socket is root-equivalent on the host.
 
 FROM rust:1.96.0-bookworm AS build
 WORKDIR /src
@@ -68,7 +68,7 @@ WORKDIR /var/lib/koreograf
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 \
     CMD ["python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"]
-# hadolint ignore=DL3002 # The entrypoint drops to uid 10001 unless docker.sock is mounted.
+# hadolint ignore=DL3002 # The entrypoint drops to uid 10001.
 USER 0
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
 CMD ["koreograf"]

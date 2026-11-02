@@ -717,6 +717,7 @@
   "the_git_address_contains_credentials": "The Git address contains credentials. Put them in the source control credential.",
   "the_git_address_is_invalid": "The Git address is invalid.",
   "the_git_address_must_be_http_s_ssh": "The Git address must be http(s), ssh, git@, or file.",
+  "the_git_checkout_is_owned_by_another_user": "The Git checkout is owned by another user. Change its owner to 10001 or recreate the project.",
   "the_hook_has_no_target": "The hook has no target.",
   "the_image_name_is_invalid": "The image name is invalid.",
   "the_inventory_belongs_to_another_team": "The inventory belongs to another team.",

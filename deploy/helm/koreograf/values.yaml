@@ -48,6 +48,8 @@ runner:
   dockerSocket:
     enabled: false
     hostPath: /var/run/docker.sock
+    # GID des Sockets auf dem Host: stat -c '%g' /var/run/docker.sock
+    group: 999
 
 ldap:
   url: ""
