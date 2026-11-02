@@ -113,6 +113,8 @@ A source has `kind` `ini`, `project`, or `netbox`.
 | `project` | `name`, `project_id`, `path` relative to that project |
 | `netbox` | `name`, `api_endpoint`, `token`, and optionally `validate_certs` (default true), `ca_file` (absolute PEM path, empty uses the system CAs), `group_by`, `query_filters`, `virtual_machines` (default true) |
 
+`PUT /api/inventories/{id}/sources/{source_id}` takes the fields of the stored kind. An omitted field keeps its value. For `ini` that is `name` and `body`. For `project` that is `name`, `project_id`, and `path`. For `netbox` that is `name`, `api_endpoint`, `token`, `validate_certs`, `ca_file`, `group_by`, `query_filters`, and `virtual_machines`. An empty or omitted `token` keeps the stored token, and the token is never returned. A field of another kind or an unknown field answers 400. The source keeps its id and position. A changed project or NetBox source is fetched again before the response; its `sync` carries `ok`, `before`, and `after` host counts. A failed fetch keeps the previous contents and answers with the error. `PUT /api/inventories/{id}` changes the name and may replace the body of a single static source.
+
 `POST /api/inventories/import` takes `project_id`, `path`, and an optional `name`. `POST /api/inventories/netbox` takes the same NetBox fields as a source, with `name` required.
 
 ### Credentials

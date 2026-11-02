@@ -294,7 +294,7 @@ pub async fn sync_inventory(
     Ok(Json(inventory_json(&db, &item)?))
 }
 
-fn refresh_project(state: &Shared, team: &str, source_json: &str) -> AppResult<String> {
+fn project_source_paths(source_json: &str) -> AppResult<(String, String)> {
     let source = db::json_object(source_json);
     let project_id = source
         .get("project_id")
@@ -304,9 +304,36 @@ fn refresh_project(state: &Shared, team: &str, source_json: &str) -> AppResult<S
         .get("path")
         .and_then(Value::as_str)
         .ok_or_else(|| ApiError::bad("the_project_source_is_incomplete"))?;
-    let project = visible_project(state, project_id, team)?;
+    Ok((project_id.to_string(), path.to_string()))
+}
+
+fn refresh_project(state: &Shared, team: &str, source_json: &str) -> AppResult<String> {
+    let (project_id, path) = project_source_paths(source_json)?;
+    let project = visible_project(state, &project_id, team)?;
     let root = project_dir(state, &project)?;
-    read_project_file(&root, path)
+    read_project_file(&root, &path)
+}
+
+fn stored_netbox(source_json: &str) -> AppResult<StoredNetbox> {
+    serde_json::from_str(source_json).map_err(|_| ApiError::bad("the_netbox_source_is_incomplete"))
+}
+
+fn stored_token(
+    state: &Shared,
+    credential_id: &Option<String>,
+    team_id: &str,
+) -> AppResult<String> {
+    let credential_id = credential_id
+        .as_deref()
+        .ok_or_else(|| ApiError::bad("the_netbox_token_is_missing"))?;
+    let db = state.db()?;
+    let credential = db::credential(&db, credential_id)?
+        .ok_or_else(|| ApiError::bad("the_netbox_token_is_missing"))?;
+    if credential.team_id != team_id || credential.kind != "netbox" {
+        return Err(ApiError::bad("the_netbox_token_belongs_to_another_team"));
+    }
+    let plain = state.decrypt(&credential.secret_blob)?;
+    token_from_secret(&plain)
 }
 
 async fn refresh_netbox(
@@ -315,21 +342,8 @@ async fn refresh_netbox(
     team_id: &str,
     source_json: &str,
 ) -> AppResult<String> {
-    let stored: StoredNetbox = serde_json::from_str(source_json)
-        .map_err(|_| ApiError::bad("the_netbox_source_is_incomplete"))?;
-    let credential_id = credential_id
-        .as_deref()
-        .ok_or_else(|| ApiError::bad("the_netbox_token_is_missing"))?;
-    let token = {
-        let db = state.db()?;
-        let credential = db::credential(&db, credential_id)?
-            .ok_or_else(|| ApiError::bad("the_netbox_token_is_missing"))?;
-        if credential.team_id != team_id || credential.kind != "netbox" {
-            return Err(ApiError::bad("the_netbox_token_belongs_to_another_team"));
-        }
-        let plain = state.decrypt(&credential.secret_blob)?;
-        token_from_secret(&plain)?
-    };
+    let stored = stored_netbox(source_json)?;
+    let token = stored_token(state, credential_id, team_id)?;
     let source = NetboxSource {
         api_endpoint: stored.api_endpoint,
         validate_certs: stored.validate_certs,
@@ -358,18 +372,17 @@ fn token_from_secret(plain: &str) -> AppResult<String> {
     Ok(token.to_string())
 }
 
-fn connection_source(
+fn netbox_config(
     api_endpoint: &str,
-    token: &str,
     validate_certs: bool,
     ca_file: &str,
+    group_by: &[String],
+    query: Vec<(String, String)>,
+    virtual_machines: bool,
 ) -> AppResult<NetboxSource> {
     let endpoint = api_endpoint.trim().trim_end_matches('/').to_string();
     if !netbox::valid_endpoint(&endpoint) {
         return Err(ApiError::bad("the_netbox_address_must_be_http_or_https"));
-    }
-    if !netbox::valid_token(token.trim()) {
-        return Err(ApiError::bad("the_netbox_token_is_invalid"));
     }
     let ca_file = ca_file.trim().to_string();
     crate::tls::absolute_ca_path(&ca_file).map_err(ApiError::bad)?;
@@ -377,30 +390,50 @@ fn connection_source(
         api_endpoint: endpoint,
         validate_certs,
         ca_file,
-        group_by: Vec::new(),
-        query: Vec::new(),
-        virtual_machines: false,
+        group_by: group_by
+            .iter()
+            .flat_map(|item| item.split(','))
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(str::to_string)
+            .collect(),
+        query,
+        virtual_machines,
     })
 }
 
+fn connection_source(
+    api_endpoint: &str,
+    token: &str,
+    validate_certs: bool,
+    ca_file: &str,
+) -> AppResult<NetboxSource> {
+    if !netbox::valid_token(token.trim()) {
+        return Err(ApiError::bad("the_netbox_token_is_invalid"));
+    }
+    netbox_config(
+        api_endpoint,
+        validate_certs,
+        ca_file,
+        &[],
+        Vec::new(),
+        false,
+    )
+}
+
 fn netbox_source(body: &NetboxBody) -> AppResult<NetboxSource> {
-    let mut source = connection_source(
+    if !netbox::valid_token(body.token.trim()) {
+        return Err(ApiError::bad("the_netbox_token_is_invalid"));
+    }
+    let query = netbox::parse_filters(&body.query_filters).map_err(ApiError::bad)?;
+    netbox_config(
         &body.api_endpoint,
-        &body.token,
         body.validate_certs,
         &body.ca_file,
-    )?;
-    source.group_by = body
-        .group_by
-        .iter()
-        .flat_map(|item| item.split(','))
-        .map(str::trim)
-        .filter(|item| !item.is_empty())
-        .map(str::to_string)
-        .collect();
-    source.query = netbox::parse_filters(&body.query_filters).map_err(ApiError::bad)?;
-    source.virtual_machines = body.virtual_machines;
-    Ok(source)
+        &body.group_by,
+        query,
+        body.virtual_machines,
+    )
 }
 
 fn visible_project(state: &Shared, id: &str, team: &str) -> AppResult<Project> {
@@ -549,27 +582,67 @@ pub async fn update_source(
     headers: HeaderMap,
     user: AuthUser,
     Path((inventory_id, source_id)): Path<(String, String)>,
-    ApiJson(body): ApiJson<SourcePatch>,
+    ApiJson(body): ApiJson<SourceUpdate>,
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let db = state.db()?;
-    owned_source(&db, &inventory_id, &source_id, &team)?;
-    let source = db::inventory_source(&db, &source_id)?.ok_or(ApiError::NotFound)?;
-    if !body.body.trim().is_empty() && source.kind != "ini" {
-        return Err(ApiError::bad("this_source_comes_from_a_project_or_from"));
+    let (source, before) = {
+        let db = state.db()?;
+        let item = db::inventory(&db, &inventory_id)?.ok_or(ApiError::NotFound)?;
+        if item.team_id != team {
+            return Err(ApiError::NotFound);
+        }
+        let source = db::inventory_source(&db, &source_id)?.ok_or(ApiError::NotFound)?;
+        if source.inventory_id != inventory_id {
+            return Err(ApiError::NotFound);
+        }
+        let before = inventory_json(&db, &item)?["host_count"]
+            .as_u64()
+            .unwrap_or(0);
+        (source, before)
+    };
+    reject_foreign_fields(&source.kind, &body)?;
+    let resolved = match source.kind.as_str() {
+        "ini" => resolve_ini_update(&source, &body)?,
+        "project" => resolve_project_update(&state, &team, &source, &body)?,
+        "netbox" => resolve_netbox_update(&state, &team, &source, &body).await?,
+        _ => return Err(ApiError::bad("a_source_is_manual_project_or_netbox")),
+    };
+    let mut db = state.db()?;
+    let tx = db.transaction()?;
+    db::update_inventory_source(
+        &tx,
+        &source_id,
+        &resolved.name,
+        &resolved.source_json,
+        &resolved.body,
+    )?;
+    if let Some(credential_name) = &resolved.credential_name {
+        let credential_id = source
+            .credential_id
+            .as_deref()
+            .ok_or_else(|| ApiError::bad("the_netbox_token_is_missing"))?;
+        let mut credential = db::credential(&tx, credential_id)?
+            .ok_or_else(|| ApiError::bad("the_netbox_token_is_missing"))?;
+        if credential.team_id != team || credential.kind != "netbox" {
+            return Err(ApiError::bad("the_netbox_token_belongs_to_another_team"));
+        }
+        credential.name = credential_name.clone();
+        if let Some(blob) = &resolved.credential_blob {
+            credential.secret_blob = blob.clone();
+        }
+        db::update_credential(&tx, &credential)?;
     }
-    if !body.name.trim().is_empty() {
-        db::rename_inventory_source(&db, &source_id, &require_name(&body.name)?)?;
-    }
-    if !body.body.trim().is_empty() {
-        check_static_ini(&body.body)?;
-        db::set_inventory_source_body(&db, &source_id, &body.body)?;
-        db::refresh_inventory_summary(&db, &inventory_id)?;
-    }
-    db::set_inventory_admin_saved(&db, &inventory_id, user.is_admin)?;
+    db::refresh_inventory_summary(&tx, &inventory_id)?;
+    db::set_inventory_admin_saved(&tx, &inventory_id, user.is_admin)?;
+    tx.commit()?;
     let item = db::inventory(&db, &inventory_id)?.ok_or(ApiError::NotFound)?;
-    Ok(Json(inventory_json(&db, &item)?))
+    let mut value = inventory_json(&db, &item)?;
+    if source.kind == "project" || source.kind == "netbox" {
+        let after = value["host_count"].as_u64().unwrap_or(0);
+        value["sync"] = json!({"ok": true, "before": before, "after": after});
+    }
+    Ok(Json(value))
 }
 
 pub async fn delete_source(
@@ -623,11 +696,185 @@ pub async fn sync_source(
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct SourcePatch {
+pub(super) struct SourceUpdate {
     #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    body: Option<String>,
+    #[serde(default)]
+    project_id: Option<String>,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    api_endpoint: Option<String>,
+    #[serde(default)]
+    token: Option<String>,
+    #[serde(default)]
+    validate_certs: Option<bool>,
+    #[serde(default)]
+    ca_file: Option<String>,
+    #[serde(default)]
+    group_by: Option<Vec<String>>,
+    #[serde(default)]
+    query_filters: Option<Vec<String>>,
+    #[serde(default)]
+    virtual_machines: Option<bool>,
+}
+
+struct ResolvedUpdate {
     name: String,
-    #[serde(default)]
+    source_json: String,
     body: String,
+    credential_name: Option<String>,
+    credential_blob: Option<String>,
+}
+
+fn reject_foreign_fields(kind: &str, body: &SourceUpdate) -> AppResult<()> {
+    let fields: &[(&str, bool)] = match kind {
+        "ini" => &[
+            ("project_id", body.project_id.is_some()),
+            ("path", body.path.is_some()),
+            ("api_endpoint", body.api_endpoint.is_some()),
+            ("token", body.token.is_some()),
+            ("validate_certs", body.validate_certs.is_some()),
+            ("ca_file", body.ca_file.is_some()),
+            ("group_by", body.group_by.is_some()),
+            ("query_filters", body.query_filters.is_some()),
+            ("virtual_machines", body.virtual_machines.is_some()),
+        ],
+        "project" => &[
+            ("body", body.body.is_some()),
+            ("api_endpoint", body.api_endpoint.is_some()),
+            ("token", body.token.is_some()),
+            ("validate_certs", body.validate_certs.is_some()),
+            ("ca_file", body.ca_file.is_some()),
+            ("group_by", body.group_by.is_some()),
+            ("query_filters", body.query_filters.is_some()),
+            ("virtual_machines", body.virtual_machines.is_some()),
+        ],
+        "netbox" => &[
+            ("body", body.body.is_some()),
+            ("project_id", body.project_id.is_some()),
+            ("path", body.path.is_some()),
+        ],
+        _ => return Err(ApiError::bad("a_source_is_manual_project_or_netbox")),
+    };
+    if let Some(&(field, _)) = fields.iter().find(|(_, present)| *present) {
+        return Err(ApiError::bad_vars(
+            "json_field_is_not_supported",
+            [("field", field)],
+        ));
+    }
+    Ok(())
+}
+
+fn updated_name(provided: Option<String>, current: &str, fallback: &str) -> AppResult<String> {
+    match provided {
+        Some(raw) => source_label(&raw, fallback),
+        None => Ok(current.to_string()),
+    }
+}
+
+fn resolve_ini_update(
+    source: &db::InventorySource,
+    body: &SourceUpdate,
+) -> AppResult<ResolvedUpdate> {
+    let name = updated_name(body.name.clone(), &source.name, "manual")?;
+    let text = match body.body.as_ref() {
+        Some(text) => {
+            if text.trim().is_empty() {
+                return Err(ApiError::bad("the_manual_source_is_empty"));
+            }
+            check_static_ini(text)?;
+            text.clone()
+        }
+        None => source.body.clone(),
+    };
+    Ok(ResolvedUpdate {
+        name,
+        source_json: source.source_json.clone(),
+        body: text,
+        credential_name: None,
+        credential_blob: None,
+    })
+}
+
+fn resolve_project_update(
+    state: &Shared,
+    team: &str,
+    source: &db::InventorySource,
+    body: &SourceUpdate,
+) -> AppResult<ResolvedUpdate> {
+    let (current_project_id, current_path) = project_source_paths(&source.source_json)?;
+    let project_id = body
+        .project_id
+        .as_deref()
+        .unwrap_or(&current_project_id)
+        .trim();
+    let path = body.path.as_deref().unwrap_or(&current_path).trim();
+    runner::check_relative(path).map_err(ApiError::bad)?;
+    if path.is_empty() {
+        return Err(ApiError::bad("path_is_missing"));
+    }
+    let project = visible_project(state, project_id, team)?;
+    let root = project_dir(state, &project)?;
+    let text = read_project_file(&root, path)?;
+    let found = scan::classify_inventory(path, &text)
+        .ok_or_else(|| ApiError::bad("the_file_is_not_an_inventory"))?;
+    if found.format == "plugin" {
+        return Err(ApiError::bad("plugin_files_are_not_copied_as_text_add"));
+    }
+    let name = updated_name(body.name.clone(), &source.name, &file_stem(path))?;
+    Ok(ResolvedUpdate {
+        name,
+        source_json: json!({"project_id": project.id, "path": path}).to_string(),
+        body: text,
+        credential_name: None,
+        credential_blob: None,
+    })
+}
+
+async fn resolve_netbox_update(
+    state: &Shared,
+    team: &str,
+    source: &db::InventorySource,
+    body: &SourceUpdate,
+) -> AppResult<ResolvedUpdate> {
+    let stored = stored_netbox(&source.source_json)?;
+    let new_token = body
+        .token
+        .as_deref()
+        .map(str::trim)
+        .filter(|token| !token.is_empty());
+    let token = match new_token {
+        Some(token) => token.to_string(),
+        None => stored_token(state, &source.credential_id, team)?,
+    };
+    let query = match &body.query_filters {
+        Some(filters) => netbox::parse_filters(filters).map_err(ApiError::bad)?,
+        None => stored.query.clone(),
+    };
+    let parsed = netbox_config(
+        body.api_endpoint.as_deref().unwrap_or(&stored.api_endpoint),
+        body.validate_certs.unwrap_or(stored.validate_certs),
+        body.ca_file.as_deref().unwrap_or(&stored.ca_file),
+        body.group_by.as_deref().unwrap_or(&stored.group_by),
+        query,
+        body.virtual_machines.unwrap_or(stored.virtual_machines),
+    )?;
+    let name = updated_name(body.name.clone(), &source.name, "netbox")?;
+    let ini = fetch_netbox(state, &parsed, &token).await?;
+    let credential_blob = match new_token {
+        Some(token) => Some(state.encrypt(&json!({"token": token}).to_string())?),
+        None => None,
+    };
+    Ok(ResolvedUpdate {
+        credential_name: Some(format!("{name} Token")),
+        credential_blob,
+        name,
+        source_json: netbox::source_json(&parsed).to_string(),
+        body: ini,
+    })
 }
 
 fn owned_source(

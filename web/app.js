@@ -26,6 +26,7 @@ let navOpen = false;
 let navKey = null;
 let navToken = null;
 let leaveGuard = null;
+let sourceNotice = null;
 let shownHash = null;
 
 window.addEventListener("beforeunload", (event) => {
@@ -379,6 +380,18 @@ const ERROR_FIELD = {
   the_project_path_is_not_a_directory: "source",
   the_project_path_is_not_allowed: "source",
   path_projects_are_limited_to_administrators: "source",
+  the_netbox_address_must_be_http_or_https: "api_endpoint",
+  the_netbox_token_is_invalid: "token",
+  the_netbox_token_is_missing: "token",
+  the_netbox_token_belongs_to_another_team: "token",
+  path_is_missing: "path",
+  the_file_is_not_an_inventory: "path",
+  file_is_missing_from_the_project: "path",
+  path_leaves_the_project: "path",
+  path_is_not_a_file: "path",
+  plugin_files_are_not_copied_as_text_add: "path",
+  the_manual_source_is_empty: "body",
+  inventory_ini_is_invalid: "body",
 };
 
 let flashKey = "";
@@ -3689,26 +3702,33 @@ function certificateBadge(on) {
   return on ? ` <span class="pill warn">${h("certificate_check_off")}</span>` : "";
 }
 
-function mountSourceDraft(container, projects, kind, preset) {
+function mountSourceDraft(container, projects, kind, preset, options = {}) {
   const data = preset || {};
+  const editing = Boolean(options.editing);
   const card = document.createElement("section");
   card.className = "card";
   card.dataset.kind = kind;
+  if (editing) card.dataset.editing = editing;
   card.style.marginTop = "10px";
   const projectOptions = projects.map((item) => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join("");
   const title = kind === "ini" ? t("manual") : kind === "project" ? t("project") : t("netbox");
   let fields = "";
   if (kind === "ini") {
-    fields = `<label class="field"><span>${h("ini_or_yaml")}</span><textarea name="body" required>${esc(data.body || "[all]\nlocalhost ansible_connection=local")}</textarea></label>`;
+    fields = `<label class="field required"><span>${h("ini_or_yaml")}</span><textarea name="body" required>${esc(data.body || "[all]\nlocalhost ansible_connection=local")}</textarea></label>`;
   } else if (kind === "project") {
-    fields = `<label class="field"><span>${h("project")}</span><select name="project_id"><option value="">—</option>${projectOptions}</select></label>
-      <label class="field"><span>${h("inventory_file")}</span><select name="path"><option value="">—</option></select></label>
+    const initialPath = data.path ? `<option value="${esc(data.path)}" selected>${esc(data.path)}</option>` : "";
+    fields = `<label class="field required"><span>${h("project")}</span><select name="project_id" required><option value="">—</option>${projectOptions}</select></label>
+      <label class="field required"><span>${h("inventory_file")}</span><select name="path" required><option value="">—</option>${initialPath}</select></label>
       <p class="small muted" data-plugin-note></p>`;
   } else {
     const groupBy = Array.isArray(data.group_by) ? data.group_by.join(", ") : (data.group_by || "");
-    const filters = Array.isArray(data.query_filters) ? data.query_filters.join("\n") : (data.query || "");
-    fields = `<label class="field"><span>${h("api_address")}</span><input name="api_endpoint" required value="${esc(data.api_endpoint || "")}" placeholder="https://netbox.example.com"></label>
-      <label class="field"><span>${h("token")}</span><input name="token" type="password" required autocomplete="off"></label>
+    const filters = Array.isArray(data.query_filters)
+      ? data.query_filters.join("\n")
+      : Array.isArray(data.query)
+        ? data.query.map((item) => Array.isArray(item) ? item.join("=") : String(item)).join("\n")
+        : "";
+    fields = `<label class="field required"><span>${h("api_address")}</span><input name="api_endpoint" required value="${esc(data.api_endpoint || "")}" placeholder="https://netbox.example.com"></label>
+      <label class="field${editing ? "" : " required"}"><span>${h("token")}</span><input name="token" type="password"${editing ? "" : " required"} autocomplete="off" placeholder="${editing ? h("leave_empty_to_keep_the_stored_value") : ""}"></label>
       <label class="field"><span>${h("group_by")}</span><input name="group_by" value="${esc(groupBy)}" placeholder="sites, device_roles"></label>
       <label class="field"><span>${h("filters_one_key_value_per_line")}</span><textarea name="query">${esc(filters)}</textarea></label>
       <label class="field check"><span>${h("verify_certificate")}</span><input name="validate_certs" type="checkbox"${data.validate_certs === false ? "" : " checked"}></label>
@@ -3717,11 +3737,17 @@ function mountSourceDraft(container, projects, kind, preset) {
       <label class="field check"><span>${h("virtual_machines")}</span><input name="virtual_machines" type="checkbox"${data.virtual_machines === false ? "" : " checked"}></label>
       <div class="row"><button class="btn" type="button" data-netbox-test>${h("test_connection")}</button><span class="small muted" data-netbox-test-status aria-live="polite"></span></div>`;
   }
-  card.innerHTML = `<div class="spread"><h2>${esc(title)}</h2><button class="btn ghost" type="button" data-remove-draft>${h("remove")}</button></div>
-    <div class="form">${fields}
+  card.innerHTML = `<div class="spread"><h2>${esc(title)}</h2><button class="btn ghost" type="button" data-remove-draft>${h(editing ? "cancel" : "remove")}</button></div>
+    <div class="form"><p class="small muted">${h("fields_marked_with_a_star_are_required")}</p>${fields}
       <label class="field"><span>${h("source_name")}</span><input name="source_name" value="${esc(data.name || "")}" placeholder="${esc(title)}"></label>
+      ${editing ? `<div class="row"><button class="btn pill primary" type="button" data-save-draft>${h("save_source")}</button></div>
+      <p class="small muted" data-source-error aria-live="polite"></p>` : ""}
     </div>`;
   container.appendChild(card);
+  if (editing) {
+    card.addEventListener("input", () => { card.dataset.dirty = "1"; });
+    card.addEventListener("change", () => { card.dataset.dirty = "1"; });
+  }
   card.querySelector("[data-remove-draft]").addEventListener("click", () => card.remove());
   if (kind === "netbox") {
     const test = card.querySelector("[data-netbox-test]");
@@ -3751,7 +3777,7 @@ function mountSourceDraft(container, projects, kind, preset) {
     const select = card.querySelector("[name=project_id]");
     const files = card.querySelector("[name=path]");
     const note = card.querySelector("[data-plugin-note]");
-    select.addEventListener("change", async () => {
+    const loadFiles = async (preferred) => {
       files.innerHTML = `<option value="">—</option>`;
       note.textContent = "";
       if (!select.value) return;
@@ -3760,6 +3786,7 @@ function mountSourceDraft(container, projects, kind, preset) {
         const inventories = contents.inventories || [];
         const staticFiles = inventories.filter((file) => file.format !== "plugin");
         files.innerHTML = `<option value="">—</option>${staticFiles.map((file) => `<option value="${esc(file.path)}">${esc(file.path)}</option>`).join("")}`;
+        if (preferred && [...files.options].some((option) => option.value === preferred)) files.value = preferred;
         const plugins = inventories.filter((file) => file.format === "plugin");
         if (plugins.length) {
           note.textContent = t("files_is_not_executed_here_add_netbox_as", {
@@ -3771,7 +3798,12 @@ function mountSourceDraft(container, projects, kind, preset) {
       } catch (error) {
         note.textContent = t(error.message || "the_project_cannot_be_read", error.vars);
       }
-    });
+    };
+    select.addEventListener("change", () => loadFiles(""));
+    if (data.project_id) {
+      select.value = data.project_id;
+      loadFiles(data.path || "");
+    }
   }
   return card;
 }
@@ -3799,6 +3831,12 @@ function readSourceDraft(card) {
     ca_file: card.querySelector("[name=ca_file]").value.trim(),
     virtual_machines: card.querySelector("[name=virtual_machines]").checked,
   };
+}
+
+function readSourceUpdate(card) {
+  const draft = readSourceDraft(card);
+  delete draft.kind;
+  return draft;
 }
 
 function bindSourcePicks(projects) {
@@ -3879,6 +3917,7 @@ async function pageInventory(id) {
     api("GET", `/api/inventories/${encodeURIComponent(id)}`),
     can("operator") ? api("GET", "/api/projects") : Promise.resolve([]),
   ]);
+  const notice = sourceNotice && sourceNotice.inventoryId === id ? sourceNotice : null;
   const rows = (item.hosts || []).map((host) => {
     const vars = Object.entries(host.vars || {}).map(([key, value]) => `${key}=${value}`).join(" ");
     return `<tr><td class="mono">${esc(host.name)}</td><td>${esc((host.groups || []).join(", "))}</td><td class="mono">${esc(vars)}</td></tr>`;
@@ -3889,18 +3928,22 @@ async function pageInventory(id) {
       <div class="spread">
         <div><strong>${esc(sourceTitle(source))}</strong>${certificateBadge(certificateCheckOff(source))} <span class="small muted">${esc(sourceKindLabel(source.kind))} · ${esc(sourceSummary(source))}</span></div>
         <div class="row">
-          ${can("operator") && source.kind !== "ini" ? `<span class="small muted" data-source-status="${esc(source.id)}" aria-live="polite"></span>` : ""}
+          ${can("operator") ? `<span class="small muted" data-source-status="${esc(source.id)}" aria-live="polite">${notice && notice.sourceId === source.id ? esc(notice.text) : ""}</span>` : ""}
+          ${can("operator") ? `<button class="btn" type="button" data-edit-source="${esc(source.id)}">${h("edit")}</button>` : ""}
           ${can("operator") && source.kind !== "ini" ? `<button class="btn" type="button" data-sync-source="${esc(source.id)}">${h("refresh")}</button>` : ""}
           ${can("operator") ? `<button class="btn danger" type="button" data-drop-source="${esc(source.id)}">${h("remove")}</button>` : ""}
         </div>
       </div>
       <p class="small muted">${h("count_hosts", { count: source.host_count })}</p>
-      ${can("operator") && source.kind === "ini" ? `<form class="form" data-ini-source="${esc(source.id)}">
-        <label class="field"><span>${h("text")}</span><textarea name="body" required>${esc(source.body || "")}</textarea></label>
-        <button class="btn" type="submit">${h("save_source")}</button>
-      </form>` : `<pre class="mono">${esc(source.body || "")}</pre>`}
+      <pre class="mono">${esc(source.body || "")}</pre>
     </section>`).join("");
   shell(item.name, `
+    <form class="card form" id="inventory-name-form" style="margin-bottom:14px">
+      <p class="small muted">${h("fields_marked_with_a_star_are_required")}</p>
+      <label class="field required"><span>${h("name")}</span><input name="name" required value="${esc(item.name)}"></label>
+      <div class="row"><button class="btn pill primary" type="submit">${h("save")}</button><button class="btn" id="cancel-inventory-name" type="button">${h("cancel")}</button></div>
+      <p class="small muted" data-inventory-name-error aria-live="polite"></p>
+    </form>
     <section class="card" style="margin-bottom:14px">
       <div class="spread">
         <h2>${h("hosts")}</h2>
@@ -3911,8 +3954,10 @@ async function pageInventory(id) {
     <section>
       <h2>${h("sources")}</h2>
       ${sourceCards || `<p class="small muted">${h("no_source_yet")}</p>`}
+      <div id="source-edit"></div>
       ${can("operator") ? `<div class="card" style="margin-top:14px">
         <h2>${h("add_source")}</h2>
+        <p class="small muted">${h("an_inventory_can_have_several_sources_they_are")}</p>
         <div class="choice-row">
           <button class="btn pill" type="button" data-add-kind="ini">${h("manual_2")}</button>
           <button class="btn pill" type="button" data-add-kind="project">${h("project_2")}</button>
@@ -3928,6 +3973,31 @@ async function pageInventory(id) {
       <button class="btn danger" id="delete-inventory" type="button">${h("delete_inventory")}</button>
     </section>` : ""}`,
     can("operator") ? `<a class="btn pill" href="#/inventories/new">${h("inventory_2")}</a>` : "");
+  if (notice) sourceNotice = null;
+  const nameForm = document.querySelector("#inventory-name-form");
+  const nameInput = nameForm.querySelector("[name=name]");
+  const nameError = nameForm.querySelector("[data-inventory-name-error]");
+  const nameInitial = item.name;
+  nameForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!nameForm.reportValidity()) return;
+    nameError.textContent = "";
+    const button = nameForm.querySelector("button[type=submit]");
+    button.disabled = true;
+    try {
+      await api("PUT", `/api/inventories/${encodeURIComponent(id)}`, { name: nameInput.value });
+      markSaved();
+      route();
+    } catch (error) {
+      button.disabled = false;
+      nameError.textContent = t(error.message || "error.generic", error.vars);
+      handle(error);
+    }
+  });
+  document.querySelector("#cancel-inventory-name").addEventListener("click", () => {
+    nameInput.value = nameInitial;
+    nameError.textContent = "";
+  });
   const sync = document.querySelector("#sync-inventory");
   if (sync) {
     sync.addEventListener("click", async () => {
@@ -3941,6 +4011,42 @@ async function pageInventory(id) {
       }
     });
   }
+  document.querySelectorAll("[data-edit-source]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const target = document.querySelector("#source-edit");
+      const source = (item.sources || []).find((row) => row.id === button.dataset.editSource);
+      if (!target || !source) return;
+      target.innerHTML = "";
+      const card = mountSourceDraft(target, projects, source.kind, {
+        ...(source.source || {}),
+        name: source.name,
+        body: source.body,
+      }, { editing: source.id });
+      const errorNote = card.querySelector("[data-source-error]");
+      card.querySelector("[data-save-draft]").addEventListener("click", async () => {
+        const invalid = [...card.querySelectorAll("input, select, textarea")].find((control) => !control.checkValidity());
+        if (invalid) {
+          invalid.reportValidity();
+          return;
+        }
+        errorNote.textContent = "";
+        const button = card.querySelector("[data-save-draft]");
+        button.disabled = true;
+        try {
+          const saved = await api("PUT", `/api/inventories/${encodeURIComponent(id)}/sources/${encodeURIComponent(source.id)}`, readSourceUpdate(card));
+          sourceNotice = saved.sync && saved.sync.ok
+            ? { inventoryId: id, sourceId: source.id, text: t("hosts_before_after", { before: saved.sync.before, after: saved.sync.after }) }
+            : null;
+          markSaved();
+          route();
+        } catch (error) {
+          button.disabled = false;
+          errorNote.textContent = t(error.message || "error.generic", error.vars);
+          handle(error);
+        }
+      });
+    });
+  });
   document.querySelectorAll("[data-sync-source]").forEach((button) => {
     button.addEventListener("click", async () => {
       const status = document.querySelector(`[data-source-status="${button.dataset.syncSource}"]`);
@@ -3971,18 +4077,6 @@ async function pageInventory(id) {
       } catch (error) { handle(error); }
     });
   });
-  document.querySelectorAll("[data-ini-source]").forEach((form) => {
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      try {
-        await api("PUT", `/api/inventories/${encodeURIComponent(id)}/sources/${encodeURIComponent(form.dataset.iniSource)}`, {
-          body: form.body.value,
-        });
-        markSaved();
-        route();
-      } catch (error) { handle(error); }
-    });
-  });
   if (can("operator")) {
     bindSourcePicks(projects);
     document.querySelector("#add-sources").addEventListener("click", async () => {
@@ -4004,6 +4098,9 @@ async function pageInventory(id) {
       } catch (error) { handle(error); }
     });
   }
+  leaveGuard = () => nameInput.value !== nameInitial
+    || document.querySelector("#source-edit [data-dirty]") !== null
+    || document.querySelector("#source-drafts [data-kind]") !== null;
 }
 const CREDENTIAL_KINDS = [
   ["ssh", "machine_ssh", "a_key_or_a_password_or_both"],
