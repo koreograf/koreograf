@@ -343,6 +343,7 @@ fn migrate(c: &Connection) -> AppResult<()> {
             [],
         )?;
     }
+    c.execute("UPDATE credentials SET auto = 0 WHERE auto = 1", [])?;
     c.execute(
         "INSERT INTO inventory_sources (
             id, inventory_id, name, kind, source_json, credential_id, body, position, created_at
@@ -1634,11 +1635,14 @@ pub fn update_inventory_source(
     id: &str,
     name: &str,
     source_json: &str,
+    credential_id: Option<&str>,
     body: &str,
 ) -> AppResult<()> {
     let n = c.execute(
-        "UPDATE inventory_sources SET name = ?2, source_json = ?3, body = ?4 WHERE id = ?1",
-        params![id, name, source_json, body],
+        "UPDATE inventory_sources
+         SET name = ?2, source_json = ?3, credential_id = ?4, body = ?5
+         WHERE id = ?1",
+        params![id, name, source_json, credential_id, body],
     )?;
     if n == 0 {
         return Err(ApiError::NotFound);
@@ -1811,6 +1815,57 @@ pub fn list_credentials(c: &Connection, team_id: &str) -> AppResult<Vec<Credenti
          FROM credentials WHERE team_id = ?1 ORDER BY name",
     )?;
     let rows = stmt.query_map([team_id], map_credential)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+pub fn netbox_credentials(c: &Connection) -> AppResult<Vec<Credential>> {
+    let mut stmt = c.prepare(
+        "SELECT id, team_id, name, kind, secret_blob, created_at, auto
+         FROM credentials WHERE kind = 'netbox'",
+    )?;
+    let rows = stmt.query_map([], map_credential)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+pub struct CredentialUsage {
+    pub inventory_id: String,
+    pub inventory_name: String,
+    pub source_id: String,
+    pub source_name: String,
+}
+
+pub fn credential_usages(
+    c: &Connection,
+    credential_id: &str,
+    team_id: &str,
+) -> AppResult<Vec<CredentialUsage>> {
+    let mut stmt = c.prepare(
+        "SELECT i.id, i.name, s.id, s.name
+         FROM inventory_sources s
+         JOIN inventories i ON i.id = s.inventory_id
+         WHERE s.credential_id = ?1 AND i.team_id = ?2
+         ORDER BY i.name, s.position",
+    )?;
+    let rows = stmt.query_map(params![credential_id, team_id], |row| {
+        Ok(CredentialUsage {
+            inventory_id: row.get(0)?,
+            inventory_name: row.get(1)?,
+            source_id: row.get(2)?,
+            source_name: row.get(3)?,
+        })
+    })?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+pub fn netbox_credential_endpoints(c: &Connection) -> AppResult<Vec<(String, String)>> {
+    let mut stmt = c.prepare(
+        "SELECT credential_id, source_json FROM inventory_sources
+         WHERE credential_id IS NOT NULL AND kind = 'netbox'
+         ORDER BY created_at",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
 }
 

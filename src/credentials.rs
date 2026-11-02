@@ -3,7 +3,7 @@
 //! Secrets stay in files with mode 0600 or in process environment variables.
 //! They are not placed on the command line.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use serde_json::{Map, Value};
@@ -585,6 +585,69 @@ fn check_netbox(secret: &Value) -> Result<(), String> {
     } else {
         one_line(url, "address")
     }
+}
+
+pub(crate) fn backfill_netbox_urls(state: &crate::Shared) -> Result<(), crate::error::ApiError> {
+    let (credentials, sources) = {
+        let db = state.db()?;
+        (
+            crate::db::netbox_credentials(&db)?,
+            crate::db::netbox_credential_endpoints(&db)?,
+        )
+    };
+    let mut endpoints = HashMap::new();
+    for (credential_id, source_json) in sources {
+        let endpoint = serde_json::from_str::<Value>(&source_json)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("api_endpoint")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+            });
+        if let Some(endpoint) = endpoint {
+            endpoints.entry(credential_id).or_insert(endpoint);
+        }
+    }
+    let mut updates = Vec::new();
+    for credential in credentials {
+        let Ok(plain) = state.decrypt(&credential.secret_blob) else {
+            continue;
+        };
+        let Ok(mut secret) = serde_json::from_str::<Value>(&plain) else {
+            continue;
+        };
+        let has_url = secret
+            .get("url")
+            .and_then(Value::as_str)
+            .is_some_and(|url| !url.trim().is_empty());
+        if has_url {
+            continue;
+        }
+        let Some(endpoint) = endpoints.get(&credential.id) else {
+            continue;
+        };
+        let Some(object) = secret.as_object_mut() else {
+            continue;
+        };
+        object.insert("url".into(), Value::String(endpoint.clone()));
+        if let Ok(blob) = state.encrypt(&secret.to_string()) {
+            updates.push((credential.id, blob));
+        }
+    }
+    if updates.is_empty() {
+        return Ok(());
+    }
+    let db = state.db()?;
+    for (id, blob) in updates {
+        db.execute(
+            "UPDATE credentials SET secret_blob = ?2 WHERE id = ?1",
+            rusqlite::params![id, blob],
+        )?;
+    }
+    Ok(())
 }
 
 fn check_login(secret: &Value) -> Result<(), String> {

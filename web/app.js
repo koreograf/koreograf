@@ -383,7 +383,8 @@ const ERROR_FIELD = {
   the_netbox_address_must_be_http_or_https: "api_endpoint",
   the_netbox_token_is_invalid: "token",
   the_netbox_token_is_missing: "token",
-  the_netbox_token_belongs_to_another_team: "token",
+  the_netbox_token_belongs_to_another_team: "credential_id",
+  netbox_credential_has_the_wrong_kind: "credential_id",
   netbox_token_required_for_endpoint_change: "token",
   path_is_missing: "path",
   the_file_is_not_an_inventory: "path",
@@ -3707,6 +3708,7 @@ function certificateBadge(on) {
 
 function mountSourceDraft(container, projects, kind, preset, options = {}) {
   const data = preset || {};
+  const credentials = options.credentials || [];
   const editing = Boolean(options.editing);
   const card = document.createElement("section");
   card.className = "card";
@@ -3730,9 +3732,21 @@ function mountSourceDraft(container, projects, kind, preset, options = {}) {
       : Array.isArray(data.query)
         ? data.query.map((item) => Array.isArray(item) ? item.join("=") : String(item)).join("\n")
         : "";
-    fields = `<label class="field required"><span>${h("api_address")}</span><input name="api_endpoint" required value="${esc(data.api_endpoint || "")}" placeholder="https://netbox.example.com"></label>
-      <label class="field${editing ? "" : " required"}"><span>${h("token")}</span><input name="token" type="password"${editing ? "" : " required"} autocomplete="off" placeholder="${editing ? h("leave_empty_to_keep_the_stored_value") : ""}"></label>
-      ${editing ? `<p class="small muted" data-token-hint hidden>${h("netbox_token_required_for_endpoint_change")}</p>` : ""}
+    const netboxCredentials = credentials.filter((item) => item.kind === "netbox");
+    const selectedCredential = String(data.credential_id || "");
+    const credentialPick = `<label class="field"><span>${h("netbox_credential")}</span>
+      <div class="row">
+        <select class="fit" name="credential_id">${selectOptions(netboxCredentials, selectedCredential, true, (row) => row.name)}</select>
+        ${can("owner") ? `<button class="btn pill" type="button" data-new-netbox-credential>${h("credential")}</button>` : ""}
+      </div>
+    </label>`;
+    fields = `${credentialPick}
+      <label class="field"><span>${h("api_address")}</span><input name="api_endpoint" value="${esc(data.api_endpoint || "")}" placeholder="https://netbox.example.com"></label>
+      <p class="small muted">${h("netbox_address_from_credential")}</p>
+      <div data-token-box${selectedCredential ? " hidden" : ""}>
+        <label class="field${editing ? "" : " required"}"><span>${h("token")}</span><input name="token" type="password"${editing ? "" : " required"} autocomplete="off" placeholder="${editing ? h("leave_empty_to_keep_the_stored_value") : ""}"></label>
+        ${editing ? `<p class="small muted" data-token-hint hidden>${h("netbox_token_required_for_endpoint_change")}</p>` : `<p class="small muted">${h("netbox_token_becomes_a_credential", { name: data.name || title })}</p>`}
+      </div>
       <label class="field"><span>${h("group_by")}</span><input name="group_by" value="${esc(groupBy)}" placeholder="sites, device_roles"></label>
       <label class="field"><span>${h("filters_one_key_value_per_line")}</span><textarea name="query">${esc(filters)}</textarea></label>
       <label class="field check"><span>${h("verify_certificate")}</span><input name="validate_certs" type="checkbox"${data.validate_certs === false ? "" : " checked"}></label>
@@ -3748,23 +3762,39 @@ function mountSourceDraft(container, projects, kind, preset, options = {}) {
       <p class="small muted" data-source-error aria-live="polite"></p>` : ""}
     </div>`;
   container.appendChild(card);
-  if (editing) {
-    const refreshToken = () => {
-      if (kind !== "netbox") return;
-      const endpoint = card.querySelector("[name=api_endpoint]").value.trim().replace(/\/+$/, "");
-      const caFile = card.querySelector("[name=ca_file]").value.trim();
-      const verify = card.querySelector("[name=validate_certs]").checked;
-      const changed = endpoint !== String(data.api_endpoint || "").trim().replace(/\/+$/, "")
-        || caFile !== String(data.ca_file || "").trim()
-        || (data.validate_certs !== false && !verify);
-      const token = card.querySelector("[name=token]");
-      token.required = changed;
+  if (kind === "netbox") {
+    const refreshCredential = () => {
+      const select = card.querySelector("[name=credential_id]");
+      const box = card.querySelector("[data-token-box]");
+      const token = box.querySelector("[name=token]");
+      const endpoint = card.querySelector("[name=api_endpoint]");
+      const chosen = Boolean(select.value);
+      box.hidden = chosen;
+      token.required = !chosen && !editing;
+      endpoint.required = !chosen;
       const hint = card.querySelector("[data-token-hint]");
-      if (hint) hint.hidden = !(changed && !token.value.trim());
+      if (hint) {
+        const current = String(data.api_endpoint || "").trim().replace(/\/+$/, "");
+        const changed = endpoint.value.trim().replace(/\/+$/, "") !== current;
+        hint.hidden = chosen || !changed || Boolean(token.value.trim());
+      }
     };
-    card.addEventListener("input", () => { card.dataset.dirty = "1"; refreshToken(); });
-    card.addEventListener("change", () => { card.dataset.dirty = "1"; refreshToken(); });
-    refreshToken();
+    card.addEventListener("input", () => { card.dataset.dirty = "1"; refreshCredential(); });
+    card.addEventListener("change", () => { card.dataset.dirty = "1"; refreshCredential(); });
+    card.querySelector("[name=credential_id]").addEventListener("change", refreshCredential);
+    const create = card.querySelector("[data-new-netbox-credential]");
+    if (create) {
+      create.addEventListener("click", () => {
+        openCredentialCreator("netbox", (created) => {
+          const select = card.querySelector("[name=credential_id]");
+          credentials.push(created);
+          select.insertAdjacentHTML("beforeend", `<option value="${esc(created.id)}">${esc(created.name)}</option>`);
+          select.value = created.id;
+          refreshCredential();
+        });
+      });
+    }
+    refreshCredential();
   }
   card.querySelector("[data-remove-draft]").addEventListener("click", () => card.remove());
   if (kind === "netbox") {
@@ -3777,6 +3807,7 @@ function mountSourceDraft(container, projects, kind, preset, options = {}) {
       try {
         const result = await api("POST", "/api/inventories/netbox/test", {
           api_endpoint: draft.api_endpoint,
+          credential_id: draft.credential_id,
           token: draft.token,
           validate_certs: draft.validate_certs,
           ca_file: draft.ca_file,
@@ -3842,6 +3873,7 @@ function readSourceDraft(card) {
     kind,
     name,
     api_endpoint: card.querySelector("[name=api_endpoint]").value,
+    credential_id: card.querySelector("[name=credential_id]").value,
     token: card.querySelector("[name=token]").value,
     group_by: card.querySelector("[name=group_by]").value.split(",").map((item) => item.trim()).filter(Boolean),
     query_filters: card.querySelector("[name=query]").value.split("\n").map((item) => item.trim()).filter(Boolean),
@@ -3857,10 +3889,10 @@ function readSourceUpdate(card) {
   return draft;
 }
 
-function bindSourcePicks(projects) {
+function bindSourcePicks(projects, credentials) {
   document.querySelectorAll("[data-add-kind]").forEach((button) => {
     button.addEventListener("click", () => {
-      mountSourceDraft(document.querySelector("#source-drafts"), projects, button.dataset.addKind);
+      mountSourceDraft(document.querySelector("#source-drafts"), projects, button.dataset.addKind, undefined, { credentials });
     });
   });
 }
@@ -3901,6 +3933,7 @@ async function pageInventoryNew() {
     return;
   }
   const projects = await api("GET", "/api/projects");
+  const credentials = await api("GET", "/api/credentials");
   shell(t("new_inventory"), `
     <form class="card form" id="inventory-create">
       <label class="field"><span>${h("name")}</span><input name="name" required></label>
@@ -3916,7 +3949,7 @@ async function pageInventoryNew() {
       </div>
       <button class="btn pill primary" type="submit">${h("create")}</button>
     </form>`);
-  bindSourcePicks(projects);
+  bindSourcePicks(projects, credentials);
   document.querySelector("#inventory-create").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -3995,9 +4028,10 @@ function inventoryGroupTable(groups, id) {
 async function pageInventory(id) {
   if (!needTeam()) return;
   const view = inventoryHostState();
-  const [item, projects, firstPage, groupPage] = await Promise.all([
+  const [item, projects, credentials, firstPage, groupPage] = await Promise.all([
     api("GET", `/api/inventories/${encodeURIComponent(id)}`),
     can("operator") ? api("GET", "/api/projects") : Promise.resolve([]),
+    can("operator") ? api("GET", "/api/credentials") : Promise.resolve([]),
     api("GET", inventoryHostUrl(id, view)),
     api("GET", `/api/inventories/${encodeURIComponent(id)}/groups`),
   ]);
@@ -4288,7 +4322,8 @@ async function pageInventory(id) {
           ...(source.source || {}),
           name: source.name,
           body: source.body,
-        }, { editing: source.id });
+          credential_id: source.credential_id || "",
+        }, { editing: source.id, credentials });
         const errorNote = card.querySelector("[data-source-error]");
         card.querySelector("[data-save-draft]").addEventListener("click", async () => {
           const invalid = [...card.querySelectorAll("input, select, textarea")].find((control) => !control.checkValidity());
@@ -4349,7 +4384,7 @@ async function pageInventory(id) {
     });
   });
   if (can("operator")) {
-    bindSourcePicks(projects);
+    bindSourcePicks(projects, credentials);
     document.querySelector("#add-sources").addEventListener("click", async () => {
       const drafts = [...document.querySelectorAll("#source-drafts [data-kind]")].map(readSourceDraft);
       if (!drafts.length) return;
@@ -4530,6 +4565,17 @@ function credentialKindLabel(kind) {
 function selectedCredentialIds(item) {
   if (Array.isArray(item.credential_ids)) return item.credential_ids;
   return item.credential_id ? [item.credential_id] : [];
+}
+
+function credentialUsageNames(item) {
+  return (item.usages || []).map((usage) => `${usage.inventory_name} / ${usage.source_name}`).join(", ");
+}
+
+function credentialUsageCard(item) {
+  const names = credentialUsageNames(item);
+  return `<section class="card"><h2>${h("used_by")}</h2>${names
+    ? `<p>${esc(names)}</p>`
+    : `<p class="small muted">${h("not_used")}</p>`}</section>`;
 }
 
 function templateCredentialFields(credentials, selectedIds) {
@@ -4905,6 +4951,51 @@ function bindCredentialKind(form) {
   draw();
 }
 
+function openCredentialCreator(kind, onCreated) {
+  document.querySelector("#quick-credential")?.remove();
+  document.querySelector(".main").insertAdjacentHTML("beforeend", `
+    <div class="overlay" id="quick-credential">
+      <div class="overlay-card" role="dialog" aria-modal="true" aria-labelledby="quick-credential-title">
+        <form class="form" id="quick-credential-form">
+          <div class="spread">
+            <h2 id="quick-credential-title">${h("new_credential")}</h2>
+            <button class="btn" type="button" id="quick-credential-close">${h("close")}</button>
+          </div>
+          <input type="hidden" name="kind" value="${esc(kind)}">
+          <label class="field required"><span>${h("name")}</span><input name="name" required></label>
+          <label class="field"><span>${h("type")}</span><input value="${esc(credentialKindLabel(kind))}" disabled></label>
+          <div>${credentialFields(kind)}</div>
+          <p class="small muted" data-quick-error aria-live="polite"></p>
+          <button class="btn pill primary" type="submit">${h("create")}</button>
+        </form>
+      </div>
+    </div>`);
+  const overlay = document.querySelector("#quick-credential");
+  const close = () => overlay.remove();
+  const dismiss = makeModal(overlay, close);
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) dismiss();
+  });
+  document.querySelector("#quick-credential-close").addEventListener("click", dismiss);
+  const form = document.querySelector("#quick-credential-form");
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const errorNote = form.querySelector("[data-quick-error]");
+    errorNote.textContent = "";
+    try {
+      const created = await api("POST", "/api/credentials", {
+        name: form.name.value,
+        kind: form.kind.value,
+        secret: credentialSecret(form),
+      });
+      dismiss();
+      onCreated(created);
+    } catch (error) {
+      errorNote.textContent = t(error.message || "error.generic", error.vars);
+    }
+  });
+}
+
 async function pageCredentials() {
   if (!needTeam()) return;
   const credentials = await api("GET", "/api/credentials");
@@ -4917,10 +5008,10 @@ async function pageCredentials() {
     can("owner") ? addLink("#/credentials/new", "credential") : "");
   const drawCredentials = () => {
     const needle = document.querySelector("#credential-search").value.trim().toLowerCase();
-    const rows = credentials.filter((item) => !needle || `${item.name} ${item.kind} ${credentialKindLabel(item.kind)}`.toLowerCase().includes(needle)).map((item) =>
-      `<tr><td><a href="#/credentials/${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(credentialKindLabel(item.kind))}</td><td>${can("owner") ? `<button class="btn danger" type="button" data-credential="${esc(item.id)}">${h("delete")}</button>` : ""}</td></tr>`
+    const rows = credentials.filter((item) => !needle || `${item.name} ${item.kind} ${credentialKindLabel(item.kind)} ${credentialUsageNames(item)}`.toLowerCase().includes(needle)).map((item) =>
+      `<tr><td><a href="#/credentials/${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(credentialKindLabel(item.kind))}</td><td>${esc(credentialUsageNames(item) || t("not_used"))}</td><td>${can("owner") ? `<button class="btn danger" type="button" data-credential="${esc(item.id)}">${h("delete")}</button>` : ""}</td></tr>`
     );
-    document.querySelector("#credential-table").innerHTML = table([t("name"), t("type"), ""], rows);
+    document.querySelector("#credential-table").innerHTML = table([t("name"), t("type"), t("used_by"), ""], rows);
     document.querySelectorAll("[data-credential]").forEach((button) => {
       button.addEventListener("click", async () => {
         try {
@@ -5020,10 +5111,10 @@ async function pageCredential(id) {
       return paramRow(fieldLabel(key), shown);
     }).join("");
     const stored = (item.set || []).map((key) => paramRowHtml(fieldLabel(key), `<input type="password" value="********" disabled tabindex="-1">`)).join("");
-    shell(item.name, `<section class="card"><dl class="kv">${paramRow("name", item.name)}${paramRow("type", credentialKindLabel(item.kind))}${visible}${stored}</dl></section>`);
+    shell(item.name, `<section class="card"><dl class="kv">${paramRow("name", item.name)}${paramRow("type", credentialKindLabel(item.kind))}${visible}${stored}</dl></section>${credentialUsageCard(item)}`);
     return;
   }
-  shell(item.name, credentialEditForm(item), `<button class="btn danger" id="delete-credential" type="button">${h("delete")}</button>`);
+  shell(item.name, `${credentialEditForm(item)}${credentialUsageCard(item)}`, `<button class="btn danger" id="delete-credential" type="button">${h("delete")}</button>`);
   const form = document.querySelector("#credential-form");
   form.querySelectorAll("[data-stored-mask]").forEach((field) => {
     field.addEventListener("focus", () => {

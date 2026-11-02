@@ -3550,6 +3550,439 @@ async fn netbox_endpoint_changes_require_a_new_token() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[tokio::test]
+async fn netbox_sources_share_a_normal_credential() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-netbox-shared-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (addr, seen) = netbox_mock_recording().await;
+    let (status, credential, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "NetBox Prod",
+            "kind": "netbox",
+            "secret": {"token": "secret-token", "url": addr}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{credential}");
+    let credential_id = credential["id"].as_str().unwrap().to_string();
+
+    let (status, first, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "NetBox shared",
+            "sources": [{
+                "kind": "netbox",
+                "credential_id": credential_id,
+                "query_filters": ["status=active"],
+                "virtual_machines": false
+            }]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    assert_eq!(first["sources"][0]["credential_id"], credential_id);
+    let first_id = first["id"].as_str().unwrap().to_string();
+    let first_source = first["sources"][0]["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        seen.lock().unwrap().last().map(String::as_str),
+        Some("Token secret-token")
+    );
+
+    let (status, second, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "NetBox second",
+            "sources": [{
+                "kind": "netbox",
+                "credential_id": credential_id,
+                "api_endpoint": addr,
+                "query_filters": ["status=active"],
+                "virtual_machines": false
+            }]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{second}");
+    let second_id = second["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        seen.lock().unwrap().last().map(String::as_str),
+        Some("Token secret-token")
+    );
+
+    let (status, rotated, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/credentials/{credential_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "NetBox Prod", "secret": {"token": "rotated-token"}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{rotated}");
+    assert!(!rotated.to_string().contains("rotated-token"));
+    for id in [&first_id, &second_id] {
+        let (status, synced, _) = call(
+            &app,
+            "POST",
+            &format!("/api/inventories/{id}/sync"),
+            Some(&cookie),
+            Some(&team),
+            Some(json!({})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{synced}");
+        assert!(synced["hosts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["name"] == "web-1"));
+        assert_eq!(
+            seen.lock().unwrap().last().map(String::as_str),
+            Some("Token rotated-token")
+        );
+    }
+
+    let (status, ssh, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Not NetBox",
+            "kind": "ssh",
+            "secret": {"username": "deploy", "password": "ssh-pass"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{ssh}");
+    let ssh_id = ssh["id"].as_str().unwrap();
+    let (status, wrong_kind, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Wrong kind",
+            "sources": [{
+                "kind": "netbox",
+                "credential_id": ssh_id,
+                "api_endpoint": addr
+            }]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{wrong_kind}");
+    assert_eq!(wrong_kind["error"], "netbox_credential_has_the_wrong_kind");
+
+    let (status, other_team, _) = call(
+        &app,
+        "POST",
+        "/api/teams",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Other NetBox team"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{other_team}");
+    let other = other_team["id"].as_str().unwrap();
+    let (status, foreign, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&cookie),
+        Some(other),
+        Some(json!({
+            "name": "Foreign NetBox",
+            "kind": "netbox",
+            "secret": {"token": "secret-token", "url": addr}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{foreign}");
+    let foreign_id = foreign["id"].as_str().unwrap();
+    let (status, wrong_team, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Wrong team",
+            "sources": [{
+                "kind": "netbox",
+                "credential_id": foreign_id,
+                "api_endpoint": addr
+            }]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{wrong_team}");
+    assert_eq!(
+        wrong_team["error"],
+        "the_credential_belongs_to_another_team"
+    );
+
+    let (status, listed, _) = call(
+        &app,
+        "GET",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let row = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == credential_id)
+        .expect("shared credential");
+    assert_eq!(row["usages"].as_array().unwrap().len(), 2, "{row}");
+    assert!(row["usages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|usage| usage["inventory_name"] == "NetBox shared"));
+
+    let (status, refused, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/credentials/{credential_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["error"], "credential_is_in_use");
+    let names = refused["vars"]["names"].as_str().unwrap_or("");
+    assert!(names.contains("NetBox shared / netbox"), "{names}");
+    assert!(names.contains("NetBox second / netbox"), "{names}");
+
+    let (status, synced, _) = call(
+        &app,
+        "POST",
+        &format!("/api/inventories/{first_id}/sources/{first_source}/sync"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{synced}");
+    assert_eq!(
+        seen.lock().unwrap().last().map(String::as_str),
+        Some("Token rotated-token")
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn netbox_automatic_credentials_become_normal_and_get_their_url() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-netbox-migrate-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state.clone());
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (addr, _) = netbox_mock_recording().await;
+    let (status, credential, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Legacy NetBox Token",
+            "kind": "netbox",
+            "secret": {"token": "secret-token"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{credential}");
+    let credential_id = credential["id"].as_str().unwrap().to_string();
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Legacy NetBox",
+            "sources": [{
+                "kind": "netbox",
+                "name": "Legacy NetBox",
+                "credential_id": credential_id,
+                "api_endpoint": addr,
+                "query_filters": ["status=active"],
+                "virtual_machines": false
+            }]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let inventory_id = created["id"].as_str().unwrap().to_string();
+    let source_id = created["sources"][0]["id"].as_str().unwrap().to_string();
+    assert_eq!(created["sources"][0]["credential_id"], credential_id);
+
+    {
+        let db = state.db().unwrap();
+        let changed = db
+            .execute(
+                "UPDATE credentials SET auto = 1 WHERE id = ?1",
+                [&credential_id],
+            )
+            .unwrap();
+        assert_eq!(changed, 1);
+    }
+    drop(app);
+    drop(state);
+
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state.clone());
+
+    {
+        let db = state.db().unwrap();
+        let automatic: i64 = db
+            .query_row(
+                "SELECT auto FROM credentials WHERE id = ?1",
+                [&credential_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(automatic, 0);
+    }
+
+    let (status, _, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let cookie = cookie.expect("session cookie");
+    let (status, stored, _) = call(
+        &app,
+        "GET",
+        &format!("/api/credentials/{credential_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{stored}");
+    assert_eq!(stored["name"], "Legacy NetBox Token");
+    assert_eq!(stored["fields"]["url"], addr);
+    assert_eq!(stored["usages"][0]["inventory_id"], inventory_id);
+
+    let (status, synced, _) = call(
+        &app,
+        "POST",
+        &format!("/api/inventories/{inventory_id}/sources/{source_id}/sync"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{synced}");
+    assert!(synced["hosts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["name"] == "web-1"));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+async fn netbox_mock_recording() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = seen.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let mock = axum::Router::new().route(
+        "/api/dcim/devices/",
+        axum::routing::get(move |headers: axum::http::HeaderMap| {
+            let seen = recorded.clone();
+            async move {
+                let token = headers
+                    .get("authorization")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("")
+                    .to_string();
+                seen.lock().unwrap().push(token);
+                axum::Json(json!({
+                    "next": null,
+                    "results": [{
+                        "id": 1,
+                        "name": "web-1",
+                        "primary_ip4": {"address": "10.0.0.8/24"},
+                        "site": {"slug": "berlin"}
+                    }]
+                }))
+            }
+        }),
+    );
+    tokio::spawn(async move {
+        axum::serve(listener, mock).await.unwrap();
+    });
+    (format!("http://{addr}"), seen)
+}
+
 async fn netbox_mock() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
     let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let count = hits.clone();
@@ -3807,7 +4240,7 @@ async fn nb_status(headers: axum::http::HeaderMap) -> axum::response::Response {
 }
 
 #[tokio::test]
-async fn deleting_an_inventory_removes_its_auto_netbox_credential() {
+async fn deleting_an_inventory_keeps_its_shortcut_netbox_credential() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -3916,7 +4349,7 @@ async fn deleting_an_inventory_removes_its_auto_netbox_credential() {
         .iter()
         .map(|item| item["name"].as_str().unwrap())
         .collect::<Vec<_>>();
-    assert!(!names.contains(&"Prod NB Token"), "{names:?}");
+    assert!(names.contains(&"Prod NB Token"), "{names:?}");
     assert!(names.contains(&"Unrelated NetBox Token"), "{names:?}");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -4033,7 +4466,7 @@ async fn deleting_a_used_inventory_is_refused_with_the_template_names() {
 }
 
 #[tokio::test]
-async fn deleting_an_inventory_removes_auto_credentials_from_sources() {
+async fn deleting_an_inventory_keeps_shortcut_credentials_from_sources() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -4146,7 +4579,7 @@ async fn deleting_an_inventory_removes_auto_credentials_from_sources() {
         .iter()
         .map(|item| item["name"].as_str().unwrap())
         .collect::<Vec<_>>();
-    assert!(!names.contains(&"Prod NB Token"), "{names:?}");
+    assert!(names.contains(&"Prod NB Token"), "{names:?}");
     assert!(names.contains(&"Unrelated NetBox Token"), "{names:?}");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -4299,7 +4732,7 @@ async fn broken_ini_bodies_are_rejected_on_the_source_endpoints() {
 }
 
 #[tokio::test]
-async fn deleting_an_inventory_keeps_auto_credentials_referenced_in_workflows() {
+async fn deleting_an_inventory_keeps_shortcut_credentials_referenced_in_workflows() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()

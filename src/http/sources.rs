@@ -33,6 +33,8 @@ pub(super) struct SourceInput {
     #[serde(default)]
     api_endpoint: String,
     #[serde(default)]
+    credential_id: String,
+    #[serde(default)]
     token: String,
     #[serde(default = "yes")]
     validate_certs: bool,
@@ -58,7 +60,11 @@ pub(super) struct ImportBody {
 #[serde(deny_unknown_fields)]
 pub(super) struct NetboxBody {
     name: String,
+    #[serde(default)]
     api_endpoint: String,
+    #[serde(default)]
+    credential_id: String,
+    #[serde(default)]
     token: String,
     #[serde(default = "yes")]
     validate_certs: bool,
@@ -77,6 +83,8 @@ pub(super) struct NetboxBody {
 pub(super) struct NetboxTestBody {
     #[serde(default)]
     api_endpoint: String,
+    #[serde(default)]
+    credential_id: String,
     #[serde(default)]
     token: String,
     #[serde(default = "yes")]
@@ -182,11 +190,23 @@ pub async fn create_netbox(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let name = require_name(&body.name)?;
-    let source = netbox_source(&body)?;
-    let ini = fetch_netbox(&state, &source, body.token.trim()).await?;
-    let secret = json!({"token": body.token.trim()}).to_string();
-    let blob = state.encrypt(&secret)?;
-    let credential_id = Uuid::new_v4().to_string();
+    let access = netbox_access(
+        &state,
+        &team,
+        &body.credential_id,
+        &body.token,
+        &body.api_endpoint,
+        &name,
+    )?;
+    let source = netbox_source_fields(
+        &access.api_endpoint,
+        body.validate_certs,
+        &body.ca_file,
+        &body.group_by,
+        &body.query_filters,
+        body.virtual_machines,
+    )?;
+    let ini = fetch_netbox(&state, &source, &access.token).await?;
     let inventory_id = Uuid::new_v4().to_string();
     let item = Inventory {
         id: inventory_id,
@@ -196,7 +216,7 @@ pub async fn create_netbox(
         created_at: db::now(),
         source_kind: "netbox".into(),
         source_json: netbox::source_json(&source).to_string(),
-        credential_id: Some(credential_id.clone()),
+        credential_id: None,
         admin_saved: user.is_admin,
     };
     let source_row = db::InventorySource {
@@ -205,28 +225,50 @@ pub async fn create_netbox(
         name: "netbox".into(),
         kind: "netbox".into(),
         source_json: item.source_json.clone(),
-        credential_id: Some(credential_id.clone()),
+        credential_id: None,
         body: item.body.clone(),
         position: 0,
         created_at: item.created_at.clone(),
     };
     let mut db = state.db()?;
     let tx = db.transaction()?;
-    db::insert_credential(
-        &tx,
-        &db::Credential {
-            id: credential_id,
-            team_id: team,
-            name: format!("{name} Token"),
-            kind: "netbox".into(),
-            secret_blob: blob,
-            created_at: db::now(),
-            auto: true,
-        },
-    )?;
+    let credential_id = if let Some(id) = access.credential_id {
+        Some(id)
+    } else if let Some(blob) = access.credential_blob {
+        let id = Uuid::new_v4().to_string();
+        let base = access
+            .credential_name
+            .unwrap_or_else(|| format!("{name} Token"));
+        let credential_name = unique_credential_name(&tx, &team, &base)?;
+        db::insert_credential(
+            &tx,
+            &db::Credential {
+                id: id.clone(),
+                team_id: team,
+                name: credential_name,
+                kind: "netbox".into(),
+                secret_blob: blob,
+                created_at: db::now(),
+                auto: false,
+            },
+        )?;
+        Some(id)
+    } else {
+        None
+    };
+    let item = Inventory {
+        credential_id: credential_id.clone(),
+        ..item
+    };
+    let source_row = db::InventorySource {
+        credential_id,
+        ..source_row
+    };
     db::insert_inventory(&tx, &item)?;
     db::insert_inventory_source(&tx, &source_row)?;
+    db::refresh_inventory_summary(&tx, &item.id)?;
     tx.commit()?;
+    let item = db::inventory(&db, &item.id)?.ok_or(ApiError::NotFound)?;
     Ok(created(inventory_json(&db, &item)?))
 }
 
@@ -238,14 +280,22 @@ pub async fn test_netbox(
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let source = connection_source(
-        &body.api_endpoint,
+    let access = netbox_access(
+        &state,
+        &team,
+        &body.credential_id,
         &body.token,
+        &body.api_endpoint,
+        "NetBox",
+    )?;
+    let source = connection_source(
+        &access.api_endpoint,
+        &access.token,
         body.validate_certs,
         &body.ca_file,
     )?;
     let proxy = crate::settings::load(&state)?.proxy;
-    let version = netbox::test_connection(&source, body.token.trim(), &proxy)
+    let version = netbox::test_connection(&source, &access.token, &proxy)
         .await
         .map_err(ApiError::bad)?;
     Ok(Json(json!({ "version": version })))
@@ -365,11 +415,7 @@ async fn fetch_netbox(state: &Shared, source: &NetboxSource, token: &str) -> App
 fn token_from_secret(plain: &str) -> AppResult<String> {
     let value: Value = serde_json::from_str(plain)
         .map_err(|_| ApiError::bad("the_netbox_credential_is_damaged"))?;
-    let token = value.get("token").and_then(Value::as_str).unwrap_or("");
-    if !netbox::valid_token(token) {
-        return Err(ApiError::bad("the_netbox_token_is_invalid"));
-    }
-    Ok(token.to_string())
+    token_from_value(&value)
 }
 
 fn netbox_config(
@@ -421,19 +467,107 @@ fn connection_source(
     )
 }
 
-fn netbox_source(body: &NetboxBody) -> AppResult<NetboxSource> {
-    if !netbox::valid_token(body.token.trim()) {
+fn netbox_source_fields(
+    api_endpoint: &str,
+    validate_certs: bool,
+    ca_file: &str,
+    group_by: &[String],
+    query_filters: &[String],
+    virtual_machines: bool,
+) -> AppResult<NetboxSource> {
+    let query = netbox::parse_filters(query_filters).map_err(ApiError::bad)?;
+    netbox_config(
+        api_endpoint,
+        validate_certs,
+        ca_file,
+        group_by,
+        query,
+        virtual_machines,
+    )
+}
+
+struct NetboxAccess {
+    credential_id: Option<String>,
+    credential_name: Option<String>,
+    credential_blob: Option<String>,
+    token: String,
+    api_endpoint: String,
+}
+
+fn netbox_access(
+    state: &Shared,
+    team: &str,
+    credential_id: &str,
+    token: &str,
+    api_endpoint: &str,
+    fallback_name: &str,
+) -> AppResult<NetboxAccess> {
+    let credential_id = credential_id.trim();
+    let token = token.trim();
+    let endpoint = api_endpoint.trim();
+    if !credential_id.is_empty() {
+        let secret = credential_secret(state, credential_id, team)?;
+        let token = token_from_value(&secret)?;
+        let url = secret
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        let api_endpoint = if endpoint.is_empty() {
+            url.to_string()
+        } else {
+            endpoint.to_string()
+        };
+        return Ok(NetboxAccess {
+            credential_id: Some(credential_id.to_string()),
+            credential_name: None,
+            credential_blob: None,
+            token,
+            api_endpoint,
+        });
+    }
+    if !token.is_empty() {
+        if !netbox::valid_token(token) {
+            return Err(ApiError::bad("the_netbox_token_is_invalid"));
+        }
+        if endpoint.is_empty() {
+            return Err(ApiError::bad("the_netbox_address_must_be_http_or_https"));
+        }
+        let blob = state.encrypt(&json!({"token": token, "url": endpoint}).to_string())?;
+        return Ok(NetboxAccess {
+            credential_id: None,
+            credential_name: Some(format!("{fallback_name} Token")),
+            credential_blob: Some(blob),
+            token: token.to_string(),
+            api_endpoint: endpoint.to_string(),
+        });
+    }
+    Err(ApiError::bad("the_netbox_token_is_missing"))
+}
+
+fn credential_secret(state: &Shared, id: &str, team: &str) -> AppResult<Value> {
+    let (blob, kind, credential_team) = {
+        let db = state.db()?;
+        let item =
+            db::credential(&db, id)?.ok_or_else(|| ApiError::bad("the_netbox_token_is_missing"))?;
+        (item.secret_blob, item.kind, item.team_id)
+    };
+    if credential_team != team {
+        return Err(ApiError::bad("the_credential_belongs_to_another_team"));
+    }
+    if kind != "netbox" {
+        return Err(ApiError::bad("netbox_credential_has_the_wrong_kind"));
+    }
+    let plain = state.decrypt(&blob)?;
+    serde_json::from_str(&plain).map_err(|_| ApiError::bad("the_netbox_credential_is_damaged"))
+}
+
+fn token_from_value(value: &Value) -> AppResult<String> {
+    let token = value.get("token").and_then(Value::as_str).unwrap_or("");
+    if !netbox::valid_token(token) {
         return Err(ApiError::bad("the_netbox_token_is_invalid"));
     }
-    let query = netbox::parse_filters(&body.query_filters).map_err(ApiError::bad)?;
-    netbox_config(
-        &body.api_endpoint,
-        body.validate_certs,
-        &body.ca_file,
-        &body.group_by,
-        query,
-        body.virtual_machines,
-    )
+    Ok(token.to_string())
 }
 
 fn visible_project(state: &Shared, id: &str, team: &str) -> AppResult<Project> {
@@ -495,6 +629,7 @@ struct ResolvedSource {
     kind: String,
     source_json: String,
     body: String,
+    credential_id: Option<String>,
     credential_name: Option<String>,
     credential_blob: Option<String>,
 }
@@ -632,29 +767,40 @@ pub async fn update_source(
     };
     let mut db = state.db()?;
     let tx = db.transaction()?;
+    let credential_id = if let Some(blob) = &resolved.credential_blob {
+        let id = Uuid::new_v4().to_string();
+        let base = resolved
+            .credential_name
+            .clone()
+            .unwrap_or_else(|| format!("{} Token", resolved.name));
+        let credential_name = unique_credential_name(&tx, &team, &base)?;
+        db::insert_credential(
+            &tx,
+            &db::Credential {
+                id: id.clone(),
+                team_id: team.clone(),
+                name: credential_name,
+                kind: "netbox".into(),
+                secret_blob: blob.clone(),
+                created_at: db::now(),
+                auto: false,
+            },
+        )?;
+        Some(id)
+    } else {
+        resolved
+            .credential_id
+            .clone()
+            .or_else(|| source.credential_id.clone())
+    };
     db::update_inventory_source(
         &tx,
         &source_id,
         &resolved.name,
         &resolved.source_json,
+        credential_id.as_deref(),
         &resolved.body,
     )?;
-    if let Some(credential_name) = &resolved.credential_name {
-        let credential_id = source
-            .credential_id
-            .as_deref()
-            .ok_or_else(|| ApiError::bad("the_netbox_token_is_missing"))?;
-        let mut credential = db::credential(&tx, credential_id)?
-            .ok_or_else(|| ApiError::bad("the_netbox_token_is_missing"))?;
-        if credential.team_id != team || credential.kind != "netbox" {
-            return Err(ApiError::bad("the_netbox_token_belongs_to_another_team"));
-        }
-        credential.name = credential_name.clone();
-        if let Some(blob) = &resolved.credential_blob {
-            credential.secret_blob = blob.clone();
-        }
-        db::update_credential(&tx, &credential)?;
-    }
     db::refresh_inventory_summary(&tx, &inventory_id)?;
     db::set_inventory_admin_saved(&tx, &inventory_id, user.is_admin)?;
     tx.commit()?;
@@ -730,6 +876,8 @@ pub(super) struct SourceUpdate {
     #[serde(default)]
     api_endpoint: Option<String>,
     #[serde(default)]
+    credential_id: Option<String>,
+    #[serde(default)]
     token: Option<String>,
     #[serde(default)]
     validate_certs: Option<bool>,
@@ -747,6 +895,7 @@ struct ResolvedUpdate {
     name: String,
     source_json: String,
     body: String,
+    credential_id: Option<String>,
     credential_name: Option<String>,
     credential_blob: Option<String>,
 }
@@ -757,6 +906,7 @@ fn reject_foreign_fields(kind: &str, body: &SourceUpdate) -> AppResult<()> {
             ("project_id", body.project_id.is_some()),
             ("path", body.path.is_some()),
             ("api_endpoint", body.api_endpoint.is_some()),
+            ("credential_id", body.credential_id.is_some()),
             ("token", body.token.is_some()),
             ("validate_certs", body.validate_certs.is_some()),
             ("ca_file", body.ca_file.is_some()),
@@ -767,6 +917,7 @@ fn reject_foreign_fields(kind: &str, body: &SourceUpdate) -> AppResult<()> {
         "project" => &[
             ("body", body.body.is_some()),
             ("api_endpoint", body.api_endpoint.is_some()),
+            ("credential_id", body.credential_id.is_some()),
             ("token", body.token.is_some()),
             ("validate_certs", body.validate_certs.is_some()),
             ("ca_file", body.ca_file.is_some()),
@@ -816,6 +967,7 @@ fn resolve_ini_update(
         name,
         source_json: source.source_json.clone(),
         body: text,
+        credential_id: None,
         credential_name: None,
         credential_blob: None,
     })
@@ -851,6 +1003,7 @@ fn resolve_project_update(
         name,
         source_json: json!({"project_id": project.id, "path": path}).to_string(),
         body: text,
+        credential_id: None,
         credential_name: None,
         credential_blob: None,
     })
@@ -868,12 +1021,39 @@ async fn resolve_netbox_update(
         .as_deref()
         .map(str::trim)
         .filter(|token| !token.is_empty());
+    let explicit_id = body
+        .credential_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    let endpoint_override = body.api_endpoint.as_deref().map(str::trim);
+    let endpoint = match endpoint_override {
+        Some(text) if !text.is_empty() => text,
+        Some(_) if explicit_id.is_some() => "",
+        _ => &stored.api_endpoint,
+    };
+    let access = if let Some(id) = explicit_id {
+        netbox_access(state, team, id, "", endpoint, &source.name)?
+    } else if let Some(token) = new_token {
+        let endpoint = if endpoint.is_empty() {
+            &stored.api_endpoint
+        } else {
+            endpoint
+        };
+        netbox_access(state, team, "", token, endpoint, &source.name)?
+    } else {
+        let id = source
+            .credential_id
+            .as_deref()
+            .ok_or_else(|| ApiError::bad("the_netbox_token_is_missing"))?;
+        netbox_access(state, team, id, "", endpoint, &source.name)?
+    };
     let query = match &body.query_filters {
         Some(filters) => netbox::parse_filters(filters).map_err(ApiError::bad)?,
         None => stored.query.clone(),
     };
     let parsed = netbox_config(
-        body.api_endpoint.as_deref().unwrap_or(&stored.api_endpoint),
+        &access.api_endpoint,
         body.validate_certs.unwrap_or(stored.validate_certs),
         body.ca_file.as_deref().unwrap_or(&stored.ca_file),
         body.group_by.as_deref().unwrap_or(&stored.group_by),
@@ -883,22 +1063,15 @@ async fn resolve_netbox_update(
     let changes_destination = parsed.api_endpoint != stored.api_endpoint
         || parsed.ca_file != stored.ca_file
         || (stored.validate_certs && !parsed.validate_certs);
-    if changes_destination && new_token.is_none() {
+    if changes_destination && new_token.is_none() && explicit_id.is_none() {
         return Err(ApiError::bad("netbox_token_required_for_endpoint_change"));
     }
-    let token = match new_token {
-        Some(token) => token.to_string(),
-        None => stored_token(state, &source.credential_id, team)?,
-    };
     let name = updated_name(body.name.clone(), &source.name, "netbox")?;
-    let ini = fetch_netbox(state, &parsed, &token).await?;
-    let credential_blob = match new_token {
-        Some(token) => Some(state.encrypt(&json!({"token": token}).to_string())?),
-        None => None,
-    };
+    let ini = fetch_netbox(state, &parsed, &access.token).await?;
     Ok(ResolvedUpdate {
-        credential_name: Some(format!("{name} Token")),
-        credential_blob,
+        credential_id: access.credential_id,
+        credential_name: access.credential_name,
+        credential_blob: access.credential_blob,
         name,
         source_json: netbox::source_json(&parsed).to_string(),
         body: ini,
@@ -930,27 +1103,30 @@ fn store_source(
     source: &ResolvedSource,
     created_at: &str,
 ) -> AppResult<()> {
-    let credential_id = if let Some(blob) = &source.credential_blob {
-        let id = Uuid::new_v4().to_string();
-        let credential_name = source
-            .credential_name
-            .clone()
-            .unwrap_or_else(|| format!("{} Token", source.name));
-        db::insert_credential(
-            db,
-            &db::Credential {
-                id: id.clone(),
-                team_id: team.to_string(),
-                name: credential_name,
-                kind: "netbox".into(),
-                secret_blob: blob.clone(),
-                created_at: created_at.to_string(),
-                auto: true,
-            },
-        )?;
-        Some(id)
-    } else {
-        None
+    let credential_id = match (&source.credential_id, &source.credential_blob) {
+        (Some(id), _) => Some(id.clone()),
+        (None, Some(blob)) => {
+            let id = Uuid::new_v4().to_string();
+            let base = source
+                .credential_name
+                .clone()
+                .unwrap_or_else(|| format!("{} Token", source.name));
+            let credential_name = unique_credential_name(db, team, &base)?;
+            db::insert_credential(
+                db,
+                &db::Credential {
+                    id: id.clone(),
+                    team_id: team.to_string(),
+                    name: credential_name,
+                    kind: "netbox".into(),
+                    secret_blob: blob.clone(),
+                    created_at: created_at.to_string(),
+                    auto: false,
+                },
+            )?;
+            Some(id)
+        }
+        (None, None) => None,
     };
     db::insert_inventory_source(
         db,
@@ -984,6 +1160,7 @@ async fn resolve_source(
                 kind: "ini".into(),
                 source_json: "{}".into(),
                 body: input.body.clone(),
+                credential_id: None,
                 credential_name: None,
                 credential_blob: None,
             })
@@ -1017,28 +1194,34 @@ async fn resolve_source(
                 kind: "project".into(),
                 source_json: json!({"project_id": project.id, "path": path}).to_string(),
                 body: text,
+                credential_id: None,
                 credential_name: None,
                 credential_blob: None,
             })
         }
         "netbox" => {
-            let parsed = netbox_source(&NetboxBody {
-                name: input.name.clone(),
-                api_endpoint: input.api_endpoint.clone(),
-                token: input.token.clone(),
-                validate_certs: input.validate_certs,
-                ca_file: input.ca_file.clone(),
-                group_by: input.group_by.clone(),
-                query_filters: input.query_filters.clone(),
-                virtual_machines: input.virtual_machines,
-            })?;
-            let ini = fetch_netbox(state, &parsed, input.token.trim()).await?;
             let name = source_label(&input.name, "netbox")?;
-            let secret = json!({"token": input.token.trim()}).to_string();
-            let blob = state.encrypt(&secret)?;
+            let access = netbox_access(
+                state,
+                team,
+                &input.credential_id,
+                &input.token,
+                &input.api_endpoint,
+                &name,
+            )?;
+            let parsed = netbox_source_fields(
+                &access.api_endpoint,
+                input.validate_certs,
+                &input.ca_file,
+                &input.group_by,
+                &input.query_filters,
+                input.virtual_machines,
+            )?;
+            let ini = fetch_netbox(state, &parsed, &access.token).await?;
             Ok(ResolvedSource {
-                credential_name: Some(format!("{name} Token")),
-                credential_blob: Some(blob),
+                credential_id: access.credential_id,
+                credential_name: access.credential_name,
+                credential_blob: access.credential_blob,
                 name,
                 kind: "netbox".into(),
                 source_json: netbox::source_json(&parsed).to_string(),
@@ -1063,4 +1246,26 @@ fn file_stem(path: &str) -> String {
         .map(|(stem, _)| stem.to_string())
         .filter(|stem| !stem.is_empty())
         .unwrap_or_else(|| name.to_string())
+}
+
+fn unique_credential_name(db: &rusqlite::Connection, team: &str, base: &str) -> AppResult<String> {
+    let mut name = base.to_string();
+    let mut suffix = 2;
+    loop {
+        let found = db
+            .query_row(
+                "SELECT 1 FROM credentials WHERE team_id = ?1 AND name = ?2",
+                rusqlite::params![team, name],
+                |_| Ok(()),
+            )
+            .map(|_| true);
+        match found {
+            Ok(true) => {}
+            Ok(false) => return Ok(name),
+            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(name),
+            Err(err) => return Err(err.into()),
+        }
+        name = format!("{base} {suffix}");
+        suffix += 1;
+    }
 }
