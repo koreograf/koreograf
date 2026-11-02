@@ -199,6 +199,8 @@ Shell: `entrypoint` or `spec.script`. The script is written as `inline.sh`.
 | `workflow_id` | no | |
 | `extra_vars` | no | Object merged into the launch |
 
+`PUT /api/hooks/{id}` replaces those fields and keeps the token and the created time.
+
 ### Launch
 
 `POST /api/templates/{id}/launch` and `POST /api/workflows/{id}/launch` take `{"extra_vars": {}}`. The value is an object. A template launch may also send `inventory_id`, `credential_ids`, and an Ansible `spec` with `job_type`, `tags`, `skip_tags`, `limit`, and `verbosity`. Omit a field to keep the template value. An empty `inventory_id` clears it. An empty string in those spec fields clears that field. `extra_vars` is still merged. Those three fields are accepted only when the template has `prompt_on_launch` set, or when the body sets `launch_with_options: true`. The template row's Launch with options action sends that flag. Plain API launches and hooks do not set it, so a template without `prompt_on_launch` still rejects those overrides. Otherwise the launch is rejected. A body that sends none of them keeps the template, including for hooks and scripts. The template row is not changed. Workflow launch ignores those three fields and uses the graph.
@@ -233,7 +235,7 @@ Shell: `entrypoint` or `spec.script`. The script is written as `inline.sh`.
 | POST | `/api/inventories/{id}/sources/{source_id}/sync` |
 | GET | `/api/cache`, `/api/plugins` |
 | GET, POST | `/api/templates`, `/api/workflows`, `/api/hooks`, `/api/jobs` |
-| PUT, DELETE | `/api/templates/{id}`, `/api/workflows/{id}` |
+| PUT, DELETE | `/api/templates/{id}`, `/api/workflows/{id}`, `/api/hooks/{id}` |
 | POST | `/api/templates/{id}/launch`, `/api/workflows/{id}/launch` |
 | GET, POST | `/api/templates/{id}/schedules`, `/api/workflows/{id}/schedules` |
 | GET | `/api/schedules` |
@@ -243,7 +245,6 @@ Shell: `entrypoint` or `spec.script`. The script is written as `inline.sh`.
 | GET | `/api/jobs/{id}`, `/api/jobs/{id}/output`, `/api/workflows/{id}`, `/api/workflow-jobs/{id}` |
 | POST | `/api/jobs/{id}/cancel`, `/api/jobs/{id}/relaunch`, `/api/hooks/{id}/test` |
 | GET | `/api/hooks/{id}/deliveries` |
-| DELETE | `/api/hooks/{id}` |
 | POST | `/hooks/{id}/{token}` |
 | GET | `/healthz`, `/metrics` |
 | GET, POST | `/api/admin/backup` |

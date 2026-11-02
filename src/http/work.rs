@@ -647,10 +647,32 @@ pub async fn create_hook(
 ) -> AppResult<Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let hook = build_hook(&state, &team, body)?;
+    let hook = build_hook(&state, &team, None, body)?;
     let db = state.db()?;
     db::insert_hook(&db, &hook)?;
     Ok(created(hook_json(&hook, true)))
+}
+
+pub async fn update_hook(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Path(id): Path<String>,
+    ApiJson(body): ApiJson<HookBody>,
+) -> AppResult<Json<Value>> {
+    let team = team_header(&headers)?;
+    gate(&state, &user, &team, Role::Operator)?;
+    let current = {
+        let db = state.db()?;
+        db::hook(&db, &id)?.ok_or(ApiError::NotFound)?
+    };
+    if current.team_id != team {
+        return Err(ApiError::NotFound);
+    }
+    let hook = build_hook(&state, &team, Some(&current), body)?;
+    let db = state.db()?;
+    db::update_hook(&db, &hook)?;
+    Ok(Json(hook_json(&hook, true)))
 }
 
 pub async fn delete_hook(
@@ -950,7 +972,12 @@ fn build_workflow(
     })
 }
 
-fn build_hook(state: &Shared, team: &str, body: HookBody) -> AppResult<Hook> {
+fn build_hook(
+    state: &Shared,
+    team: &str,
+    existing: Option<&Hook>,
+    body: HookBody,
+) -> AppResult<Hook> {
     let template_id = blank(body.template_id);
     let workflow_id = blank(body.workflow_id);
     match (&template_id, &workflow_id) {
@@ -985,17 +1012,17 @@ fn build_hook(state: &Shared, team: &str, body: HookBody) -> AppResult<Hook> {
         }
     }
     Ok(Hook {
-        id: Uuid::new_v4().to_string(),
+        id: existing.map_or_else(|| Uuid::new_v4().to_string(), |hook| hook.id.clone()),
         team_id: team.to_string(),
         name: require_name(&body.name)?,
-        token: crypto::random_token(),
+        token: existing.map_or_else(crypto::random_token, |hook| hook.token.clone()),
         match_alertname: alertname.to_string(),
         match_status: body.match_status,
         template_id,
         workflow_id,
         extra_vars: extra.to_string(),
-        enabled: true,
-        created_at: db::now(),
+        enabled: existing.is_none_or(|hook| hook.enabled),
+        created_at: existing.map_or_else(db::now, |hook| hook.created_at.clone()),
     })
 }
 

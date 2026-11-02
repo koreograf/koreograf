@@ -4017,13 +4017,13 @@ async function pageHooks() {
       <div id="hook-table"></div>
     </section>
     <section class="card"><h2>${h("deliveries")}</h2>${table([t("hook"), t("status"), t("summary"), t("time")], incoming)}</section>`,
-    can("operator") ? addLink("#/hooks/new", "webhook_2") : "");
+    can("operator") ? addLink("#/hooks?new=1", "webhook_2") : "");
   const drawHooks = () => {
     const needle = document.querySelector("#hook-search").value.trim().toLowerCase();
     const rows = hooks.filter((hook) => !needle || `${hook.name} ${hook.match_alertname} ${hook.match_status}`.toLowerCase().includes(needle)).map((hook) => {
       const url = hook.token ? `${origin}/hooks/${hook.id}/${hook.token}` : "";
       return `<tr>
-        <td>${esc(hook.name)}<div class="small muted">${esc(hook.match_alertname)} · ${esc(hookStatusLabel(hook.match_status))}</div></td>
+        <td>${can("operator") ? `<a href="#/hooks?edit=${esc(hook.id)}">${esc(hook.name)}</a>` : esc(hook.name)}<div class="small muted">${esc(hook.match_alertname)} · ${esc(hookStatusLabel(hook.match_status))}</div></td>
         <td class="mono">${url ? esc(url) : h("token_is_visible_to_operators")}</td>
         <td>${can("operator") ? `<button class="btn" type="button" data-test="${esc(hook.id)}">${h("test")}</button>` : ""}</td>
         <td class="actions danger">${can("operator") ? `<button class="btn danger" type="button" data-delete="${esc(hook.id)}">${h("delete")}</button>` : ""}</td>
@@ -4057,58 +4057,72 @@ async function pageHooks() {
   };
   document.querySelector("#hook-search").addEventListener("input", drawHooks);
   drawHooks();
-}
-
-async function pageHookNew() {
-  if (!needTeam()) return;
-  if (!can("operator")) {
-    deny("webhook", "operator");
+  const request = editQuery();
+  if (request.create !== null) {
+    if (can("operator")) await openHookDialog(null);
     return;
   }
+  if (!request.edit) return;
+  const item = hooks.find((row) => row.id === request.edit);
+  if (!item) {
+    clearEditHash();
+    return;
+  }
+  if (can("operator")) await openHookDialog(item);
+}
+
+async function openHookDialog(item) {
+  const editing = Boolean(item);
   const [templates, workflows] = await Promise.all([
     api("GET", "/api/templates"),
     api("GET", "/api/workflows"),
   ]);
-  shell(t("new_webhook"), `
-    <form class="card form" id="hook-form">
-      <label class="field"><span>${h("name")}</span><input name="name" required></label>
+  const targetId = editing ? (item.workflow_id || item.template_id || "") : "";
+  const option = (value, label, selected) =>
+    `<option value="${value}"${value === selected ? " selected" : ""}>${label}</option>`;
+  const status = editing ? item.match_status : "firing";
+  const targetOption = (kind, row) =>
+    option(`${kind}:${row.id}`, esc(row.name), `${kind}:${targetId}`);
+  openEditDialog({
+    id: "hook-dialog",
+    title: editing ? t("edit_webhook") : t("new_webhook"),
+    body: `
+      <label class="field required"><span>${h("name")}</span><input name="name" required value="${editing ? esc(item.name) : ""}"></label>
       <div class="field-row">
-        <label class="field"><span>${h("alert_name")}</span><input class="fit" name="match_alertname" required placeholder="DiskSpaceLow"></label>
+        <label class="field required"><span>${h("alert_name")}</span><input class="fit" name="match_alertname" required placeholder="DiskSpaceLow" value="${editing ? esc(item.match_alertname) : ""}"></label>
         <label class="field"><span>${h("status")}</span>
-          <select class="fit" name="match_status"><option value="firing">${h("hook_status_firing")}</option><option value="resolved">${h("hook_status_resolved")}</option><option value="any">${h("hook_status_any")}</option></select>
+          <select class="fit" name="match_status">${option("firing", h("hook_status_firing"), status)}${option("resolved", h("hook_status_resolved"), status)}${option("any", h("hook_status_any"), status)}</select>
         </label>
       </div>
-      <label class="field"><span>${h("target")}</span>
+      <label class="field required"><span>${h("target")}</span>
         <select name="target">
-          <optgroup label="${h("workflow")}">${workflows.map((item) => `<option value="workflow:${esc(item.id)}">${esc(item.name)}</option>`).join("")}</optgroup>
-          <optgroup label="${h("template")}">${templates.map((item) => `<option value="template:${esc(item.id)}">${esc(item.name)}</option>`).join("")}</optgroup>
+          <option value=""${editing ? "" : " selected"}>${h("select")}</option>
+          <optgroup label="${h("workflow")}">${workflows.map((row) => targetOption("workflow", row)).join("")}</optgroup>
+          <optgroup label="${h("template")}">${templates.map((row) => targetOption("template", row)).join("")}</optgroup>
         </select>
       </label>
-      <label class="field"><span>${h("extra_variables_json")}</span><textarea name="extra_vars">{}</textarea></label>
-      <button class="btn pill primary" type="submit">${h("create")}</button>
-    </form>`);
-  document.querySelector("#hook-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    try {
+      <label class="field"><span>${h("extra_variables_json")}</span><textarea name="extra_vars">${editing ? esc(JSON.stringify(item.extra_vars || {}, null, 2)) : "{}"}</textarea></label>`,
+    submit: editing ? t("save") : t("create"),
+    onSubmit: async ({ form, close }) => {
       const rawTarget = form.target.value;
       const splitAt = rawTarget.indexOf(":");
       if (splitAt < 1) throw new Error("create_a_template_or_a_workflow_first");
       const kind = rawTarget.slice(0, splitAt);
-      const targetId = rawTarget.slice(splitAt + 1);
-      await api("POST", "/api/hooks", {
+      const id = rawTarget.slice(splitAt + 1);
+      const payload = {
         name: form.name.value,
         match_alertname: form.match_alertname.value,
         match_status: form.match_status.value,
         extra_vars: jsonObject(form.extra_vars.value, "extra_variables"),
-        template_id: kind === "template" ? targetId : null,
-        workflow_id: kind === "workflow" ? targetId : null,
-      });
+        template_id: kind === "template" ? id : null,
+        workflow_id: kind === "workflow" ? id : null,
+      };
+      if (editing) await api("PUT", `/api/hooks/${encodeURIComponent(item.id)}`, payload);
+      else await api("POST", "/api/hooks", payload);
       markSaved();
-      go("#/hooks");
-    } catch (error) {
-      handle(error);
-    }
+      close();
+      await route();
+    },
   });
 }
 
@@ -4139,11 +4153,11 @@ async function pageRuntime() {
     <section class="card" style="margin-bottom:14px"><h2>${h("tools")}</h2>${table([t("id"), t("description")], pluginRows)}</section>
     <section class="card" style="margin-bottom:14px"><h2>${h("cached_collections")}</h2>${table([t("name"), t("version")], collectionRows)}</section>
     <section class="card" style="margin-bottom:14px"><h2>${h("cached_roles")}</h2>${table([t("name"), t("version")], roleRows)}</section>`,
-    can("owner") ? addLink("#/environments/new", "environment") : "");
+    can("owner") ? addLink("#/runtime?new=1", "environment") : "");
   const drawEnvironments = () => {
     const needle = document.querySelector("#environment-search").value.trim().toLowerCase();
     const rows = environments.filter((item) => !needle || `${item.name} ${item.tool || ""} ${item.image} ${item.pull_policy} ${item.scope || ""} ${scopeLabel(item)}`.toLowerCase().includes(needle)).map((item) =>
-      `<tr><td><a href="#/environments/${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(scopeLabel(item))}</td><td>${esc(environmentToolLabel(item.tool))}</td><td class="mono">${esc(item.image)}</td><td>${esc(item.pull_policy)}</td><td>${canManageEnvironment(item) ? `<button class="btn danger" type="button" data-env="${esc(item.id)}">${h("delete")}</button>` : ""}</td></tr>`
+      `<tr><td><a href="#/environments/${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(scopeLabel(item))}</td><td>${esc(environmentToolLabel(item.tool))}</td><td class="mono">${esc(item.image)}</td><td>${esc(item.pull_policy)}</td><td>${canManageEnvironment(item) ? `<a class="btn" href="#/runtime?edit=${esc(item.id)}">${h("edit")}</a> <button class="btn danger" type="button" data-env="${esc(item.id)}">${h("delete")}</button>` : ""}</td></tr>`
     );
     document.querySelector("#environment-table").innerHTML = table([t("name"), t("applies_to"), t("tool"), t("image"), t("pull"), ""], rows);
     document.querySelectorAll("[data-env]").forEach((button) => {
@@ -4159,6 +4173,18 @@ async function pageRuntime() {
   };
   document.querySelector("#environment-search").addEventListener("input", drawEnvironments);
   drawEnvironments();
+  const request = editQuery();
+  if (request.create !== null) {
+    if (can("owner")) openEnvironmentDialog(null);
+    return;
+  }
+  if (!request.edit) return;
+  const item = environments.find((row) => row.id === request.edit);
+  if (!item) {
+    clearEditHash();
+    return;
+  }
+  if (canManageEnvironment(item)) openEnvironmentDialog(item);
 }
 
 function canManageEnvironment(item) {
@@ -4191,85 +4217,71 @@ function environmentImagePlaceholder(tool) {
   return "registry.example.com/execution-environment:latest";
 }
 
-function environmentForm(item) {
+function openEnvironmentDialog(item) {
+  const editing = Boolean(item);
   const policy = item ? item.pull_policy : "if_not_present";
   const scope = item && item.scope ? item.scope : "team";
   const current = item && item.tool ? item.tool : "";
   const tool = ["ansible", "opentofu", "shell"].includes(current) ? current : "ansible";
   const option = (value) => `<option value="${value}"${policy === value ? " selected" : ""}>${value}</option>`;
   const toolOption = (value) => `<option value="${value}"${tool === value ? " selected" : ""}>${h(value)}</option>`;
-  return `<form class="card form" id="env-form">
-    <label class="field"><span>${h("name")}</span><input name="name" required value="${item ? esc(item.name) : ""}"></label>
-    <label class="field"><span>${h("tool")}</span><select class="fit" name="tool">${toolOption("ansible")}${toolOption("opentofu")}${toolOption("shell")}</select></label>
-    <label class="field"><span>${h("image")}</span><input name="image" required value="${item ? esc(item.image) : ""}" placeholder="${esc(environmentImagePlaceholder(tool))}"></label>
-    <label class="field"><span>${h("network")}</span><input name="network" value="${item ? esc(item.network || "") : ""}" placeholder="koreograf_default"></label>
-    <p class="small muted">${h("the_network_is_passed_to_the_container_run_an_empty")}</p>
-    <div class="field-row">
-      <label class="field"><span>${h("pull")}</span><select class="fit" name="pull_policy">${option("if_not_present")}${option("always")}${option("never")}</select></label>
-      <label class="field"><span>${h("applies_to")}</span><select class="fit" name="scope">${environmentScopeOptions(scope)}</select></label>
-    </div>
-    <p class="small muted">${h("global_applies_to_every_team_the_organization_applies")}</p>
-    <label class="field"><span>${h("description")}</span><input name="description" maxlength="1000" value="${item ? esc(item.description) : ""}"></label>
-    <button class="btn pill primary" type="submit">${item ? h("save") : h("create")}</button>
-  </form>`;
-}
-
-function bindEnvironmentForm(id) {
-  const form = document.querySelector("#env-form");
-  const refreshImagePlaceholder = () => {
-    form.image.placeholder = environmentImagePlaceholder(form.tool.value);
-  };
-  form.tool.addEventListener("change", refreshImagePlaceholder);
-  refreshImagePlaceholder();
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const payload = {
-      name: form.name.value,
-      image: form.image.value,
-      tool: form.tool.value,
-      pull_policy: form.pull_policy.value,
-      network: form.network.value,
-      description: form.description.value,
-      scope: form.scope.value,
-    };
-    try {
-      if (id) await api("PUT", `/api/environments/${encodeURIComponent(id)}`, payload);
+  const dialog = openEditDialog({
+    id: "environment-dialog",
+    title: editing ? t("edit_environment") : t("new_environment"),
+    body: `
+      <label class="field required"><span>${h("name")}</span><input name="name" required value="${editing ? esc(item.name) : ""}"></label>
+      <label class="field"><span>${h("tool")}</span><select class="fit" name="tool">${toolOption("ansible")}${toolOption("opentofu")}${toolOption("shell")}</select></label>
+      <label class="field required"><span>${h("image")}</span><input name="image" required value="${editing ? esc(item.image) : ""}" placeholder="${esc(environmentImagePlaceholder(tool))}"></label>
+      <label class="field"><span>${h("network")}</span><input name="network" value="${editing ? esc(item.network || "") : ""}" placeholder="koreograf_default"></label>
+      <p class="small muted">${h("the_network_is_passed_to_the_container_run_an_empty")}</p>
+      <div class="field-row">
+        <label class="field"><span>${h("pull")}</span><select class="fit" name="pull_policy">${option("if_not_present")}${option("always")}${option("never")}</select></label>
+        <label class="field"><span>${h("applies_to")}</span><select class="fit" name="scope">${environmentScopeOptions(scope)}</select></label>
+      </div>
+      <p class="small muted">${h("global_applies_to_every_team_the_organization_applies")}</p>
+      <label class="field"><span>${h("description")}</span><input name="description" maxlength="1000" value="${editing ? esc(item.description) : ""}"></label>`,
+    submit: editing ? t("save") : t("create"),
+    onSubmit: async ({ form, close }) => {
+      const payload = {
+        name: form.name.value,
+        image: form.image.value,
+        tool: form.tool.value,
+        pull_policy: form.pull_policy.value,
+        network: form.network.value,
+        description: form.description.value,
+        scope: form.scope.value,
+      };
+      if (editing) await api("PUT", `/api/environments/${encodeURIComponent(item.id)}`, payload);
       else await api("POST", "/api/environments", payload);
       markSaved();
-      go("#/runtime");
-    } catch (error) {
-      handle(error);
-    }
+      close();
+      await route();
+    },
   });
-}
-
-async function pageEnvironmentNew() {
-  if (!needTeam()) return;
-  if (!can("owner")) {
-    deny("execution_environment", "owner");
-    return;
-  }
-  shell(t("new_environment"), environmentForm(null));
-  bindEnvironmentForm(null);
+  const refreshImagePlaceholder = () => {
+    dialog.form.image.placeholder = environmentImagePlaceholder(dialog.form.tool.value);
+  };
+  dialog.form.tool.addEventListener("change", refreshImagePlaceholder);
+  refreshImagePlaceholder();
 }
 
 async function pageEnvironment(id) {
   if (!needTeam()) return;
   const item = await api("GET", `/api/environments/${encodeURIComponent(id)}`);
-  if (!canManageEnvironment(item)) {
-    shell(item.name, `<section class="card"><dl class="kv">
+  const manage = canManageEnvironment(item);
+  shell(item.name, `<section class="card"><dl class="kv">
       ${paramRow("name", item.name)}
       ${paramRow("applies_to", scopeLabel(item))}
       ${paramRow("tool", environmentToolLabel(item.tool))}
       ${paramRow("image", item.image)}
       ${paramRow("pull", item.pull_policy)}
       ${paramRow("description", item.description)}
-    </dl></section>`);
-    return;
-  }
-  shell(item.name, environmentForm(item), `<button class="btn danger" id="delete-env" type="button">${h("delete")}</button>`);
-  bindEnvironmentForm(id);
-  document.querySelector("#delete-env").addEventListener("click", async () => {
+    </dl></section>`, manage
+    ? `<a class="btn pill" href="#/runtime?edit=${esc(item.id)}">${h("edit")}</a><button class="btn danger" id="delete-env" type="button">${h("delete")}</button>`
+    : "");
+  const remove = document.querySelector("#delete-env");
+  if (!remove) return;
+  remove.addEventListener("click", async () => {
     try {
       await api("DELETE", `/api/environments/${encodeURIComponent(id)}`);
       go("#/runtime");
@@ -6202,7 +6214,7 @@ async function pageTeam() {
     return `<tr><td>${name} <span class="small muted">${esc(member.username)}</span></td><td>${roleCell}</td><td>${sourceCell}</td><td>${remove}</td></tr>`;
   });
   const actions = [
-    teamId && can("owner") ? addLink("#/team/members/new", "member") : "",
+    teamId && can("owner") ? addLink("#/team?new=member", "member") : "",
     me.is_admin ? addLink("#/team?new=1", "team_2") : "",
     me.is_admin ? addLink("#/users?new=1", "user_2") : "",
   ].join("");
@@ -6219,7 +6231,9 @@ async function pageTeam() {
       ${table([t("name"), t("role"), t("source"), ""], memberRows)}
     </section>` : `<div class="card">${h("no_team_selected")}</div>`}`, actions);
   const request = editQuery();
-  if (request.create !== null) {
+  if (request.create === "member") {
+    if (can("owner")) openMemberDialog();
+  } else if (request.create !== null) {
     if (me.is_admin) openTeamDialog(null, organizations, current && current.organization_id);
   } else if (request.edit) {
     const item = teams.find((team) => team.id === request.edit);
@@ -6287,36 +6301,27 @@ function openTeamDialog(item, organizations, defaultOrganizationId) {
   });
 }
 
-async function pageMemberNew() {
-  if (!teamId) {
-    shell(t("team"), `<div class="card">${h("no_team_selected")}</div>`);
-    return;
-  }
-  if (!can("owner")) {
-    deny("members", "owner");
-    return;
-  }
-  shell(t("add_member"), `
-    <form class="card form" id="member-form">
-      <label class="field"><span>${h("username")}</span><input name="username" required></label>
+function openMemberDialog() {
+  openEditDialog({
+    id: "member-dialog",
+    title: t("add_member"),
+    body: `
+      <label class="field required"><span>${h("username")}</span><input name="username" required></label>
       <div class="field-row">
         <label class="field"><span>${h("role")}</span>
           <select class="fit" name="role"><option value="viewer">${h("viewer")}</option><option value="operator" selected>${h("operator")}</option><option value="owner">${h("owner")}</option></select>
         </label>
-      </div>
-      <button class="btn pill primary" type="submit">${h("add")}</button>
-    </form>`);
-  document.querySelector("#member-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    try {
+      </div>`,
+    submit: t("add"),
+    onSubmit: async ({ form, close }) => {
       await api("POST", `/api/teams/${encodeURIComponent(teamId)}/members`, {
         username: form.username.value,
         role: form.role.value,
       });
       markSaved();
-      go("#/team");
-    } catch (error) { handle(error); }
+      close();
+      await route();
+    },
   });
 }
 
@@ -6889,9 +6894,10 @@ async function route() {
     else if (parts[0] === "workflows") await pageWorkflows();
     else if (parts[0] === "schedules") await pageSchedules();
     else if (parts[0] === "runs" && parts[1]) await pageRun(parts[1]);
-    else if (parts[0] === "hooks" && parts[1] === "new") await pageHookNew();
+    else if (parts[0] === "hooks" && parts[1] === "new") { location.replace("#/hooks?new=1"); return; }
+    else if (parts[0] === "hooks" && parts[1]) { location.replace(`#/hooks?edit=${encodeURIComponent(parts[1])}`); return; }
     else if (parts[0] === "hooks") await pageHooks();
-    else if (parts[0] === "environments" && parts[1] === "new") await pageEnvironmentNew();
+    else if (parts[0] === "environments" && parts[1] === "new") { location.replace("#/runtime?new=1"); return; }
     else if (parts[0] === "environments" && parts[1]) await pageEnvironment(parts[1]);
     else if (parts[0] === "runtime") await pageRuntime();
     else if (parts[0] === "projects" && parts[1] === "new") { location.replace("#/projects?new=1"); return; }
@@ -6909,7 +6915,7 @@ async function route() {
     else if (parts[0] === "organizations" && parts[1]) { location.replace(`#/organizations?edit=${encodeURIComponent(parts[1])}`); return; }
     else if (parts[0] === "organizations") await pageOrganizations();
     else if (parts[0] === "catalog") location.hash = "#/projects";
-    else if (parts[0] === "team" && parts[1] === "members" && parts[2] === "new") await pageMemberNew();
+    else if (parts[0] === "team" && parts[1] === "members" && parts[2] === "new") { location.replace("#/team?new=member"); return; }
     else if (parts[0] === "team" && parts[1] === "new") { location.replace("#/team?new=1"); return; }
     else if (parts[0] === "team" && parts[1]) { location.replace(`#/team?edit=${encodeURIComponent(parts[1])}`); return; }
     else if (parts[0] === "account") await pageAccount();

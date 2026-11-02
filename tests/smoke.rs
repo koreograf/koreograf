@@ -7417,7 +7417,7 @@ async fn owner_can_edit_an_execution_environment() {
         .split_once("async function pageRuntime")
         .expect("runtime page")
         .1
-        .split_once("function environmentForm")
+        .split_once("function openEnvironmentDialog")
         .expect("environment form")
         .0;
     let environments = runtime
@@ -10286,6 +10286,103 @@ fn has_line(job: &Value, stream: &str, line: &str) -> bool {
             .iter()
             .any(|event| event["stream"] == stream && event["line"] == line)
     })
+}
+
+#[tokio::test]
+async fn a_hook_can_be_edited_and_keeps_its_token() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-hook-edit-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+    let (status, templates, _) = call(
+        &app,
+        "GET",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{templates}");
+    let template_id = templates
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["name"] == "Healthcheck")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/hooks",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Before",
+            "match_alertname": "DiskSpaceLow",
+            "template_id": template_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let id = created["id"].as_str().unwrap();
+    let token = created["token"].as_str().unwrap();
+
+    let (status, updated, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/hooks/{id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "After",
+            "match_alertname": "CpuHigh",
+            "match_status": "resolved",
+            "template_id": template_id,
+            "extra_vars": {"limit": "web-1"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["name"], "After");
+    assert_eq!(updated["match_alertname"], "CpuHigh");
+    assert_eq!(updated["match_status"], "resolved");
+    assert_eq!(updated["token"], token);
+    assert_eq!(updated["extra_vars"]["limit"], "web-1");
+
+    let (status, hooks, _) =
+        call(&app, "GET", "/api/hooks", Some(&cookie), Some(&team), None).await;
+    assert_eq!(status, StatusCode::OK, "{hooks}");
+    let stored = hooks
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == id)
+        .unwrap();
+    assert_eq!(stored["name"], "After");
+    assert_eq!(stored["token"], token);
+    assert_eq!(stored["created_at"], created["created_at"]);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
@@ -13167,6 +13264,10 @@ fn edit_overlay_addresses_round_trip_and_old_pages_redirect() {
         "location.replace(`#/users?edit=${encodeURIComponent(parts[1])}`)",
         "location.replace(\"#/projects?new=1\")",
         "location.replace(\"#/inventories?new=1\")",
+        "location.replace(\"#/hooks?new=1\")",
+        "location.replace(`#/hooks?edit=${encodeURIComponent(parts[1])}`)",
+        "location.replace(\"#/runtime?new=1\")",
+        "location.replace(\"#/team?new=member\")",
     ] {
         assert!(script.contains(redirect), "missing redirect {redirect}");
     }
@@ -13180,8 +13281,16 @@ fn edit_overlay_addresses_round_trip_and_old_pages_redirect() {
         "addLink(\"#/users/new\"",
         "addLink(\"#/projects/new\"",
         "addLink(\"#/inventories/new\"",
+        "addLink(\"#/hooks/new\"",
+        "addLink(\"#/environments/new\"",
+        "addLink(\"#/team/members/new\"",
         "href=\"#/projects/new\"",
         "href=\"#/inventories/new\"",
+        "href=\"#/hooks/new\"",
+        "href=\"#/environments/new\"",
+        "id=\"hook-form\"",
+        "id=\"env-form\"",
+        "id=\"member-form\"",
     ] {
         assert!(
             !script.contains(old),
@@ -13214,7 +13323,14 @@ const create = editQuery("#/organizations?new=1");
 check(create.create === "1" && create.edit === "" && create.tab === "", "new was not read");
 const project = editQuery("#/projects?edit=p1&tab=source");
 check(project.edit === "p1" && project.tab === "source", "project edit and tab were not read");
+const hook = editQuery("#/hooks?edit=h1");
+check(hook.edit === "h1" && hook.create === null, "hook edit was not read");
+const member = editQuery("#/team?new=member");
+check(member.create === "member" && member.edit === "", "member create was not read");
 check(editAddress({{ create: "1" }}, "#/credentials") === "#/credentials?new=1", "new address was not built");
+check(editAddress({{ create: "1" }}, "#/runtime") === "#/runtime?new=1", "runtime new address was not built");
+check(editAddress({{ edit: "e1" }}, "#/runtime") === "#/runtime?edit=e1", "runtime edit address was not built");
+check(editAddress({{ create: "member" }}, "#/team") === "#/team?new=member", "member address was not built");
 check(editAddress({{ create: "1" }}, "#/inventories") === "#/inventories?new=1", "inventory new address was not built");
 check(editAddress({{ edit: "p1", tab: "source" }}, "#/projects") === "#/projects?edit=p1&tab=source", "project address was not built");
 check(editAddress({{ edit: "u1", tab: "account" }}, "#/users?page=2") === "#/users?page=2&edit=u1&tab=account", "edit address was not built");
@@ -13330,6 +13446,58 @@ fn projects_and_inventories_use_the_edit_overlay() {
     assert!(!script.contains("id=\"project-form\""));
     assert!(!script.contains("id=\"inventory-create\""));
     assert!(!script.contains("id=\"inventory-name-form\""));
+    let close = extract_braced_function(&script, "function closeLive");
+    assert!(close.contains("[data-edit-overlay]"));
+}
+
+#[test]
+fn hooks_environments_and_team_members_use_the_edit_overlay() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let hooks = extract_braced_function(&script, "async function pageHooks");
+    assert!(hooks.contains("openHookDialog(item)"));
+    assert!(hooks.contains("openHookDialog(null)"));
+    assert!(hooks.contains("#/hooks?edit="));
+    assert!(hooks.contains("#/hooks?new=1"));
+    assert!(hooks.contains("clearEditHash();"));
+    let hook = extract_braced_function(&script, "async function openHookDialog");
+    assert!(hook.contains("openEditDialog({"));
+    assert!(hook.contains("api(\"POST\", \"/api/hooks\""));
+    assert!(hook.contains("api(\"PUT\", `/api/hooks/"));
+    assert!(hook.contains("jsonObject(form.extra_vars.value"));
+    assert!(hook.contains("markSaved();"));
+    assert!(hook.contains("close();"));
+    assert!(hook.contains("await route();"));
+    assert!(!hook.contains("handle(error)"));
+    let runtime = extract_braced_function(&script, "async function pageRuntime");
+    assert!(runtime.contains("openEnvironmentDialog(item)"));
+    assert!(runtime.contains("openEnvironmentDialog(null)"));
+    assert!(runtime.contains("#/runtime?edit="));
+    assert!(runtime.contains("#/runtime?new=1"));
+    assert!(runtime.contains("clearEditHash();"));
+    let environment = extract_braced_function(&script, "function openEnvironmentDialog");
+    assert!(environment.contains("openEditDialog({"));
+    assert!(environment.contains("api(\"POST\", \"/api/environments\""));
+    assert!(environment.contains("api(\"PUT\", `/api/environments/"));
+    assert!(environment.contains("environmentImagePlaceholder(dialog.form.tool.value)"));
+    assert!(environment.contains("markSaved();"));
+    assert!(environment.contains("close();"));
+    assert!(environment.contains("await route();"));
+    assert!(!environment.contains("handle(error)"));
+    let detail = extract_braced_function(&script, "async function pageEnvironment");
+    assert!(detail.contains("#/runtime?edit="));
+    assert!(detail.contains("delete-env"));
+    assert!(!detail.contains("environmentForm"));
+    let team = extract_braced_function(&script, "async function pageTeam");
+    assert!(team.contains("openMemberDialog()"));
+    assert!(team.contains("#/team?new=member"));
+    let member = extract_braced_function(&script, "function openMemberDialog");
+    assert!(member.contains("openEditDialog({"));
+    assert!(member.contains("api(\"POST\", `/api/teams/${encodeURIComponent(teamId)}/members`"));
+    assert!(member.contains("markSaved();"));
+    assert!(member.contains("close();"));
+    assert!(member.contains("await route();"));
+    assert!(!member.contains("handle(error)"));
     let close = extract_braced_function(&script, "function closeLive");
     assert!(close.contains("[data-edit-overlay]"));
 }
