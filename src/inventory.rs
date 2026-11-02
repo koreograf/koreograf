@@ -429,6 +429,8 @@ fn parse_yaml_inventory(body: &str) -> InventoryData {
     let mut data = InventoryData::default();
     let mut group_stack: Vec<(usize, String)> = Vec::new();
     let mut host: Option<String> = None;
+    let mut host_indent: Option<usize> = None;
+    let mut var_stack: Vec<(usize, String)> = Vec::new();
     let mut hosts_indent: Option<usize> = None;
     let mut vars_indent: Option<usize> = None;
     let mut children_indent: Option<usize> = None;
@@ -448,12 +450,14 @@ fn parse_yaml_inventory(body: &str) -> InventoryData {
             continue;
         };
         let key = key.trim();
-        let value = value.trim().trim_matches('"').trim_matches('\'');
+        let value = yaml_text(value.trim());
         if key.is_empty() {
             continue;
         }
         if hosts_indent.is_some_and(|level| indent <= level) {
             host = None;
+            host_indent = None;
+            var_stack.clear();
             hosts_indent = None;
         }
         if vars_indent.is_some_and(|level| indent <= level) {
@@ -489,11 +493,26 @@ fn parse_yaml_inventory(body: &str) -> InventoryData {
             continue;
         }
         if hosts_indent.is_some() {
+            while var_stack.last().is_some_and(|(level, _)| *level >= indent) {
+                var_stack.pop();
+            }
             if value.is_empty() {
-                host = Some(key.to_string());
-                remember_host(&mut data, key, &group);
+                if host.is_some() && host_indent.is_some_and(|level| indent > level) {
+                    var_stack.push((indent, key.to_string()));
+                } else {
+                    host = Some(key.to_string());
+                    host_indent = Some(indent);
+                    var_stack.clear();
+                    remember_host(&mut data, key, &group);
+                }
             } else if let Some(name) = &host {
-                set_var(&mut data.hosts, name, key, value);
+                let mut full = String::new();
+                for (_, part) in &var_stack {
+                    full.push_str(part);
+                    full.push('.');
+                }
+                full.push_str(key);
+                set_var(&mut data.hosts, name, &full, value);
             }
             continue;
         }
@@ -517,6 +536,14 @@ fn parse_yaml_inventory(body: &str) -> InventoryData {
         }
     }
     data
+}
+
+fn yaml_text(value: &str) -> &str {
+    let value = value
+        .strip_prefix("!unsafe")
+        .map(str::trim_start)
+        .unwrap_or(value);
+    value.trim_matches('"').trim_matches('\'')
 }
 
 fn remember_host(data: &mut InventoryData, name: &str, group: &str) {
@@ -619,6 +646,28 @@ all:
         assert!(
             parse_hosts("plugin: netbox.netbox.nb_inventory\napi_endpoint: https://nb\n")
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn reads_yaml_unsafe_strings_without_the_tag() {
+        let body = "\
+all:
+  hosts:
+    web-1:
+      motd: !unsafe \"{{ lookup('pipe', 'id') }}\"
+      ntp:
+        server: !unsafe pool.ntp.org
+";
+        let hosts = parse_hosts(body);
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(
+            hosts[0].vars.get("motd").map(String::as_str),
+            Some("{{ lookup('pipe', 'id') }}")
+        );
+        assert_eq!(
+            hosts[0].vars.get("ntp.server").map(String::as_str),
+            Some("pool.ntp.org")
         );
     }
 

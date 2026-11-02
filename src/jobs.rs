@@ -1688,6 +1688,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_netbox_config_context_inventory_blocks_a_local_run() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-inv-context-{nanos}"));
+        let state = crate::boot(admins(&dir, RunnerMode::Local)).expect("boot");
+        let team_id = team_of(&state);
+        let inventory_id = {
+            let db = state.db().expect("db");
+            insert_inventory(&db, &team_id, true)
+        };
+        let template_id = {
+            let db = state.db().expect("db");
+            db.execute(
+                "UPDATE inventories SET source_kind = 'netbox', source_json = ?2 WHERE id = ?1",
+                rusqlite::params![&inventory_id, r#"{"load_config_context":true}"#],
+            )
+            .expect("netbox source");
+            insert_shell(&db, &team_id, Some(&inventory_id), "true")
+        };
+        let denied = launch(
+            &state,
+            LaunchRequest {
+                team_id: team_id.clone(),
+                template_id: template_id.clone(),
+                extra_vars: json!({}),
+                launched_by: "admin".into(),
+                trigger: "manual".into(),
+                workflow_job_id: None,
+                workflow_node_id: None,
+                parameters_override: None,
+                overrides: LaunchOverrides::default(),
+            },
+        )
+        .expect_err("config context inventory");
+        assert!(
+            denied
+                .to_string()
+                .contains("local_runs_are_limited_to_administrators"),
+            "{denied}"
+        );
+        {
+            let db = state.db().expect("db");
+            db.execute(
+                "UPDATE inventories SET source_json = ?2 WHERE id = ?1",
+                rusqlite::params![&inventory_id, r#"{"load_config_context":false}"#],
+            )
+            .expect("plain source");
+        }
+        launch(
+            &state,
+            LaunchRequest {
+                team_id,
+                template_id,
+                extra_vars: json!({}),
+                launched_by: "admin".into(),
+                trigger: "manual".into(),
+                workflow_job_id: None,
+                workflow_node_id: None,
+                parameters_override: None,
+                overrides: LaunchOverrides::default(),
+            },
+        )
+        .expect("plain netbox inventory");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
     async fn an_operator_workflow_cannot_replace_a_local_shell_script() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

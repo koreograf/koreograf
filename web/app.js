@@ -3707,6 +3707,58 @@ function certificateBadge(on) {
   return on ? ` <span class="pill warn">${h("certificate_check_off")}</span>` : "";
 }
 
+const NETBOX_GROUPINGS = [
+  ["sites", "sites"],
+  ["region", "regions"],
+  ["site_group", "site_groups"],
+  ["location", "locations"],
+  ["device_roles", "roles"],
+  ["platforms", "platforms"],
+  ["manufacturers", "manufacturers"],
+  ["device_types", "device_types"],
+  ["tenants", "tenants"],
+  ["tags", "tags"],
+  ["cluster", "cluster"],
+  ["status", "status"],
+  ["is_virtual", "virtual_and_physical"],
+];
+
+const NETBOX_FILTER_KEYS = ["status", "site", "tag", "role"];
+
+function netboxFilters(data) {
+  if (Array.isArray(data.query)) {
+    return data.query
+      .map((item) => Array.isArray(item) ? { key: String(item[0] || ""), value: String(item[1] || "") } : null)
+      .filter((item) => item && item.key);
+  }
+  if (Array.isArray(data.query_filters)) {
+    return data.query_filters
+      .map((line) => String(line).split("="))
+      .filter((parts) => parts.length > 1 && parts[0].trim())
+      .map((parts) => ({ key: parts[0].trim(), value: parts.slice(1).join("=").trim() }));
+  }
+  return [];
+}
+
+function netboxFilterRow(filter = {}) {
+  const key = String(filter.key || "status");
+  const value = String(filter.value || "");
+  const custom = !NETBOX_FILTER_KEYS.includes(key);
+  const options = NETBOX_FILTER_KEYS.map((name) => `<option value="${esc(name)}"${name === key ? " selected" : ""}>${h(name)}</option>`).join("");
+  const extra = custom ? `<option value="${esc(key)}" selected>${esc(key)}</option>` : "";
+  return `<div class="filter-row" data-filter-row>
+    <select data-filter-key>${options}${extra}<option value="__custom">${h("custom_key")}</option></select>
+    <input data-filter-key-custom${custom ? "" : " hidden"} value="${custom ? esc(key) : ""}" placeholder="${h("key")}" autocomplete="off">
+    <input data-filter-value value="${esc(value)}" placeholder="${h("value")}" autocomplete="off">
+    <button class="btn ghost" type="button" data-remove-filter>${h("remove")}</button>
+  </div>`;
+}
+
+function netboxGroupingFields(selected) {
+  return `<div class="check-grid">${NETBOX_GROUPINGS.map(([key, label]) => `
+    <label class="check-row"><input type="checkbox" name="group_by" value="${esc(key)}"${selected.includes(key) ? " checked" : ""}><span>${h(label)}</span></label>`).join("")}</div>`;
+}
+
 function mountSourceDraft(container, projects, kind, preset, options = {}) {
   const data = preset || {};
   const credentials = options.credentials || [];
@@ -3727,12 +3779,14 @@ function mountSourceDraft(container, projects, kind, preset, options = {}) {
       <label class="field required"><span>${h("inventory_file")}</span><select name="path" required><option value="">—</option>${initialPath}</select></label>
       <p class="small muted" data-plugin-note></p>`;
   } else {
-    const groupBy = Array.isArray(data.group_by) ? data.group_by.join(", ") : (data.group_by || "");
-    const filters = Array.isArray(data.query_filters)
-      ? data.query_filters.join("\n")
-      : Array.isArray(data.query)
-        ? data.query.map((item) => Array.isArray(item) ? item.join("=") : String(item)).join("\n")
-        : "";
+    const selectedGroups = Array.isArray(data.group_by)
+      ? data.group_by.map(String)
+      : String(data.group_by || "").split(",").map((item) => item.trim()).filter(Boolean);
+    const filters = netboxFilters(data);
+    const filterRows = (filters.length ? filters : [{ key: "status", value: "" }])
+      .map(netboxFilterRow)
+      .join("");
+    const maxHosts = Number(data.max_hosts) > 0 ? Number(data.max_hosts) : 2000;
     const netboxCredentials = credentials.filter((item) => item.kind === "netbox");
     const selectedCredential = String(data.credential_id || "");
     const credentialPick = `<label class="field"><span>${h("netbox_credential")}</span>
@@ -3748,13 +3802,26 @@ function mountSourceDraft(container, projects, kind, preset, options = {}) {
         <label class="field${editing ? "" : " required"}"><span>${h("token")}</span><input name="token" type="password"${editing ? "" : " required"} autocomplete="off" placeholder="${editing ? h("leave_empty_to_keep_the_stored_value") : ""}"></label>
         ${editing ? `<p class="small muted" data-token-hint hidden>${h("netbox_token_required_for_endpoint_change")}</p>` : `<p class="small muted">${h("netbox_token_becomes_a_credential", { name: data.name || title })}</p>`}
       </div>
-      <label class="field"><span>${h("group_by")}</span><input name="group_by" value="${esc(groupBy)}" placeholder="sites, device_roles"></label>
-      <label class="field"><span>${h("filters_one_key_value_per_line")}</span><textarea name="query">${esc(filters)}</textarea></label>
-      <label class="field check"><span>${h("verify_certificate")}</span><input name="validate_certs" type="checkbox"${data.validate_certs === false ? "" : " checked"}></label>
-      <label class="field"><span>${h("private_ca_file")}</span><input name="ca_file" value="${esc(data.ca_file || "")}" placeholder="/etc/ssl/certs/internal-ca.pem" autocomplete="off" spellcheck="false"></label>
-      <p class="small muted">${h("an_absolute_pem_path_empty_uses_the_system_cas")}</p>
-      <label class="field check"><span>${h("virtual_machines")}</span><input name="virtual_machines" type="checkbox"${data.virtual_machines === false ? "" : " checked"}></label>
-      <div class="row"><button class="btn" type="button" data-netbox-test>${h("test_connection")}</button><span class="small muted" data-netbox-test-status aria-live="polite"></span></div>`;
+      <div class="field"><span>${h("grouping")}</span>${netboxGroupingFields(selectedGroups)}</div>
+      <p class="small muted">${h("netbox_collision_note")}</p>
+      <div class="field"><span>${h("filters")}</span>
+        <div class="filter-rows" data-filter-rows>${filterRows}</div>
+        <button class="btn pill" type="button" data-add-filter>${h("add_filter")}</button>
+      </div>
+      <details class="advanced-fieldset">
+        <summary>${h("advanced")}</summary>
+        <div class="form">
+          <label class="field check"><span>${h("group_names_raw")}</span><input name="group_names_raw" type="checkbox"${data.group_names_raw ? " checked" : ""}></label>
+          <label class="field check"><span>${h("load_config_context")}</span><input name="load_config_context" type="checkbox"${data.load_config_context ? " checked" : ""}></label>
+          <label class="field"><span>${h("max_hosts")}</span><input name="max_hosts" type="number" min="1" max="10000" value="${esc(maxHosts)}"><span class="small muted">${h("netbox_max_hosts_hint", { max: 10000 })}</span></label>
+          <label class="field check"><span>${h("verify_certificate")}</span><input name="validate_certs" type="checkbox"${data.validate_certs === false ? "" : " checked"}></label>
+          <label class="field"><span>${h("private_ca_file")}</span><input name="ca_file" value="${esc(data.ca_file || "")}" placeholder="/etc/ssl/certs/internal-ca.pem" autocomplete="off" spellcheck="false"></label>
+          <p class="small muted">${h("an_absolute_pem_path_empty_uses_the_system_cas")}</p>
+          <label class="field check"><span>${h("virtual_machines")}</span><input name="virtual_machines" type="checkbox"${data.virtual_machines === false ? "" : " checked"}></label>
+        </div>
+      </details>
+      <div class="row"><button class="btn" type="button" data-netbox-test>${h("test_connection")}</button><button class="btn" type="button" data-netbox-preview>${h("preview")}</button><span class="small muted" data-netbox-test-status aria-live="polite"></span></div>
+      <div class="preview-result" data-netbox-preview-result hidden></div>`;
   }
   card.innerHTML = `<div class="spread"><h2>${esc(title)}</h2><button class="btn ghost" type="button" data-remove-draft>${h(editing ? "cancel" : "remove")}</button></div>
     <div class="form"><p class="small muted">${h("fields_marked_with_a_star_are_required")}</p>${fields}
@@ -3796,6 +3863,29 @@ function mountSourceDraft(container, projects, kind, preset, options = {}) {
       });
     }
     refreshCredential();
+    const rows = card.querySelector("[data-filter-rows]");
+    card.querySelector("[data-add-filter]").addEventListener("click", () => {
+      rows.insertAdjacentHTML("beforeend", netboxFilterRow({ key: "status", value: "" }));
+      card.dataset.dirty = "1";
+    });
+    rows.addEventListener("change", (event) => {
+      if (!event.target.matches("[data-filter-key]")) return;
+      const row = event.target.closest("[data-filter-row]");
+      const custom = row.querySelector("[data-filter-key-custom]");
+      custom.hidden = event.target.value !== "__custom";
+      if (!custom.hidden) custom.focus();
+    });
+    rows.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-remove-filter]");
+      if (!button) return;
+      const row = button.closest("[data-filter-row]");
+      if (rows.querySelectorAll("[data-filter-row]").length > 1) {
+        row.remove();
+      } else {
+        row.querySelector("[data-filter-value]").value = "";
+      }
+      card.dataset.dirty = "1";
+    });
   }
   card.querySelector("[data-remove-draft]").addEventListener("click", () => card.remove());
   if (kind === "netbox") {
@@ -3820,6 +3910,44 @@ function mountSourceDraft(container, projects, kind, preset, options = {}) {
         status.textContent = t(error.message || "error.generic", error.vars);
       } finally {
         test.disabled = false;
+      }
+    });
+    const preview = card.querySelector("[data-netbox-preview]");
+    const resultBox = card.querySelector("[data-netbox-preview-result]");
+    preview.addEventListener("click", async () => {
+      const draft = readSourceDraft(card);
+      preview.disabled = true;
+      status.textContent = t("previewing");
+      resultBox.hidden = true;
+      try {
+        const result = await api("POST", "/api/inventories/netbox/preview", {
+          api_endpoint: draft.api_endpoint,
+          credential_id: draft.credential_id,
+          token: draft.token,
+          validate_certs: draft.validate_certs,
+          ca_file: draft.ca_file,
+          group_by: draft.group_by,
+          group_names_raw: draft.group_names_raw,
+          load_config_context: draft.load_config_context,
+          max_hosts: draft.max_hosts,
+          query_filters: draft.query_filters,
+          virtual_machines: draft.virtual_machines,
+        });
+        status.textContent = "";
+        const groups = (result.groups || []).map((group) => `<li>${esc(group.name)} <span class="small muted">${h("count_hosts", { count: group.host_count })}</span></li>`).join("");
+        const sample = result.sample_host
+          ? `<h3>${h("sample_host")}</h3><p class="mono">${esc(result.sample_host.name)}</p><pre class="mono">${esc(effectiveVariablesYaml(Object.entries(result.sample_host.vars || {}).map(([name, value]) => ({ name, value, origin: "host" }))))}</pre>`
+          : `<p class="small muted">${h("preview_no_hosts")}</p>`;
+        const collisions = (result.collisions || []).length
+          ? `<p class="small warn">${h("netbox_collisions", { groups: result.collisions.join(", ") })}</p>`
+          : "";
+        resultBox.innerHTML = `<p><strong>${h("count_hosts", { count: result.host_count })}</strong></p>${collisions}
+          <h3>${h("groups")}</h3><ul>${groups || `<li>${h("none")}</li>`}</ul>${sample}`;
+        resultBox.hidden = false;
+      } catch (error) {
+        status.textContent = t(error.message || "error.generic", error.vars);
+      } finally {
+        preview.disabled = false;
       }
     });
   }
@@ -3870,14 +3998,25 @@ function readSourceDraft(card) {
       path: card.querySelector("[name=path]").value,
     };
   }
+  const query_filters = [...card.querySelectorAll("[data-filter-row]")].map((row) => {
+    const select = row.querySelector("[data-filter-key]");
+    const key = select.value === "__custom"
+      ? row.querySelector("[data-filter-key-custom]").value.trim()
+      : select.value;
+    const value = row.querySelector("[data-filter-value]").value.trim();
+    return key && value ? `${key}=${value}` : "";
+  }).filter(Boolean);
   return {
     kind,
     name,
     api_endpoint: card.querySelector("[name=api_endpoint]").value,
     credential_id: card.querySelector("[name=credential_id]").value,
     token: card.querySelector("[name=token]").value,
-    group_by: card.querySelector("[name=group_by]").value.split(",").map((item) => item.trim()).filter(Boolean),
-    query_filters: card.querySelector("[name=query]").value.split("\n").map((item) => item.trim()).filter(Boolean),
+    group_by: [...card.querySelectorAll("[name=group_by]:checked")].map((input) => input.value),
+    group_names_raw: card.querySelector("[name=group_names_raw]").checked,
+    load_config_context: card.querySelector("[name=load_config_context]").checked,
+    max_hosts: Number(card.querySelector("[name=max_hosts]").value) || 2000,
+    query_filters,
     validate_certs: card.querySelector("[name=validate_certs]").checked,
     ca_file: card.querySelector("[name=ca_file]").value.trim(),
     virtual_machines: card.querySelector("[name=virtual_machines]").checked,
@@ -4337,8 +4476,15 @@ async function pageInventory(id) {
           save.disabled = true;
           try {
             const saved = await api("PUT", `/api/inventories/${encodeURIComponent(id)}/sources/${encodeURIComponent(source.id)}`, readSourceUpdate(card));
+            const collisions = saved.collisions || [];
             sourceNotice = saved.sync && saved.sync.ok
-              ? { inventoryId: id, sourceId: source.id, text: t("hosts_before_after", { before: saved.sync.before, after: saved.sync.after }) }
+              ? {
+                inventoryId: id,
+                sourceId: source.id,
+                text: collisions.length
+                  ? t("netbox_collisions", { groups: collisions.join(", ") })
+                  : t("hosts_before_after", { before: saved.sync.before, after: saved.sync.after }),
+              }
               : null;
             markSaved();
             route();
@@ -4362,10 +4508,15 @@ async function pageInventory(id) {
       if (status) status.textContent = t("refreshing");
       try {
         const item = await api("POST", `/api/inventories/${encodeURIComponent(id)}/sources/${encodeURIComponent(button.dataset.syncSource)}/sync`);
+        const collisions = item.collisions || [];
         await route();
         const fresh = document.querySelector(`[data-source-status="${button.dataset.syncSource}"]`);
         const synced = (item.sources || []).find((row) => row.id === button.dataset.syncSource);
-        if (fresh) fresh.textContent = t("updated_hosts", { count: synced ? synced.host_count : 0 });
+        if (fresh) {
+          fresh.textContent = collisions.length
+            ? t("netbox_collisions", { groups: collisions.join(", ") })
+            : t("updated_hosts", { count: synced ? synced.host_count : 0 });
+        }
       } catch (error) {
         button.disabled = false;
         button.textContent = t("refresh");

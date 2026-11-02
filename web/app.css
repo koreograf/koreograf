@@ -337,6 +337,27 @@ select.fit { width: max-content; min-width: 8rem; max-width: 100%; field-sizing:
 textarea.secret-mask { -webkit-text-security: disc; }
 .field.check { justify-items: start; }
 .field.check input { width: 1.15rem; height: 1.15rem; }
+.check-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 4px 12px;
+}
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.check-row input { width: 1.15rem; height: 1.15rem; margin: 0; }
+.filter-row {
+  display: grid;
+  grid-template-columns: minmax(7rem, 1fr) minmax(7rem, 1fr) minmax(7rem, 1.5fr) auto;
+  gap: 6px;
+  align-items: center;
+}
+.advanced-fieldset { border-top: 1px solid var(--line); padding-top: 8px; }
+.advanced-fieldset summary { cursor: pointer; font-weight: 600; }
+.preview-result { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 8px; }
+.preview-result h3 { margin: 8px 0 4px; }
 .vault-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .vault-row .chips { flex: 1 1 16rem; }
 .overlay-card.vault-picker { width: min(32rem, 100%); }

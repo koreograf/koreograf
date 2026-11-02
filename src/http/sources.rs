@@ -43,6 +43,12 @@ pub(super) struct SourceInput {
     #[serde(default)]
     group_by: Vec<String>,
     #[serde(default)]
+    group_names_raw: bool,
+    #[serde(default)]
+    load_config_context: bool,
+    #[serde(default = "default_max_hosts")]
+    max_hosts: usize,
+    #[serde(default)]
     query_filters: Vec<String>,
     #[serde(default = "yes")]
     virtual_machines: bool,
@@ -73,6 +79,12 @@ pub(super) struct NetboxBody {
     #[serde(default)]
     group_by: Vec<String>,
     #[serde(default)]
+    group_names_raw: bool,
+    #[serde(default)]
+    load_config_context: bool,
+    #[serde(default = "default_max_hosts")]
+    max_hosts: usize,
+    #[serde(default)]
     query_filters: Vec<String>,
     #[serde(default = "yes")]
     virtual_machines: bool,
@@ -93,8 +105,39 @@ pub(super) struct NetboxTestBody {
     ca_file: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct NetboxPreviewBody {
+    #[serde(default)]
+    api_endpoint: String,
+    #[serde(default)]
+    credential_id: String,
+    #[serde(default)]
+    token: String,
+    #[serde(default = "yes")]
+    validate_certs: bool,
+    #[serde(default)]
+    ca_file: String,
+    #[serde(default)]
+    group_by: Vec<String>,
+    #[serde(default)]
+    group_names_raw: bool,
+    #[serde(default)]
+    load_config_context: bool,
+    #[serde(default = "default_max_hosts")]
+    max_hosts: usize,
+    #[serde(default)]
+    query_filters: Vec<String>,
+    #[serde(default = "yes")]
+    virtual_machines: bool,
+}
+
 fn yes() -> bool {
     true
+}
+
+fn default_max_hosts() -> usize {
+    netbox::DEFAULT_MAX_HOSTS
 }
 
 #[derive(Deserialize)]
@@ -106,6 +149,12 @@ struct StoredNetbox {
     ca_file: String,
     #[serde(default)]
     group_by: Vec<String>,
+    #[serde(default)]
+    group_names_raw: bool,
+    #[serde(default)]
+    load_config_context: bool,
+    #[serde(default = "default_max_hosts")]
+    max_hosts: usize,
     #[serde(default)]
     query: Vec<(String, String)>,
     #[serde(default = "yes")]
@@ -207,24 +256,27 @@ pub async fn create_netbox(
         &body.ca_file,
         None,
     )?;
-    let source = netbox_source_fields(
-        &access.api_endpoint,
-        body.validate_certs,
-        &body.ca_file,
-        &body.group_by,
-        &body.query_filters,
-        body.virtual_machines,
-    )?;
-    let ini = fetch_netbox(&state, &source, &access.token).await?;
+    let source = netbox_source_fields(NetboxFields {
+        api_endpoint: &access.api_endpoint,
+        validate_certs: body.validate_certs,
+        ca_file: &body.ca_file,
+        group_by: &body.group_by,
+        group_names_raw: body.group_names_raw,
+        load_config_context: body.load_config_context,
+        max_hosts: body.max_hosts,
+        query_filters: &body.query_filters,
+        virtual_machines: body.virtual_machines,
+    })?;
+    let fetched = fetch_netbox(&state, &source, &access.token).await?;
     let inventory_id = Uuid::new_v4().to_string();
     let item = Inventory {
         id: inventory_id,
         team_id: team.clone(),
         name: name.clone(),
-        body: ini,
+        body: fetched.body,
         created_at: db::now(),
         source_kind: "netbox".into(),
-        source_json: netbox::source_json(&source).to_string(),
+        source_json: netbox::source_json_with_collisions(&source, &fetched.collisions).to_string(),
         credential_id: None,
         admin_saved: user.is_admin,
     };
@@ -320,6 +372,62 @@ pub async fn test_netbox(
     Ok(Json(json!({ "version": version })))
 }
 
+pub async fn preview_netbox(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    user: AuthUser,
+    ApiJson(body): ApiJson<NetboxPreviewBody>,
+) -> AppResult<Json<Value>> {
+    let team = team_header(&headers)?;
+    gate(&state, &user, &team, Role::Operator)?;
+    let access = netbox_access(
+        &state,
+        &team,
+        &body.credential_id,
+        &body.token,
+        &body.api_endpoint,
+        "NetBox",
+    )?;
+    ensure_certificate_override(
+        &state,
+        &user,
+        &team,
+        access.credential_id.is_some() || access.credential_blob.is_some(),
+        body.validate_certs,
+        &body.ca_file,
+        None,
+    )?;
+    let source = netbox_source_fields(NetboxFields {
+        api_endpoint: &access.api_endpoint,
+        validate_certs: body.validate_certs,
+        ca_file: &body.ca_file,
+        group_by: &body.group_by,
+        group_names_raw: body.group_names_raw,
+        load_config_context: body.load_config_context,
+        max_hosts: body.max_hosts,
+        query_filters: &body.query_filters,
+        virtual_machines: body.virtual_machines,
+    })?;
+    let fetched = fetch_netbox(&state, &source, &access.token).await?;
+    let report = netbox::preview(&fetched.body);
+    let sample = report.sample_host.map(|(name, vars)| {
+        json!({
+            "name": name,
+            "vars": vars,
+        })
+    });
+    Ok(Json(json!({
+        "host_count": report.host_count,
+        "groups": report.groups.iter().map(|(name, hosts)| json!({
+            "name": name,
+            "host_count": hosts,
+        })).collect::<Vec<_>>(),
+        "sample_host": sample,
+        "collisions": fetched.collisions,
+        "dropped_vars": fetched.dropped_vars,
+    })))
+}
+
 pub async fn sync_inventory(
     State(state): State<Shared>,
     headers: HeaderMap,
@@ -341,7 +449,11 @@ pub async fn sync_inventory(
         match source.kind.as_str() {
             "project" => fresh.push((
                 source.id.clone(),
-                refresh_project(&state, &team, &source.source_json)?,
+                netbox::NetboxResult {
+                    body: refresh_project(&state, &team, &source.source_json)?,
+                    collisions: Vec::new(),
+                    dropped_vars: Vec::new(),
+                },
             )),
             "netbox" => fresh.push((
                 source.id.clone(),
@@ -353,14 +465,25 @@ pub async fn sync_inventory(
     if fresh.is_empty() {
         return Err(ApiError::bad("this_inventory_has_no_external_source"));
     }
+    let collisions: Vec<String> = fresh
+        .iter()
+        .flat_map(|(_, fetched)| fetched.collisions.clone())
+        .collect();
+    let dropped_vars: Vec<String> = fresh
+        .iter()
+        .flat_map(|(_, fetched)| fetched.dropped_vars.clone())
+        .collect();
     let db = state.db()?;
-    for (source_id, body) in &fresh {
-        db::set_inventory_source_body(&db, source_id, body)?;
+    for (source_id, fetched) in &fresh {
+        db::set_inventory_source_body(&db, source_id, &fetched.body)?;
     }
     db::refresh_inventory_summary(&db, &id)?;
     db::set_inventory_admin_saved(&db, &id, user.is_admin)?;
     let item = db::inventory(&db, &id)?.ok_or(ApiError::NotFound)?;
-    Ok(Json(inventory_json(&db, &item)?))
+    let mut value = inventory_json(&db, &item)?;
+    value["collisions"] = json!(collisions);
+    value["dropped_vars"] = json!(dropped_vars);
+    Ok(Json(value))
 }
 
 fn project_source_paths(source_json: &str) -> AppResult<(String, String)> {
@@ -425,7 +548,7 @@ async fn refresh_netbox(
     credential_id: &Option<String>,
     team_id: &str,
     source_json: &str,
-) -> AppResult<String> {
+) -> AppResult<netbox::NetboxResult> {
     let stored = stored_netbox(source_json)?;
     let (token, url) = stored_token(state, credential_id, team_id)?;
     if !endpoint_matches(&stored.api_endpoint, &url) {
@@ -436,46 +559,71 @@ async fn refresh_netbox(
         validate_certs: stored.validate_certs,
         ca_file: stored.ca_file,
         group_by: stored.group_by,
+        group_names_raw: stored.group_names_raw,
+        load_config_context: stored.load_config_context,
+        max_hosts: stored.max_hosts,
         query: stored.query,
         virtual_machines: stored.virtual_machines,
     };
     fetch_netbox(state, &source, &token).await
 }
 
-async fn fetch_netbox(state: &Shared, source: &NetboxSource, token: &str) -> AppResult<String> {
+async fn fetch_netbox(
+    state: &Shared,
+    source: &NetboxSource,
+    token: &str,
+) -> AppResult<netbox::NetboxResult> {
     let proxy = crate::settings::load(state)?.proxy;
-    netbox::fetch_ini(source, token, &proxy)
+    netbox::fetch(source, token, &proxy)
         .await
         .map_err(ApiError::bad)
 }
 
-fn netbox_config(
-    api_endpoint: &str,
+struct NetboxFields<'a> {
+    api_endpoint: &'a str,
     validate_certs: bool,
-    ca_file: &str,
-    group_by: &[String],
-    query: Vec<(String, String)>,
+    ca_file: &'a str,
+    group_by: &'a [String],
+    group_names_raw: bool,
+    load_config_context: bool,
+    max_hosts: usize,
+    query_filters: &'a [String],
     virtual_machines: bool,
+}
+
+fn netbox_config(
+    fields: &NetboxFields<'_>,
+    query: Vec<(String, String)>,
 ) -> AppResult<NetboxSource> {
-    let endpoint = api_endpoint.trim().trim_end_matches('/').to_string();
+    let endpoint = fields.api_endpoint.trim().trim_end_matches('/').to_string();
     if !netbox::valid_endpoint(&endpoint) {
         return Err(ApiError::bad("the_netbox_address_must_be_http_or_https"));
     }
-    let ca_file = ca_file.trim().to_string();
+    if fields.max_hosts == 0 || fields.max_hosts > netbox::MAX_HOSTS_LIMIT {
+        return Err(ApiError::bad_vars(
+            "netbox_host_limit_is_out_of_range",
+            [("max", netbox::MAX_HOSTS_LIMIT.to_string())],
+        ));
+    }
+    let ca_file = fields.ca_file.trim().to_string();
     crate::tls::absolute_ca_path(&ca_file).map_err(ApiError::bad)?;
     Ok(NetboxSource {
         api_endpoint: endpoint,
-        validate_certs,
+        validate_certs: fields.validate_certs,
         ca_file,
-        group_by: group_by
+        group_by: fields
+            .group_by
             .iter()
             .flat_map(|item| item.split(','))
             .map(str::trim)
             .filter(|item| !item.is_empty())
             .map(str::to_string)
             .collect(),
+        group_names_raw: fields.group_names_raw,
+        load_config_context: fields.load_config_context,
+        max_hosts: fields.max_hosts,
         query,
-        virtual_machines,
+        virtual_machines: fields.virtual_machines,
     })
 }
 
@@ -489,32 +637,24 @@ fn connection_source(
         return Err(ApiError::bad("the_netbox_token_is_invalid"));
     }
     netbox_config(
-        api_endpoint,
-        validate_certs,
-        ca_file,
-        &[],
+        &NetboxFields {
+            api_endpoint,
+            validate_certs,
+            ca_file,
+            group_by: &[],
+            group_names_raw: false,
+            load_config_context: false,
+            max_hosts: netbox::DEFAULT_MAX_HOSTS,
+            query_filters: &[],
+            virtual_machines: false,
+        },
         Vec::new(),
-        false,
     )
 }
 
-fn netbox_source_fields(
-    api_endpoint: &str,
-    validate_certs: bool,
-    ca_file: &str,
-    group_by: &[String],
-    query_filters: &[String],
-    virtual_machines: bool,
-) -> AppResult<NetboxSource> {
-    let query = netbox::parse_filters(query_filters).map_err(ApiError::bad)?;
-    netbox_config(
-        api_endpoint,
-        validate_certs,
-        ca_file,
-        group_by,
-        query,
-        virtual_machines,
-    )
+fn netbox_source_fields(fields: NetboxFields<'_>) -> AppResult<NetboxSource> {
+    let query = netbox::parse_filters(fields.query_filters).map_err(ApiError::bad)?;
+    netbox_config(&fields, query)
 }
 
 struct NetboxAccess {
@@ -899,6 +1039,8 @@ pub async fn update_source(
     if source.kind == "project" || source.kind == "netbox" {
         let after = value["host_count"].as_u64().unwrap_or(0);
         value["sync"] = json!({"ok": true, "before": before, "after": after});
+        value["collisions"] = json!(resolved.collisions);
+        value["dropped_vars"] = json!(resolved.dropped_vars);
     }
     Ok(Json(value))
 }
@@ -937,19 +1079,26 @@ pub async fn sync_source(
         let db = state.db()?;
         owned_source(&db, &inventory_id, &source_id, &team)?
     };
-    let body = match source.kind.as_str() {
-        "project" => refresh_project(&state, &team, &source.source_json)?,
+    let fetched = match source.kind.as_str() {
+        "project" => netbox::NetboxResult {
+            body: refresh_project(&state, &team, &source.source_json)?,
+            collisions: Vec::new(),
+            dropped_vars: Vec::new(),
+        },
         "netbox" => {
             refresh_netbox(&state, &source.credential_id, &team, &source.source_json).await?
         }
         _ => return Err(ApiError::bad("this_inventory_has_no_external_source")),
     };
     let db = state.db()?;
-    db::set_inventory_source_body(&db, &source_id, &body)?;
+    db::set_inventory_source_body(&db, &source_id, &fetched.body)?;
     db::refresh_inventory_summary(&db, &inventory_id)?;
     db::set_inventory_admin_saved(&db, &inventory_id, user.is_admin)?;
     let item = db::inventory(&db, &inventory_id)?.ok_or(ApiError::NotFound)?;
-    Ok(Json(inventory_json(&db, &item)?))
+    let mut value = inventory_json(&db, &item)?;
+    value["collisions"] = json!(fetched.collisions);
+    value["dropped_vars"] = json!(fetched.dropped_vars);
+    Ok(Json(value))
 }
 
 #[derive(Deserialize)]
@@ -976,6 +1125,12 @@ pub(super) struct SourceUpdate {
     #[serde(default)]
     group_by: Option<Vec<String>>,
     #[serde(default)]
+    group_names_raw: Option<bool>,
+    #[serde(default)]
+    load_config_context: Option<bool>,
+    #[serde(default)]
+    max_hosts: Option<usize>,
+    #[serde(default)]
     query_filters: Option<Vec<String>>,
     #[serde(default)]
     virtual_machines: Option<bool>,
@@ -988,6 +1143,8 @@ struct ResolvedUpdate {
     credential_id: Option<String>,
     credential_name: Option<String>,
     credential_blob: Option<String>,
+    collisions: Vec<String>,
+    dropped_vars: Vec<String>,
 }
 
 fn reject_foreign_fields(kind: &str, body: &SourceUpdate) -> AppResult<()> {
@@ -1001,6 +1158,9 @@ fn reject_foreign_fields(kind: &str, body: &SourceUpdate) -> AppResult<()> {
             ("validate_certs", body.validate_certs.is_some()),
             ("ca_file", body.ca_file.is_some()),
             ("group_by", body.group_by.is_some()),
+            ("group_names_raw", body.group_names_raw.is_some()),
+            ("load_config_context", body.load_config_context.is_some()),
+            ("max_hosts", body.max_hosts.is_some()),
             ("query_filters", body.query_filters.is_some()),
             ("virtual_machines", body.virtual_machines.is_some()),
         ],
@@ -1012,6 +1172,9 @@ fn reject_foreign_fields(kind: &str, body: &SourceUpdate) -> AppResult<()> {
             ("validate_certs", body.validate_certs.is_some()),
             ("ca_file", body.ca_file.is_some()),
             ("group_by", body.group_by.is_some()),
+            ("group_names_raw", body.group_names_raw.is_some()),
+            ("load_config_context", body.load_config_context.is_some()),
+            ("max_hosts", body.max_hosts.is_some()),
             ("query_filters", body.query_filters.is_some()),
             ("virtual_machines", body.virtual_machines.is_some()),
         ],
@@ -1060,6 +1223,8 @@ fn resolve_ini_update(
         credential_id: None,
         credential_name: None,
         credential_blob: None,
+        collisions: Vec::new(),
+        dropped_vars: Vec::new(),
     })
 }
 
@@ -1096,6 +1261,8 @@ fn resolve_project_update(
         credential_id: None,
         credential_name: None,
         credential_blob: None,
+        collisions: Vec::new(),
+        dropped_vars: Vec::new(),
     })
 }
 
@@ -1153,12 +1320,20 @@ async fn resolve_netbox_update(
     let validate_certs = body.validate_certs.unwrap_or(stored.validate_certs);
     let ca_file = body.ca_file.as_deref().unwrap_or(&stored.ca_file);
     let parsed = netbox_config(
-        &access.api_endpoint,
-        validate_certs,
-        ca_file,
-        body.group_by.as_deref().unwrap_or(&stored.group_by),
+        &NetboxFields {
+            api_endpoint: &access.api_endpoint,
+            validate_certs,
+            ca_file,
+            group_by: body.group_by.as_deref().unwrap_or(&stored.group_by),
+            group_names_raw: body.group_names_raw.unwrap_or(stored.group_names_raw),
+            load_config_context: body
+                .load_config_context
+                .unwrap_or(stored.load_config_context),
+            max_hosts: body.max_hosts.unwrap_or(stored.max_hosts),
+            query_filters: &[],
+            virtual_machines: body.virtual_machines.unwrap_or(stored.virtual_machines),
+        },
         query,
-        body.virtual_machines.unwrap_or(stored.virtual_machines),
     )?;
     let changes_destination = parsed.api_endpoint != stored.api_endpoint
         || parsed.ca_file != stored.ca_file
@@ -1176,14 +1351,16 @@ async fn resolve_netbox_update(
         Some(&stored),
     )?;
     let name = updated_name(body.name.clone(), &source.name, "netbox")?;
-    let ini = fetch_netbox(state, &parsed, &access.token).await?;
+    let fetched = fetch_netbox(state, &parsed, &access.token).await?;
     Ok(ResolvedUpdate {
         credential_id: access.credential_id,
         credential_name: access.credential_name,
         credential_blob: access.credential_blob,
         name,
-        source_json: netbox::source_json(&parsed).to_string(),
-        body: ini,
+        source_json: netbox::source_json_with_collisions(&parsed, &fetched.collisions).to_string(),
+        body: fetched.body,
+        collisions: fetched.collisions,
+        dropped_vars: fetched.dropped_vars,
     })
 }
 
@@ -1329,23 +1506,27 @@ async fn resolve_source(
                 &input.ca_file,
                 None,
             )?;
-            let parsed = netbox_source_fields(
-                &access.api_endpoint,
-                input.validate_certs,
-                &input.ca_file,
-                &input.group_by,
-                &input.query_filters,
-                input.virtual_machines,
-            )?;
-            let ini = fetch_netbox(state, &parsed, &access.token).await?;
+            let parsed = netbox_source_fields(NetboxFields {
+                api_endpoint: &access.api_endpoint,
+                validate_certs: input.validate_certs,
+                ca_file: &input.ca_file,
+                group_by: &input.group_by,
+                group_names_raw: input.group_names_raw,
+                load_config_context: input.load_config_context,
+                max_hosts: input.max_hosts,
+                query_filters: &input.query_filters,
+                virtual_machines: input.virtual_machines,
+            })?;
+            let fetched = fetch_netbox(state, &parsed, &access.token).await?;
             Ok(ResolvedSource {
                 credential_id: access.credential_id,
                 credential_name: access.credential_name,
                 credential_blob: access.credential_blob,
                 name,
                 kind: "netbox".into(),
-                source_json: netbox::source_json(&parsed).to_string(),
-                body: ini,
+                source_json: netbox::source_json_with_collisions(&parsed, &fetched.collisions)
+                    .to_string(),
+                body: fetched.body,
             })
         }
         _ => Err(ApiError::bad("a_source_is_manual_project_or_netbox")),

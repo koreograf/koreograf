@@ -77,6 +77,7 @@ pub fn router(state: Shared) -> Router {
         .route("/inventories/import", post(sources::import_inventory))
         .route("/inventories/netbox", post(sources::create_netbox))
         .route("/inventories/netbox/test", post(sources::test_netbox))
+        .route("/inventories/netbox/preview", post(sources::preview_netbox))
         .route("/inventories/{id}/sync", post(sources::sync_inventory))
         .route(
             "/inventories/{id}/hosts",
