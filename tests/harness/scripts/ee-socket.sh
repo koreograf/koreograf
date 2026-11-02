@@ -53,6 +53,8 @@ chmod 600 "$PASS_FILE"
 # shellcheck disable=SC2034
 EE_SOCKET_PASSWORD=$(tr -d '\n\r' < "$PASS_FILE")
 export EE_SOCKET_PASSWORD
+EE_SOCKET_GID=$(stat -c '%g' /var/run/docker.sock)
+export EE_SOCKET_GID
 unset KOREOGRAF_DATA_HOST || true
 trap cleanup EXIT INT TERM
 

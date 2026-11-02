@@ -1,0 +1,7 @@
+# Socket override for tests/harness/scripts/image-smoke.sh.
+services:
+  koreograf:
+    group_add:
+      - "${KOREOGRAF_DOCKER_SOCKET_GID:?set KOREOGRAF_DOCKER_SOCKET_GID}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock

@@ -835,6 +835,9 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
     let settings = crate::settings::load(state).map_err(|err| err.to_string())?;
     if settings.runner == RunnerMode::Auto {
         let preflight = crate::preflight::check(settings.runner, state.cfg.container_image).await;
+        if state.cfg.container_image && !preflight.runtime.responding {
+            return Err(CONTAINER_SOCKET_MISSING.into());
+        }
         if let Some(problem) = preflight.job_problem(&template.tool) {
             return Err(problem);
         }
@@ -950,6 +953,9 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
     let container_mode = match (use_container, runtime.clone(), environment.clone()) {
         (true, Some(bin), Some(env)) => Some((bin, env)),
         (true, None, Some(_)) if settings.runner == RunnerMode::Docker => {
+            if state.cfg.container_image {
+                return Err(CONTAINER_SOCKET_MISSING.into());
+            }
             return Err(
                 "An execution environment is set, but neither Docker nor Podman is reachable."
                     .into(),
@@ -971,6 +977,9 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
             None
         }
     };
+    if state.cfg.container_image && container_mode.is_none() {
+        return Err(CONTAINER_SOCKET_MISSING.into());
+    }
 
     let view_work = if container_mode.is_some() {
         "/runner/work".to_string()
@@ -1179,6 +1188,8 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
 }
 
 const AUTO_WITHOUT_RUNTIME: &str = "No container runtime is reachable. The run stays on the controller. Mount the Docker socket, or set the runner mode to docker to fail instead.";
+const CONTAINER_SOCKET_MISSING: &str =
+    "No container runtime is reachable. Mount /var/run/docker.sock and see docs/installation.md.";
 
 fn should_container(mode: RunnerMode, has_environment: bool) -> bool {
     has_environment && mode != RunnerMode::Local
@@ -2286,14 +2297,18 @@ fn private_temp_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-fn set_executable(path: &Path) -> Result<(), String> {
+fn link_askpass(path: &Path) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|err| err.to_string())?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))
-            .map_err(|err| err.to_string())?;
+        std::os::unix::fs::symlink(exe, path).map_err(|err| err.to_string())
     }
-    Ok(())
+    #[cfg(not(unix))]
+    {
+        fs::copy(exe, path)
+            .map(|_| ())
+            .map_err(|err| err.to_string())
+    }
 }
 
 fn git_auth_material(secret: &Value, url: &str) -> Result<Option<GitAuth>, String> {
@@ -2311,11 +2326,7 @@ fn git_auth_material(secret: &Value, url: &str) -> Result<Option<GitAuth>, Strin
             let password_file = dir.join("git.pass");
             write_secret(&password_file, password)?;
             let askpass = dir.join("git-askpass");
-            write_secret(
-                &askpass,
-                "#!/bin/sh\ncase \"$1\" in\n  *sername*) printf '%s\\n' \"${KOREOGRAF_GIT_USERNAME:-oauth2}\" ;;\n  *) cat \"$KOREOGRAF_GIT_PASSWORD_FILE\" ;;\nesac\n",
-            )?;
-            set_executable(&askpass)?;
+            link_askpass(&askpass)?;
             env.push(("GIT_ASKPASS".into(), askpass.display().to_string()));
             env.push((
                 "KOREOGRAF_GIT_PASSWORD_FILE".into(),
@@ -2342,15 +2353,12 @@ fn git_auth_material(secret: &Value, url: &str) -> Result<Option<GitAuth>, Strin
                 let passphrase_file = dir.join("key.pass");
                 write_secret(&passphrase_file, passphrase)?;
                 let askpass = dir.join("ssh-askpass");
-                write_secret(
-                    &askpass,
-                    &format!(
-                        "#!/bin/sh\ncat {}\n",
-                        shell_quote(&passphrase_file.display().to_string())
-                    ),
-                )?;
-                set_executable(&askpass)?;
+                link_askpass(&askpass)?;
                 env.push(("SSH_ASKPASS".into(), askpass.display().to_string()));
+                env.push((
+                    "KOREOGRAF_SSH_ASKPASS_FILE".into(),
+                    passphrase_file.display().to_string(),
+                ));
                 env.push(("SSH_ASKPASS_REQUIRE".into(), "force".into()));
                 env.push(("DISPLAY".into(), ":0".into()));
             }
@@ -3683,6 +3691,20 @@ mod tests {
     }
 
     #[test]
+    fn the_image_names_the_missing_socket_and_the_installation_page() {
+        assert!(CONTAINER_SOCKET_MISSING.contains("/var/run/docker.sock"));
+        assert!(CONTAINER_SOCKET_MISSING.contains("docs/installation.md"));
+        assert!(!CONTAINER_SOCKET_MISSING.contains("stays on the controller"));
+    }
+
+    #[test]
+    fn the_image_has_no_local_runner() {
+        assert_eq!(RunnerMode::Local.in_container(true), RunnerMode::Docker);
+        assert_eq!(RunnerMode::Local.in_container(false), RunnerMode::Local);
+        assert_eq!(RunnerMode::Auto.in_container(true), RunnerMode::Auto);
+    }
+
+    #[test]
     fn an_environment_fits_any_or_its_own_tool() {
         assert!(environment_fits_tool("ansible", "any"));
         assert!(environment_fits_tool("opentofu", "opentofu"));
@@ -4255,9 +4277,13 @@ mod tests {
             0o600
         );
         let askpass = PathBuf::from(env.get("GIT_ASKPASS").unwrap());
-        assert_eq!(
-            std::fs::metadata(&askpass).unwrap().permissions().mode() & 0o777,
-            0o700
+        assert!(
+            std::fs::symlink_metadata(&askpass)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "{}",
+            askpass.display()
         );
         let command = env.get("GIT_SSH_COMMAND").unwrap();
         assert!(command.contains("IdentitiesOnly=yes"), "{command}");
@@ -4281,13 +4307,13 @@ mod tests {
             );
         }
         let ssh_askpass = PathBuf::from(env.get("SSH_ASKPASS").unwrap());
-        assert_eq!(
-            std::fs::metadata(&ssh_askpass)
+        assert!(
+            std::fs::symlink_metadata(&ssh_askpass)
                 .unwrap()
-                .permissions()
-                .mode()
-                & 0o777,
-            0o700
+                .file_type()
+                .is_symlink(),
+            "{}",
+            ssh_askpass.display()
         );
         drop(auth);
         assert!(!dir.exists());

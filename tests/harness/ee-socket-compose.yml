@@ -18,6 +18,8 @@ services:
       KOREOGRAF_ADMIN_PASSWORD: ${EE_SOCKET_PASSWORD:?set EE_SOCKET_PASSWORD}
       KOREOGRAF_RUNNER: docker
       KOREOGRAF_DATA_HOST: ${KOREOGRAF_DATA_HOST:-}
+    group_add:
+      - "${EE_SOCKET_GID:?set EE_SOCKET_GID}"
     volumes:
       - ee-data:/var/lib/koreograf
       - /var/run/docker.sock:/var/run/docker.sock
