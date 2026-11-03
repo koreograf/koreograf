@@ -94,8 +94,14 @@ pub(crate) fn restore(state: &Shared, bytes: &[u8]) -> AppResult<()> {
     }
     let cipher = crypto::install_key(&state.cfg.data_dir, &incoming.key)?;
     state.replace_cipher(cipher)?;
-    clear_state_dirs(&state.cfg.data_dir)?;
-    write_extra_files(&state.cfg.data_dir, &incoming.files)?;
+    if incoming
+        .includes
+        .iter()
+        .any(|item| item == "opentofu_state")
+    {
+        clear_state_dirs(&state.cfg.data_dir)?;
+        write_extra_files(&state.cfg.data_dir, &incoming.files)?;
+    }
     tracing::info!("backup restored");
     Ok(())
 }
@@ -175,7 +181,10 @@ pub(crate) fn promote(staging: &Path, data_dir: &Path) -> AppResult<()> {
     let mut moved = Vec::new();
     let entries = fs::read_dir(staging).map_err(|err| ApiError::Internal(err.to_string()))?;
     let mut entries: Vec<_> = entries.filter_map(Result::ok).collect();
-    entries.sort_by_key(|entry| entry.file_name());
+    entries.sort_by_key(|entry| {
+        let name = entry.file_name();
+        (name.to_str() == Some(DATABASE), name)
+    });
     for entry in entries {
         let target = data_dir.join(entry.file_name());
         if fs::symlink_metadata(&target).is_ok() {
@@ -976,6 +985,31 @@ mod tests {
         assert_eq!(fs::read(&kept).expect("kept state"), b"kept");
         assert!(!stale.exists());
         assert!(!other.exists());
+        drop(state);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn http_restore_keeps_state_when_the_backup_omits_it() {
+        let dir = temp_dir("backup-state-keep");
+        let state = crate::boot(config(&dir)).expect("boot");
+        let team: String = state
+            .db()
+            .expect("db")
+            .query_row("SELECT id FROM teams LIMIT 1", [], |row| row.get(0))
+            .expect("team");
+        let kept = dir
+            .join("cache")
+            .join(&team)
+            .join("tofu-state")
+            .join("tpl")
+            .join("terraform.tfstate");
+        fs::create_dir_all(kept.parent().expect("parent")).expect("state dir");
+        fs::write(&kept, b"kept").expect("state");
+        let archive = export(&state, false).expect("export without state");
+
+        restore(&state, &archive).expect("restore");
+        assert_eq!(fs::read(&kept).expect("kept state"), b"kept");
         drop(state);
         let _ = fs::remove_dir_all(dir);
     }
