@@ -796,6 +796,12 @@ function preflightReportHtml(report) {
   return preflightNoticeHtml(report) || `<div class="banner good">${h("preflight_ready")}</div>`;
 }
 
+function importNoticeHtml(importReport) {
+  const paths = (importReport && importReport.missing_paths) || [];
+  if (!paths.length) return "";
+  return `<div class="banner warn"><p>${h("imported_paths_need_a_mount_or_a_change")}</p><ul>${paths.map((path) => `<li><code>${esc(path)}</code></li>`).join("")}</ul></div>`;
+}
+
 async function pageDashboard() {
   if (!needTeam()) return;
   const data = await api("GET", "/api/overview");
@@ -807,6 +813,7 @@ async function pageDashboard() {
   );
   shell(t("overview"), `
     ${data.preflight ? preflightNoticeHtml(data.preflight) : ""}
+    ${me.is_admin && data.import ? importNoticeHtml(data.import) : ""}
     <div class="grid-3">
       <article class="card stat"><span class="small muted">${h("dependency_cache")}</span><strong>${esc(bytes(data.cache_bytes))}</strong><p class="small muted">${h("collections_roles_and_opentofu_providers_stay_between_runs")}</p></article>
       <article class="card stat"><span class="small muted">${h("workflow")}</span><strong>${data.workflow_id ? `<a href="#/workflows/${esc(data.workflow_id)}">${esc(data.workflow_name)}</a>` : "—"}</strong><p class="small muted">${h("success_edges_and_failure_edges_start_the_next")}</p></article>
@@ -7003,6 +7010,10 @@ async function pageSettings(notice) {
   });
 }
 
+function backupDownloadUrl(includeTofuState) {
+  return includeTofuState ? "/api/admin/backup?tofu_state=true" : "/api/admin/backup";
+}
+
 async function pageBackup() {
   if (!me.is_admin) {
     deny("backup", "admin");
@@ -7012,6 +7023,8 @@ async function pageBackup() {
     <div class="card">
       <p>${h("koreograf_stores_data_in_sqlite_the_backup_contains")}</p>
       <p class="muted">${h("postgresql_is_planned_for_a_later_company_install")}</p>
+      <label class="check-row"><input id="backup-tofu-state" type="checkbox"><span>${h("include_opentofu_state")}</span></label>
+      <p class="small muted">${h("opentofu_state_can_contain_secrets")}</p>
       <div><button class="btn pill primary" id="backup-download" type="button">${h("download_backup")}</button></div>
     </div>
     <form class="card form danger-zone" id="backup-restore">
@@ -7028,7 +7041,8 @@ async function pageBackup() {
     try {
       const headers = {};
       if (teamId) headers["X-Team-Id"] = teamId;
-      const response = await fetch("/api/admin/backup", { headers, credentials: "same-origin" });
+      const includeTofuState = document.querySelector("#backup-tofu-state").checked;
+      const response = await fetch(backupDownloadUrl(includeTofuState), { headers, credentials: "same-origin" });
       const blob = await response.blob();
       if (!response.ok) {
         const text = await blob.text();

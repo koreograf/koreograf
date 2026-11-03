@@ -252,6 +252,8 @@ Shell: `entrypoint` or `spec.script`. The script is written as `inline.sh`.
 | GET, POST | `/api/admin/backup` |
 | GET, PUT | `/api/settings` |
 
+`GET /api/admin/backup?tofu_state=true` adds `cache/<team>/tofu-state/` to the zip. Without the query parameter the state stays out. `POST /api/admin/backup` still needs `X-Restore-Confirm: ERSETZEN`. `GET /api/overview` includes `import` with `source`, `path_map`, `missing_paths`, and the copied state count for an administrator after an import, and `null` otherwise.
+
 `GET /api/inventories` returns one summary per inventory with `id`, `name`, `created_at`, `source_kind`, `source`, `source_count`, `host_count`, `group_count`, and `sources` metadata. A summary has no `hosts` array and no source `body`. This is a breaking change for alpha clients that read `hosts` from the list.
 
 `GET /api/inventories/{id}` returns the same summary. It has no `hosts` array and no source `body`. `GET /api/inventories/{id}/hosts` returns a page of parsed hosts with `id`, `total`, `page`, `page_size`, `groups`, and `hosts`. `page` starts at 1. `page_size` defaults to 50 and is capped at 200; `limit` is an alias and `offset` starts at zero. `search` matches the host name, group names, variable names, and variable values. `group` keeps hosts in that exact group. `sort` is `name` (default), `address` (the `ansible_host` value), or `groups`; a leading `-` reverses the order.

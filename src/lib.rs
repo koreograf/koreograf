@@ -23,6 +23,7 @@ mod inventory;
 mod jobs;
 mod ldap;
 mod metrics;
+mod migration;
 mod netbox;
 mod preflight;
 mod runner;
@@ -212,6 +213,7 @@ pub fn boot(mut cfg: Config) -> anyhow::Result<Shared> {
 pub async fn serve(cfg: Config) -> anyhow::Result<()> {
     let url = std::env::var("KOREOGRAF_DATABASE_URL").unwrap_or_default();
     config::database_choice(&url).map_err(anyhow::Error::msg)?;
+    migration::prepare(&cfg)?;
     let state = boot(cfg)?;
     let mode = match settings::load(&state) {
         Ok(effective) => {
