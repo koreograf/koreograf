@@ -14638,28 +14638,51 @@ fn template_form_saves_the_visible_playbook_path() {
 }
 
 #[test]
-fn inventory_tables_mask_secret_variables() {
+fn inventory_tables_drop_variables_and_details_keep_them() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
-    assert!(script.contains("const vars = formatVars(host.vars);"));
-    assert!(script.contains("const vars = formatVars(group.vars);"));
+    let host_table = extract_braced_function(&script, "function inventoryHostTable");
+    let group_table = extract_braced_function(&script, "function inventoryGroupTable");
+    for table in [&host_table, &group_table] {
+        assert!(
+            !table.contains("h(\"variables\")"),
+            "inventory table still renders a variables header"
+        );
+        assert!(
+            !table.contains("formatVars"),
+            "inventory table still renders variables"
+        );
+    }
+    assert!(
+        !script.contains("function formatVars"),
+        "formatVars should be removed with the column"
+    );
+    assert!(host_table.contains("head(\"address\", \"address\")"));
+    assert!(host_table.contains("head(\"groups\", \"groups\")"));
+    assert!(group_table.contains("h(\"hosts\")"));
+    assert!(group_table.contains("h(\"groups\")"));
+
+    let host_detail = extract_braced_function(&script, "async function pageInventoryHost");
+    let group_detail = extract_braced_function(&script, "async function pageInventoryGroup");
+    assert!(host_detail.contains("effectiveVariablesYaml"));
+    assert!(group_detail.contains("effectiveVariablesYaml"));
+
     let function = format!(
-        "{}\n{}",
+        "{}\n{}\nfunction t(key) {{ return key; }}",
         extract_braced_function(&script, "function looksSecretVar"),
-        extract_braced_function(&script, "function formatVars")
+        extract_braced_function(&script, "function effectiveVariablesYaml")
     );
     let probe = format!(
         r#"{function}
-const vars = formatVars({{ ansible_become_password: "s3cret", db_password: "hunter2", ansible_host: "10.0.0.1" }});
-if (!vars.includes("ansible_become_password=••••••")) {{
+const vars = effectiveVariablesYaml([
+  {{ name: "ansible_become_password", value: "s3cret", origin: "host" }},
+  {{ name: "ansible_host", value: "10.0.0.1", origin: "host" }},
+]);
+if (!vars.includes('ansible_become_password: "••••••"')) {{
   console.error(vars);
   process.exit(1);
 }}
-if (!vars.includes("db_password=••••••")) {{
-  console.error(vars);
-  process.exit(1);
-}}
-if (!vars.includes("ansible_host=10.0.0.1")) {{
+if (!vars.includes('ansible_host: "10.0.0.1"')) {{
   console.error(vars);
   process.exit(1);
 }}
