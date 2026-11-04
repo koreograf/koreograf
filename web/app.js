@@ -4489,7 +4489,7 @@ function projectCredentialField(credentials, selectedId) {
       ${can("owner") ? `<button class="btn pill" type="button" data-new-scm-credential>${h("credential")}</button>` : ""}
     </div>
   </label>
-  <p class="small muted">${h("source_control_credential_hint")}</p>
+  <p class="small muted">${h("source_control_project_hint")}</p>
   <p class="small muted" id="scm-key-hint" hidden>${h("source_control_key_hint")}</p>`;
 }
 
@@ -5987,6 +5987,7 @@ function credentialFields(kind, current) {
   if (kind === "scm") {
     return [
       credHint(hint),
+      credHint("source_control_username_hint"),
       text("username", "user"),
       secretInput("password", "password", "password", has("password")),
       secretArea("private_key", "private_key", has("private_key")),

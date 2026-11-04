@@ -15129,6 +15129,30 @@ fn message_catalogs_match_and_cover_the_ui() {
     );
 }
 
+#[test]
+fn source_control_token_hints_are_in_the_forms_and_catalogs() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    assert!(script.contains("[\"scm\", \"source_control\", \"source_control_credential_hint\"]"));
+    assert!(script.contains("credHint(\"source_control_username_hint\")"));
+    assert!(script.contains("h(\"source_control_project_hint\")"));
+    assert!(script.contains("h(\"source_control_key_hint\")"));
+    let en = std::fs::read_to_string(root.join("web/i18n/en.json")).expect("en");
+    let de = std::fs::read_to_string(root.join("web/i18n/de.json")).expect("de");
+    for catalog in [&en, &de] {
+        assert!(catalog.contains("x-access-token"));
+        assert!(catalog.contains("oauth2"));
+        assert!(catalog.contains("source_control_credential_hint"));
+        assert!(catalog.contains("source_control_username_hint"));
+        assert!(catalog.contains("source_control_project_hint"));
+    }
+    let docs = std::fs::read_to_string(root.join("docs/jobs.md")).expect("docs");
+    assert!(docs.contains("https://github.com/example/project.git"));
+    assert!(docs.contains("x-access-token"));
+    assert!(docs.contains("https://gitlab.com/example/project.git"));
+    assert!(docs.contains("oauth2"));
+}
+
 fn assert_catalog_sorted(path: &Path) {
     let text = std::fs::read_to_string(path)
         .unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
