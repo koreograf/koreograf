@@ -16,6 +16,13 @@ on:
         description: Tag to publish, including the leading v
         required: true
         type: string
+    outputs:
+      digest:
+        description: Digest of the published image
+        value: ${{ jobs.image.outputs.digest }}
+      tag:
+        description: Tag that was published
+        value: ${{ jobs.image.outputs.tag }}
 
 permissions:
   contents: read
@@ -94,30 +101,3 @@ jobs:
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: cosign sign --yes "ghcr.io/koreograf/koreograf@${DIGEST}"
-
-  notes:
-    name: release notes
-    needs: image
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Add the digest to the release notes
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DIGEST: ${{ needs.image.outputs.digest }}
-          TAG: ${{ needs.image.outputs.tag }}
-        run: |
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            exit 0
-          fi
-          gh release view "$TAG" --json body -q .body >/tmp/koreograf-release-notes.md
-          image="ghcr.io/koreograf/koreograf@${DIGEST}"
-          if grep -qF "\`${image}\`" /tmp/koreograf-release-notes.md; then
-            exit 0
-          fi
-          {
-            printf '\n\nImage: `%s`\n' "$image"
-            printf 'Signed with cosign keyless.\n'
-          } >>/tmp/koreograf-release-notes.md
-          gh release edit "$TAG" --notes-file /tmp/koreograf-release-notes.md

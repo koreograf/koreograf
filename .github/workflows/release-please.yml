@@ -39,3 +39,33 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       tag: ${{ needs.release-please.outputs.tag_name }}
+
+  notes:
+    name: release notes
+    needs:
+      - release-please
+      - image
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Add the digest to the release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DIGEST: ${{ needs.image.outputs.digest }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            exit 0
+          fi
+          gh release view "$TAG" --json body -q .body >/tmp/koreograf-release-notes.md
+          image="ghcr.io/koreograf/koreograf@${DIGEST}"
+          if grep -qF "\`${image}\`" /tmp/koreograf-release-notes.md; then
+            exit 0
+          fi
+          {
+            printf '\n\nImage: `%s`\n' "$image"
+            printf 'Signed with cosign keyless.\n'
+          } >>/tmp/koreograf-release-notes.md
+          gh release edit "$TAG" --notes-file /tmp/koreograf-release-notes.md
