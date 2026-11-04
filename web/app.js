@@ -5174,22 +5174,20 @@ function inventoryHostTable(hosts, state, id) {
     return `<th aria-sort="${aria}"><button class="btn compact" type="button" data-host-sort="${next}">${h(label)}${active ? (descending ? " ↓" : " ↑") : ""}</button></th>`;
   };
   const rows = hosts.map((host) => {
-    const vars = formatVars(host.vars);
     const link = id
       ? `<a class="mono" href="#/inventories/${encodeURIComponent(id)}/hosts/${encodeURIComponent(host.name)}">${esc(host.name)}</a>`
       : `<span class="mono">${esc(host.name)}</span>`;
-    return `<tr><td>${link}</td><td class="mono">${esc((host.vars || {}).ansible_host || "")}</td><td>${esc((host.groups || []).join(", "))}</td><td class="mono">${esc(vars)}</td></tr>`;
+    return `<tr><td>${link}</td><td class="mono">${esc((host.vars || {}).ansible_host || "")}</td><td>${esc((host.groups || []).join(", "))}</td></tr>`;
   });
-  return `<div class="table-wrap inventory-hosts-table"><table class="table"><thead><tr>${head("name", "name")}${head("address", "address")}${head("groups", "groups")}<th>${h("variables")}</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+  return `<div class="table-wrap inventory-hosts-table"><table class="table"><thead><tr>${head("name", "name")}${head("address", "address")}${head("groups", "groups")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
 }
 
 function inventoryGroupTable(groups, id) {
   const rows = groups.map((group) => {
     const link = `<a href="#/inventories/${encodeURIComponent(id)}/groups/${encodeURIComponent(group.name)}">${esc(group.name)}</a>`;
-    const vars = formatVars(group.vars);
-    return `<tr><td>${link}</td><td>${esc(group.host_count)}</td><td>${esc((group.children || []).join(", "))}</td><td class="mono">${esc(vars)}</td></tr>`;
+    return `<tr><td>${link}</td><td>${esc(group.host_count)}</td><td>${esc((group.children || []).join(", "))}</td></tr>`;
   });
-  return `<div class="table-wrap inventory-groups-table"><table class="table"><thead><tr><th>${h("name")}</th><th>${h("hosts")}</th><th>${h("groups")}</th><th>${h("variables")}</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+  return `<div class="table-wrap inventory-groups-table"><table class="table"><thead><tr><th>${h("name")}</th><th>${h("hosts")}</th><th>${h("groups")}</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
 }
 
 async function pageInventory(id) {
@@ -5558,10 +5556,6 @@ async function pageInventory(id) {
 }
 function looksSecretVar(name) {
   return /(pass(word|phrase)?|secret|token|api[-_]?key|private[-_]?key|access[-_]?key|auth[-_]?key|credential|vault)/i.test(name);
-}
-
-function formatVars(vars) {
-  return Object.entries(vars || {}).map(([key, value]) => `${key}=${looksSecretVar(key) ? "••••••" : value}`).join(" ");
 }
 
 function effectiveVariablesYaml(vars) {
