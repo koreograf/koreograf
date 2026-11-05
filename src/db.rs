@@ -566,20 +566,22 @@ CREATE INDEX IF NOT EXISTS idx_jobs_team_status ON jobs(team_id, status, created
             |row| row.get::<_, String>(0),
         )
         .optional()?;
-    if legacy_ldap_ca.is_some() {
-        let insecure = c
-            .query_row(
-                "SELECT value FROM settings WHERE key = 'ldap_tls_insecure'",
-                [],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?
-            .is_some_and(|value| value == "1" || value == "true");
-        if insecure {
-            c.execute(
-                "UPDATE settings SET value = '0' WHERE key = 'ldap_tls_insecure'",
-                [],
-            )?;
+    if let Some(ca_file) = legacy_ldap_ca.as_deref() {
+        if !ca_file.is_empty() {
+            let insecure = c
+                .query_row(
+                    "SELECT value FROM settings WHERE key = 'ldap_tls_insecure'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+                .is_some_and(|value| value == "1" || value == "true");
+            if insecure {
+                c.execute(
+                    "UPDATE settings SET value = '0' WHERE key = 'ldap_tls_insecure'",
+                    [],
+                )?;
+            }
         }
         c.execute("DELETE FROM settings WHERE key = 'ldap_ca_file'", [])?;
     }
@@ -3687,6 +3689,29 @@ mod tests {
             )
             .ok();
         assert_eq!(insecure.as_deref(), Some("0"));
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('ldap_ca_file', '')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE settings SET value = '1' WHERE key = 'ldap_tls_insecure'",
+            [],
+        )
+        .unwrap();
+        ensure_schema(&conn).unwrap();
+        let insecure: Option<String> = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'ldap_tls_insecure'",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+        assert_eq!(
+            insecure.as_deref(),
+            Some("1"),
+            "a blank path keeps the opt-out"
+        );
         let ca: Option<String> = conn
             .query_row(
                 "SELECT value FROM settings WHERE key = 'ldap_ca_file'",
