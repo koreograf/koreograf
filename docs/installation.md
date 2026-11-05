@@ -30,6 +30,26 @@ The UI is at `http://127.0.0.1:8080`. The language menu at the bottom of the sid
 
 Environment variables, including the runner mode, are in [Configuration](configuration.md).
 
+## Editor MCP client
+
+`koreograf mcp` speaks the Model Context Protocol over stdin and stdout and calls the running server over HTTP. Create a personal API token under **My account** and put it in the editor configuration. `KOREOGRAF_TEAM_ID` is optional; a tool argument `team_id` overrides it for that call. The process refuses to start with an empty token and writes its logs to stderr.
+
+```json
+{
+  "mcpServers": {
+    "koreograf": {
+      "command": "koreograf",
+      "args": ["mcp"],
+      "env": {
+        "KOREOGRAF_URL": "http://127.0.0.1:8080",
+        "KOREOGRAF_TOKEN": "koro_replace-me",
+        "KOREOGRAF_TEAM_ID": "your-team-id"
+      }
+    }
+  }
+}
+```
+
 ## Docker Compose
 
 Docker Engine 20.10 or newer, and Docker Compose v2. The published image is `linux/amd64` and `linux/arm64`. Pull requests compile the arm64 binary, and the tag workflow publishes the multi-architecture image.
