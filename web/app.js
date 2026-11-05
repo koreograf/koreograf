@@ -4845,7 +4845,7 @@ function sourceSummary(item, credentials = []) {
 
 function certificateCheckOff(source) {
   const data = (source && source.source) || {};
-  return source && source.kind === "netbox" && data.validate_certs === false && !String(data.ca_file || "").trim();
+  return source && source.kind === "netbox" && data.validate_certs === false;
 }
 
 function certificateBadge(on) {
@@ -4955,8 +4955,6 @@ function mountSourceDraft(container, projects, kind, preset, options = {}) {
           <label class="field check"><span>${h("load_config_context")}</span><input name="load_config_context" type="checkbox"${data.load_config_context ? " checked" : ""}></label>
           <label class="field"><span>${h("max_hosts")}</span><input name="max_hosts" type="number" min="1" max="10000" value="${esc(maxHosts)}"><span class="small muted">${h("netbox_max_hosts_hint", { max: 10000 })}</span></label>
           <label class="field check"><span>${h("verify_certificate")}</span><input name="validate_certs" type="checkbox"${data.validate_certs === false ? "" : " checked"}></label>
-          <label class="field"><span>${h("private_ca_file")}</span><input name="ca_file" value="${esc(data.ca_file || "")}" placeholder="/etc/ssl/certs/internal-ca.pem" autocomplete="off" spellcheck="false"></label>
-          <p class="small muted">${h("an_absolute_pem_path_empty_uses_the_system_cas")}</p>
           <label class="field check"><span>${h("virtual_machines")}</span><input name="virtual_machines" type="checkbox"${data.virtual_machines === false ? "" : " checked"}></label>
         </div>
       </details>
@@ -5045,7 +5043,6 @@ function mountSourceDraft(container, projects, kind, preset, options = {}) {
         const result = await api("POST", "/api/inventories/netbox/test", {
           credential_id: draft.credential_id,
           validate_certs: draft.validate_certs,
-          ca_file: draft.ca_file,
         });
         status.textContent = result.version
           ? t("netbox.test_ok", { version: result.version })
@@ -5067,7 +5064,6 @@ function mountSourceDraft(container, projects, kind, preset, options = {}) {
         const result = await api("POST", "/api/inventories/netbox/preview", {
           credential_id: draft.credential_id,
           validate_certs: draft.validate_certs,
-          ca_file: draft.ca_file,
           group_by: draft.group_by,
           group_names_raw: draft.group_names_raw,
           load_config_context: draft.load_config_context,
@@ -5159,7 +5155,6 @@ function readSourceDraft(card) {
     max_hosts: Number(card.querySelector("[name=max_hosts]").value) || 2000,
     query_filters,
     validate_certs: card.querySelector("[name=validate_certs]").checked,
-    ca_file: card.querySelector("[name=ca_file]").value.trim(),
     virtual_machines: card.querySelector("[name=virtual_machines]").checked,
   };
 }
@@ -7067,7 +7062,6 @@ function settingsBody(form) {
       group_base: form.ldap_group_base.value.trim(),
       starttls: form.ldap_starttls.checked,
       tls_insecure: form.ldap_tls_insecure.checked,
-      ca_file: form.ldap_ca_file.value.trim(),
     },
     proxy: {
       url: form.proxy_url.value.trim(),
@@ -7143,8 +7137,6 @@ async function pageSettings(notice) {
       </div>
       <label class="row"><input name="ldap_starttls" type="checkbox"${ldap.starttls ? " checked" : ""}> ${h("starttls")}</label>
       <label class="row"><input name="ldap_tls_insecure" type="checkbox"${ldap.tls_insecure ? " checked" : ""}> ${h("skip_certificate_checks_only_on_a_network_you")}</label>
-      <label class="field"><span>${h("private_ca_file")}</span><input name="ldap_ca_file" value="${esc(ldap.ca_file || "")}" placeholder="/etc/ssl/certs/internal-ca.pem" autocomplete="off" spellcheck="false"></label>
-      <p class="small muted">${h("an_absolute_pem_path_empty_uses_the_system_cas")}</p>
     </section>
     <section class="form-section">
       <h2>${h("proxy")}</h2>

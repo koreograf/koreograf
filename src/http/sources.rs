@@ -38,8 +38,8 @@ pub(super) struct SourceInput {
     token: String,
     #[serde(default = "yes")]
     validate_certs: bool,
-    #[serde(default)]
-    ca_file: String,
+    #[serde(default, rename = "ca_file")]
+    _ca_file: String,
     #[serde(default)]
     group_by: Vec<String>,
     #[serde(default)]
@@ -74,8 +74,8 @@ pub(super) struct NetboxBody {
     token: String,
     #[serde(default = "yes")]
     validate_certs: bool,
-    #[serde(default)]
-    ca_file: String,
+    #[serde(default, rename = "ca_file")]
+    _ca_file: String,
     #[serde(default)]
     group_by: Vec<String>,
     #[serde(default)]
@@ -101,8 +101,8 @@ pub(super) struct NetboxTestBody {
     token: String,
     #[serde(default = "yes")]
     validate_certs: bool,
-    #[serde(default)]
-    ca_file: String,
+    #[serde(default, rename = "ca_file")]
+    _ca_file: String,
 }
 
 #[derive(Deserialize)]
@@ -116,8 +116,8 @@ pub(super) struct NetboxPreviewBody {
     token: String,
     #[serde(default = "yes")]
     validate_certs: bool,
-    #[serde(default)]
-    ca_file: String,
+    #[serde(default, rename = "ca_file")]
+    _ca_file: String,
     #[serde(default)]
     group_by: Vec<String>,
     #[serde(default)]
@@ -144,8 +144,6 @@ fn default_max_hosts() -> usize {
 struct StoredNetbox {
     #[serde(default = "yes")]
     validate_certs: bool,
-    #[serde(default)]
-    ca_file: String,
     #[serde(default)]
     group_by: Vec<String>,
     #[serde(default)]
@@ -245,19 +243,10 @@ pub async fn create_netbox(
         &body.token,
         &body.api_endpoint,
     )?;
-    ensure_certificate_override(
-        &state,
-        &user,
-        &team,
-        true,
-        body.validate_certs,
-        &body.ca_file,
-        None,
-    )?;
+    ensure_certificate_override(&state, &user, &team, true, body.validate_certs, None)?;
     let source = netbox_source_fields(NetboxFields {
         api_endpoint: &access.api_endpoint,
         validate_certs: body.validate_certs,
-        ca_file: &body.ca_file,
         group_by: &body.group_by,
         group_names_raw: body.group_names_raw,
         load_config_context: body.load_config_context,
@@ -314,21 +303,8 @@ pub async fn test_netbox(
         &body.token,
         &body.api_endpoint,
     )?;
-    ensure_certificate_override(
-        &state,
-        &user,
-        &team,
-        true,
-        body.validate_certs,
-        &body.ca_file,
-        None,
-    )?;
-    let source = connection_source(
-        &access.api_endpoint,
-        &access.token,
-        body.validate_certs,
-        &body.ca_file,
-    )?;
+    ensure_certificate_override(&state, &user, &team, true, body.validate_certs, None)?;
+    let source = connection_source(&access.api_endpoint, &access.token, body.validate_certs)?;
     let proxy = crate::settings::load(&state)?.proxy;
     let version = netbox::test_connection(&source, &access.token, &proxy)
         .await
@@ -351,19 +327,10 @@ pub async fn preview_netbox(
         &body.token,
         &body.api_endpoint,
     )?;
-    ensure_certificate_override(
-        &state,
-        &user,
-        &team,
-        true,
-        body.validate_certs,
-        &body.ca_file,
-        None,
-    )?;
+    ensure_certificate_override(&state, &user, &team, true, body.validate_certs, None)?;
     let source = netbox_source_fields(NetboxFields {
         api_endpoint: &access.api_endpoint,
         validate_certs: body.validate_certs,
-        ca_file: &body.ca_file,
         group_by: &body.group_by,
         group_names_raw: body.group_names_raw,
         load_config_context: body.load_config_context,
@@ -509,7 +476,6 @@ async fn refresh_netbox(
     let source = NetboxSource {
         api_endpoint: url,
         validate_certs: stored.validate_certs,
-        ca_file: stored.ca_file,
         group_by: stored.group_by,
         group_names_raw: stored.group_names_raw,
         load_config_context: stored.load_config_context,
@@ -534,7 +500,6 @@ async fn fetch_netbox(
 struct NetboxFields<'a> {
     api_endpoint: &'a str,
     validate_certs: bool,
-    ca_file: &'a str,
     group_by: &'a [String],
     group_names_raw: bool,
     load_config_context: bool,
@@ -557,12 +522,9 @@ fn netbox_config(
             [("max", netbox::MAX_HOSTS_LIMIT.to_string())],
         ));
     }
-    let ca_file = fields.ca_file.trim().to_string();
-    crate::tls::absolute_ca_path(&ca_file).map_err(ApiError::bad)?;
     Ok(NetboxSource {
         api_endpoint: endpoint,
         validate_certs: fields.validate_certs,
-        ca_file,
         group_by: fields
             .group_by
             .iter()
@@ -583,7 +545,6 @@ fn connection_source(
     api_endpoint: &str,
     token: &str,
     validate_certs: bool,
-    ca_file: &str,
 ) -> AppResult<NetboxSource> {
     if !netbox::valid_token(token.trim()) {
         return Err(ApiError::bad("the_netbox_token_is_invalid"));
@@ -592,7 +553,6 @@ fn connection_source(
         &NetboxFields {
             api_endpoint,
             validate_certs,
-            ca_file,
             group_by: &[],
             group_names_raw: false,
             load_config_context: false,
@@ -675,15 +635,13 @@ fn ensure_certificate_override(
     team: &str,
     credential_used: bool,
     validate_certs: bool,
-    ca_file: &str,
     stored: Option<&StoredNetbox>,
 ) -> AppResult<()> {
     if !credential_used {
         return Ok(());
     }
     let stored_validate_certs = stored.is_none_or(|item| item.validate_certs);
-    let stored_ca_file = stored.map_or("", |item| item.ca_file.trim());
-    if validate_certs == stored_validate_certs && ca_file.trim() == stored_ca_file {
+    if validate_certs == stored_validate_certs {
         return Ok(());
     }
     gate(state, user, team, Role::Owner)
@@ -1002,8 +960,8 @@ pub(super) struct SourceUpdate {
     token: Option<String>,
     #[serde(default)]
     validate_certs: Option<bool>,
-    #[serde(default)]
-    ca_file: Option<String>,
+    #[serde(default, rename = "ca_file")]
+    _ca_file: Option<String>,
     #[serde(default)]
     group_by: Option<Vec<String>>,
     #[serde(default)]
@@ -1036,7 +994,7 @@ fn reject_foreign_fields(kind: &str, body: &SourceUpdate) -> AppResult<()> {
             ("credential_id", body.credential_id.is_some()),
             ("token", body.token.is_some()),
             ("validate_certs", body.validate_certs.is_some()),
-            ("ca_file", body.ca_file.is_some()),
+            ("ca_file", body._ca_file.is_some()),
             ("group_by", body.group_by.is_some()),
             ("group_names_raw", body.group_names_raw.is_some()),
             ("load_config_context", body.load_config_context.is_some()),
@@ -1050,7 +1008,7 @@ fn reject_foreign_fields(kind: &str, body: &SourceUpdate) -> AppResult<()> {
             ("credential_id", body.credential_id.is_some()),
             ("token", body.token.is_some()),
             ("validate_certs", body.validate_certs.is_some()),
-            ("ca_file", body.ca_file.is_some()),
+            ("ca_file", body._ca_file.is_some()),
             ("group_by", body.group_by.is_some()),
             ("group_names_raw", body.group_names_raw.is_some()),
             ("load_config_context", body.load_config_context.is_some()),
@@ -1169,12 +1127,10 @@ async fn resolve_netbox_update(
         None => stored.query.clone(),
     };
     let validate_certs = body.validate_certs.unwrap_or(stored.validate_certs);
-    let ca_file = body.ca_file.as_deref().unwrap_or(&stored.ca_file);
     let parsed = netbox_config(
         &NetboxFields {
             api_endpoint: &access.api_endpoint,
             validate_certs,
-            ca_file,
             group_by: body.group_by.as_deref().unwrap_or(&stored.group_by),
             group_names_raw: body.group_names_raw.unwrap_or(stored.group_names_raw),
             load_config_context: body
@@ -1186,15 +1142,7 @@ async fn resolve_netbox_update(
         },
         query,
     )?;
-    ensure_certificate_override(
-        state,
-        user,
-        team,
-        true,
-        validate_certs,
-        ca_file,
-        Some(&stored),
-    )?;
+    ensure_certificate_override(state, user, team, true, validate_certs, Some(&stored))?;
     let name = updated_name(body.name.clone(), &source.name, "netbox")?;
     let fetched = fetch_netbox(state, &parsed, &access.token).await?;
     Ok(ResolvedUpdate {
@@ -1308,19 +1256,10 @@ async fn resolve_source(
                 &input.token,
                 &input.api_endpoint,
             )?;
-            ensure_certificate_override(
-                state,
-                user,
-                team,
-                true,
-                input.validate_certs,
-                &input.ca_file,
-                None,
-            )?;
+            ensure_certificate_override(state, user, team, true, input.validate_certs, None)?;
             let parsed = netbox_source_fields(NetboxFields {
                 api_endpoint: &access.api_endpoint,
                 validate_certs: input.validate_certs,
-                ca_file: &input.ca_file,
                 group_by: &input.group_by,
                 group_names_raw: input.group_names_raw,
                 load_config_context: input.load_config_context,

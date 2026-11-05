@@ -529,6 +529,62 @@ CREATE INDEX IF NOT EXISTS idx_schedules_target ON schedules(target_kind, target
         "CREATE INDEX IF NOT EXISTS idx_jobs_team_created ON jobs(team_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_team_status ON jobs(team_id, status, created_at DESC);",
     )?;
+    let sources = {
+        let mut stmt = c.prepare("SELECT id, source_json FROM inventory_sources")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+    for (id, raw) in sources {
+        let Ok(mut value) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        let Some(object) = value.as_object_mut() else {
+            continue;
+        };
+        let has_ca = object
+            .get("ca_file")
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.is_empty());
+        if !has_ca {
+            continue;
+        }
+        object.remove("ca_file");
+        if object.get("validate_certs").and_then(Value::as_bool) == Some(false) {
+            object.insert("validate_certs".to_string(), Value::Bool(true));
+        }
+        c.execute(
+            "UPDATE inventory_sources SET source_json = ?2 WHERE id = ?1",
+            params![id, value.to_string()],
+        )?;
+    }
+    let legacy_ldap_ca = c
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'ldap_ca_file'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if let Some(ca_file) = legacy_ldap_ca.as_deref() {
+        if !ca_file.is_empty() {
+            let insecure = c
+                .query_row(
+                    "SELECT value FROM settings WHERE key = 'ldap_tls_insecure'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+                .is_some_and(|value| value == "1" || value == "true");
+            if insecure {
+                c.execute(
+                    "UPDATE settings SET value = '0' WHERE key = 'ldap_tls_insecure'",
+                    [],
+                )?;
+            }
+        }
+        c.execute("DELETE FROM settings WHERE key = 'ldap_ca_file'", [])?;
+    }
     c.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
 }
@@ -3583,6 +3639,87 @@ mod tests {
         let workflow = workflow(&conn, "w1").unwrap().unwrap();
         assert!(inventory.admin_saved);
         assert!(workflow.admin_saved);
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn migration_drops_legacy_ca_files_and_keeps_verification_on() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-migrate-ca-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = Connection::open(dir.join("koreograf.db")).unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        conn.execute(
+            "INSERT INTO inventory_sources (id, inventory_id, name, kind, source_json, created_at)
+             VALUES ('s1', 'i1', 'NetBox', 'netbox', ?1, '2020-01-01T00:00:00Z')",
+            [r#"{"api_endpoint":"https://netbox.example","validate_certs":false,"ca_file":"/etc/ca.pem"}"#],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('ldap_ca_file', '/etc/ldap.pem')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('ldap_tls_insecure', '1')",
+            [],
+        )
+        .unwrap();
+        ensure_schema(&conn).unwrap();
+        let raw: String = conn
+            .query_row(
+                "SELECT source_json FROM inventory_sources WHERE id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let value: Value = serde_json::from_str(&raw).unwrap();
+        assert!(value.get("ca_file").is_none(), "{raw}");
+        assert_eq!(value["validate_certs"], Value::Bool(true));
+        let insecure: Option<String> = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'ldap_tls_insecure'",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+        assert_eq!(insecure.as_deref(), Some("0"));
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('ldap_ca_file', '')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE settings SET value = '1' WHERE key = 'ldap_tls_insecure'",
+            [],
+        )
+        .unwrap();
+        ensure_schema(&conn).unwrap();
+        let insecure: Option<String> = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'ldap_tls_insecure'",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+        assert_eq!(
+            insecure.as_deref(),
+            Some("1"),
+            "a blank path keeps the opt-out"
+        );
+        let ca: Option<String> = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'ldap_ca_file'",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+        assert!(ca.is_none());
         drop(conn);
         let _ = std::fs::remove_dir_all(&dir);
     }

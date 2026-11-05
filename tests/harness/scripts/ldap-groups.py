@@ -292,7 +292,6 @@ def check_sign_in(args, admin_password: str, user_password: str, secrets: list[s
                 "group_base": args.group_base,
                 "starttls": False,
                 "tls_insecure": False,
-                "ca_file": "",
             },
             "proxy": {"url": "", "username": "", "password": "", "no_proxy": ""},
             "runner": "local",

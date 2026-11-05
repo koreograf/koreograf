@@ -41,9 +41,8 @@ See `.env.example`. Comments in that file are English. Copy it to `.env` before 
 | `KOREOGRAF_LDAP_USER_BASE` | empty. Required when `KOREOGRAF_LDAP_URL` is set |
 | `KOREOGRAF_LDAP_GROUP_BASE` | empty |
 | `KOREOGRAF_LDAP_TLS_INSECURE` | false. Skips certificate checks and writes a warning |
-| `KOREOGRAF_LDAP_CA_FILE` | empty. Absolute PEM path. When set, checks stay on |
 
-Directory sign-in, including these four variables, is described in [Organizations, teams, LDAP, and Active Directory](authentication.md).
+Directory sign-in is described in [Organizations, teams, LDAP, and Active Directory](authentication.md). Company CAs are mounted at `/etc/koreograf/ca`; see [Installation](installation.md#company-certificate-authorities).
 
 Startup runs the runner preflight, logs one block, and keeps the report for the overview. `koreograf doctor` prints the same block and exits with code 2 when the configured mode lacks a tool or runtime. The check covers `ansible-playbook` 2.14 or newer, `tofu` 1.6 or newer, `sh`, `git`, `ssh`, and a Docker or Podman CLI whose daemon answers. The tools get two seconds; the container CLI gets ten. `GET /api/runner/preflight` is administrator-only, runs the check fresh, refreshes the cached report, and returns binary paths and versions but never an environment variable or the value of `PATH`. The **Overview** page and `GET /api/overview` use the cached report, so **Check again** under **Settings → Jobs** refreshes it after a change to the machine or runner mode. `KOREOGRAF_CONTAINER_IMAGE=1` reduces the check to the container CLI and socket. The image build sets it.
 

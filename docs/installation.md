@@ -48,6 +48,18 @@ docker compose exec koreograf cat /var/lib/koreograf/initial-admin-password
 docker compose exec koreograf rm /var/lib/koreograf/initial-admin-password
 ```
 
+### Company certificate authorities
+
+Koreograf trusts a company CA in addition to the public roots. Put the certificates in a directory on the host and mount it read-only at `/etc/koreograf/ca`. The directory holds files named `*.pem` or `*.crt`. Other files are ignored. The files must be readable by uid 10001. A missing or empty directory leaves trust unchanged. A file that is not a PEM, or one that cannot be read, stops the start with one English line that names the file. Certificate verification is never turned off by this directory.
+
+```yaml
+volumes:
+  - koreograf-data:/var/lib/koreograf
+  - /srv/koreograf/ca:/etc/koreograf/ca:ro
+```
+
+The same certificates apply to LDAP, NetBox, and git. Git gets them through a bundle in `/tmp`, so the image needs no `update-ca-certificates` and stays `scratch`. The Helm chart mounts the same path when `caDirectory.enabled` is true; set `caDirectory.hostPath` to the directory on the node. Execution environments keep their own trust store.
+
 Compose pulls `ghcr.io/koreograf/koreograf:0.1.0-alpha.7`. <!-- x-release-please-version -->
 It does not compile. Build this checkout without replacing that published tag:
 

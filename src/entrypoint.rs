@@ -16,6 +16,8 @@ const TARGET_UID: u32 = 10001;
 const TARGET_GID: u32 = 10001;
 const DEFAULT_DATA_DIR: &str = "/var/lib/koreograf";
 const DEFAULT_SOCKET: &str = "/var/run/docker.sock";
+const SYSTEM_CA_BUNDLE: &str = "/etc/ssl/certs/ca-certificates.crt";
+pub(crate) const GIT_CA_BUNDLE: &str = "/tmp/koreograf-ca-bundle.pem";
 
 pub fn entrypoint(args: &[String]) -> Result<(), String> {
     let command: Vec<OsString> = args.iter().skip(2).map(OsString::from).collect::<Vec<_>>();
@@ -51,10 +53,15 @@ fn run_entrypoint(command: &[OsString]) -> Result<(), String> {
         set_no_new_privs().map_err(|err| format!("Could not set no_new_privs ({err})."))?;
     }
 
+    let bundle = git_ca_bundle()?;
     let program = &command[0];
-    let err = std::process::Command::new(program)
-        .args(&command[1..])
-        .exec();
+    let mut child = std::process::Command::new(program);
+    child.args(&command[1..]);
+    if let Some(path) = bundle {
+        child.env("SSL_CERT_FILE", &path);
+        child.env("GIT_SSL_CAINFO", &path);
+    }
+    let err = child.exec();
     Err(format!(
         "Could not start {}: {}",
         program.to_string_lossy(),
@@ -64,9 +71,15 @@ fn run_entrypoint(command: &[OsString]) -> Result<(), String> {
 
 #[cfg(not(unix))]
 fn run_entrypoint(command: &[OsString]) -> Result<(), String> {
+    let bundle = git_ca_bundle()?;
     let program = &command[0];
-    let status = std::process::Command::new(program)
-        .args(&command[1..])
+    let mut child = std::process::Command::new(program);
+    child.args(&command[1..]);
+    if let Some(path) = bundle {
+        child.env("SSL_CERT_FILE", &path);
+        child.env("GIT_SSL_CAINFO", &path);
+    }
+    let status = child
         .status()
         .map_err(|err| format!("Could not start {}: {err}", program.to_string_lossy()))?;
     if status.success() {
@@ -77,6 +90,57 @@ fn run_entrypoint(command: &[OsString]) -> Result<(), String> {
             program.to_string_lossy()
         ))
     }
+}
+
+fn git_ca_bundle() -> Result<Option<PathBuf>, String> {
+    let base = std::env::var_os("SSL_CERT_FILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(SYSTEM_CA_BUNDLE));
+    git_ca_bundle_from(
+        Path::new(crate::tls::CA_DIRECTORY),
+        &base,
+        Path::new(GIT_CA_BUNDLE),
+    )
+}
+
+fn git_ca_bundle_from(
+    ca_dir: &Path,
+    system_bundle: &Path,
+    out: &Path,
+) -> Result<Option<PathBuf>, String> {
+    let loaded = crate::tls::load_cas(ca_dir)?;
+    if loaded.pem.is_empty() {
+        return Ok(None);
+    }
+    let mut bundle = match fs::read(system_bundle) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(_) => {
+            return Err(format!(
+                "The system CA bundle {} cannot be read.",
+                system_bundle.display()
+            ))
+        }
+    };
+    if bundle.is_empty() {
+        eprintln!(
+            "The system CA bundle {} is missing or empty; company CAs are not added for git.",
+            system_bundle.display()
+        );
+        return Ok(None);
+    }
+    if !bundle.ends_with(b"\n") {
+        bundle.push(b'\n');
+    }
+    bundle.extend(loaded.pem);
+    fs::write(out, bundle).map_err(|err| format!("Could not write {} ({err}).", out.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(out, fs::Permissions::from_mode(0o644))
+            .map_err(|err| format!("Could not set the mode of {} ({err}).", out.display()))?;
+    }
+    Ok(Some(out.to_path_buf()))
 }
 
 #[cfg(unix)]
@@ -235,6 +299,75 @@ mod tests {
         assert!(!entrypoint_requested(["koreograf"]));
         assert!(!entrypoint_requested(["koreograf", "healthcheck"]));
         assert!(!entrypoint_requested(["koreograf", "run", "entrypoint"]));
+    }
+
+    fn scratch_ca(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-entrypoint-{name}-{nanos}"));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn the_git_bundle_lives_under_tmp() {
+        assert_eq!(GIT_CA_BUNDLE, "/tmp/koreograf-ca-bundle.pem");
+    }
+
+    #[test]
+    fn company_cas_are_appended_to_the_system_bundle_for_git() {
+        let dir = scratch_ca("bundle");
+        let ca = dir.join("ca");
+        fs::create_dir_all(&ca).unwrap();
+        fs::write(ca.join("company.pem"), crate::tls::TEST_CA_PEM).unwrap();
+        let system = dir.join("system.pem");
+        fs::write(&system, "SYSTEM ROOTS\n").unwrap();
+        let out = dir.join("bundle.pem");
+        let path = git_ca_bundle_from(&ca, &system, &out).unwrap().unwrap();
+        assert_eq!(path, out);
+        let text = fs::read_to_string(&out).unwrap();
+        assert!(text.starts_with("SYSTEM ROOTS\n"), "{text}");
+        assert!(text.contains("BEGIN CERTIFICATE"), "{text}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&out).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o644, "bundle mode");
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_missing_system_bundle_keeps_git_on_its_own_store() {
+        let dir = scratch_ca("no-system");
+        let ca = dir.join("ca");
+        fs::create_dir_all(&ca).unwrap();
+        fs::write(ca.join("company.pem"), crate::tls::TEST_CA_PEM).unwrap();
+        let out = dir.join("bundle.pem");
+        let missing = dir.join("missing-system.pem");
+        assert!(git_ca_bundle_from(&ca, &missing, &out).unwrap().is_none());
+        assert!(!out.exists());
+        let empty = dir.join("empty-system.pem");
+        fs::write(&empty, "").unwrap();
+        assert!(git_ca_bundle_from(&ca, &empty, &out).unwrap().is_none());
+        assert!(!out.exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_empty_or_missing_ca_directory_writes_no_bundle() {
+        let dir = scratch_ca("empty");
+        let out = dir.join("bundle.pem");
+        let system = dir.join("system.pem");
+        assert!(git_ca_bundle_from(&dir.join("missing"), &system, &out)
+            .unwrap()
+            .is_none());
+        assert!(!out.exists());
+        assert!(git_ca_bundle_from(&dir, &system, &out).unwrap().is_none());
+        assert!(!out.exists());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

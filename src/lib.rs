@@ -213,6 +213,10 @@ pub fn boot(mut cfg: Config) -> anyhow::Result<Shared> {
 pub async fn serve(cfg: Config) -> anyhow::Result<()> {
     let url = std::env::var("KOREOGRAF_DATABASE_URL").unwrap_or_default();
     config::database_choice(&url).map_err(anyhow::Error::msg)?;
+    if let Err(error) = tls::validate_company_cas() {
+        tracing::error!(%error, "Company CA directory is invalid");
+        return Err(anyhow::Error::msg(error));
+    }
     migration::prepare(&cfg)?;
     let state = boot(cfg)?;
     let mode = match settings::load(&state) {
