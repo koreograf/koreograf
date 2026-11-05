@@ -40,6 +40,17 @@ pub struct Client {
     team_id: Option<String>,
 }
 
+fn path_segment(value: &str) -> String {
+    let mut out = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'~' => out.push(byte as char),
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
+}
+
 impl Client {
     pub fn new(
         base: impl Into<String>,
@@ -182,14 +193,20 @@ impl Client {
     }
 
     pub async fn get_job(&self, id: &str, team_id: Option<&str>) -> Result<Value, Error> {
-        self.json(Method::GET, &format!("/api/jobs/{id}"), &[], None, team_id)
-            .await
+        self.json(
+            Method::GET,
+            &format!("/api/jobs/{}", path_segment(id)),
+            &[],
+            None,
+            team_id,
+        )
+        .await
     }
 
     pub async fn job_output(&self, id: &str, team_id: Option<&str>) -> Result<String, Error> {
         self.request(
             Method::GET,
-            &format!("/api/jobs/{id}/output"),
+            &format!("/api/jobs/{}/output", path_segment(id)),
             &[],
             None,
             team_id,
@@ -200,7 +217,7 @@ impl Client {
     pub async fn get_workflow_job(&self, id: &str, team_id: Option<&str>) -> Result<Value, Error> {
         self.json(
             Method::GET,
-            &format!("/api/workflow-jobs/{id}"),
+            &format!("/api/workflow-jobs/{}", path_segment(id)),
             &[],
             None,
             team_id,
@@ -217,7 +234,7 @@ impl Client {
         let body = json!({"extra_vars": extra_vars});
         self.json(
             Method::POST,
-            &format!("/api/templates/{id}/launch"),
+            &format!("/api/templates/{}/launch", path_segment(id)),
             &[],
             Some(&body),
             team_id,
@@ -234,7 +251,7 @@ impl Client {
         let body = json!({"extra_vars": extra_vars});
         self.json(
             Method::POST,
-            &format!("/api/workflows/{id}/launch"),
+            &format!("/api/workflows/{}/launch", path_segment(id)),
             &[],
             Some(&body),
             team_id,
@@ -245,7 +262,7 @@ impl Client {
     pub async fn cancel_job(&self, id: &str, team_id: Option<&str>) -> Result<Value, Error> {
         self.json(
             Method::POST,
-            &format!("/api/jobs/{id}/cancel"),
+            &format!("/api/jobs/{}/cancel", path_segment(id)),
             &[],
             None,
             team_id,
@@ -257,7 +274,7 @@ impl Client {
         let body = json!({});
         self.json(
             Method::POST,
-            &format!("/api/jobs/{id}/relaunch"),
+            &format!("/api/jobs/{}/relaunch", path_segment(id)),
             &[],
             Some(&body),
             team_id,
@@ -268,7 +285,7 @@ impl Client {
     pub async fn sync_project(&self, id: &str, team_id: Option<&str>) -> Result<Value, Error> {
         self.json(
             Method::POST,
-            &format!("/api/projects/{id}/sync"),
+            &format!("/api/projects/{}/sync", path_segment(id)),
             &[],
             None,
             team_id,
@@ -279,7 +296,7 @@ impl Client {
     pub async fn sync_inventory(&self, id: &str, team_id: Option<&str>) -> Result<Value, Error> {
         self.json(
             Method::POST,
-            &format!("/api/inventories/{id}/sync"),
+            &format!("/api/inventories/{}/sync", path_segment(id)),
             &[],
             None,
             team_id,
@@ -463,7 +480,9 @@ impl Server {
             .map_err(|error| error.text())
     }
 
-    #[tool(description = "List the workflows of the selected team.")]
+    #[tool(
+        description = "List the workflows of the selected team. Node overrides can contain extra_vars, which may hold secrets; never repeat those values verbatim."
+    )]
     async fn list_workflows(
         &self,
         Parameters(args): Parameters<TeamArgs>,
@@ -644,4 +663,18 @@ pub async fn run() -> anyhow::Result<()> {
     let running = rmcp::serve_server(server, rmcp::transport::stdio()).await?;
     running.waiting().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::path_segment;
+
+    #[test]
+    fn ids_cannot_leave_the_route() {
+        assert_eq!(path_segment("abc-123_X~"), "abc-123_X~");
+        assert_eq!(path_segment("../admin"), "%2E%2E%2Fadmin");
+        assert_eq!(path_segment("a/b"), "a%2Fb");
+        assert_eq!(path_segment("a?b#c"), "a%3Fb%23c");
+        assert_eq!(path_segment("a b"), "a%20b");
+    }
 }
