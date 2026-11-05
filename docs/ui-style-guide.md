@@ -11,7 +11,7 @@ This guide describes the browser UI as it exists today. `web/app.css`, `web/app.
 
 ## Layout and tokens
 
-The signed-in UI uses the `.shell` grid: a 232 px sidebar and a flexible main column. `.main` carries the page padding and the `#main` landmark. The sidebar holds `.side`, `.nav`, `.nav-group`, and `.nav-label`. A page starts with `.top`, which holds the `h1` and page actions.
+The signed-in UI uses the `.shell` grid: a 232 px sidebar and a flexible main column. `.main` carries the page padding and the `#main` landmark. The sidebar holds `.side`, `.nav`, `.nav-group`, and `.nav-label`. A page starts with `.top`, which holds the `h1` and page actions. The sidebar foot (`.side-foot`) sits at the bottom and holds the account link, the build line with the repository link, the language switch, and the sign-out button.
 
 All design tokens are custom properties on `:root` in `web/app.css`.
 

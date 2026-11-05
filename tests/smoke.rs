@@ -13778,6 +13778,31 @@ async fn version_is_available_without_signing_in() {
 }
 
 #[test]
+fn ui_reads_version_and_links_the_repository() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let login = extract_braced_function(&script, "function renderLogin");
+    let shell = extract_braced_function(&script, "function shell");
+    let version_slot = extract_braced_function(&script, "function versionSlot");
+    let load = extract_braced_function(&script, "async function loadVersion");
+    for body in [&login, &shell] {
+        assert!(
+            body.contains("versionSlot()"),
+            "a page does not render the build line"
+        );
+        assert!(
+            body.contains("loadVersion()"),
+            "a page does not request the version"
+        );
+    }
+    assert!(load.contains("/api/version"));
+    assert!(load.contains("data.commit"));
+    assert!(version_slot.contains("https://github.com/koreograf/koreograf"));
+    assert!(version_slot.contains("target=\"_blank\""));
+    assert!(version_slot.contains("rel=\"noopener noreferrer\""));
+}
+
+#[test]
 fn auto_mode_names_a_missing_runtime() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let runner = std::fs::read_to_string(root.join("src/runner.rs")).expect("runner.rs");
