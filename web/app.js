@@ -4949,13 +4949,14 @@ function mountSourceDraft(container, projects, kind, preset, options = {}) {
         status.textContent = "";
         const groups = (result.groups || []).map((group) => `<li>${esc(group.name)} <span class="small muted">${h("count_hosts", { count: group.host_count })}</span></li>`).join("");
         const sample = result.sample_host
-          ? `<h3>${h("sample_host")}</h3><p class="mono">${esc(result.sample_host.name)}</p><pre class="mono">${esc(effectiveVariablesYaml(Object.entries(result.sample_host.vars || {}).map(([name, value]) => ({ name, value, origin: "host" }))))}</pre>`
+          ? `<h3>${h("sample_host")}</h3><p class="mono">${esc(result.sample_host.name)}</p>${variablesViewer(Object.entries(result.sample_host.vars || {}).map(([name, value]) => ({ name, value, origin: "host" })))}`
           : `<p class="small muted">${h("preview_no_hosts")}</p>`;
         const collisions = (result.collisions || []).length
           ? `<p class="small warn">${h("netbox_collisions", { groups: result.collisions.join(", ") })}</p>`
           : "";
         resultBox.innerHTML = `<p><strong>${h("count_hosts", { count: result.host_count })}</strong></p>${collisions}
           <h3>${h("groups")}</h3><ul>${groups || `<li>${h("none")}</li>`}</ul>${sample}`;
+        bindVariablesViews(resultBox);
         resultBox.hidden = false;
       } catch (error) {
         status.textContent = t(error.message || "error.generic", error.vars);
@@ -5560,13 +5561,110 @@ function looksSecretVar(name) {
   return /(pass(word|phrase)?|secret|token|api[-_]?key|private[-_]?key|access[-_]?key|auth[-_]?key|credential|vault)/i.test(name);
 }
 
+let variablesViewSerial = 0;
+
+function variableText(item) {
+  return looksSecretVar(item.name) ? "••••••" : String(item.value ?? "");
+}
+
+function variableOrigin(item) {
+  return item.origin === "host" ? t("host") : String(item.origin ?? "");
+}
+
+function yamlPlain(text) {
+  return /^[A-Za-z0-9_][A-Za-z0-9_.\/-]*$/.test(text)
+    && !/^(true|false|yes|no|on|off|null|none)$/i.test(text)
+    && !/^[+-]?(\d+(\.\d+)?|\.\d+)$/.test(text);
+}
+
+function variableScalar(value) {
+  const text = String(value ?? "");
+  return yamlPlain(text) ? esc(text) : esc(JSON.stringify(text));
+}
+
+function variableKey(name) {
+  const text = String(name ?? "");
+  return /^[A-Za-z_][A-Za-z0-9_.-]*$/.test(text) ? esc(text) : esc(JSON.stringify(text));
+}
+
 function effectiveVariablesYaml(vars) {
-  if (!vars.length) return t("no_variables");
   return vars.map((item) => {
-    const value = looksSecretVar(item.name) ? '"••••••"' : JSON.stringify(String(item.value));
-    const origin = item.origin === "host" ? t("host") : item.origin;
-    return `${item.name}: ${value} # ${origin}`;
+    const value = variableScalar(variableText(item));
+    return `<span class="vars-key">${variableKey(item.name)}</span>: <span class="vars-value">${value}</span> <span class="vars-comment"># ${esc(variableOrigin(item))}</span>`;
   }).join("\n");
+}
+
+function jsonVariableMarkup(text) {
+  const pattern = /("(?:\\.|[^"\\])*")(?=\s*:)|("(?:\\.|[^"\\])*")|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|\b(true|false|null)\b/g;
+  let result = "";
+  let last = 0;
+  let match;
+  while ((match = pattern.exec(text)) !== null) {
+    result += esc(text.slice(last, match.index));
+    if (match[1]) result += `<span class="vars-key">${esc(match[1])}</span>`;
+    else if (match[2]) result += `<span class="vars-value">${esc(match[2])}</span>`;
+    else result += esc(match[0]);
+    last = pattern.lastIndex;
+  }
+  return result + esc(text.slice(last));
+}
+
+function effectiveVariablesJson(vars) {
+  const rows = vars.map((item) => ({
+    name: String(item.name ?? ""),
+    value: looksSecretVar(item.name) ? "••••••" : (item.value ?? ""),
+    origin: variableOrigin(item),
+  }));
+  return jsonVariableMarkup(JSON.stringify(rows, null, 2));
+}
+
+function variablesViewer(vars) {
+  const id = `vars-${++variablesViewSerial}`;
+  const empty = `<p class="small muted">${h("no_variables")}</p>`;
+  const yaml = vars.length ? `<pre class="vars">${effectiveVariablesYaml(vars)}</pre>` : empty;
+  const json = vars.length ? `<pre class="vars">${effectiveVariablesJson(vars)}</pre>` : empty;
+  return `<div class="vars-view" data-vars-view>
+    <div class="spread tab-bar">
+      <div class="tabs" role="tablist" aria-label="${h("variables")}">
+        <button class="btn pill primary" type="button" role="tab" data-vars-tab="yaml" aria-selected="true" aria-controls="${id}-yaml" tabindex="0">${h("yaml")}</button>
+        <button class="btn pill" type="button" role="tab" data-vars-tab="json" aria-selected="false" aria-controls="${id}-json" tabindex="-1">${h("json")}</button>
+      </div>
+    </div>
+    <div id="${id}-yaml" role="tabpanel" data-vars-panel="yaml">${yaml}</div>
+    <div id="${id}-json" role="tabpanel" data-vars-panel="json" hidden>${json}</div>
+  </div>`;
+}
+
+function bindVariablesViews(root = document) {
+  root.querySelectorAll("[data-vars-view]").forEach((view) => {
+    const buttons = [...view.querySelectorAll("[data-vars-tab]")];
+    const panels = [...view.querySelectorAll("[data-vars-panel]")];
+    const choose = (format, focus) => {
+      buttons.forEach((button) => {
+        const active = button.dataset.varsTab === format;
+        button.classList.toggle("primary", active);
+        button.setAttribute("aria-selected", String(active));
+        button.tabIndex = active ? 0 : -1;
+        if (active && focus) button.focus();
+      });
+      panels.forEach((panel) => {
+        panel.hidden = panel.dataset.varsPanel !== format;
+      });
+    };
+    buttons.forEach((button, index) => {
+      button.addEventListener("click", () => choose(button.dataset.varsTab, false));
+      button.addEventListener("keydown", (event) => {
+        let next = null;
+        if (event.key === "ArrowRight") next = (index + 1) % buttons.length;
+        else if (event.key === "ArrowLeft") next = (index - 1 + buttons.length) % buttons.length;
+        else if (event.key === "Home") next = 0;
+        else if (event.key === "End") next = buttons.length - 1;
+        if (next === null) return;
+        event.preventDefault();
+        choose(buttons[next].dataset.varsTab, true);
+      });
+    });
+  });
 }
 
 function inventoryLaunchCard(title, templates, buttonLabel, buttonId, selectId) {
@@ -5622,9 +5720,10 @@ async function pageInventoryHost(id, name) {
     <section class="card">
       <h2>${h("effective_variables")}</h2>
       <p class="small muted">${h("secret_looking_variables_are_masked")}</p>
-      <pre class="mono">${esc(effectiveVariablesYaml(host.vars || []))}</pre>
+      ${variablesViewer(host.vars || [])}
     </section>
     ${launch}`);
+  bindVariablesViews();
   bindInventoryLaunch("host-launch", "host-template", ansibleTemplates, { inventoryId: id, limit: host.name });
 }
 
@@ -5663,7 +5762,7 @@ async function pageInventoryGroup(id, name) {
     <section class="card">
       <h2>${h("group_variables")}</h2>
       <p class="small muted">${h("secret_looking_variables_are_masked")}</p>
-      <pre class="mono">${esc(effectiveVariablesYaml(vars))}</pre>
+      ${variablesViewer(vars)}
     </section>
     <section class="card">
       <h2>${h("hosts")}</h2>
@@ -5672,6 +5771,7 @@ async function pageInventoryGroup(id, name) {
       ${pager}
     </section>
     ${launch}`);
+  bindVariablesViews();
   document.querySelectorAll("[data-group-page]").forEach((button) => {
     button.addEventListener("click", () => {
       if (button.disabled) return;
