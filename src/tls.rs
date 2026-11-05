@@ -86,10 +86,14 @@ fn ldap_client_config_from(dir: &Path) -> Result<Option<Arc<ClientConfig>>, Stri
     }
     let mut roots = RootCertStore::empty();
     let native = rustls_native_certs::load_native_certs();
-    if native.errors.is_empty() {
-        for cert in native.certs {
-            let _ = roots.add(cert);
-        }
+    if !native.errors.is_empty() {
+        tracing::warn!(
+            errors = ?native.errors,
+            "Some native root certificates could not be read; the public roots that loaded are kept"
+        );
+    }
+    for cert in native.certs {
+        let _ = roots.add(cert);
     }
     for cert in loaded.certs {
         roots

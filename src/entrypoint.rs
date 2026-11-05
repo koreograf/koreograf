@@ -93,9 +93,12 @@ fn run_entrypoint(command: &[OsString]) -> Result<(), String> {
 }
 
 fn git_ca_bundle() -> Result<Option<PathBuf>, String> {
+    let base = std::env::var_os("SSL_CERT_FILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(SYSTEM_CA_BUNDLE));
     git_ca_bundle_from(
         Path::new(crate::tls::CA_DIRECTORY),
-        Path::new(SYSTEM_CA_BUNDLE),
+        &base,
         Path::new(GIT_CA_BUNDLE),
     )
 }
@@ -124,6 +127,12 @@ fn git_ca_bundle_from(
     }
     bundle.extend(loaded.pem);
     fs::write(out, bundle).map_err(|err| format!("Could not write {} ({err}).", out.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(out, fs::Permissions::from_mode(0o644))
+            .map_err(|err| format!("Could not set the mode of {} ({err}).", out.display()))?;
+    }
     Ok(Some(out.to_path_buf()))
 }
 
@@ -314,6 +323,12 @@ mod tests {
         let text = fs::read_to_string(&out).unwrap();
         assert!(text.starts_with("SYSTEM ROOTS\n"), "{text}");
         assert!(text.contains("BEGIN CERTIFICATE"), "{text}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&out).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o644, "bundle mode");
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 
