@@ -42,6 +42,7 @@ a { color: var(--accent); }
     radial-gradient(circle at top left, rgba(194, 65, 12, 0.12), transparent 36%),
     var(--paper);
 }
+.login-stack { width: min(440px, 100%); display: flex; flex-direction: column; gap: 12px; }
 .login-card {
   width: min(440px, 100%);
   background: var(--panel);
@@ -250,6 +251,11 @@ a.btn { display: inline-block; text-decoration: none; }
 .side .btn.ghost { color: var(--side-text); }
 .account-link { color: var(--side-text); text-decoration: none; font-size: 13px; }
 .account-link:hover { color: white; text-decoration: underline; }
+.version-line { margin: 0; }
+.version-line a { color: var(--muted); text-decoration: none; }
+.version-line a:hover { text-decoration: underline; }
+.side .version-line a { color: var(--side-text); }
+.side .version-line a:hover { color: white; }
 .login-card .spread { align-items: center; margin-bottom: 18px; }
 .login-card .brand-lockup { margin-bottom: 0; }
 .btn:disabled { opacity: 0.55; cursor: not-allowed; }

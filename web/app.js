@@ -27,6 +27,8 @@ let navToken = null;
 let leaveGuard = null;
 let sourceNotice = null;
 let shownHash = null;
+let buildVersion = "";
+let versionRequested = false;
 
 window.addEventListener("beforeunload", (event) => {
   if (!leaveGuard || !leaveGuard()) return;
@@ -565,6 +567,37 @@ function navActive(here, href) {
   return here === href || here.startsWith(`${href}/`);
 }
 
+function versionSlot() {
+  return `<p class="small version-line" data-version hidden><a href="https://github.com/koreograf/koreograf" target="_blank" rel="noopener noreferrer"></a></p>`;
+}
+
+function fillVersion() {
+  if (!buildVersion) return;
+  document.querySelectorAll("[data-version]").forEach((line) => {
+    const link = line.querySelector("a");
+    if (link) link.textContent = t("build_version", { version: buildVersion });
+    line.hidden = false;
+  });
+}
+
+async function loadVersion() {
+  if (!versionRequested) {
+    versionRequested = true;
+    try {
+      const response = await fetch("/api/version", { credentials: "same-origin" });
+      if (response.ok) {
+        const data = await response.json();
+        const version = String(data.version || "");
+        const commit = data.commit && data.commit !== "unknown" ? ` ${data.commit}` : "";
+        if (version) buildVersion = `${version}${commit}`;
+      }
+    } catch {
+      buildVersion = "";
+    }
+  }
+  fillVersion();
+}
+
 function shell(title, body, actions) {
   const here = (location.hash || "#/").split("?")[0];
   const groups = [
@@ -614,6 +647,7 @@ function shell(title, body, actions) {
         <nav class="nav">${nav}</nav>
         <div class="side-foot">
           <a class="account-link" href="#/account">${esc(me.display_name)} · ${esc(roleLabel(roleOf()))}${me.auth_source === "ldap" ? " · LDAP" : ""}</a>
+          ${versionSlot()}
           ${langSwitch()}
           <button class="btn ghost" id="logout" type="button">${h("sign_out")}</button>
         </div>
@@ -658,6 +692,7 @@ function shell(title, body, actions) {
   navScrim.addEventListener("click", () => setNavOpen(false));
   navKey = (event) => { if (event.key === "Escape") setNavOpen(false); };
   document.addEventListener("keydown", navKey);
+  loadVersion();
 }
 
 function needTeam() {
@@ -694,21 +729,25 @@ function renderLogin(message, tone, vars, username) {
   const kind = tone === "good" ? "good" : "bad";
   app.innerHTML = `
     <div class="login-wrap">
-      <form class="login-card" id="login-form">
-        <div class="spread">
-          <div class="brand-lockup"><span class="mark" aria-hidden="true"></span><h1 class="word">Koreograf</h1></div>
-          ${langSwitch()}
-        </div>
-        <p class="lede">${h("jobs_workflows_and_alerts_for_several_teams_local")}</p>
-        ${message ? `<div class="banner ${kind}">${h(message, vars)}</div>` : ""}
-        <div class="form">
-          <label class="field"><span>${h("username")}</span><input name="username" autocomplete="username" required value="${esc(username || "")}"></label>
-          <label class="field"><span>${h("password")}</span><input name="password" type="password" autocomplete="current-password" required></label>
-          <button class="btn primary" type="submit">${h("sign_in")}</button>
-        </div>
-      </form>
+      <div class="login-stack">
+        <form class="login-card" id="login-form">
+          <div class="spread">
+            <div class="brand-lockup"><span class="mark" aria-hidden="true"></span><h1 class="word">Koreograf</h1></div>
+            ${langSwitch()}
+          </div>
+          <p class="lede">${h("jobs_workflows_and_alerts_for_several_teams_local")}</p>
+          ${message ? `<div class="banner ${kind}">${h(message, vars)}</div>` : ""}
+          <div class="form">
+            <label class="field"><span>${h("username")}</span><input name="username" autocomplete="username" required value="${esc(username || "")}"></label>
+            <label class="field"><span>${h("password")}</span><input name="password" type="password" autocomplete="current-password" required></label>
+            <button class="btn primary" type="submit">${h("sign_in")}</button>
+          </div>
+        </form>
+        ${versionSlot()}
+      </div>
     </div>`;
   bindLangSwitch();
+  loadVersion();
   const initial = username
     ? document.querySelector("#login-form [name=password]")
     : document.querySelector("#login-form [name=username]");

@@ -93,6 +93,7 @@
   "bind_dn": "Bind DN",
   "bind_password": "Bind password",
   "branch_tag_or_commit": "Branch, tag, or commit",
+  "build_version": "Koreograf {version}",
   "cached_collections": "Cached collections",
   "cached_roles": "Cached roles",
   "cancel": "Cancel",
