@@ -3,6 +3,8 @@ use std::collections::BTreeSet;
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
+use chrono::{DateTime, Duration as ChronoDuration, NaiveDate, SecondsFormat, TimeZone, Utc};
+use chrono_tz::Tz;
 use rusqlite::Connection;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -132,6 +134,16 @@ fn default_pull() -> String {
     "if_not_present".into()
 }
 
+#[derive(Default, Deserialize)]
+pub struct DashboardQuery {
+    #[serde(default)]
+    days: String,
+    #[serde(default)]
+    tz: String,
+    #[serde(default)]
+    timezone: String,
+}
+
 pub async fn runner_status(
     State(state): State<Shared>,
     headers: HeaderMap,
@@ -223,6 +235,106 @@ pub async fn overview(
         "workflow_name": workflow.as_ref().map(|item| &item.name),
         "hook_id": hook.as_ref().map(|item| &item.id),
         "hook_name": hook.as_ref().map(|item| &item.name),
+    })))
+}
+
+#[derive(Clone, Default)]
+struct DashboardDay {
+    started: u64,
+    successful: u64,
+    failed: u64,
+    canceled: u64,
+}
+
+fn parse_utc(value: Option<&str>) -> Option<DateTime<Utc>> {
+    value
+        .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
+        .map(|stamp| stamp.with_timezone(&Utc))
+}
+
+fn day_offset(first: NaiveDate, date: NaiveDate, days: i64) -> Option<usize> {
+    let offset = (date - first).num_days();
+    if (0..days).contains(&offset) {
+        Some(offset as usize)
+    } else {
+        None
+    }
+}
+
+pub async fn dashboard(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Query(query): Query<DashboardQuery>,
+) -> AppResult<Json<Value>> {
+    let team = team_header(&headers)?;
+    gate(&state, &user, &team, Role::Viewer)?;
+    let days = query.days.trim().parse::<i64>().unwrap_or(1).clamp(1, 14);
+    let zone_name = if query.tz.trim().is_empty() {
+        query.timezone.trim()
+    } else {
+        query.tz.trim()
+    };
+    let timezone: Tz = zone_name.parse().unwrap_or(Tz::UTC);
+    let now = Utc::now();
+    let today = now.with_timezone(&timezone).date_naive();
+    let first = today - ChronoDuration::days(days - 1);
+    let start = first
+        .and_hms_opt(0, 0, 0)
+        .and_then(|local| timezone.from_local_datetime(&local).earliest())
+        .map(|local| local.with_timezone(&Utc))
+        .unwrap_or(now - ChronoDuration::days(days));
+    let from = start.to_rfc3339_opts(SecondsFormat::Secs, true);
+    let to = now.to_rfc3339_opts(SecondsFormat::Secs, true);
+    let activity = {
+        let db = state.db()?;
+        db::job_activity(&db, &team, &from, &to)?
+    };
+    let cache = cacheinfo::team_cache(&state.cfg.data_dir, &team);
+    let mut buckets = vec![DashboardDay::default(); days as usize];
+    for item in activity {
+        if let Some(started) = parse_utc(item.started_at.as_deref()) {
+            let date = started.with_timezone(&timezone).date_naive();
+            if let Some(index) = day_offset(first, date, days) {
+                buckets[index].started += 1;
+            }
+        }
+        if let Some(finished) = parse_utc(item.finished_at.as_deref()) {
+            let date = finished.with_timezone(&timezone).date_naive();
+            if let Some(index) = day_offset(first, date, days) {
+                match item.status.as_str() {
+                    "successful" => buckets[index].successful += 1,
+                    "failed" => buckets[index].failed += 1,
+                    "canceled" => buckets[index].canceled += 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+    let series = buckets
+        .iter()
+        .enumerate()
+        .map(|(offset, day)| {
+            json!({
+                "date": (first + ChronoDuration::days(offset as i64)).to_string(),
+                "started": day.started,
+                "successful": day.successful,
+                "failed": day.failed,
+                "canceled": day.canceled,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(json!({
+        "range_days": days,
+        "timezone": timezone.name(),
+        "from": from,
+        "to": to,
+        "series": series,
+        "cache": {
+            "collections": cache.collections.len(),
+            "roles": cache.roles.len(),
+            "tofu_bytes": cache.tofu_bytes,
+        },
     })))
 }
 

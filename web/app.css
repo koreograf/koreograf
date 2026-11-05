@@ -575,6 +575,17 @@ textarea { min-height: 88px; resize: vertical; }
 }
 .tabs { display: flex; gap: 8px; margin: 0; }
 .tab-bar { flex-wrap: wrap; margin: 0 0 12px; }
+.charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.chart { display: flex; align-items: flex-end; gap: 6px; height: 180px; padding-top: 8px; border-bottom: 1px solid var(--line); }
+.chart-day { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; gap: 6px; }
+.chart-bars { display: flex; flex-direction: column-reverse; justify-content: flex-start; height: 100%; }
+.chart-seg { width: 100%; border-radius: 3px 3px 0 0; }
+.chart-seg.successful { background: var(--good); }
+.chart-seg.failed { background: var(--bad); }
+.chart-seg.canceled { background: var(--bad); opacity: .55; }
+.chart-seg.started { background: var(--info); }
+.chart-day-label { text-align: center; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; }
+.chart-empty { margin: 0; }
 .kv { display: grid; grid-template-columns: minmax(140px, 220px) 1fr; gap: 8px 16px; margin: 0 0 16px; }
 .kv dt { color: var(--muted); }
 .kv dd { margin: 0; overflow-wrap: anywhere; }
@@ -734,7 +745,7 @@ code, .mono { font-family: var(--mono); font-size: 13px; word-break: break-all; 
     transition: transform 0.2s ease, visibility 0.2s;
   }
   .side.open { transform: none; visibility: visible; }
-  .grid-3, .editor-body { grid-template-columns: 1fr; }
+  .grid-3, .charts, .editor-body { grid-template-columns: 1fr; }
   .main { padding: 16px; }
   .schedule-body { overflow: auto; }
   .schedule-layout { grid-template-columns: 1fr; height: auto; }

@@ -12,6 +12,8 @@ The lines contain no credentials, no tokens, and no extra variables.
 
 For Ansible, `playbook` is the playbook path. For shell and OpenTofu it is the entry path. Koreograf reads roles from Ansible's default callback output (`TASK [role : task]`, `RUNNING HANDLER`, `ok:`, `changed:`, `fatal:`, `unreachable:`, `skipping:`). `KOREOGRAF Role from cache` means the role was already in the cache. A task name that contains ` : ` outside a role can look like a role.
 
+The dashboard reads the stored jobs in SQLite for its daily series; it does not scrape `/metrics`.
+
 `GET /metrics` is open, like `/healthz`, and returns Prometheus text. Counters live in memory and start at zero after a restart. Prometheus treats that jump as a restart. Cache numbers are read from disk on each scrape, even when no job is running. The time of a role is the log line. `koreograf_role_results_total` counts results and has no timestamp.
 
 | Metric | Type | Labels |

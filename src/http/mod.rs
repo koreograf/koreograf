@@ -44,6 +44,7 @@ pub fn router(state: Shared) -> Router {
                 .delete(session::delete_user),
         )
         .route("/overview", get(catalog::overview))
+        .route("/dashboard", get(catalog::dashboard))
         .route("/runner", get(catalog::runner_status))
         .route("/runner/preflight", get(catalog::runner_preflight))
         .route(
