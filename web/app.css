@@ -384,11 +384,13 @@ textarea.secret-mask { -webkit-text-security: disc; }
 .vault-option:hover,
 .vault-option.selected { background: var(--accent-soft); }
 .overlay-card.dialog { width: min(40rem, 100%); max-height: min(90vh, 860px); padding: 0; gap: 0; overflow: hidden; }
+.overlay.tabbed { align-items: flex-start; }
+.overlay-card.dialog.tabbed { max-height: min(90vh, 860px); }
 .overlay-card.dialog.wide { width: min(920px, 100%); }
 .dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 16px 8px; flex: none; }
 .dialog-head h2 { margin: 0; }
 .dialog-close { font-size: 20px; line-height: 1; padding: 4px 10px; }
-.dialog-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--line); margin: 0 0 4px; }
+.dialog-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--line); margin: 0; padding: 0 16px; flex: none; }
 .dialog-tab {
   appearance: none;
   border: 0;
@@ -398,9 +400,10 @@ textarea.secret-mask { -webkit-text-security: disc; }
   color: var(--muted);
   cursor: pointer;
   font: inherit;
+  font-weight: 600;
 }
 .dialog-tab:hover { color: var(--ink); }
-.dialog-tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+.dialog-tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
 .dialog-tab.has-error::after { content: " !"; color: var(--bad); font-weight: 700; }
 .dialog-panels, .dialog-panel { display: grid; gap: 10px; }
 .dialog-panel[hidden] { display: none; }
@@ -739,7 +742,7 @@ code, .mono { font-family: var(--mono); font-size: 13px; word-break: break-all; 
 }
 
 @media (max-width: 600px) {
-  .overlay { padding: 0; align-items: stretch; }
-  .overlay-card, .overlay-card.dialog { width: 100%; max-width: none; max-height: none; height: 100%; border-radius: 0; }
+  .overlay, .overlay.tabbed { padding: 0; align-items: stretch; }
+  .overlay-card, .overlay-card.dialog, .overlay-card.dialog.tabbed { width: 100%; max-width: none; max-height: none; height: 100%; border-radius: 0; }
   .overlay-card .log { min-height: 0; }
 }

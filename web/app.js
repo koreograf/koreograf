@@ -1080,19 +1080,20 @@ function makeModal(overlay, close) {
 
 let dialogSerial = 0;
 
-function openDialog({ id, formId, title, body, submit, onSubmit, danger, form = Boolean(onSubmit), actions = true, wide = false, bodyClass = "", footer = "", onClose, onError }) {
+function openDialog({ id, formId, title, body, submit, onSubmit, danger, form = Boolean(onSubmit), actions = true, wide = false, bodyClass = "", footer = "", tabs = "", onClose, onError }) {
   const serial = ++dialogSerial;
   const titleId = `dialog-title-${serial}`;
   const shellTag = form ? "form" : "div";
   const overlay = document.createElement("div");
-  overlay.className = "overlay";
+  overlay.className = tabs ? "overlay tabbed" : "overlay";
   if (id) overlay.id = id;
   overlay.innerHTML = `
-    <div class="overlay-card dialog${wide ? " wide" : ""}" role="dialog" aria-modal="true" aria-labelledby="${titleId}">
+    <div class="overlay-card dialog${wide ? " wide" : ""}${tabs ? " tabbed" : ""}" role="dialog" aria-modal="true" aria-labelledby="${titleId}">
       <div class="dialog-head">
         <h2 id="${titleId}">${esc(title)}</h2>
         <button class="btn ghost dialog-close" type="button" aria-label="${h("close")}">×</button>
       </div>
+      ${tabs}
       <${shellTag} class="dialog-form">
         <div class="dialog-body${bodyClass ? ` ${bodyClass}` : ""}">${body}</div>
         ${footer ? `<div class="dialog-footer">${footer}</div>` : ""}
@@ -1213,7 +1214,8 @@ function openEditDialog({
     id,
     formId: id ? `${id}-form` : undefined,
     title,
-    body: `${hint ? `<p class="small muted dialog-hint">${h(hint)}</p>` : ""}${tabBar}${panelMarkup}`,
+    tabs: tabBar,
+    body: `${hint ? `<p class="small muted dialog-hint">${h(hint)}</p>` : ""}${panelMarkup}`,
     submit,
     onSubmit,
     danger,

@@ -13919,7 +13919,9 @@ fn edit_overlays_share_one_dialog_helper() {
     assert!(css.contains(".dialog-tab[aria-selected=\"true\"]"));
     assert!(css.contains(".dialog-tab.has-error::after"));
     assert!(css.contains(".dialog-panel[hidden] { display: none; }"));
-    assert!(css.contains(".overlay-card, .overlay-card.dialog { width: 100%;"));
+    assert!(css.contains(
+        ".overlay-card, .overlay-card.dialog, .overlay-card.dialog.tabbed { width: 100%;"
+    ));
 }
 
 #[test]
@@ -14375,6 +14377,73 @@ if (captured.form !== true) {{ console.error("submit dialog did not default to a
 "#
     );
     run_node_probe("edit-dialog-form", &probe);
+}
+
+#[test]
+fn tabbed_dialogs_keep_the_tab_row_in_the_chrome() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let css = std::fs::read_to_string(root.join("web/app.css")).expect("app.css");
+    assert!(script.contains("footer = \"\", tabs = \"\""));
+    assert!(script.contains("overlay.className = tabs ? \"overlay tabbed\" : \"overlay\";"));
+    assert!(script.contains("${tabs ? \" tabbed\" : \"\"}"));
+    let head_at = script
+        .find("</div>\n      ${tabs}")
+        .expect("tabs after the head");
+    let form_at = script
+        .find("<${shellTag} class=\"dialog-form\">")
+        .expect("form");
+    assert!(
+        head_at < form_at,
+        "tabs must be rendered before the scrolling body"
+    );
+    let helper = extract_function_with_destructured_params(&script, "function openEditDialog");
+    assert!(helper.contains("tabs: tabBar,"));
+    assert!(
+        !helper.contains("${tabBar}${panelMarkup}"),
+        "tab bar still sits in the scrolling body"
+    );
+    assert!(css.contains(".overlay.tabbed { align-items: flex-start; }"));
+    let narrow = css
+        .split("@media (max-width: 600px)")
+        .nth(1)
+        .and_then(|rest| rest.get(..rest.len().min(400)))
+        .expect("narrow overlay rule");
+    assert!(
+        narrow.contains(".overlay.tabbed"),
+        "tabbed overlays must stay full screen"
+    );
+    assert!(
+        narrow.contains(".overlay-card.dialog.tabbed"),
+        "the narrow full-screen rule must win over the tabbed max height"
+    );
+    let tabs_rule = css
+        .split(".dialog-tabs {")
+        .nth(1)
+        .and_then(|rest| rest.split('}').next())
+        .expect("dialog-tabs rule");
+    assert!(
+        tabs_rule.contains("flex: none;"),
+        "the tab row must not scroll with the body"
+    );
+    let tab_rule = css
+        .split(".dialog-tab {")
+        .nth(1)
+        .and_then(|rest| rest.split('}').next())
+        .expect("dialog-tab rule");
+    assert!(
+        tab_rule.contains("font-weight: 600;"),
+        "all tabs keep one width"
+    );
+    let selected = css
+        .split(".dialog-tab[aria-selected=\"true\"] {")
+        .nth(1)
+        .and_then(|rest| rest.split('}').next())
+        .expect("selected tab rule");
+    assert!(
+        !selected.contains("font-weight"),
+        "selection must not change the label width"
+    );
 }
 
 #[test]
