@@ -13919,7 +13919,9 @@ fn edit_overlays_share_one_dialog_helper() {
     assert!(css.contains(".dialog-tab[aria-selected=\"true\"]"));
     assert!(css.contains(".dialog-tab.has-error::after"));
     assert!(css.contains(".dialog-panel[hidden] { display: none; }"));
-    assert!(css.contains(".overlay-card, .overlay-card.dialog { width: 100%;"));
+    assert!(css.contains(
+        ".overlay-card, .overlay-card.dialog, .overlay-card.dialog.tabbed { width: 100%;"
+    ));
 }
 
 #[test]
