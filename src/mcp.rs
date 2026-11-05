@@ -591,7 +591,9 @@ impl Server {
             .map_err(|error| error.text())
     }
 
-    #[tool(description = "Cancel a job with POST /api/jobs/{id}/cancel.")]
+    #[tool(
+        description = "Cancel a job with POST /api/jobs/{id}/cancel. The response is job JSON that can contain secret values in extra_vars; do not repeat those values to the user verbatim."
+    )]
     async fn cancel_job(&self, Parameters(args): Parameters<IdArgs>) -> Result<String, String> {
         self.client
             .cancel_job(&args.id, args.team_id.as_deref())
