@@ -122,7 +122,14 @@ fn git_ca_bundle_from(
             ))
         }
     };
-    if !bundle.is_empty() && !bundle.ends_with(b"\n") {
+    if bundle.is_empty() {
+        eprintln!(
+            "The system CA bundle {} is missing or empty; company CAs are not added for git.",
+            system_bundle.display()
+        );
+        return Ok(None);
+    }
+    if !bundle.ends_with(b"\n") {
         bundle.push(b'\n');
     }
     bundle.extend(loaded.pem);
@@ -329,6 +336,23 @@ mod tests {
             let mode = fs::metadata(&out).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o644, "bundle mode");
         }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_missing_system_bundle_keeps_git_on_its_own_store() {
+        let dir = scratch_ca("no-system");
+        let ca = dir.join("ca");
+        fs::create_dir_all(&ca).unwrap();
+        fs::write(ca.join("company.pem"), crate::tls::TEST_CA_PEM).unwrap();
+        let out = dir.join("bundle.pem");
+        let missing = dir.join("missing-system.pem");
+        assert!(git_ca_bundle_from(&ca, &missing, &out).unwrap().is_none());
+        assert!(!out.exists());
+        let empty = dir.join("empty-system.pem");
+        fs::write(&empty, "").unwrap();
+        assert!(git_ca_bundle_from(&ca, &empty, &out).unwrap().is_none());
+        assert!(!out.exists());
         let _ = fs::remove_dir_all(&dir);
     }
 
