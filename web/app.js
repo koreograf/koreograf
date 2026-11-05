@@ -5568,7 +5568,8 @@ function variableText(item) {
 }
 
 function variableOrigin(item) {
-  return item.origin === "host" ? t("host") : String(item.origin ?? "");
+  const origin = item.origin === "host" ? t("host") : String(item.origin ?? "");
+  return origin.replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ").trim();
 }
 
 function yamlPlain(text) {

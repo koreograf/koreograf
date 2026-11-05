@@ -14817,6 +14817,12 @@ check(view.includes('data-vars-tab="json" aria-selected="false"'), "json tab is 
 check(/<div id="vars-\d+-yaml" role="tabpanel" data-vars-panel="yaml"><pre class="vars">/.test(view), "yaml panel is missing\n" + view);
 check(/<div id="vars-\d+-json" role="tabpanel" data-vars-panel="json" hidden>/.test(view), "json panel is missing\n" + view);
 
+const weird = effectiveVariablesYaml([
+  {{ name: "a", value: "1", origin: "team\n  injected: true" }},
+]);
+check(!weird.includes("\n  injected"), "origin line break added a mapping line\n" + weird);
+check(/# team injected: true/.test(weird.replace(/\s+/g, " ")), "origin was not flattened\n" + weird);
+
 const empty = variablesViewer([]);
 check((empty.match(/no_variables/g) || []).length === 2, "empty state is not in both formats\n" + empty);
 check(!empty.includes('<pre class="vars">'), "empty state rendered a code block\n" + empty);
