@@ -15061,6 +15061,332 @@ for (const [report, want] of cases) {{
     run_node_probe("preflight-notice", &probe);
 }
 
+#[tokio::test]
+async fn dashboard_series_comes_from_stored_jobs_and_is_team_scoped() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-dashboard-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state.clone());
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("admin cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, other, _) = call(
+        &app,
+        "POST",
+        "/api/teams",
+        Some(&cookie),
+        None,
+        Some(json!({"name": "Dashboard Other", "description": ""})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{other}");
+    let other_team = other["id"].as_str().unwrap().to_string();
+
+    let (status, empty_team, _) = call(
+        &app,
+        "POST",
+        "/api/teams",
+        Some(&cookie),
+        None,
+        Some(json!({"name": "Dashboard Empty", "description": ""})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{empty_team}");
+    let empty_team = empty_team["id"].as_str().unwrap().to_string();
+
+    let now = chrono::Utc::now();
+    let stamp = |ago: chrono::Duration| (now - ago).format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let today = stamp(chrono::Duration::zero());
+    let yesterday = stamp(chrono::Duration::days(1) + chrono::Duration::minutes(1));
+    let older = stamp(chrono::Duration::days(3) + chrono::Duration::minutes(1));
+    {
+        let db = state.db().expect("database");
+        let add = |id: &str,
+                   team_id: &str,
+                   status: &str,
+                   started: Option<&str>,
+                   finished: Option<&str>| {
+            db.execute(
+                "INSERT INTO jobs (
+                    id, team_id, name, tool, status, extra_vars, launched_by, trigger,
+                    started_at, finished_at, created_at
+                 ) VALUES (?1, ?2, ?1, 'shell', ?3, '{}', 'admin', 'manual', ?4, ?5, ?6)",
+                (id, team_id, status, started, finished, today.as_str()),
+            )
+            .unwrap();
+        };
+        add(
+            "today-successful",
+            &team,
+            "successful",
+            Some(&today),
+            Some(&today),
+        );
+        add("today-failed", &team, "failed", Some(&today), Some(&today));
+        add(
+            "today-canceled",
+            &team,
+            "canceled",
+            Some(&today),
+            Some(&today),
+        );
+        add("today-running", &team, "running", Some(&today), None);
+        add(
+            "yesterday-successful",
+            &team,
+            "successful",
+            Some(&yesterday),
+            Some(&yesterday),
+        );
+        add(
+            "older-successful",
+            &team,
+            "successful",
+            Some(&older),
+            Some(&older),
+        );
+        add(
+            "other-team-successful",
+            &other_team,
+            "successful",
+            Some(&today),
+            Some(&today),
+        );
+        add("pending-without-start", &team, "pending", None, None);
+    }
+
+    let cache_root = dir.join("cache").join(&team);
+    std::fs::create_dir_all(cache_root.join("collections/ansible_collections/acme/tools")).unwrap();
+    std::fs::create_dir_all(cache_root.join("roles/common")).unwrap();
+    std::fs::create_dir_all(cache_root.join("tofu")).unwrap();
+    std::fs::write(cache_root.join("tofu/provider.bin"), [0_u8; 123]).unwrap();
+
+    let total = |series: &Value, key: &str| {
+        series
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|day| day[key].as_u64().unwrap())
+            .sum::<u64>()
+    };
+
+    let (status, day, _) = call(
+        &app,
+        "GET",
+        "/api/dashboard?days=1&tz=UTC",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{day}");
+    assert_eq!(day["range_days"], 1);
+    assert_eq!(day["series"].as_array().unwrap().len(), 1);
+    assert_eq!(day["series"][0]["date"], day["to"].as_str().unwrap()[..10]);
+    assert_eq!(day["series"][0]["successful"], 1);
+    assert_eq!(day["series"][0]["failed"], 1);
+    assert_eq!(day["series"][0]["canceled"], 1);
+    assert_eq!(day["series"][0]["started"], 4);
+    assert_eq!(day["cache"]["collections"], 1);
+    assert_eq!(day["cache"]["roles"], 1);
+    assert_eq!(day["cache"]["tofu_bytes"], 123);
+
+    let (status, week, _) = call(
+        &app,
+        "GET",
+        "/api/dashboard?days=7&tz=UTC",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{week}");
+    assert_eq!(week["range_days"], 7);
+    assert_eq!(week["series"].as_array().unwrap().len(), 7);
+    assert_eq!(total(&week["series"], "successful"), 3);
+    assert_eq!(total(&week["series"], "failed"), 1);
+    assert_eq!(total(&week["series"], "canceled"), 1);
+    assert_eq!(total(&week["series"], "started"), 6);
+
+    let (status, capped, _) = call(
+        &app,
+        "GET",
+        "/api/dashboard?days=30&tz=UTC",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{capped}");
+    assert_eq!(capped["range_days"], 14);
+    assert_eq!(capped["series"].as_array().unwrap().len(), 14);
+    assert_eq!(total(&capped["series"], "successful"), 3);
+
+    let (status, defaulted, _) = call(
+        &app,
+        "GET",
+        "/api/dashboard?tz=UTC",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{defaulted}");
+    assert_eq!(defaulted["range_days"], 1);
+    assert_eq!(defaulted["series"].as_array().unwrap().len(), 1);
+
+    let (status, isolated, _) = call(
+        &app,
+        "GET",
+        "/api/dashboard?days=7&tz=UTC",
+        Some(&cookie),
+        Some(&other_team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{isolated}");
+    assert_eq!(total(&isolated["series"], "successful"), 1);
+    assert_eq!(total(&isolated["series"], "started"), 1);
+    assert_eq!(isolated["cache"]["tofu_bytes"], 0);
+
+    let (status, empty, _) = call(
+        &app,
+        "GET",
+        "/api/dashboard?days=14&tz=UTC",
+        Some(&cookie),
+        Some(&empty_team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{empty}");
+    assert_eq!(empty["range_days"], 14);
+    assert_eq!(total(&empty["series"], "started"), 0);
+    assert_eq!(total(&empty["series"], "successful"), 0);
+    assert_eq!(empty["cache"]["collections"], 0);
+
+    let (status, _viewer, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "username": "dashboard-viewer",
+            "display_name": "Dashboard Viewer",
+            "password": "viewer-pass",
+            "is_admin": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _member, _) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{team}/members"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"username": "dashboard-viewer", "role": "viewer"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, viewer_me, viewer_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "dashboard-viewer", "password": "viewer-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{viewer_me}");
+    let viewer_cookie = viewer_cookie.expect("viewer cookie");
+    let (status, viewer, _) = call(
+        &app,
+        "GET",
+        "/api/dashboard?days=7&tz=UTC",
+        Some(&viewer_cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{viewer}");
+    assert_eq!(total(&viewer["series"], "successful"), 3);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn dashboard_page_has_tabs_default_range_empty_state_and_cache_numbers() {
+    let script = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("web/app.js"))
+        .expect("app.js");
+    let tabs = extract_braced_function(&script, "function dashboardTabs(tab)");
+    let chart = extract_braced_function(
+        &script,
+        "function dashboardChart(series, values, heading, legend)",
+    );
+    let body = extract_braced_function(&script, "function dashboardBody(data, range)");
+    let short = extract_braced_function(&script, "function shortDay(value)");
+    let range = extract_braced_function(&script, "function dashboardRange()");
+    let address = extract_braced_function(&script, "function dashboardAddress(tab, range)");
+    let probe = format!(
+        r##"{tabs}
+{chart}
+{body}
+{short}
+{range}
+{address}
+let lang = "en";
+let location = {{ hash: "#/" }};
+function esc(value) {{ return String(value ?? ""); }}
+function t(key) {{ return key; }}
+function h(key) {{ return esc(t(key)); }}
+function pill(status) {{ return `<span class="pill ${{status}}">${{status}}</span>`; }}
+function bytes(value) {{ return `${{Number(value) || 0}} B`; }}
+function check(ok, message) {{
+  if (!ok) {{ console.error(message); process.exit(1); }}
+}}
+check(dashboardRange() === "1", "default range is not today");
+location.hash = "#/?tab=dashboard&days=7";
+check(dashboardRange() === "7", "range did not come from the address");
+check(dashboardAddress("dashboard", "1") === "#/?tab=dashboard", "dashboard tab is not kept");
+check(dashboardAddress("overview", "7") === "#/", "overview address carries dashboard state");
+const tabsView = dashboardTabs("overview");
+check(tabsView.includes('role="tablist"'), "missing tablist");
+check(tabsView.includes('id="tab-overview" aria-selected="true"'), "overview is not selected");
+check(tabsView.includes('id="tab-dashboard" aria-selected="false"'), "dashboard is not unselected");
+const empty = dashboardBody({{ series: [{{ date: "2026-11-05", started: 0, successful: 0, failed: 0, canceled: 0 }}], cache: {{ collections: 0, roles: 0, tofu_bytes: 0 }} }}, "1");
+check(empty.includes("no_jobs_in_this_range"), "empty range has no empty state");
+check(empty.includes('data-dashboard-range="1" aria-pressed="true"'), "today is not the default range");
+check(empty.includes('data-dashboard-range="7" aria-pressed="false"'), "7 days is not offered");
+check(empty.includes('data-dashboard-range="14" aria-pressed="false"'), "14 days is not offered");
+const filled = dashboardBody({{ series: [{{ date: "2026-11-05", started: 3, successful: 1, failed: 1, canceled: 1 }}], cache: {{ collections: 2, roles: 4, tofu_bytes: 2048 }} }}, "7");
+check(filled.includes("jobs_finished_per_day"), "missing finished chart");
+check(filled.includes("jobs_started_per_day"), "missing started chart");
+check(filled.includes('<span class="small muted">collections</span><strong>2</strong>'), "collections number is missing");
+check(filled.includes('<span class="small muted">roles</span><strong>4</strong>'), "roles number is missing");
+check(filled.includes('<span class="small muted">opentofu</span><strong>2048 B</strong>'), "tofu bytes are missing");
+const cachePart = filled.slice(filled.indexOf("dependency_cache"));
+check(!cachePart.includes('class="chart"'), "cache drew a fake chart line");
+"##
+    );
+    run_node_probe("dashboard-page", &probe);
+}
+
 fn extract_braced_function(script: &str, needle: &str) -> String {
     let start = script
         .find(needle)

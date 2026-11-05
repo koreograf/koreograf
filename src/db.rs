@@ -2493,6 +2493,35 @@ pub fn list_jobs(c: &Connection, team_id: &str, query: &JobQuery) -> AppResult<(
     Ok((items, total))
 }
 
+#[derive(Clone, Debug)]
+pub struct JobActivity {
+    pub status: String,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+}
+
+pub fn job_activity(
+    c: &Connection,
+    team_id: &str,
+    from: &str,
+    to: &str,
+) -> AppResult<Vec<JobActivity>> {
+    let mut stmt = c.prepare(
+        "SELECT status, started_at, finished_at FROM jobs
+         WHERE team_id = ?1
+           AND ((finished_at IS NOT NULL AND finished_at >= ?2 AND finished_at <= ?3)
+             OR (started_at IS NOT NULL AND started_at >= ?2 AND started_at <= ?3))",
+    )?;
+    let rows = stmt.query_map(params![team_id, from, to], |row| {
+        Ok(JobActivity {
+            status: row.get(0)?,
+            started_at: row.get(1)?,
+            finished_at: row.get(2)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
 pub fn mark_running(c: &Connection, id: &str) -> AppResult<bool> {
     let n = c.execute(
         "UPDATE jobs SET status = 'running', started_at = COALESCE(started_at, ?2)
