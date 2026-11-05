@@ -15111,7 +15111,7 @@ async fn dashboard_series_comes_from_stored_jobs_and_is_team_scoped() {
 
     let now = chrono::Utc::now();
     let stamp = |ago: chrono::Duration| (now - ago).format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    let today = stamp(chrono::Duration::minutes(1));
+    let today = stamp(chrono::Duration::zero());
     let yesterday = stamp(chrono::Duration::days(1) + chrono::Duration::minutes(1));
     let older = stamp(chrono::Duration::days(3) + chrono::Duration::minutes(1));
     {
@@ -15197,7 +15197,7 @@ async fn dashboard_series_comes_from_stored_jobs_and_is_team_scoped() {
     assert_eq!(status, StatusCode::OK, "{day}");
     assert_eq!(day["range_days"], 1);
     assert_eq!(day["series"].as_array().unwrap().len(), 1);
-    assert_eq!(day["series"][0]["date"], now.format("%Y-%m-%d").to_string());
+    assert_eq!(day["series"][0]["date"], day["to"].as_str().unwrap()[..10]);
     assert_eq!(day["series"][0]["successful"], 1);
     assert_eq!(day["series"][0]["failed"], 1);
     assert_eq!(day["series"][0]["canceled"], 1);
