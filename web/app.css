@@ -590,6 +590,9 @@ pre.vars {
   overflow: auto;
   white-space: pre-wrap;
 }
+pre.vars .vars-key { color: var(--warn-bg); }
+pre.vars .vars-value { color: var(--good-bg); }
+pre.vars .vars-comment { color: var(--muted); }
 
 .editor-stack { display: flex; flex-direction: column; gap: 12px; }
 .editor-body { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 12px; min-height: 560px; }

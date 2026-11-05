@@ -14733,31 +14733,104 @@ fn inventory_tables_drop_variables_and_details_keep_them() {
 
     let host_detail = extract_braced_function(&script, "async function pageInventoryHost");
     let group_detail = extract_braced_function(&script, "async function pageInventoryGroup");
-    assert!(host_detail.contains("effectiveVariablesYaml"));
-    assert!(group_detail.contains("effectiveVariablesYaml"));
+    assert!(host_detail.contains("variablesViewer(host.vars || [])"));
+    assert!(group_detail.contains("variablesViewer(vars)"));
+    assert!(host_detail.contains("bindVariablesViews();"));
+    assert!(group_detail.contains("bindVariablesViews();"));
+    assert!(script.contains(
+        "variablesViewer(Object.entries(result.sample_host.vars || {}).map(([name, value]) => ({ name, value, origin: \"host\" })))"
+    ));
+    assert!(script.contains("bindVariablesViews(resultBox);"));
 
-    let function = format!(
-        "{}\n{}\nfunction t(key) {{ return key; }}",
-        extract_braced_function(&script, "function looksSecretVar"),
-        extract_braced_function(&script, "function effectiveVariablesYaml")
-    );
+    let functions = [
+        "function looksSecretVar",
+        "function variableText",
+        "function variableOrigin",
+        "function yamlPlain",
+        "function variableScalar",
+        "function variableKey",
+        "function effectiveVariablesYaml",
+        "function jsonVariableMarkup",
+        "function effectiveVariablesJson",
+        "function variablesViewer",
+    ]
+    .iter()
+    .map(|needle| extract_braced_function(&script, needle))
+    .collect::<Vec<_>>()
+    .join("\n");
     let probe = format!(
-        r#"{function}
-const vars = effectiveVariablesYaml([
-  {{ name: "ansible_become_password", value: "s3cret", origin: "host" }},
+        r#"{functions}
+let variablesViewSerial = 0;
+function t(key) {{ return key; }}
+function esc(value) {{
+  return String(value ?? "").replace(/[&<>"']/g, (ch) => ({{
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  }}[ch]));
+}}
+function h(key) {{ return esc(t(key)); }}
+function check(ok, message) {{
+  if (!ok) {{ console.error(message); process.exit(1); }}
+}}
+const vars = [
   {{ name: "ansible_host", value: "10.0.0.1", origin: "host" }},
+  {{ name: "message", value: "hello world", origin: "web" }},
+  {{ name: "ansible_become_password", value: "s3cret", origin: "host" }},
+  {{ name: "evil", value: "<script>x &lt; y</script>", origin: "group" }},
+];
+const yaml = effectiveVariablesYaml(vars);
+for (const want of [
+  '<span class="vars-key">ansible_host</span>: <span class="vars-value">10.0.0.1</span>',
+  '<span class="vars-value">&quot;hello world&quot;</span>',
+  '<span class="vars-value">&quot;••••••&quot;</span>',
+  '<span class="vars-comment"># host</span>',
+  '<span class="vars-comment"># web</span>',
+]) {{
+  check(yaml.includes(want), "yaml missing " + want + "\n" + yaml);
+}}
+check(yaml.includes("&lt;script&gt;x &amp;lt; y&lt;/script&gt;"), "yaml value was not escaped\n" + yaml);
+check(!yaml.includes("<script>"), "yaml kept raw markup\n" + yaml);
+
+const json = effectiveVariablesJson(vars);
+for (const want of [
+  '<span class="vars-key">&quot;name&quot;</span>',
+  '<span class="vars-key">&quot;value&quot;</span>',
+  '<span class="vars-key">&quot;origin&quot;</span>',
+  '<span class="vars-value">&quot;ansible_host&quot;</span>',
+  '<span class="vars-value">&quot;host&quot;</span>',
+  '<span class="vars-value">&quot;••••••&quot;</span>',
+  '&lt;script&gt;x &amp;lt; y&lt;/script&gt;',
+]) {{
+  check(json.includes(want), "json missing " + want + "\n" + json);
+}}
+check(!json.includes("<script>"), "json kept raw markup\n" + json);
+check(json.includes("\n  {{\n"), "json is not pretty printed\n" + json);
+
+const view = variablesViewer(vars);
+check(view.includes('<div class="spread tab-bar">'), "missing page tab bar\n" + view);
+check(view.includes('<div class="tabs" role="tablist"'), "missing page tabs\n" + view);
+check(view.includes('data-vars-tab="yaml" aria-selected="true"'), "yaml is not selected by default\n" + view);
+check(view.includes('data-vars-tab="json" aria-selected="false"'), "json tab is not unselected\n" + view);
+check(/<div id="vars-\d+-yaml" role="tabpanel" data-vars-panel="yaml"><pre class="vars">/.test(view), "yaml panel is missing\n" + view);
+check(/<div id="vars-\d+-json" role="tabpanel" data-vars-panel="json" hidden>/.test(view), "json panel is missing\n" + view);
+
+const weird = effectiveVariablesYaml([
+  {{ name: "a", value: "1", origin: "team\n  injected: true" }},
+  {{ name: "b", value: "2", origin: "team\u0085  injected: true" }},
 ]);
-if (!vars.includes('ansible_become_password: "••••••"')) {{
-  console.error(vars);
-  process.exit(1);
-}}
-if (!vars.includes('ansible_host: "10.0.0.1"')) {{
-  console.error(vars);
-  process.exit(1);
-}}
+check(!weird.includes("\n  injected"), "origin line break added a mapping line\n" + weird);
+check(/# team injected: true/.test(weird.replace(/\s+/g, " ")), "origin was not flattened\n" + weird);
+check(!/[\u0085\u2028\u2029]/.test(weird), "origin kept a Unicode line break\n" + weird);
+
+const empty = variablesViewer([]);
+check((empty.match(/no_variables/g) || []).length === 2, "empty state is not in both formats\n" + empty);
+check(!empty.includes('<pre class="vars">'), "empty state rendered a code block\n" + empty);
 "#
     );
-    run_node_probe("inventory-vars-mask", &probe);
+    run_node_probe("inventory-vars-yaml-json", &probe);
 }
 
 #[test]
