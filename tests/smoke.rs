@@ -14402,6 +14402,19 @@ fn tabbed_dialogs_keep_the_tab_row_in_the_chrome() {
         "tab bar still sits in the scrolling body"
     );
     assert!(css.contains(".overlay.tabbed { align-items: flex-start; }"));
+    let narrow = css
+        .split("@media (max-width: 600px)")
+        .nth(1)
+        .and_then(|rest| rest.get(..rest.len().min(400)))
+        .expect("narrow overlay rule");
+    assert!(
+        narrow.contains(".overlay.tabbed"),
+        "tabbed overlays must stay full screen"
+    );
+    assert!(
+        narrow.contains(".overlay-card.dialog.tabbed"),
+        "the narrow full-screen rule must win over the tabbed max height"
+    );
     let tabs_rule = css
         .split(".dialog-tabs {")
         .nth(1)

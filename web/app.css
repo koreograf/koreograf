@@ -742,7 +742,7 @@ code, .mono { font-family: var(--mono); font-size: 13px; word-break: break-all; 
 }
 
 @media (max-width: 600px) {
-  .overlay { padding: 0; align-items: stretch; }
-  .overlay-card, .overlay-card.dialog { width: 100%; max-width: none; max-height: none; height: 100%; border-radius: 0; }
+  .overlay, .overlay.tabbed { padding: 0; align-items: stretch; }
+  .overlay-card, .overlay-card.dialog, .overlay-card.dialog.tabbed { width: 100%; max-width: none; max-height: none; height: 100%; border-radius: 0; }
   .overlay-card .log { min-height: 0; }
 }
