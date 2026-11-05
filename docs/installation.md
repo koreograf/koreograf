@@ -60,7 +60,7 @@ volumes:
 
 The same certificates apply to LDAP, NetBox, and git. Git gets them through a bundle in `/tmp`, so the image needs no `update-ca-certificates` and stays `scratch`. The Helm chart mounts the same path when `caDirectory.enabled` is true; set `caDirectory.hostPath` to the directory on the node. Execution environments keep their own trust store.
 
-Compose pulls `ghcr.io/koreograf/koreograf:0.1.0-alpha.7`. <!-- x-release-please-version -->
+Compose pulls `ghcr.io/koreograf/koreograf:0.1.0-alpha.8`. <!-- x-release-please-version -->
 It does not compile. Build this checkout without replacing that published tag:
 
 ```bash
@@ -210,8 +210,8 @@ The new files belong to uid 10001. Check sign-in, credentials, path projects, an
 helm upgrade --install koreograf deploy/helm/koreograf
 ```
 
-The chart version, `appVersion`, and `image.tag` are `0.1.0-alpha.7`. <!-- x-release-please-version -->
-The chart pulls `ghcr.io/koreograf/koreograf:0.1.0-alpha.7`, the same image Compose uses. <!-- x-release-please-version -->
+The chart version, `appVersion`, and `image.tag` are `0.1.0-alpha.8`. <!-- x-release-please-version -->
+The chart pulls `ghcr.io/koreograf/koreograf:0.1.0-alpha.8`, the same image Compose uses. <!-- x-release-please-version -->
 It is published for `linux/amd64` and `linux/arm64`. On another architecture, build the image and set `image.repository` and `image.tag` to that build.
 
 By default the pod runs as uid and gid 10001, with `fsGroup` 10001, `runAsNonRoot`, a read-only root filesystem, a `tmpfs` on `/tmp`, a dropped capability set, no privilege escalation, and the runtime default seccomp profile. `fsGroup` is what makes an existing volume readable. A volume driver that ignores `fsGroup` leaves root-owned files, and this pod cannot change them because it does not start as root. Set `runner.dockerSocket.enabled` and `runner.dockerSocket.group` to the socket's gid (`stat -c '%g' /var/run/docker.sock` on the host). The chart keeps uid 10001 and puts that gid in `supplementalGroups`; it does not switch to root. A wrong group stops the container with a clear line in the pod log. A non-empty `podSecurityContext` or `securityContext` replaces that default completely, so it then has to include the supplemental group, `readOnlyRootFilesystem`, and the `/tmp` mount itself. The chart does not set a container command, so the binary entrypoint prepares the volume for uid 10001. A pod `command` replaces that entrypoint and has to start `koreograf entrypoint` when it should still fix an existing volume.
