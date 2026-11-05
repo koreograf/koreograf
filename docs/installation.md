@@ -32,7 +32,7 @@ Environment variables, including the runner mode, are in [Configuration](configu
 
 ## Docker Compose
 
-Docker Engine 20.10 or newer, and Docker Compose v2. The published image is `linux/amd64` and `linux/arm64`.
+Docker Engine 20.10 or newer, and Docker Compose v2. The published image is `linux/amd64` and `linux/arm64`. Pull requests compile the arm64 binary, and the tag workflow publishes the multi-architecture image.
 
 ```bash
 git clone https://github.com/koreograf/koreograf.git

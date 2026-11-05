@@ -54,6 +54,29 @@ jobs:
           rustc +1.89.0 --version
           cargo +1.89.0 check --workspace --all-targets --locked
 
+  arm64:
+    name: arm64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.99.1
+          targets: aarch64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Extract the arm64 musl cross linker
+        run: |
+          image="ghcr.io/cross-rs/aarch64-unknown-linux-musl@sha256:183f923c24aaf6220d0107a26a737cdec7c18dcf04c571b2c52fe49ed9f6045e"
+          mkdir -p /tmp/koreograf-toolchain
+          docker run --rm -v /tmp/koreograf-toolchain:/out --entrypoint sh "$image" -c 'cp -a /x-tools/aarch64-unknown-linux-musl /out/'
+          echo "/tmp/koreograf-toolchain/aarch64-unknown-linux-musl/bin" >> "$GITHUB_PATH"
+      - name: Build for arm64
+        env:
+          CC_aarch64_unknown_linux_musl: aarch64-unknown-linux-musl-gcc
+          AR_aarch64_unknown_linux_musl: aarch64-unknown-linux-musl-ar
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-unknown-linux-musl-gcc
+        run: cargo build --release --locked --target aarch64-unknown-linux-musl
+
   web:
     name: web
     runs-on: ubuntu-latest
