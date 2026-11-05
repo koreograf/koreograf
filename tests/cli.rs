@@ -122,3 +122,20 @@ fn doctor_exits_zero_with_every_local_tool() {
     assert!(!text.contains("PATH"), "{text}");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn mcp_without_a_token_exits_non_zero() {
+    use std::process::Stdio;
+    let output = Command::new(env!("CARGO_BIN_EXE_koreograf"))
+        .arg("mcp")
+        .env("KOREOGRAF_TOKEN", "")
+        .stdin(Stdio::piped())
+        .output()
+        .expect("run mcp");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("KOREOGRAF_TOKEN"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

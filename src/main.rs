@@ -43,6 +43,19 @@ async fn main() -> anyhow::Result<()> {
         let code = koreograf::doctor().await?;
         std::process::exit(code);
     }
+    if koreograf::mcp::requested(&args) {
+        let filter =
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("koreograf=info"));
+        tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .with_env_filter(filter)
+            .init();
+        if let Err(err) = koreograf::mcp::run().await {
+            eprintln!("{err}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("koreograf=info,tower_http=info"));
     let json = std::env::var("KOREOGRAF_LOG_FORMAT")

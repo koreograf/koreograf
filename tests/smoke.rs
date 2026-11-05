@@ -16533,3 +16533,213 @@ fn leftover_german(dir: &Path, hits: &mut Vec<String>) {
         }
     }
 }
+
+#[tokio::test]
+async fn mcp_tools_call_the_http_api() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-mcp-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, projects, _) = call(
+        &app,
+        "GET",
+        "/api/projects",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{projects}");
+    let project_id = projects
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["name"] == "Demo")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (status, templates, _) = call(
+        &app,
+        "GET",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{templates}");
+    let template_id = templates
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["name"] == "Healthcheck")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        None,
+        Some(json!({
+            "username": "mcp-viewer",
+            "display_name": "MCP viewer",
+            "password": "viewer-pass",
+            "is_admin": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{team}/members"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"username": "mcp-viewer", "role": "viewer"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, viewer_me, viewer_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "mcp-viewer", "password": "viewer-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{viewer_me}");
+    let viewer_cookie = viewer_cookie.expect("viewer cookie");
+
+    let (status, admin_token, _) = call(
+        &app,
+        "POST",
+        "/api/me/tokens",
+        Some(&cookie),
+        None,
+        Some(json!({"name": "mcp-admin"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let admin_secret = admin_token["secret"].as_str().unwrap().to_string();
+    let (status, viewer_token, _) = call(
+        &app,
+        "POST",
+        "/api/me/tokens",
+        Some(&viewer_cookie),
+        None,
+        Some(json!({"name": "mcp-viewer"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let viewer_secret = viewer_token["secret"].as_str().unwrap().to_string();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let served = app.clone();
+    let server = tokio::spawn(async move { axum::serve(listener, served).await.unwrap() });
+    let url = format!("http://{address}");
+
+    let client =
+        koreograf::mcp::Client::new(url.clone(), admin_secret, Some(team.clone())).unwrap();
+    assert_eq!(client.whoami(None).await.unwrap()["username"], "admin");
+    assert_eq!(
+        client.version(None).await.unwrap()["version"],
+        env!("CARGO_PKG_VERSION")
+    );
+    assert!(client
+        .list_projects(None)
+        .await
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["name"] == "Demo"));
+    assert!(client.list_inventories(None).await.unwrap().is_array());
+    assert!(client.list_credentials(None).await.unwrap().is_array());
+    assert!(client
+        .list_templates(None)
+        .await
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["name"] == "Healthcheck"));
+    assert!(client.list_workflows(None).await.unwrap().is_array());
+    assert!(client.list_schedules(None).await.unwrap().is_array());
+    let jobs = client
+        .list_jobs(koreograf::mcp::JobQuery {
+            limit: Some(5),
+            status: Some("successful"),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(jobs["items"].is_array());
+
+    let launched = client
+        .launch_template(&template_id, serde_json::Map::new(), None)
+        .await
+        .unwrap();
+    let job_id = launched["id"].as_str().unwrap().to_string();
+    let mut final_job = Value::Null;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let job = client.get_job(&job_id, None).await.unwrap();
+        if matches!(
+            job["status"].as_str(),
+            Some("successful" | "failed" | "canceled")
+        ) {
+            final_job = job;
+            break;
+        }
+    }
+    assert_eq!(final_job["status"], "successful", "job: {final_job}");
+    let output = client.job_output(&job_id, None).await.unwrap();
+    assert!(output.contains("healthcheck ok"), "{output}");
+    let synced = client.sync_project(&project_id, None).await.unwrap();
+    assert!(synced["path"].is_string(), "{synced}");
+
+    let viewer =
+        koreograf::mcp::Client::new(url, viewer_secret.clone(), Some(team.clone())).unwrap();
+    let denied = viewer
+        .launch_template(&template_id, serde_json::Map::new(), None)
+        .await
+        .unwrap_err();
+    let (route_status, route_body) = call_bearer(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        &viewer_secret,
+        Some(&team),
+        Some(json!({"extra_vars": {}})),
+    )
+    .await;
+    assert_eq!(denied.status, Some(route_status.as_u16()));
+    assert_eq!(denied.key, route_body["error"].as_str().unwrap());
+
+    server.abort();
+    let _ = std::fs::remove_dir_all(&dir);
+}
