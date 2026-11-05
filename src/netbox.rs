@@ -12,7 +12,6 @@ const PAGE_SIZE: usize = 100;
 pub struct NetboxSource {
     pub api_endpoint: String,
     pub validate_certs: bool,
-    pub ca_file: String,
     pub group_by: Vec<String>,
     pub group_names_raw: bool,
     pub load_config_context: bool,
@@ -56,7 +55,6 @@ pub fn valid_endpoint(url: &str) -> bool {
 pub fn source_json(source: &NetboxSource) -> Value {
     json!({
         "validate_certs": source.validate_certs,
-        "ca_file": source.ca_file,
         "group_by": source.group_by,
         "group_names_raw": source.group_names_raw,
         "load_config_context": source.load_config_context,
@@ -96,7 +94,6 @@ pub fn parse_plugin(text: &str) -> Option<NetboxSource> {
     Some(NetboxSource {
         api_endpoint: api_endpoint.trim_end_matches('/').to_string(),
         validate_certs: flag(text, "validate_certs").unwrap_or(true),
-        ca_file: String::new(),
         group_by: list_items(text, "group_by"),
         group_names_raw: flag(text, "group_names_raw").unwrap_or(false),
         load_config_context: flag(text, "load_config_context").unwrap_or(false),
@@ -243,11 +240,7 @@ pub async fn test_connection(
     if !valid_token(token) {
         return Err("the_netbox_token_is_invalid".into());
     }
-    crate::tls::warn_netbox(
-        &source.api_endpoint,
-        !source.validate_certs,
-        &source.ca_file,
-    );
+    crate::tls::warn_netbox(&source.api_endpoint, !source.validate_certs);
     let client = client(source, proxy)?;
     let url = format!("{}/api/status/", source.api_endpoint.trim_end_matches('/'));
     let body = get_json(&client, &url, token).await?;
@@ -266,19 +259,20 @@ fn client(
         .connect_timeout(Duration::from_secs(8))
         .timeout(Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::none());
-    match crate::tls::reqwest_roots(&source.ca_file) {
-        Ok(Some(certs)) => {
-            for cert in certs {
-                builder = builder.add_root_certificate(cert);
+    if source.validate_certs {
+        match crate::tls::reqwest_roots() {
+            Ok(certs) => {
+                for cert in certs {
+                    builder = builder.add_root_certificate(cert);
+                }
+            }
+            Err(error) => {
+                tracing::warn!(endpoint = %source.api_endpoint, %error, "NetBox TLS setup failed");
+                return Err(error);
             }
         }
-        Ok(None) => {
-            builder = builder.danger_accept_invalid_certs(!source.validate_certs);
-        }
-        Err(error) => {
-            tracing::warn!(endpoint = %source.api_endpoint, %error, "NetBox TLS setup failed");
-            return Err(error);
-        }
+    } else {
+        builder = builder.danger_accept_invalid_certs(true);
     }
     proxy
         .apply_reqwest(builder)?
@@ -1335,7 +1329,6 @@ mod tests {
         let source = NetboxSource {
             api_endpoint: format!("http://{addr}"),
             validate_certs: true,
-            ca_file: String::new(),
             group_by: Vec::new(),
             group_names_raw: false,
             load_config_context: true,
@@ -1404,7 +1397,6 @@ mod tests {
         let source = NetboxSource {
             api_endpoint: format!("http://{addr}"),
             validate_certs: true,
-            ca_file: String::new(),
             group_by: Vec::new(),
             group_names_raw: false,
             load_config_context: false,
@@ -1441,7 +1433,6 @@ mod tests {
         let source = NetboxSource {
             api_endpoint: format!("http://{addr}"),
             validate_certs: true,
-            ca_file: String::new(),
             group_by: Vec::new(),
             group_names_raw: false,
             load_config_context: false,
@@ -1478,7 +1469,6 @@ mod tests {
         let source = NetboxSource {
             api_endpoint: base,
             validate_certs: true,
-            ca_file: String::new(),
             group_by: Vec::new(),
             group_names_raw: false,
             load_config_context: false,
@@ -1545,7 +1535,6 @@ mod tests {
         let source = NetboxSource {
             api_endpoint: format!("http://{addr}"),
             validate_certs: true,
-            ca_file: String::new(),
             group_by: vec!["sites".into()],
             group_names_raw: false,
             load_config_context: false,
@@ -1564,29 +1553,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_missing_ca_file_fails_closed_when_checks_are_off() {
-        let source = NetboxSource {
-            api_endpoint: "http://127.0.0.1:9".into(),
-            validate_certs: false,
-            ca_file: "/no/such/koreograf-ca.pem".into(),
-            group_by: Vec::new(),
-            group_names_raw: false,
-            load_config_context: false,
-            max_hosts: DEFAULT_MAX_HOSTS,
-            query: Vec::new(),
-            virtual_machines: false,
-        };
-        let proxy = crate::settings::ProxySettings::inherit();
-        let error = fetch_ini(&source, "token", &proxy).await.unwrap_err();
-        assert_eq!(error, "the_ca_file_cannot_be_read");
-    }
-
-    #[tokio::test]
     async fn an_unreachable_netbox_gives_up_before_the_total_timeout() {
         let source = NetboxSource {
             api_endpoint: "http://192.0.2.1:8080".into(),
             validate_certs: true,
-            ca_file: String::new(),
             group_by: Vec::new(),
             group_names_raw: false,
             load_config_context: false,

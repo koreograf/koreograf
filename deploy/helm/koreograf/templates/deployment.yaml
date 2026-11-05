@@ -110,8 +110,6 @@ spec:
               value: {{ .Values.ldap.starttls | quote }}
             - name: KOREOGRAF_LDAP_TLS_INSECURE
               value: {{ .Values.ldap.tlsInsecure | quote }}
-            - name: KOREOGRAF_LDAP_CA_FILE
-              value: {{ .Values.ldap.caFile | quote }}
             {{- end }}
           readinessProbe:
             exec:
@@ -130,6 +128,11 @@ spec:
               mountPath: /var/lib/koreograf
             - name: tmp
               mountPath: /tmp
+            {{- if .Values.caDirectory.enabled }}
+            - name: company-ca
+              mountPath: /etc/koreograf/ca
+              readOnly: true
+            {{- end }}
             {{- if .Values.runner.dockerSocket.enabled }}
             - name: docker-sock
               mountPath: /var/run/docker.sock
@@ -144,6 +147,12 @@ spec:
             claimName: {{ include "koreograf.fullname" . }}
         - name: tmp
           emptyDir: {}
+        {{- if .Values.caDirectory.enabled }}
+        - name: company-ca
+          hostPath:
+            path: {{ .Values.caDirectory.hostPath }}
+            type: DirectoryOrCreate
+        {{- end }}
         {{- if .Values.runner.dockerSocket.enabled }}
         - name: docker-sock
           hostPath:

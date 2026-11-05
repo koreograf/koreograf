@@ -3866,7 +3866,7 @@ async fn inventory_sources_can_be_edited_and_inventories_renamed() {
             "group_by": ["site"],
             "query_filters": ["status=planned"],
             "validate_certs": true,
-            "ca_file": "",
+            "ca_file": "/no/such/koreograf-ca.pem",
             "virtual_machines": false
         })),
     )
@@ -3875,6 +3875,7 @@ async fn inventory_sources_can_be_edited_and_inventories_renamed() {
     assert_eq!(edited["sources"][0]["id"], source_id);
     assert_eq!(edited["sources"][0]["name"], "Edited NetBox");
     assert_eq!(edited["sources"][0]["source"]["group_by"], json!(["site"]));
+    assert!(edited["sources"][0]["source"].get("ca_file").is_none());
     assert_eq!(
         edited["sources"][0]["source"]["query"],
         json!([["status", "planned"]])
@@ -5002,7 +5003,7 @@ async fn netbox_automatic_credentials_become_normal_and_get_their_url() {
     let source_json = json!({
         "api_endpoint": addr,
         "validate_certs": true,
-        "ca_file": "",
+        "ca_file": "/no/such/koreograf-ca.pem",
         "group_by": [],
         "query": [["status", "active"]],
         "virtual_machines": false
@@ -9829,6 +9830,10 @@ async fn admin_settings_hide_secrets_and_apply_without_restart() {
     assert!(script.contains("proxy_address"));
     assert!(script.contains("use_environment_variables"));
     assert!(script.contains("data-stored-mask=\"1\""));
+    assert!(!script.contains("private_ca_file"));
+    assert!(!script.contains("ldap_ca_file"));
+    assert!(!script.contains("name=ca_file"));
+    assert!(!script.contains("an_absolute_pem_path"));
     assert!(!script.contains("bind-secret-value"));
     assert!(!script.contains("proxy-secret-value"));
 
@@ -9885,7 +9890,7 @@ async fn admin_settings_hide_secrets_and_apply_without_restart() {
     assert_eq!(current["source"], "env");
     assert_eq!(current["runner"], "local");
     assert_eq!(current["ldap"]["url"], "");
-    assert_eq!(current["ldap"]["ca_file"], "");
+    assert!(current["ldap"].get("ca_file").is_none());
     assert_eq!(current["ldap"]["bind_password_set"], false);
     assert_eq!(current["proxy"]["password_set"], false);
     assert!(!current.to_string().contains("password\":"));
@@ -9936,7 +9941,7 @@ async fn admin_settings_hide_secrets_and_apply_without_restart() {
     assert!(!saved_text.contains("proxy-secret-value"), "{saved_text}");
     assert_eq!(saved["source"], "saved");
     assert_eq!(saved["ldap"]["mode"], "ad");
-    assert_eq!(saved["ldap"]["ca_file"], "");
+    assert!(saved["ldap"].get("ca_file").is_none());
     assert_eq!(saved["ldap"]["user_filter"], "(sAMAccountName={username})");
     assert_eq!(saved["ldap"]["bind_password_set"], true);
     assert_eq!(saved["proxy"]["password_set"], true);

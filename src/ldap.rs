@@ -360,10 +360,10 @@ fn connection_settings(cfg: &LdapConfig) -> Result<LdapConnSettings, String> {
     let mut settings = LdapConnSettings::new()
         .set_starttls(cfg.starttls)
         .set_conn_timeout(Duration::from_secs(8));
-    if let Some(config) = crate::tls::ldap_client_config(&cfg.ca_file)? {
+    if cfg.tls_insecure {
+        settings = settings.set_no_tls_verify(true);
+    } else if let Some(config) = crate::tls::ldap_client_config()? {
         settings = settings.set_config(config);
-    } else {
-        settings = settings.set_no_tls_verify(cfg.tls_insecure);
     }
     Ok(settings)
 }
@@ -727,34 +727,11 @@ mod tests {
             group_base: String::new(),
             starttls: false,
             tls_insecure: false,
-            ca_file: String::new(),
         };
         let error = authenticate(&cfg, "alice", "secret")
             .await
             .expect_err("empty bind password");
         assert_eq!(error, "ldap_is_not_fully_configured");
-    }
-
-    #[test]
-    fn a_missing_ca_file_does_not_turn_verification_off() {
-        let cfg = LdapConfig {
-            url: "ldaps://ldap.example.com".into(),
-            mode: "ldap".into(),
-            bind_dn: "cn=reader,dc=example,dc=com".into(),
-            bind_password: "secret".into(),
-            user_base: "ou=people,dc=example,dc=com".into(),
-            user_filter: "(uid={username})".into(),
-            username_attr: "uid".into(),
-            group_attr: "memberOf".into(),
-            group_base: String::new(),
-            starttls: false,
-            tls_insecure: true,
-            ca_file: "/no/such/koreograf-ca.pem".into(),
-        };
-        let Err(error) = connection_settings(&cfg) else {
-            panic!("missing CA file was accepted");
-        };
-        assert_eq!(error, "the_ca_file_cannot_be_read");
     }
 
     #[test]

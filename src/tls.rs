@@ -1,87 +1,89 @@
-//! Optional PEM trust anchors for LDAP and NetBox.
+//! Company certificate authorities from a fixed directory.
 //!
-//! An empty path keeps the system certificate store. A set path adds those
-//! certificates and leaves verification on, even when the insecure flag is set.
-//! A path that cannot be read fails the connection.
+//! Every `*.pem` and `*.crt` file in the directory is added to the public
+//! roots for LDAP and NetBox. Git receives the same files through a bundle.
+//! A missing or empty directory leaves trust unchanged.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use rustls::pki_types::{pem::PemObject, CertificateDer};
 use rustls::{ClientConfig, RootCertStore};
 
+pub(crate) const CA_DIRECTORY: &str = "/etc/koreograf/ca";
 const MAX_CA_BYTES: u64 = 1_048_576;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TlsPosture {
-    Default,
-    Insecure,
-    CustomCa,
-    CaOverridesInsecure,
+#[derive(Debug, Default)]
+pub(crate) struct CompanyCerts {
+    pub certs: Vec<CertificateDer<'static>>,
+    pub pem: Vec<u8>,
 }
 
-pub fn posture(insecure: bool, ca_file: &str) -> Result<TlsPosture, String> {
-    let has_ca = absolute_ca_path(ca_file)?.is_some();
-    Ok(match (has_ca, insecure) {
-        (true, true) => TlsPosture::CaOverridesInsecure,
-        (true, false) => TlsPosture::CustomCa,
-        (false, true) => TlsPosture::Insecure,
-        (false, false) => TlsPosture::Default,
-    })
+pub(crate) fn load_company_cas() -> Result<CompanyCerts, String> {
+    load_cas(Path::new(CA_DIRECTORY))
 }
 
-pub fn absolute_ca_path(raw: &str) -> Result<Option<PathBuf>, String> {
-    let path = raw.trim();
-    if path.is_empty() {
-        return Ok(None);
-    }
-    if path.chars().count() > 400 || path.chars().any(char::is_control) {
-        return Err("the_ca_file_must_be_an_absolute_path".into());
-    }
-    let path = Path::new(path);
-    let escapes = path
-        .components()
-        .any(|component| matches!(component, Component::ParentDir));
-    if !path.is_absolute() || escapes {
-        return Err("the_ca_file_must_be_an_absolute_path".into());
-    }
-    Ok(Some(path.to_path_buf()))
-}
-
-pub fn read_ca_pem(path: &Path) -> Result<Vec<u8>, String> {
-    let meta = std::fs::metadata(path).map_err(|_| "the_ca_file_cannot_be_read".to_string())?;
-    if !meta.is_file() {
-        return Err("the_ca_file_cannot_be_read".into());
-    }
-    if meta.len() > MAX_CA_BYTES {
-        return Err("the_ca_file_is_too_large".into());
-    }
-    let bytes = std::fs::read(path).map_err(|_| "the_ca_file_cannot_be_read".to_string())?;
-    if bytes.len() as u64 > MAX_CA_BYTES {
-        return Err("the_ca_file_is_too_large".into());
-    }
-    Ok(bytes)
-}
-
-pub fn reqwest_roots(ca_file: &str) -> Result<Option<Vec<reqwest::Certificate>>, String> {
-    let Some(path) = absolute_ca_path(ca_file)? else {
-        return Ok(None);
+pub(crate) fn load_cas(dir: &Path) -> Result<CompanyCerts, String> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(CompanyCerts::default())
+        }
+        Err(_) => {
+            return Err(format!(
+                "The CA directory {} cannot be read.",
+                dir.display()
+            ))
+        }
     };
-    let pem = read_ca_pem(&path)?;
-    let certs = reqwest::Certificate::from_pem_bundle(&pem)
-        .map_err(|_| "the_ca_file_is_not_a_certificate".to_string())?;
-    if certs.is_empty() {
-        return Err("the_ca_file_is_not_a_certificate".into());
+    let mut paths = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| is_ca_file(path))
+        .collect::<Vec<_>>();
+    paths.sort();
+    let mut loaded = CompanyCerts::default();
+    for path in paths {
+        let pem = read_file(&path)?;
+        let certs = parse_certificates(&pem, &path)?;
+        loaded.certs.extend(certs);
+        loaded.pem.extend(pem);
+        if !loaded.pem.ends_with(b"\n") {
+            loaded.pem.push(b'\n');
+        }
     }
-    Ok(Some(certs))
+    Ok(loaded)
 }
 
-pub fn ldap_client_config(ca_file: &str) -> Result<Option<Arc<ClientConfig>>, String> {
-    let Some(path) = absolute_ca_path(ca_file)? else {
+pub(crate) fn validate_company_cas() -> Result<(), String> {
+    load_company_cas().map(|_| ())
+}
+
+pub(crate) fn reqwest_roots() -> Result<Vec<reqwest::Certificate>, String> {
+    reqwest_roots_from(Path::new(CA_DIRECTORY))
+}
+
+fn reqwest_roots_from(dir: &Path) -> Result<Vec<reqwest::Certificate>, String> {
+    let loaded = load_cas(dir)?;
+    loaded
+        .certs
+        .into_iter()
+        .map(|cert| {
+            reqwest::Certificate::from_der(cert.as_ref())
+                .map_err(|_| "A company CA certificate cannot be used.".to_string())
+        })
+        .collect()
+}
+
+pub(crate) fn ldap_client_config() -> Result<Option<Arc<ClientConfig>>, String> {
+    ldap_client_config_from(Path::new(CA_DIRECTORY))
+}
+
+fn ldap_client_config_from(dir: &Path) -> Result<Option<Arc<ClientConfig>>, String> {
+    let loaded = load_cas(dir)?;
+    if loaded.certs.is_empty() {
         return Ok(None);
-    };
-    let pem = read_ca_pem(&path)?;
-    let extra = extra_certificates(&pem)?;
+    }
     let mut roots = RootCertStore::empty();
     let native = rustls_native_certs::load_native_certs();
     if native.errors.is_empty() {
@@ -89,76 +91,61 @@ pub fn ldap_client_config(ca_file: &str) -> Result<Option<Arc<ClientConfig>>, St
             let _ = roots.add(cert);
         }
     }
-    for cert in extra {
+    for cert in loaded.certs {
         roots
             .add(cert)
-            .map_err(|_| "the_ca_file_is_not_a_certificate".to_string())?;
+            .map_err(|_| "A company CA certificate cannot be used.".to_string())?;
     }
     Ok(Some(client_config(roots)?))
 }
 
-pub fn warn_directory(cfg: &crate::config::LdapConfig) {
-    if cfg.url.is_empty() {
-        return;
-    }
-    match posture(cfg.tls_insecure, &cfg.ca_file) {
-        Ok(TlsPosture::Insecure) => {
-            tracing::warn!(url = %cfg.url, "LDAP certificate verification is disabled");
-        }
-        Ok(TlsPosture::CaOverridesInsecure) => {
-            tracing::warn!(
-                url = %cfg.url,
-                ca_file = %cfg.ca_file,
-                "LDAP certificate checks stay on because a CA file is set; TLS insecure is ignored"
-            );
-            warn_if_unreadable(&cfg.url, &cfg.ca_file);
-        }
-        Ok(TlsPosture::CustomCa) => warn_if_unreadable(&cfg.url, &cfg.ca_file),
-        Ok(TlsPosture::Default) => {}
-        Err(error) => {
-            tracing::warn!(
-                url = %cfg.url,
-                %error,
-                "LDAP CA file cannot be used; directory sign-in will fail"
-            );
-        }
-    }
-}
-
-pub fn warn_netbox(endpoint: &str, insecure: bool, ca_file: &str) {
-    match posture(insecure, ca_file) {
-        Ok(TlsPosture::Insecure) => {
-            tracing::warn!(%endpoint, "NetBox certificate verification is disabled");
-        }
-        Ok(TlsPosture::CaOverridesInsecure) => {
-            tracing::warn!(
-                %endpoint,
-                %ca_file,
-                "NetBox certificate checks stay on because a CA file is set; validate_certs false is ignored"
-            );
-        }
-        _ => {}
-    }
-}
-
-fn warn_if_unreadable(url: &str, ca_file: &str) {
-    if let Err(error) = ldap_client_config(ca_file) {
+pub(crate) fn warn_directory(cfg: &crate::config::LdapConfig) {
+    if !cfg.url.is_empty() && cfg.tls_insecure {
         tracing::warn!(
-            %url,
-            %error,
-            "LDAP CA file cannot be used; directory sign-in will fail"
+            url = %cfg.url,
+            "LDAP certificate verification is disabled"
         );
     }
 }
 
-fn extra_certificates(pem: &[u8]) -> Result<Vec<CertificateDer<'static>>, String> {
+pub(crate) fn warn_netbox(endpoint: &str, insecure: bool) {
+    if insecure {
+        tracing::warn!(%endpoint, "NetBox certificate verification is disabled");
+    }
+}
+
+fn is_ca_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("pem") || ext.eq_ignore_ascii_case("crt"))
+}
+
+fn read_file(path: &Path) -> Result<Vec<u8>, String> {
+    let meta = std::fs::metadata(path)
+        .map_err(|_| format!("The CA file {} cannot be read.", path.display()))?;
+    if !meta.is_file() || meta.len() > MAX_CA_BYTES {
+        return Err(format!("The CA file {} cannot be read.", path.display()));
+    }
+    let bytes = std::fs::read(path)
+        .map_err(|_| format!("The CA file {} cannot be read.", path.display()))?;
+    if bytes.len() as u64 > MAX_CA_BYTES {
+        return Err(format!("The CA file {} cannot be read.", path.display()));
+    }
+    Ok(bytes)
+}
+
+fn parse_certificates(pem: &[u8], path: &Path) -> Result<Vec<CertificateDer<'static>>, String> {
     let mut found = Vec::new();
     for item in CertificateDer::pem_slice_iter(pem) {
-        let cert = item.map_err(|_| "the_ca_file_is_not_a_certificate".to_string())?;
+        let cert =
+            item.map_err(|_| format!("The CA file {} is not a PEM certificate.", path.display()))?;
         found.push(cert);
     }
     if found.is_empty() {
-        return Err("the_ca_file_is_not_a_certificate".into());
+        return Err(format!(
+            "The CA file {} is not a PEM certificate.",
+            path.display()
+        ));
     }
     Ok(found)
 }
@@ -197,6 +184,7 @@ brXsgVyAio1sRQxSJcl/xHi6wQ5ACssBTz1ZpuE=\n\
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn scratch(name: &str) -> PathBuf {
         let nanos = std::time::SystemTime::now()
@@ -209,68 +197,64 @@ mod tests {
     }
 
     #[test]
-    fn empty_path_keeps_the_system_store() {
-        assert_eq!(posture(false, "  ").unwrap(), TlsPosture::Default);
-        assert_eq!(posture(true, "").unwrap(), TlsPosture::Insecure);
-        assert!(reqwest_roots("").unwrap().is_none());
-        assert!(ldap_client_config("").unwrap().is_none());
+    fn a_missing_directory_keeps_the_public_roots() {
+        let dir = scratch("missing").join("absent");
+        assert!(load_cas(&dir).unwrap().certs.is_empty());
+        assert!(reqwest_roots_from(&dir).unwrap().is_empty());
+        assert!(ldap_client_config_from(&dir).unwrap().is_none());
     }
 
     #[test]
-    fn a_ca_path_overrides_the_insecure_flag() {
-        assert_eq!(
-            posture(true, "/etc/ssl/certs/internal.pem").unwrap(),
-            TlsPosture::CaOverridesInsecure
-        );
-        assert_eq!(
-            posture(false, "/etc/ssl/certs/internal.pem").unwrap(),
-            TlsPosture::CustomCa
-        );
-    }
-
-    #[test]
-    fn a_relative_or_parent_path_is_rejected() {
-        assert_eq!(
-            absolute_ca_path("certs/ca.pem").unwrap_err(),
-            "the_ca_file_must_be_an_absolute_path"
-        );
-        assert_eq!(
-            absolute_ca_path("/tmp/../etc/ca.pem").unwrap_err(),
-            "the_ca_file_must_be_an_absolute_path"
-        );
-    }
-
-    #[test]
-    fn a_pem_file_is_added_to_both_clients() {
-        let dir = scratch("pem");
-        let path = dir.join("ca.pem");
-        std::fs::write(&path, TEST_CA_PEM).unwrap();
-        let text = path.display().to_string();
-        let certs = reqwest_roots(&text).unwrap().unwrap();
-        assert_eq!(certs.len(), 1);
-        assert!(ldap_client_config(&text).unwrap().is_some());
+    fn an_empty_directory_keeps_the_public_roots() {
+        let dir = scratch("empty");
+        assert!(load_cas(&dir).unwrap().certs.is_empty());
+        assert!(reqwest_roots_from(&dir).unwrap().is_empty());
+        assert!(ldap_client_config_from(&dir).unwrap().is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn a_missing_or_plain_file_fails_closed() {
-        let missing = absolute_ca_path("/no/such/koreograf-ca.pem")
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            read_ca_pem(&missing).unwrap_err(),
-            "the_ca_file_cannot_be_read"
-        );
+    fn every_pem_and_crt_file_is_added_to_both_clients() {
+        let dir = scratch("pem");
+        std::fs::write(dir.join("company.pem"), TEST_CA_PEM).unwrap();
+        std::fs::write(dir.join("company.crt"), TEST_CA_PEM).unwrap();
+        std::fs::write(dir.join("notes.txt"), "not a certificate").unwrap();
+        let loaded = load_cas(&dir).unwrap();
+        assert_eq!(loaded.certs.len(), 2);
+        assert_eq!(reqwest_roots_from(&dir).unwrap().len(), 2);
+        assert!(ldap_client_config_from(&dir).unwrap().is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_non_pem_file_fails_with_its_name() {
         let dir = scratch("text");
-        let path = dir.join("note.txt");
-        std::fs::write(&path, "not a certificate").unwrap();
-        assert_eq!(
-            reqwest_roots(&path.display().to_string()).unwrap_err(),
-            "the_ca_file_is_not_a_certificate"
-        );
-        let huge = dir.join("huge.pem");
-        std::fs::write(&huge, vec![b'A'; (MAX_CA_BYTES as usize) + 1]).unwrap();
-        assert_eq!(read_ca_pem(&huge).unwrap_err(), "the_ca_file_is_too_large");
+        std::fs::write(dir.join("broken.pem"), "not a certificate").unwrap();
+        let error = load_cas(&dir).unwrap_err();
+        assert!(error.contains("broken.pem"), "{error}");
+        assert!(error.contains("is not a PEM certificate"), "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_unreadable_entry_fails_with_its_name() {
+        let dir = scratch("unreadable");
+        std::fs::create_dir(dir.join("broken.crt")).unwrap();
+        let error = load_cas(&dir).unwrap_err();
+        assert!(error.contains("broken.crt"), "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_huge_file_fails_with_its_name() {
+        let dir = scratch("huge");
+        std::fs::write(
+            dir.join("huge.pem"),
+            vec![b'A'; (MAX_CA_BYTES as usize) + 1],
+        )
+        .unwrap();
+        let error = load_cas(&dir).unwrap_err();
+        assert!(error.contains("huge.pem"), "{error}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

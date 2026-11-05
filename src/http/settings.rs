@@ -54,8 +54,6 @@ pub(super) struct LdapBody {
     starttls: bool,
     #[serde(default)]
     tls_insecure: bool,
-    #[serde(default)]
-    ca_file: String,
 }
 
 #[derive(Deserialize, Default)]
@@ -101,7 +99,6 @@ pub async fn put_settings(
         ldap_group_base: ldap.group_base,
         ldap_starttls: ldap.starttls,
         ldap_tls_insecure: ldap.tls_insecure,
-        ldap_ca_file: ldap.ca_file,
         proxy_url: proxy.url,
         proxy_username: proxy.username,
         proxy_password: proxy.password,

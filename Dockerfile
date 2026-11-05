@@ -80,8 +80,8 @@ RUN apt-get update \
         'koreograf:x:10001:10001:Koreograf:/var/lib/koreograf:/sbin/nologin' \
         > /out/etc/passwd \
     && printf '%s\n' 'root:x:0:' 'koreograf:x:10001:' > /out/etc/group \
-    && mkdir -p /out/var/lib/koreograf /out/tmp \
-    && chown 10001:10001 /out/var/lib/koreograf /out/tmp \
+    && mkdir -p /out/var/lib/koreograf /out/tmp /out/etc/koreograf/ca \
+    && chown 10001:10001 /out/var/lib/koreograf /out/tmp /out/etc/koreograf/ca \
     && chmod 1777 /out/tmp
 
 FROM scratch

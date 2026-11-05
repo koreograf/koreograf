@@ -64,8 +64,12 @@ ldap:
   groupBase: ""
   starttls: false
   tlsInsecure: false
-  # Absoluter PEM-Pfad im Container. Leer nutzt die System-CAs.
-  caFile: ""
+
+# Firmen-CAs als read-only Verzeichnis mit *.pem und *.crt einbinden.
+# LDAP, NetBox und git vertrauen ihnen zusätzlich zu den öffentlichen CAs.
+caDirectory:
+  enabled: false
+  hostPath: /etc/koreograf/ca
 
 ingress:
   enabled: false

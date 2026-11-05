@@ -180,7 +180,6 @@ pub struct SettingsWrite {
     pub ldap_group_base: String,
     pub ldap_starttls: bool,
     pub ldap_tls_insecure: bool,
-    pub ldap_ca_file: String,
     pub proxy_url: String,
     pub proxy_username: String,
     pub proxy_password: String,
@@ -208,7 +207,6 @@ struct Draft {
     ldap_group_base: String,
     ldap_starttls: bool,
     ldap_tls_insecure: bool,
-    ldap_ca_file: String,
     proxy_url: String,
     proxy_username: String,
     proxy_password: String,
@@ -308,7 +306,6 @@ pub fn save(state: &Shared, input: &SettingsWrite) -> AppResult<Value> {
         ("ldap_group_base", draft.ldap_group_base.clone()),
         ("ldap_starttls", flag(draft.ldap_starttls)),
         ("ldap_tls_insecure", flag(draft.ldap_tls_insecure)),
-        ("ldap_ca_file", draft.ldap_ca_file.clone()),
         ("proxy_url", draft.proxy_url.clone()),
         ("proxy_username", draft.proxy_username.clone()),
         ("proxy_no_proxy", draft.proxy_no_proxy.clone()),
@@ -379,7 +376,6 @@ fn public_json(effective: &Effective) -> Value {
             "group_base": ldap.group_base,
             "starttls": ldap.starttls,
             "tls_insecure": ldap.tls_insecure,
-            "ca_file": ldap.ca_file,
         },
         "proxy": {
             "url": effective.proxy.url,
@@ -452,7 +448,6 @@ fn from_saved(state: &Shared, rows: &HashMap<String, String>) -> AppResult<Effec
                 .map(String::as_str)
                 .unwrap_or(""),
         ),
-        ca_file: rows.get("ldap_ca_file").cloned().unwrap_or_default(),
     };
     let runner = rows
         .get("runner")
@@ -510,7 +505,6 @@ fn draft_ldap(draft: &Draft) -> LdapConfig {
         group_base: draft.ldap_group_base.clone(),
         starttls: draft.ldap_starttls,
         tls_insecure: draft.ldap_tls_insecure,
-        ca_file: draft.ldap_ca_file.clone(),
     }
 }
 
@@ -527,7 +521,6 @@ fn empty_ldap() -> LdapConfig {
         group_base: String::new(),
         starttls: false,
         tls_insecure: false,
-        ca_file: String::new(),
     }
 }
 
@@ -576,8 +569,6 @@ fn validate(input: &SettingsWrite, current: &Effective, db: &Connection) -> AppR
     if !ldap_url.is_empty() && !ldap_bind_dn.is_empty() && ldap_bind_password.is_empty() {
         return Err(ApiError::bad("ldap_is_not_fully_configured"));
     }
-    let ldap_ca_file = plain(&input.ldap_ca_file, 400)?;
-    crate::tls::absolute_ca_path(&ldap_ca_file).map_err(ApiError::bad)?;
     let proxy_url = plain(&input.proxy_url, 300)?;
     if proxy_url.contains('@') {
         return Err(ApiError::bad("put_the_credentials_in_their_own_fields_not"));
@@ -634,7 +625,6 @@ fn validate(input: &SettingsWrite, current: &Effective, db: &Connection) -> AppR
         ldap_group_base,
         ldap_starttls: input.ldap_starttls,
         ldap_tls_insecure: input.ldap_tls_insecure,
-        ldap_ca_file,
         proxy_url,
         proxy_username,
         proxy_password,
@@ -987,7 +977,6 @@ mod tests {
             ldap_group_base: "".into(),
             ldap_starttls: true,
             ldap_tls_insecure: false,
-            ldap_ca_file: String::new(),
             proxy_url: "http://proxy.example:3128".into(),
             proxy_username: "a b".into(),
             proxy_password: "p@ss:word".into(),
@@ -1184,23 +1173,14 @@ mod tests {
     }
 
     #[test]
-    fn a_ca_path_is_saved_and_a_relative_path_is_rejected() {
+    fn tls_insecure_is_saved_without_a_ca_path() {
         let state = state();
         let mut write = sample("bind-secret");
-        write.ldap_ca_file = "/etc/ssl/certs/internal.pem".into();
         write.ldap_tls_insecure = true;
         let saved = save(&state, &write).unwrap();
-        assert_eq!(saved["ldap"]["ca_file"], "/etc/ssl/certs/internal.pem");
         assert_eq!(saved["ldap"]["tls_insecure"], true);
+        assert!(saved["ldap"].get("ca_file").is_none());
         let loaded = load(&state).unwrap();
-        assert_eq!(loaded.ldap.ca_file, "/etc/ssl/certs/internal.pem");
         assert!(loaded.ldap.tls_insecure);
-        write.ldap_ca_file = "certs/ca.pem".into();
-        let err = save(&state, &write).unwrap_err();
-        assert_eq!(err.to_string(), "the_ca_file_must_be_an_absolute_path");
-        assert_eq!(
-            load(&state).unwrap().ldap.ca_file,
-            "/etc/ssl/certs/internal.pem"
-        );
     }
 }

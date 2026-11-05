@@ -66,9 +66,12 @@ services:
       KOREOGRAF_LDAP_GROUP_BASE: ${KOREOGRAF_LDAP_GROUP_BASE:-}
       KOREOGRAF_LDAP_STARTTLS: ${KOREOGRAF_LDAP_STARTTLS:-}
       KOREOGRAF_LDAP_TLS_INSECURE: ${KOREOGRAF_LDAP_TLS_INSECURE:-}
-      KOREOGRAF_LDAP_CA_FILE: ${KOREOGRAF_LDAP_CA_FILE:-}
     volumes:
       - koreograf-data:/var/lib/koreograf
+      # Company CAs: a read-only directory of *.pem and *.crt files.
+      # LDAP, NetBox, and git trust them in addition to the public roots.
+      # A missing or empty directory leaves trust unchanged.
+      # - /srv/koreograf/ca:/etc/koreograf/ca:ro
       # Restore a backup on first start. Mount the file's directory, not the file.
       # - /srv/koreograf/restore:/restore
       # Import an old data directory on first start. Read-only, never written.

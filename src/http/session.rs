@@ -646,7 +646,6 @@ mod tests {
                 group_base: String::new(),
                 starttls: false,
                 tls_insecure: false,
-                ca_file: String::new(),
             }),
         })
         .expect("boot");
