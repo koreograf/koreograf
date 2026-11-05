@@ -34,6 +34,14 @@ pub fn router(state: Shared) -> Router {
         .route("/logout", post(session::logout))
         .route("/me", get(session::me).put(session::update_me))
         .route(
+            "/me/tokens",
+            get(session::list_tokens).post(session::create_token),
+        )
+        .route(
+            "/me/tokens/{id}",
+            axum::routing::delete(session::delete_token),
+        )
+        .route(
             "/users",
             get(session::list_users).post(session::create_user),
         )

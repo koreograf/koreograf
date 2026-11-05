@@ -60,6 +60,12 @@ The environment variables apply until the first save. After that, the saved valu
 
 The job timeout is 30 to 86400 seconds. The runner mode is `auto`, `docker`, or `local`. The output line limit is 100 to 100000 lines for each of stdout and stderr. The default is 8000. The job keeps the first three quarters and the last quarter. A save that leaves the limit out keeps the current value. `GET /api/jobs/{id}/output` downloads that kept log and stops at 8 MiB.
 
+## API tokens
+
+A signed-in user creates and revokes personal API tokens under **My account** (German: **Mein Konto**). `GET /api/me/tokens` lists the caller's tokens with the name, prefix, `created_at`, and `last_used_at`. `POST /api/me/tokens` takes a `name` and returns the secret once. `DELETE /api/me/tokens/{id}` revokes one token owned by the caller. Another user's id is 404. An administrator cannot read or mint another user's tokens.
+
+The secret starts with `koro_` and is stored only as a hash. Send it as `Authorization: Bearer <token>`. The token authenticates the same user as the session cookie, and the role checks stay the same. When both a bearer token and a cookie are present, the bearer token wins; a bad token is 401 and does not fall back to the cookie. Team routes still need `X-Team-Id`. A disabled or deleted user cannot use a token. Deleting a user deletes the tokens, and revoking a token does not delete the sessions.
+
 ## Users and permissions
 
 An administrator sees every account under **Users** (German: **Benutzerkonten**). `GET /api/users` lists them. `GET /api/users/{id}` returns the account and its memberships. The password hash is never returned.
