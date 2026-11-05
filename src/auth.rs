@@ -4,7 +4,7 @@ use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use axum::http::HeaderMap;
 
-use crate::crypto::{hash_password, verify_password};
+use crate::crypto::{hash_api_token, hash_password, verify_password};
 use crate::db::{self, User};
 use crate::error::{ApiError, AppResult};
 use crate::ldap;
@@ -66,6 +66,28 @@ impl FromRequestParts<Shared> for AuthUser {
         parts: &mut Parts,
         state: &Shared,
     ) -> Result<Self, Self::Rejection> {
+        let bearer = parts
+            .headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|raw| {
+                let (scheme, token) = raw.split_once(' ').unwrap_or((raw, ""));
+                scheme
+                    .eq_ignore_ascii_case("bearer")
+                    .then(|| token.trim().to_string())
+            });
+        if let Some(token) = bearer {
+            if token.is_empty() {
+                return Err(ApiError::Unauthorized);
+            }
+            let db = state.db()?;
+            let user = db::user_by_api_token(&db, &hash_api_token(&token))?
+                .ok_or(ApiError::Unauthorized)?;
+            if user.disabled {
+                return Err(ApiError::Unauthorized);
+            }
+            return Ok(user.into());
+        }
         let token =
             read_cookie(&parts.headers, "koreograf_session").ok_or(ApiError::Unauthorized)?;
         let db = state.db()?;

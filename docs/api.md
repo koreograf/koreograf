@@ -1,6 +1,6 @@
 # API
 
-`GET /api/version` does not need a session. It returns the version compiled from `Cargo.toml`. The browser UI reads this route for the build line on the sign-in page and in the sidebar. Session cookie `koreograf_session`, HttpOnly, SameSite=Lax, seven days. `Secure` is added when `KOREOGRAF_COOKIE_SECURE` is `true`, and when it is `auto` and a trusted proxy sends `X-Forwarded-Proto: https`. The default is `auto` with that proxy off, so a plain HTTP sign-in still receives the cookie. Team routes need `X-Team-Id`. Job events use the team membership stored on the job, because `EventSource` cannot set custom headers. The stream is `GET /api/jobs/{id}/events?after=`.
+`GET /api/version` does not need a session. It returns the version compiled from `Cargo.toml`. The browser UI reads this route for the build line on the sign-in page and in the sidebar. Session cookie `koreograf_session`, HttpOnly, SameSite=Lax, seven days, or `Authorization: Bearer <token>` with a personal API token. When both are present, the bearer token wins. `Secure` is added when `KOREOGRAF_COOKIE_SECURE` is `true`, and when it is `auto` and a trusted proxy sends `X-Forwarded-Proto: https`. The default is `auto` with that proxy off, so a plain HTTP sign-in still receives the cookie. Team routes need `X-Team-Id`. Job events use the team membership stored on the job, because `EventSource` cannot set custom headers. The stream is `GET /api/jobs/{id}/events?after=`.
 
 ## Walkthrough
 
@@ -77,6 +77,8 @@ curl -fsS -b "$JAR" "$BASE/api/jobs/$JOB_ID/output"
 `/output` is the kept log: the first three quarters of the line limit and the last quarter, for stdout and for stderr. The default limit is 8000 lines. The download stops at 8 MiB. `GET /api/jobs/{id}` includes `output_capped`, true when the download would stop at that cap, and a `gap` event with the omitted line count when the page leaves out the middle.
 
 `GET /api/jobs` lists the selected team's jobs, newest first. `limit` defaults to 25 and is capped at 100; `offset` skips rows. `q` searches the name, tool, status, and trigger. `status`, `tool`, `trigger`, and `template_id` filter exact values. `since` and `until` are RFC 3339 bounds on `created_at`. The response is `{"items": [...], "total": N}`, where `total` counts every match. The bare array this route returned before is gone; clients read `items`.
+
+`GET /api/me/tokens` lists the caller's personal API tokens without secrets. `POST /api/me/tokens` takes `name` and returns the secret once. `DELETE /api/me/tokens/{id}` revokes one token owned by the caller; another user's id is 404. The secret starts with `koro_` and the database stores only a hash. Names follow the same 120-character limit as other names.
 
 `POST /api/login` takes `username` and `password` and returns 200 with the session cookie. A rejected sign-in returns 401 and `invalid_username_or_password` for a wrong password, an unknown user, an empty password, and a directory failure. A request without a session still returns `sign_in_is_required`. Creating a credential needs an owner. Launch returns 202 and needs a JSON object. `extra_vars` is that object, or `{}`.
 

@@ -26,6 +26,7 @@ let navKey = null;
 let navToken = null;
 let leaveGuard = null;
 let sourceNotice = null;
+let revealToken = null;
 let shownHash = null;
 let buildVersion = "";
 let versionRequested = false;
@@ -6814,10 +6815,28 @@ function emailLine(email) {
 
 async function pageAccount() {
   me = await api("GET", "/api/me");
+  const tokens = await api("GET", "/api/me/tokens");
+  const revealed = revealToken;
+  revealToken = null;
   const rows = (me.memberships || []).map((row) => {
     const org = row.organization_name || "—";
     return `<tr><td>${esc(org)}</td><td>${esc(row.team_name)}</td><td>${esc(roleLabel(row.role))}</td><td>${esc(sourceLabel(row.source))}</td></tr>`;
   });
+  const tokenRows = tokens.map((item) => {
+    const used = item.last_used_at ? esc(when(item.last_used_at)) : h("never");
+    return `<tr>
+      <td>${esc(item.name)}</td>
+      <td class="mono">${esc(item.prefix)}</td>
+      <td class="small muted">${esc(when(item.created_at))}</td>
+      <td class="small muted">${used}</td>
+      <td class="actions"><button class="btn compact danger" type="button" data-revoke="${esc(item.id)}" data-name="${esc(item.name)}">${h("revoke")}</button></td>
+    </tr>`;
+  });
+  const secret = revealed ? `
+      <div class="banner good">
+        <p>${h("api_tokens_hint")}</p>
+        <p><code>${esc(revealed)}</code> <button class="btn compact" type="button" data-copy="${esc(revealed)}">${h("copy")}</button></p>
+      </div>` : "";
   const local = me.auth_source === "local";
   const identity = local ? `
     <form class="card form" id="account-form">
@@ -6842,6 +6861,18 @@ async function pageAccount() {
         <h2>${h("memberships")}</h2>
         ${table([t("organization"), t("team"), t("role"), t("source")], rows)}
       </section>
+      <section class="card">
+        <h2>${h("api_tokens")}</h2>
+        ${secret}
+        <form class="form" id="token-form">
+          <label class="field required">
+            <span>${h("name")}</span>
+            <input name="name" required>
+          </label>
+          <div><button class="btn pill primary" type="submit">${h("create_token")}</button></div>
+        </form>
+        ${table([t("name"), t("prefix"), t("created"), t("last_used"), t("actions")], tokenRows)}
+      </section>
     </div>`);
   const form = document.querySelector("#account-form");
   if (form) {
@@ -6859,6 +6890,34 @@ async function pageAccount() {
       } catch (error) { handle(error); }
     });
   }
+  const tokenForm = document.querySelector("#token-form");
+  if (tokenForm) {
+    tokenForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        const created = await api("POST", "/api/me/tokens", { name: tokenForm.name.value });
+        revealToken = created.secret;
+        await route();
+      } catch (error) { handle(error); }
+    });
+  }
+  document.querySelectorAll("[data-copy]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(button.dataset.copy);
+        button.textContent = t("copied");
+      } catch {}
+    });
+  });
+  document.querySelectorAll("[data-revoke]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (!window.confirm(t("delete_this_token", { name: button.dataset.name }))) return;
+      try {
+        await api("DELETE", `/api/me/tokens/${encodeURIComponent(button.dataset.revoke)}`);
+        await route();
+      } catch (error) { handle(error); }
+    });
+  });
 }
 
 async function pageUsers() {

@@ -37,6 +37,16 @@ CREATE TABLE IF NOT EXISTS sessions (
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   expires_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS api_tokens (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  prefix TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id);
 CREATE TABLE IF NOT EXISTS teams (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,
@@ -486,7 +496,17 @@ fn migrate(c: &Connection) -> AppResult<()> {
         )?;
     }
     c.execute_batch(
-        "CREATE TABLE IF NOT EXISTS schedules (
+        "CREATE TABLE IF NOT EXISTS api_tokens (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  prefix TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id);
+CREATE TABLE IF NOT EXISTS schedules (
   id TEXT PRIMARY KEY,
   team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
@@ -627,6 +647,15 @@ pub struct User {
     pub disabled: bool,
     pub email: Option<String>,
     pub created_at: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ApiToken {
+    pub id: String,
+    pub name: String,
+    pub prefix: String,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1112,6 +1141,66 @@ pub fn user_by_session(c: &Connection, token: &str) -> AppResult<Option<User>> {
         delete_session(c, token)?;
         return Ok(None);
     }
+    Ok(Some(user))
+}
+
+pub fn create_api_token(
+    c: &Connection,
+    id: &str,
+    user_id: &str,
+    name: &str,
+    prefix: &str,
+    token_hash: &str,
+    created_at: &str,
+) -> AppResult<()> {
+    c.execute(
+        "INSERT INTO api_tokens (id, user_id, name, prefix, token_hash, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![id, user_id, name, prefix, token_hash, created_at],
+    )?;
+    Ok(())
+}
+
+pub fn list_api_tokens(c: &Connection, user_id: &str) -> AppResult<Vec<ApiToken>> {
+    let mut stmt = c.prepare(
+        "SELECT id, name, prefix, created_at, last_used_at
+         FROM api_tokens WHERE user_id = ?1 ORDER BY created_at, name",
+    )?;
+    let rows = stmt.query_map([user_id], |row| {
+        Ok(ApiToken {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            prefix: row.get(2)?,
+            created_at: row.get(3)?,
+            last_used_at: row.get(4)?,
+        })
+    })?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+}
+
+pub fn delete_api_token(c: &Connection, id: &str, user_id: &str) -> AppResult<bool> {
+    Ok(c.execute(
+        "DELETE FROM api_tokens WHERE id = ?1 AND user_id = ?2",
+        params![id, user_id],
+    )? > 0)
+}
+
+pub fn user_by_api_token(c: &Connection, token_hash: &str) -> AppResult<Option<User>> {
+    let found = c
+        .query_row(
+            "SELECT u.id, u.username, u.display_name, u.password_hash, u.auth_source, u.is_admin, u.disabled, u.created_at, u.email, t.id
+             FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?1",
+            [token_hash],
+            |row| Ok((map_user(row)?, row.get::<_, String>(9)?)),
+        )
+        .optional()?;
+    let Some((user, token_id)) = found else {
+        return Ok(None);
+    };
+    c.execute(
+        "UPDATE api_tokens SET last_used_at = ?2 WHERE id = ?1",
+        params![token_id, now()],
+    )?;
     Ok(Some(user))
 }
 

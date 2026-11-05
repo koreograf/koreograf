@@ -7,7 +7,7 @@ use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use pbkdf2::pbkdf2_hmac;
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 
 use crate::error::{ApiError, AppResult};
 
@@ -175,6 +175,18 @@ pub fn random_token() -> String {
     let mut buf = [0u8; 32];
     rand::fill(&mut buf);
     hex::encode(buf)
+}
+
+pub fn api_token() -> String {
+    format!("koro_{}", random_token())
+}
+
+pub fn token_prefix(token: &str) -> String {
+    token.chars().take(13).collect()
+}
+
+pub fn hash_api_token(token: &str) -> String {
+    hex::encode(Sha256::digest(token.as_bytes()))
 }
 
 pub fn random_password() -> String {

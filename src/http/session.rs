@@ -41,6 +41,12 @@ pub(super) struct MeUpdate {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(super) struct TokenBody {
+    name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct UserUpdate {
     display_name: String,
     is_admin: bool,
@@ -141,6 +147,54 @@ pub async fn update_me(
     )?;
     let updated = db::user_by_id(&db, &user.id)?.ok_or(ApiError::NotFound)?;
     Ok(Json(profile_json(&db, &updated.into())?))
+}
+
+pub async fn list_tokens(State(state): State<Shared>, user: AuthUser) -> AppResult<Json<Value>> {
+    let db = state.db()?;
+    let tokens = db::list_api_tokens(&db, &user.id)?;
+    Ok(Json(json!(tokens)))
+}
+
+pub async fn create_token(
+    State(state): State<Shared>,
+    user: AuthUser,
+    ApiJson(body): ApiJson<TokenBody>,
+) -> Result<Response, ApiError> {
+    let name = super::require_name(&body.name)?;
+    let secret = crypto::api_token();
+    let prefix = crypto::token_prefix(&secret);
+    let created_at = db::now();
+    let id = Uuid::new_v4().to_string();
+    let db = state.db()?;
+    db::create_api_token(
+        &db,
+        &id,
+        &user.id,
+        &name,
+        &prefix,
+        &crypto::hash_api_token(&secret),
+        &created_at,
+    )?;
+    Ok(super::created(json!({
+        "id": id,
+        "name": name,
+        "prefix": prefix,
+        "secret": secret,
+        "created_at": created_at,
+        "last_used_at": null,
+    })))
+}
+
+pub async fn delete_token(
+    State(state): State<Shared>,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    let db = state.db()?;
+    if !db::delete_api_token(&db, &id, &user.id)? {
+        return Err(ApiError::NotFound);
+    }
+    Ok(super::no_content())
 }
 
 pub async fn list_users(State(state): State<Shared>, user: AuthUser) -> AppResult<Json<Value>> {

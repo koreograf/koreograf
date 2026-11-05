@@ -113,7 +113,7 @@ Every table goes through the `table` helper or reproduces its markup: `.table-wr
 </div>
 ```
 
-A list page puts its search in `.search`, optional filters in `.filter-row`, and the table in a card. Table headers are uppercase and muted; numbers use `.num`, narrow columns use `.tight`, and the last action column uses `.actions`. Paging keeps the current page in the address, as the job list does.
+A list page puts its search in `.search`, optional filters in `.filter-row`, and the table in a card. Table headers are uppercase and muted; numbers use `.num`, narrow columns use `.tight`, and the last action column uses `.actions`. Paging keeps the current page in the address, as the job list does. The account page's API token list follows the same table shape, with a create form above it and a revoke button in the action column.
 
 ### Status pills
 

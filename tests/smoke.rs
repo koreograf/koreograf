@@ -72,6 +72,34 @@ async fn call(
     (status, parsed, cookie)
 }
 
+async fn call_bearer(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    token: &str,
+    team: Option<&str>,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
+    let bearer = format!("Bearer {token}");
+    let has_body = body.is_some();
+    let mut extra = vec![("authorization", bearer.as_str())];
+    if has_body {
+        extra.push(("content-type", "application/json"));
+    }
+    if let Some(team) = team {
+        extra.push(("x-team-id", team));
+    }
+    let body = body.map(|value| value.to_string().into_bytes());
+    let (status, bytes, _) = call_raw(app, method, uri, None, &extra, body).await;
+    let parsed = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes)
+            .unwrap_or(Value::String(String::from_utf8_lossy(&bytes).to_string()))
+    };
+    (status, parsed)
+}
+
 #[tokio::test]
 async fn responses_carry_standard_headers() {
     let nanos = SystemTime::now()
@@ -16014,6 +16042,464 @@ fn take_quoted(text: &str) -> Option<(String, usize)> {
         key.push(ch);
     }
     None
+}
+
+#[tokio::test]
+async fn api_tokens_authenticate_and_revoke() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-tokens-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state.clone());
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("admin cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, viewer, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "username": "viewer",
+            "display_name": "Viewer",
+            "password": "viewer-pass",
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{viewer}");
+    let (status, operator, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "username": "operator",
+            "display_name": "Operator",
+            "password": "operator-pass",
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{operator}");
+    let operator_id = operator["id"].as_str().unwrap().to_string();
+    for (username, role) in [("viewer", "viewer"), ("operator", "operator")] {
+        let (status, _, _) = call(
+            &app,
+            "POST",
+            &format!("/api/teams/{team}/members"),
+            Some(&cookie),
+            Some(&team),
+            Some(json!({"username": username, "role": role})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+    let (_, _, viewer_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "viewer", "password": "viewer-pass"})),
+    )
+    .await;
+    let viewer_cookie = viewer_cookie.expect("viewer cookie");
+    let (_, _, operator_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "operator", "password": "operator-pass"})),
+    )
+    .await;
+    let operator_cookie = operator_cookie.expect("operator cookie");
+
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Token job",
+            "tool": "shell",
+            "entrypoint": "",
+            "spec": {"script": "true"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().unwrap().to_string();
+
+    let (status, blank, _) = call(
+        &app,
+        "POST",
+        "/api/me/tokens",
+        Some(&viewer_cookie),
+        None,
+        Some(json!({"name": "  "})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(blank["error"], "name_is_missing_or_too_long");
+    let (status, long, _) = call(
+        &app,
+        "POST",
+        "/api/me/tokens",
+        Some(&viewer_cookie),
+        None,
+        Some(json!({"name": "a".repeat(121)})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(long["error"], "name_is_missing_or_too_long");
+
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/me/tokens",
+        Some(&viewer_cookie),
+        None,
+        Some(json!({"name": "viewer-tool"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["name"], "viewer-tool");
+    let viewer_secret = created["secret"].as_str().unwrap().to_string();
+    let viewer_token_id = created["id"].as_str().unwrap().to_string();
+    assert!(viewer_secret.starts_with("koro_"));
+    assert!(created["prefix"]
+        .as_str()
+        .is_some_and(|prefix| prefix.starts_with("koro_")));
+
+    let (status, admin_tokens, _) =
+        call(&app, "GET", "/api/me/tokens", Some(&cookie), None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!admin_tokens.to_string().contains(&viewer_token_id));
+
+    let (status, listed, _) = call(
+        &app,
+        "GET",
+        "/api/me/tokens",
+        Some(&viewer_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let list = listed.as_array().unwrap();
+    assert!(list.iter().any(|item| item["id"] == viewer_token_id));
+    for item in list {
+        assert!(item.get("secret").is_none());
+        assert!(item.get("token_hash").is_none());
+        assert!(item.get("prefix").is_some());
+        assert!(item.get("created_at").is_some());
+    }
+    assert!(!listed.to_string().contains(&viewer_secret));
+
+    let (status, bearer_me) = call_bearer(&app, "GET", "/api/me", &viewer_secret, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(bearer_me["username"], "viewer");
+    assert!(!bearer_me.to_string().contains(&viewer_secret));
+    assert!(bearer_me.get("tokens").is_none());
+    let (status, bearer_tokens) =
+        call_bearer(&app, "GET", "/api/me/tokens", &viewer_secret, None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!bearer_tokens.to_string().contains(&viewer_secret));
+    let (status, team_templates) = call_bearer(
+        &app,
+        "GET",
+        "/api/templates",
+        &viewer_secret,
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{team_templates}");
+    let (status, missing_team) =
+        call_bearer(&app, "GET", "/api/templates", &viewer_secret, None, None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(missing_team["error"], "x_team_id_is_missing");
+
+    let (status, bytes, _) = call_raw(
+        &app,
+        "GET",
+        "/api/me",
+        Some(&viewer_cookie),
+        &[("authorization", "Bearer koro_bad")],
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let rejected: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(rejected["error"], "sign_in_is_required");
+    let (status, bytes, _) = call_raw(
+        &app,
+        "GET",
+        "/api/me",
+        Some(&cookie),
+        &[("authorization", &format!("Bearer {viewer_secret}"))],
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let wins: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(wins["username"], "viewer");
+
+    let (status, denied) = call_bearer(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        &viewer_secret,
+        Some(&team),
+        Some(json!({"extra_vars": {}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(denied["error"], "you_are_not_allowed_to_do_this");
+
+    let (status, operator_token, _) = call(
+        &app,
+        "POST",
+        "/api/me/tokens",
+        Some(&operator_cookie),
+        None,
+        Some(json!({"name": "operator-tool"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let operator_secret = operator_token["secret"].as_str().unwrap().to_string();
+    let operator_token_id = operator_token["id"].as_str().unwrap().to_string();
+    let (status, launched) = call_bearer(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        &operator_secret,
+        Some(&team),
+        Some(json!({"extra_vars": {}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{launched}");
+
+    let (status, _, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/me/tokens/{viewer_token_id}"),
+        Some(&viewer_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, revoked) = call_bearer(&app, "GET", "/api/me", &viewer_secret, None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(revoked["error"], "sign_in_is_required");
+    let (status, still_signed_in, _) =
+        call(&app, "GET", "/api/me", Some(&viewer_cookie), None, None).await;
+    assert_eq!(status, StatusCode::OK, "{still_signed_in}");
+
+    let (status, not_found, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/me/tokens/{operator_token_id}"),
+        Some(&viewer_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(not_found["error"], "not_found");
+    let (status, unknown) = call_bearer(&app, "GET", "/api/me", "koro_unknown", None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(unknown["error"], "sign_in_is_required");
+    let truncated = &operator_secret[..operator_secret.len() - 4];
+    let (status, shortened) = call_bearer(&app, "GET", "/api/me", truncated, None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(shortened["error"], "sign_in_is_required");
+
+    let (status, _, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/users/{operator_id}"),
+        Some(&cookie),
+        None,
+        Some(json!({
+            "display_name": "Operator",
+            "is_admin": false,
+            "disabled": true,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, disabled) =
+        call_bearer(&app, "GET", "/api/me", &operator_secret, None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(disabled["error"], "sign_in_is_required");
+    let (status, _, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/users/{operator_id}"),
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    {
+        let db = state.db().unwrap();
+        let left: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM api_tokens WHERE user_id = ?1",
+                [&operator_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0);
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn api_token_follows_the_local_runner_rule() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-token-local-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut cfg = config(&dir);
+    cfg.local_jobs = LocalJobs::Admins;
+    let state = koreograf::boot(cfg).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("admin cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "username": "operator",
+            "display_name": "Operator",
+            "password": "operator-pass",
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{team}/members"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"username": "operator", "role": "operator"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (_, _, operator_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "operator", "password": "operator-pass"})),
+    )
+    .await;
+    let operator_cookie = operator_cookie.expect("operator cookie");
+
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Local token job",
+            "tool": "shell",
+            "entrypoint": "",
+            "spec": {"script": "true"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().unwrap().to_string();
+
+    let (status, admin_token, _) = call(
+        &app,
+        "POST",
+        "/api/me/tokens",
+        Some(&cookie),
+        None,
+        Some(json!({"name": "admin-tool"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let admin_secret = admin_token["secret"].as_str().unwrap().to_string();
+    let (status, operator_token, _) = call(
+        &app,
+        "POST",
+        "/api/me/tokens",
+        Some(&operator_cookie),
+        None,
+        Some(json!({"name": "operator-tool"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let operator_secret = operator_token["secret"].as_str().unwrap().to_string();
+
+    let (status, refused) = call_bearer(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        &operator_secret,
+        Some(&team),
+        Some(json!({"extra_vars": {}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"], "local_runs_are_limited_to_administrators");
+    let (status, launched) = call_bearer(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        &admin_secret,
+        Some(&team),
+        Some(json!({"extra_vars": {}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{launched}");
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 fn leftover_german(dir: &Path, hits: &mut Vec<String>) {
