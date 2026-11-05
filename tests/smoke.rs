@@ -14819,9 +14819,11 @@ check(/<div id="vars-\d+-json" role="tabpanel" data-vars-panel="json" hidden>/.t
 
 const weird = effectiveVariablesYaml([
   {{ name: "a", value: "1", origin: "team\n  injected: true" }},
+  {{ name: "b", value: "2", origin: "team\u0085  injected: true" }},
 ]);
 check(!weird.includes("\n  injected"), "origin line break added a mapping line\n" + weird);
 check(/# team injected: true/.test(weird.replace(/\s+/g, " ")), "origin was not flattened\n" + weird);
+check(!/[\u0085\u2028\u2029]/.test(weird), "origin kept a Unicode line break\n" + weird);
 
 const empty = variablesViewer([]);
 check((empty.match(/no_variables/g) || []).length === 2, "empty state is not in both formats\n" + empty);
