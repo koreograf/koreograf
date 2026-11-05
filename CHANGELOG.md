@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.1.0-alpha.8](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.7...v0.1.0-alpha.8) (2026-11-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* existing Docker installs must add the socket group with group_add, a saved local runner mode is switched to docker, and templates without an environment use the seeded default per tool.
+
+### Features
+
+* add dashboard tab with job charts ([#273](https://github.com/koreograf/koreograf/issues/273)) ([#275](https://github.com/koreograf/koreograf/issues/275)) ([026ac86](https://github.com/koreograf/koreograf/commit/026ac86d18371e46fbddac2306e48e551fda0490))
+* add edit overlays for credentials and admin objects ([#243](https://github.com/koreograf/koreograf/issues/243)) ([680a540](https://github.com/koreograf/koreograf/commit/680a540509ea7d7d0121dca9293871b7cd0590e3))
+* add edit overlays for projects and inventories ([#244](https://github.com/koreograf/koreograf/issues/244)) ([48c6684](https://github.com/koreograf/koreograf/commit/48c6684a6f2809863f3f50c13cc246c752ed6ce3))
+* add paging and filters to the job list ([#232](https://github.com/koreograf/koreograf/issues/232)) ([a8bf839](https://github.com/koreograf/koreograf/commit/a8bf839ab950cbed14bf5d97fccaee9aa74bebc3))
+* add the job output summary and search ([#230](https://github.com/koreograf/koreograf/issues/230)) ([#233](https://github.com/koreograf/koreograf/issues/233)) ([3cac44d](https://github.com/koreograf/koreograf/commit/3cac44d245b92a43bffc42cd73c75bde9f9b7460))
+* create workflows in an overlay ([#249](https://github.com/koreograf/koreograf/issues/249)) ([f388fd2](https://github.com/koreograf/koreograf/commit/f388fd204abf93275f9c8019876994d8aa1ad2c1))
+* default execution environments per tool ([#224](https://github.com/koreograf/koreograf/issues/224)) ([#225](https://github.com/koreograf/koreograf/issues/225)) ([fbafd60](https://github.com/koreograf/koreograf/commit/fbafd607f0670bf77545ec16da75217e4daee3ef))
+* drop variables column from inventory tables ([#266](https://github.com/koreograf/koreograf/issues/266)) ([3b3bd56](https://github.com/koreograf/koreograf/commit/3b3bd56d49c08ed11ef245247cc8b65ffbc847e4))
+* edit templates in a tabbed overlay ([#248](https://github.com/koreograf/koreograf/issues/248)) ([5f906de](https://github.com/koreograf/koreograf/commit/5f906de1d2076cbf42324225cb317271494440f3))
+* explain token access in the git project credential ([#267](https://github.com/koreograf/koreograf/issues/267)) ([dbd7e7e](https://github.com/koreograf/koreograf/commit/dbd7e7ed1b8b9320fe7aaa1679d408bf7fda6245))
+* move the remaining small forms into overlays ([#245](https://github.com/koreograf/koreograf/issues/245)) ([f14847e](https://github.com/koreograf/koreograf/commit/f14847e64c97de03bc81ef017123bed409c422f5))
+* offer credential kinds per tool in templates ([#237](https://github.com/koreograf/koreograf/issues/237)) ([#251](https://github.com/koreograf/koreograf/issues/251)) ([42d7113](https://github.com/koreograf/koreograf/commit/42d7113d08f9434b093e0eb448e8ea12f8a0f123))
+* preflight the runner tools and recommend installs ([#257](https://github.com/koreograf/koreograf/issues/257)) ([ae83a1f](https://github.com/koreograf/koreograf/commit/ae83a1f02e04bc1550827b38cbb78a1907fb2005))
+* regroup the sidebar and rename runtime entry ([#228](https://github.com/koreograf/koreograf/issues/228)) ([97df6d6](https://github.com/koreograf/koreograf/commit/97df6d6a3feccc661116d0a7f996e90b8f57dd62))
+* restore and import a non-Docker installation ([#241](https://github.com/koreograf/koreograf/issues/241)) ([#263](https://github.com/koreograf/koreograf/issues/263)) ([c383715](https://github.com/koreograf/koreograf/commit/c383715c69195b915fc7fb82ec71f57ebf83d1c1))
+* seed curated default execution environments ([#239](https://github.com/koreograf/koreograf/issues/239)) ([#259](https://github.com/koreograf/koreograf/issues/259)) ([d0debd5](https://github.com/koreograf/koreograf/commit/d0debd5b08c559c92e8b292c0bda6457cbb6f0f9))
+* show inventory variables as yaml and json ([#274](https://github.com/koreograf/koreograf/issues/274)) ([04c2586](https://github.com/koreograf/koreograf/commit/04c2586aed005750b93eb311e06f6f332bb3f16e))
+* show the running build in the ui ([#279](https://github.com/koreograf/koreograf/issues/279)) ([07f9375](https://github.com/koreograf/koreograf/commit/07f9375e9dc2673c9132dfe3aa1c4ba6db01a568))
+* slim and harden the container image ([#242](https://github.com/koreograf/koreograf/issues/242)) ([75ceb88](https://github.com/koreograf/koreograf/commit/75ceb881d7acf69c51c2c22829463c71a3246fc2))
+* trust company CAs from a mounted directory ([#277](https://github.com/koreograf/koreograf/issues/277)) ([676a140](https://github.com/koreograf/koreograf/commit/676a140537d24cd22def9049b733f2393c3b9d94))
+
+
+### Bug Fixes
+
+* apply form control style to every dialog ([#246](https://github.com/koreograf/koreograf/issues/246)) ([#250](https://github.com/koreograf/koreograf/issues/250)) ([042c39e](https://github.com/koreograf/koreograf/commit/042c39e9ff1d68f04ddf34a3d2bdf734797bf0b0))
+* confirm and label credential actions ([#256](https://github.com/koreograf/koreograf/issues/256)) ([4888010](https://github.com/koreograf/koreograf/commit/4888010f16506635b4271c3060ee1fe1e808f562))
+* grant contents write to the called release workflow ([#280](https://github.com/koreograf/koreograf/issues/280)) ([3e0d546](https://github.com/koreograf/koreograf/commit/3e0d546b0fa634156d9531452e4a0686d721c3f5))
+* keep edit overlay tabs still between panels ([#271](https://github.com/koreograf/koreograf/issues/271)) ([349aadc](https://github.com/koreograf/koreograf/commit/349aadcb2d3064d61da6fe8af8621e23aa5bda91))
+* show template vault credentials as searchable pills ([#260](https://github.com/koreograf/koreograf/issues/260)) ([400f206](https://github.com/koreograf/koreograf/commit/400f206cce5b16c3270b5bb7a7e501c82de64bf2))
+
 ## [0.1.0-alpha.7](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.6...v0.1.0-alpha.7) (2026-11-02)
 
 
