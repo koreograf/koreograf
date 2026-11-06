@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.0-alpha.10](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.9...v0.1.0-alpha.10) (2026-11-06)
+
+
+### Features
+
+* give job containers the controller CA bundle ([5cf6232](https://github.com/koreograf/koreograf/commit/5cf623293c417bdfc258125da658501bf618fe5d))
+
 ## [0.1.0-alpha.9](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.8...v0.1.0-alpha.9) (2026-11-06)
 
 
