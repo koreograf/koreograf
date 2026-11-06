@@ -11,7 +11,9 @@ use rustls::pki_types::{pem::PemObject, CertificateDer};
 use rustls::{ClientConfig, RootCertStore};
 
 pub(crate) const CA_DIRECTORY: &str = "/etc/koreograf/ca";
+const SYSTEM_CA_BUNDLE: &str = "/etc/ssl/certs/ca-certificates.crt";
 const MAX_CA_BYTES: u64 = 1_048_576;
+const TRUST_BUNDLE_LIMIT: u64 = 4 * 1_048_576;
 
 #[derive(Debug, Default)]
 pub(crate) struct CompanyCerts {
@@ -57,6 +59,66 @@ pub(crate) fn load_cas(dir: &Path) -> Result<CompanyCerts, String> {
 
 pub(crate) fn validate_company_cas() -> Result<(), String> {
     load_company_cas().map(|_| ())
+}
+
+/// The trust store the controller uses for git, for a job container.
+///
+/// `SSL_CERT_FILE` or `GIT_SSL_CAINFO` is the base when one of them is set.
+/// Otherwise the system bundle is the base. Certificates in `/etc/koreograf/ca`
+/// are appended. A missing or empty base leaves the job image's store unchanged.
+pub(crate) fn controller_trust_pem() -> Result<Option<Vec<u8>>, String> {
+    controller_trust_pem_from(
+        Path::new(CA_DIRECTORY),
+        std::env::var_os("SSL_CERT_FILE").map(std::path::PathBuf::from),
+        std::env::var_os("GIT_SSL_CAINFO").map(std::path::PathBuf::from),
+        Path::new(SYSTEM_CA_BUNDLE),
+    )
+}
+
+pub(crate) fn controller_trust_pem_from(
+    ca_dir: &Path,
+    ssl_cert_file: Option<std::path::PathBuf>,
+    git_ssl_cainfo: Option<std::path::PathBuf>,
+    system_bundle: &Path,
+) -> Result<Option<Vec<u8>>, String> {
+    let preferred = ssl_cert_file.or(git_ssl_cainfo);
+    let mut bundle = if let Some(path) = preferred {
+        match read_trust_file(&path)? {
+            Some(bytes) => bytes,
+            None => match read_trust_file(system_bundle)? {
+                Some(bytes) => bytes,
+                None => return Ok(None),
+            },
+        }
+    } else {
+        match read_trust_file(system_bundle)? {
+            Some(bytes) => bytes,
+            None => return Ok(None),
+        }
+    };
+    let company = load_cas(ca_dir)?;
+    if !company.pem.is_empty() {
+        if !bundle.ends_with(b"\n") {
+            bundle.push(b'\n');
+        }
+        bundle.extend(company.pem);
+    }
+    if bundle.len() as u64 > TRUST_BUNDLE_LIMIT {
+        return Err("The CA bundle is too large.".into());
+    }
+    Ok(Some(bundle))
+}
+
+fn read_trust_file(path: &Path) -> Result<Option<Vec<u8>>, String> {
+    match std::fs::read(path) {
+        Ok(bytes) if bytes.is_empty() => Ok(None),
+        Ok(bytes) if bytes.len() as u64 > TRUST_BUNDLE_LIMIT => {
+            Err(format!("The CA bundle {} is too large.", path.display()))
+        }
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(format!("The CA bundle {} cannot be read.", path.display())),
+    }
 }
 
 pub(crate) fn reqwest_roots() -> Result<Vec<reqwest::Certificate>, String> {
@@ -237,6 +299,43 @@ mod tests {
         let error = load_cas(&dir).unwrap_err();
         assert!(error.contains("broken.pem"), "{error}");
         assert!(error.contains("is not a PEM certificate"), "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_job_bundle_is_the_system_store_plus_the_company_directory() {
+        let dir = scratch("job-bundle");
+        let ca = dir.join("ca");
+        std::fs::create_dir(&ca).unwrap();
+        std::fs::write(ca.join("company.pem"), TEST_CA_PEM).unwrap();
+        let system = dir.join("system.pem");
+        std::fs::write(&system, "SYSTEM ROOTS\n").unwrap();
+        let pem = controller_trust_pem_from(&ca, None, None, &system)
+            .unwrap()
+            .unwrap();
+        let text = String::from_utf8(pem).unwrap();
+        assert!(text.starts_with("SYSTEM ROOTS\n"), "{text}");
+        assert!(text.contains("BEGIN CERTIFICATE"), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_explicit_bundle_is_the_base_and_a_missing_base_leaves_the_image_store() {
+        let dir = scratch("job-base");
+        let ca = dir.join("ca");
+        std::fs::create_dir(&ca).unwrap();
+        let explicit = dir.join("explicit.pem");
+        std::fs::write(&explicit, "EXPLICIT\n").unwrap();
+        let system = dir.join("system.pem");
+        std::fs::write(&system, "SYSTEM\n").unwrap();
+        let pem = controller_trust_pem_from(&ca, Some(explicit), None, &system)
+            .unwrap()
+            .unwrap();
+        assert_eq!(pem, b"EXPLICIT\n");
+        let missing = dir.join("missing.pem");
+        assert!(controller_trust_pem_from(&ca, None, None, &missing)
+            .unwrap()
+            .is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

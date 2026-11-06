@@ -78,7 +78,7 @@ volumes:
   - /srv/koreograf/ca:/etc/koreograf/ca:ro
 ```
 
-The same certificates apply to LDAP, NetBox, and git. Git gets them through a bundle in `/tmp`, so the image needs no `update-ca-certificates` and stays `scratch`. The Helm chart mounts the same path when `caDirectory.enabled` is true; set `caDirectory.hostPath` to the directory on the node. Execution environments keep their own trust store.
+The same certificates apply to LDAP, NetBox, and git. Git gets them through a bundle in `/tmp`, so the image needs no `update-ca-certificates` and stays `scratch`. The Helm chart mounts the same path when `caDirectory.enabled` is true; set `caDirectory.hostPath` to the directory on the node. A job container receives that trust store as well: the system bundle on the controller, plus every certificate in this directory. The file is `ca-bundle.pem` in the job work directory. Git, curl, and Python read it through `GIT_SSL_CAINFO`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, and `CURL_CA_BUNDLE`. A missing or empty system bundle leaves the image trust store unchanged.
 
 Compose pulls `ghcr.io/koreograf/koreograf:0.1.0-alpha.9`. <!-- x-release-please-version -->
 It does not compile. Build this checkout without replacing that published tag:
