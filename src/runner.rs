@@ -540,6 +540,200 @@ fn container_run_user(owner: &str, rootless: bool) -> String {
     }
 }
 
+enum PasswdPrep {
+    Mounted,
+    Skip,
+    Unreadable(String),
+}
+
+/// Copy the image passwd and add the job uid when it is missing.
+/// OpenSSH calls getpwuid before it connects, so a numeric uid that is not
+/// listed fails with "No user exists for uid" even when the key is valid.
+/// The image file is often not writable for that uid. The copy is mounted
+/// read-only over `/etc/passwd` for this container only.
+async fn prepare_container_passwd(
+    bin: &str,
+    image: &str,
+    work: &Path,
+    user: &str,
+) -> Result<PasswdPrep, String> {
+    let Some((uid, gid)) = split_user(user) else {
+        return Ok(PasswdPrep::Skip);
+    };
+    if uid == "0" {
+        return Ok(PasswdPrep::Skip);
+    }
+    let existing = match read_image_passwd(bin, image, &passwd_reader_name(work)).await {
+        Ok(text) => text,
+        Err(err) => return Ok(PasswdPrep::Unreadable(err)),
+    };
+    let Some(body) = passwd_with_uid(&existing, uid, gid, "/runner/work") else {
+        return Ok(PasswdPrep::Skip);
+    };
+    write_private_passwd(&work.join("container.passwd"), &body)?;
+    Ok(PasswdPrep::Mounted)
+}
+
+fn split_user(user: &str) -> Option<(&str, &str)> {
+    let (uid, gid) = user.split_once(':')?;
+    if uid.is_empty()
+        || gid.is_empty()
+        || !uid.bytes().all(|byte| byte.is_ascii_digit())
+        || !gid.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    Some((uid, gid))
+}
+
+fn passwd_with_uid(existing: &str, uid: &str, gid: &str, home: &str) -> Option<String> {
+    if uid.is_empty()
+        || !uid.bytes().all(|byte| byte.is_ascii_digit())
+        || !gid.bytes().all(|byte| byte.is_ascii_digit())
+        || home.is_empty()
+        || home.contains([':', '\n', '\r'])
+    {
+        return None;
+    }
+    for line in existing.split('\n') {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut fields = line.split(':');
+        let _name = fields.next();
+        let _password = fields.next();
+        if fields.next() == Some(uid) {
+            return None;
+        }
+    }
+    let mut out = existing.to_string();
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    // The name is the uid, same as wrapper.sh, so a second "koreograf"
+    // account in the image does not hide this entry from getpwnam.
+    out.push_str(&format!(
+        "{uid}:x:{uid}:{gid}:container user:{home}:/bin/sh\n"
+    ));
+    Some(out)
+}
+
+fn passwd_reader_name(work: &Path) -> String {
+    let raw = work
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("job");
+    let safe: String = raw
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .take(20)
+        .collect();
+    let safe = if safe.is_empty() {
+        "job".to_string()
+    } else {
+        safe
+    };
+    format!("koreograf-passwd-{safe}")
+}
+
+fn write_private_passwd(path: &Path, body: &str) -> Result<(), String> {
+    use std::io::Write;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .mode(0o644)
+            .open(path)
+            .map_err(|err| {
+                format!(
+                    "The container passwd could not be written ({err}). The job was not started."
+                )
+            })?;
+        file.write_all(body.as_bytes()).map_err(|err| {
+            format!("The container passwd could not be written ({err}). The job was not started.")
+        })?;
+        // `OpenOptions` mode is masked by umask. A root-owned 0600 file is
+        // unreadable for uid 10001, and OpenSSH then still reports
+        // "No user exists for uid".
+        let mut perms = file
+            .metadata()
+            .map_err(|err| {
+                format!(
+                    "The container passwd could not be written ({err}). The job was not started."
+                )
+            })?
+            .permissions();
+        use std::os::unix::fs::PermissionsExt;
+        perms.set_mode(0o644);
+        fs::set_permissions(path, perms).map_err(|err| {
+            format!("The container passwd could not be written ({err}). The job was not started.")
+        })?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, body);
+        Err("The container passwd could not be written. The job was not started.".into())
+    }
+}
+
+async fn read_image_passwd(bin: &str, image: &str, name: &str) -> Result<String, String> {
+    // Drop a reader left behind by an earlier timeout. `--rm` only runs
+    // when this client exits on its own.
+    remove_probe_container(bin, name).await;
+    let mut cmd = Command::new(bin);
+    cmd.args([
+        "run",
+        "--rm",
+        "--name",
+        name,
+        "--network",
+        "none",
+        "--pull",
+        "never",
+        "--entrypoint",
+        "cat",
+    ])
+    .arg(image)
+    .arg("/etc/passwd")
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .kill_on_drop(true);
+    #[cfg(unix)]
+    cmd.process_group(0);
+    let output = match tokio::time::timeout(Duration::from_secs(30), cmd.output()).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(err)) => {
+            remove_probe_container(bin, name).await;
+            return Err(format!("{bin} could not read the image passwd ({err})"));
+        }
+        Err(_) => {
+            remove_probe_container(bin, name).await;
+            return Err("the read timed out".into());
+        }
+    };
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        let detail = detail
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("cat /etc/passwd failed");
+        let detail: String = detail.chars().take(180).collect();
+        return Err(detail);
+    }
+    if output.stdout.len() > 256 * 1024 {
+        return Err("the file is too large".into());
+    }
+    let text = String::from_utf8(output.stdout).map_err(|_| "the file is not utf-8".to_string())?;
+    if !text.contains(':') {
+        return Err("the file is empty".into());
+    }
+    Ok(text)
+}
+
 fn info_is_rootless(bin: &str, text: &str) -> bool {
     let text = text.trim();
     if bin == "podman" {
@@ -2853,6 +3047,9 @@ fn probe_script(mounts: &[(String, String, bool)]) -> String {
     for (index, (_, guest, _)) in mounts.iter().enumerate() {
         if guest == "/runner/work" {
             parts.push(format!("test -f /mnt{index}/wrapper.sh"));
+        } else if guest == "/etc/passwd" {
+            // A file. `test -d` would reject the private passwd and stop the job.
+            parts.push(format!("test -f /mnt{index}"));
         } else {
             parts.push(format!("test -d /mnt{index}"));
         }
@@ -3001,6 +3198,17 @@ async fn run_container(state: &Shared, job_id: &str, run: ContainerRun<'_>) -> R
     // `--env-file` is read by the client in this process.
     // Mount sources are paths the daemon can see.
     let mut mounts = container_mounts(stage, work, cache, tofu_state, template_id);
+    let owner = directory_user(work)?;
+    let rootless = runtime_is_rootless(bin).await?;
+    let user = container_run_user(&owner, rootless);
+    let passwd = prepare_container_passwd(bin, &environment.image, work, &user).await?;
+    if matches!(passwd, PasswdPrep::Mounted) {
+        mounts.push((
+            work.join("container.passwd").display().to_string(),
+            "/etc/passwd".into(),
+            true,
+        ));
+    }
     for (host, _, _) in &mounts {
         if covers_data_dir(Path::new(host), &state.cfg.data_dir) {
             return Err("The job container cannot mount the data directory.".into());
@@ -3024,15 +3232,29 @@ async fn run_container(state: &Shared, job_id: &str, run: ContainerRun<'_>) -> R
     if layout.probe {
         probe_daemon_dirs(bin, &environment.image, job_id, &mounts).await?;
     }
-    let owner = directory_user(work)?;
-    let rootless = runtime_is_rootless(bin).await?;
-    let user = container_run_user(&owner, rootless);
     log(
         state,
         job_id,
         "system",
         &format!("The job container runs as {user}."),
     );
+    match &passwd {
+        PasswdPrep::Mounted => log(
+            state,
+            job_id,
+            "system",
+            "The image passwd has no entry for this uid. A private copy is mounted at /etc/passwd.",
+        ),
+        PasswdPrep::Unreadable(err) => log(
+            state,
+            job_id,
+            "system",
+            &format!(
+                "The image passwd could not be extended ({err}). SSH can fail with 'No user exists for uid'."
+            ),
+        ),
+        PasswdPrep::Skip => {}
+    }
     let spec = ContainerSpec {
         image: environment.image.clone(),
         name: name.clone(),
@@ -3875,6 +4097,34 @@ mod tests {
     }
 
     #[test]
+    fn private_passwd_adds_only_a_missing_uid() {
+        let image =
+            "root:x:0:0:root:/root:/bin/bash\nnobody:x:65534:65534:nobody:/:/usr/sbin/nologin\n";
+        let added = passwd_with_uid(image, "10001", "10001", "/runner/work").unwrap();
+        assert!(added.ends_with("10001:x:10001:10001:container user:/runner/work:/bin/sh\n"));
+        assert!(added.starts_with("root:x:0:0:root:/root:/bin/bash\n"));
+        assert!(passwd_with_uid(&added, "10001", "10001", "/runner/work").is_none());
+        assert!(passwd_with_uid(image, "0", "0", "/runner/work").is_none());
+        let bare = "root:x:0:0:root:/root:/bin/bash";
+        let added = passwd_with_uid(bare, "10001", "10001", "/runner/work").unwrap();
+        assert!(added.contains("root:x:0:0:root:/root:/bin/bash\n10001:x:10001:"));
+        assert!(passwd_with_uid(image, "10001", "10001", "/runner/work\n").is_none());
+        assert_eq!(split_user("10001:10001"), Some(("10001", "10001")));
+        assert!(split_user("10001").is_none());
+        assert!(split_user("root:root").is_none());
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("koreograf-passwd-{nanos}"));
+        write_private_passwd(&path, &added).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(mode, 0o644);
+    }
+
+    #[test]
     fn docker_command_mounts_the_cache() {
         let spec = ContainerSpec {
             image: "quay.io/ansible/awx-ee:latest".into(),
@@ -4148,6 +4398,18 @@ mod tests {
         let comma = vec![(work.display().to_string(), "/runner/work,ro".into(), false)];
         assert!(translate_mounts(&comma, &data, host).is_err());
         assert_eq!(probe_script(&mounts), "test -f /mnt0/wrapper.sh");
+        let with_passwd = vec![
+            (work.display().to_string(), "/runner/work".into(), false),
+            (
+                work.join("container.passwd").display().to_string(),
+                "/etc/passwd".into(),
+                true,
+            ),
+        ];
+        assert_eq!(
+            probe_script(&with_passwd),
+            "test -f /mnt0/wrapper.sh && test -f /mnt1"
+        );
         assert_eq!(
             mount_check_error(""),
             "The container daemon cannot see the job directory. The job was not started."
