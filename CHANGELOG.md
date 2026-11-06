@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.0-alpha.9](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.8...v0.1.0-alpha.9) (2026-11-06)
+
+
+### Features
+
+* add a stdio MCP subcommand ([#289](https://github.com/koreograf/koreograf/issues/289)) ([e9a0013](https://github.com/koreograf/koreograf/commit/e9a0013612a74611d7d0835e0ca31c4acedcfec5))
+* add personal api tokens for bearer auth ([#287](https://github.com/koreograf/koreograf/issues/287)) ([c82fa1f](https://github.com/koreograf/koreograf/commit/c82fa1f5f2af2333378978d0fbcd8e1671aa968b))
+* serve mcp over http ([#290](https://github.com/koreograf/koreograf/issues/290)) ([7de4181](https://github.com/koreograf/koreograf/commit/7de41818b432dacdaaf9cdda1ffa23f35cab78f5))
+
+
+### Bug Fixes
+
+* give the job container a passwd entry for its uid ([6dcc15c](https://github.com/koreograf/koreograf/commit/6dcc15c673ac21a1cfffe6467927b1dd9f11d432))
+
 ## [0.1.0-alpha.8](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.7...v0.1.0-alpha.8) (2026-11-05)
 
 
