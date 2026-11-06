@@ -1,13 +1,18 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use axum::body::Body;
+use http_body_util::BodyExt;
 use reqwest::Method;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::schemars::JsonSchema;
+use rmcp::service::RequestContext;
+use rmcp::RoleServer;
 use rmcp::{tool, tool_handler, tool_router, ServerHandler};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
+use tower::ServiceExt;
 
 const DEFAULT_URL: &str = "http://127.0.0.1:8080";
 
@@ -33,9 +38,14 @@ impl Error {
 }
 
 #[derive(Debug, Clone)]
+enum Backend {
+    Remote { http: reqwest::Client, base: String },
+    Local { app: axum::Router },
+}
+
+#[derive(Debug, Clone)]
 pub struct Client {
-    http: reqwest::Client,
-    base: String,
+    backend: Backend,
     token: String,
     team_id: Option<String>,
 }
@@ -63,11 +73,23 @@ impl Client {
             .map_err(|_| Error::new("http_client_failed"))?;
         let base = base.into().trim_end_matches('/').to_string();
         Ok(Self {
-            http,
-            base,
+            backend: Backend::Remote { http, base },
             token: token.into(),
             team_id,
         })
+    }
+
+    pub fn local(app: axum::Router) -> Self {
+        Self {
+            backend: Backend::Local { app },
+            token: String::new(),
+            team_id: None,
+        }
+    }
+
+    fn with_token(mut self, token: String) -> Self {
+        self.token = token;
+        self
     }
 
     fn called_team(&self, team_id: Option<&str>) -> Option<String> {
@@ -86,32 +108,98 @@ impl Client {
         body: Option<&Value>,
         team_id: Option<&str>,
     ) -> Result<String, Error> {
-        let mut request = self
-            .http
-            .request(method, format!("{}{}", self.base, path))
-            .bearer_auth(&self.token);
+        match &self.backend {
+            Backend::Remote { http, base } => {
+                let mut request = http
+                    .request(method, format!("{base}{path}"))
+                    .bearer_auth(&self.token);
+                if !query.is_empty() {
+                    request = request.query(query);
+                }
+                if let Some(team) = self.called_team(team_id) {
+                    request = request.header("X-Team-Id", team);
+                }
+                if let Some(body) = body {
+                    request = request.json(body);
+                }
+                let response = request
+                    .send()
+                    .await
+                    .map_err(|_| Error::new("request_failed"))?;
+                let status = response.status();
+                let text = response
+                    .text()
+                    .await
+                    .map_err(|_| Error::new("invalid_response"))?;
+                if status.is_success() {
+                    return Ok(text);
+                }
+                Err(response_error(status.as_u16(), &text))
+            }
+            Backend::Local { app } => {
+                self.local_request(app, method, path, query, body, team_id)
+                    .await
+            }
+        }
+    }
+
+    async fn local_request(
+        &self,
+        app: &axum::Router,
+        method: Method,
+        path: &str,
+        query: &[(&str, String)],
+        body: Option<&Value>,
+        team_id: Option<&str>,
+    ) -> Result<String, Error> {
+        let mut target = path.to_string();
         if !query.is_empty() {
-            request = request.query(query);
+            target.push('?');
+            target.push_str(
+                &query
+                    .iter()
+                    .map(|(key, value)| format!("{}={}", path_segment(key), path_segment(value)))
+                    .collect::<Vec<_>>()
+                    .join("&"),
+            );
         }
+        let mut builder = axum::http::Request::builder()
+            .method(method)
+            .uri(target)
+            .header(
+                axum::http::header::AUTHORIZATION,
+                format!("Bearer {}", self.token),
+            );
         if let Some(team) = self.called_team(team_id) {
-            request = request.header("X-Team-Id", team);
+            builder = builder.header("X-Team-Id", team);
         }
-        if let Some(body) = body {
-            request = request.json(body);
-        }
-        let response = request
-            .send()
+        let request = if let Some(body) = body {
+            builder
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .map_err(|_| Error::new("request_failed"))?
+        } else {
+            builder
+                .body(Body::empty())
+                .map_err(|_| Error::new("request_failed"))?
+        };
+        let response = app
+            .clone()
+            .oneshot(request)
             .await
             .map_err(|_| Error::new("request_failed"))?;
-        let status = response.status();
-        let text = response
-            .text()
+        let status = response.status().as_u16();
+        let bytes = response
+            .into_body()
+            .collect()
             .await
-            .map_err(|_| Error::new("invalid_response"))?;
-        if status.is_success() {
+            .map_err(|_| Error::new("invalid_response"))?
+            .to_bytes();
+        let text = String::from_utf8_lossy(&bytes).to_string();
+        if (200..300).contains(&status) {
             return Ok(text);
         }
-        Err(response_error(status.as_u16(), &text))
+        Err(response_error(status, &text))
     }
 
     async fn json(
@@ -396,6 +484,7 @@ struct ListJobsArgs {
 #[derive(Clone)]
 pub struct Server {
     client: Client,
+    per_request_token: bool,
     tool_router: ToolRouter<Self>,
 }
 
@@ -403,16 +492,42 @@ impl Server {
     pub fn new(client: Client) -> Self {
         Self {
             client,
+            per_request_token: false,
             tool_router: Self::tool_router(),
         }
+    }
+
+    pub fn http(state: crate::Shared) -> Self {
+        Self {
+            client: Client::local(crate::http::api_router(state)),
+            per_request_token: true,
+            tool_router: Self::tool_router(),
+        }
+    }
+
+    fn client(&self, context: &RequestContext<RoleServer>) -> Result<Client, String> {
+        if !self.per_request_token {
+            return Ok(self.client.clone());
+        }
+        let parts = context
+            .extensions
+            .get::<axum::http::request::Parts>()
+            .ok_or_else(|| Error::new("sign_in_is_required").text())?;
+        let token = crate::auth::bearer_token(&parts.headers)
+            .ok_or_else(|| Error::new("sign_in_is_required").text())?;
+        Ok(self.client.clone().with_token(token))
     }
 }
 
 #[tool_router]
 impl Server {
     #[tool(description = "Return the signed-in account from GET /api/me.")]
-    async fn whoami(&self, Parameters(args): Parameters<TeamArgs>) -> Result<String, String> {
-        self.client
+    async fn whoami(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<TeamArgs>,
+    ) -> Result<String, String> {
+        self.client(&context)?
             .whoami(args.team_id.as_deref())
             .await
             .map(json_text)
@@ -420,8 +535,12 @@ impl Server {
     }
 
     #[tool(description = "Return the server version from GET /api/version.")]
-    async fn version(&self, Parameters(args): Parameters<TeamArgs>) -> Result<String, String> {
-        self.client
+    async fn version(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<TeamArgs>,
+    ) -> Result<String, String> {
+        self.client(&context)?
             .version(args.team_id.as_deref())
             .await
             .map(json_text)
@@ -431,9 +550,10 @@ impl Server {
     #[tool(description = "List the projects visible to the selected team.")]
     async fn list_projects(
         &self,
+        context: RequestContext<RoleServer>,
         Parameters(args): Parameters<TeamArgs>,
     ) -> Result<String, String> {
-        self.client
+        self.client(&context)?
             .list_projects(args.team_id.as_deref())
             .await
             .map(json_text)
@@ -443,9 +563,10 @@ impl Server {
     #[tool(description = "List the inventories visible to the selected team.")]
     async fn list_inventories(
         &self,
+        context: RequestContext<RoleServer>,
         Parameters(args): Parameters<TeamArgs>,
     ) -> Result<String, String> {
-        self.client
+        self.client(&context)?
             .list_inventories(args.team_id.as_deref())
             .await
             .map(json_text)
@@ -457,9 +578,10 @@ impl Server {
     )]
     async fn list_credentials(
         &self,
+        context: RequestContext<RoleServer>,
         Parameters(args): Parameters<TeamArgs>,
     ) -> Result<String, String> {
-        self.client
+        self.client(&context)?
             .list_credentials(args.team_id.as_deref())
             .await
             .map(json_text)
@@ -471,9 +593,10 @@ impl Server {
     )]
     async fn list_templates(
         &self,
+        context: RequestContext<RoleServer>,
         Parameters(args): Parameters<TeamArgs>,
     ) -> Result<String, String> {
-        self.client
+        self.client(&context)?
             .list_templates(args.team_id.as_deref())
             .await
             .map(json_text)
@@ -485,9 +608,10 @@ impl Server {
     )]
     async fn list_workflows(
         &self,
+        context: RequestContext<RoleServer>,
         Parameters(args): Parameters<TeamArgs>,
     ) -> Result<String, String> {
-        self.client
+        self.client(&context)?
             .list_workflows(args.team_id.as_deref())
             .await
             .map(json_text)
@@ -497,9 +621,10 @@ impl Server {
     #[tool(description = "List the schedules of the selected team.")]
     async fn list_schedules(
         &self,
+        context: RequestContext<RoleServer>,
         Parameters(args): Parameters<TeamArgs>,
     ) -> Result<String, String> {
-        self.client
+        self.client(&context)?
             .list_schedules(args.team_id.as_deref())
             .await
             .map(json_text)
@@ -511,9 +636,10 @@ impl Server {
     )]
     async fn list_jobs(
         &self,
+        context: RequestContext<RoleServer>,
         Parameters(args): Parameters<ListJobsArgs>,
     ) -> Result<String, String> {
-        self.client
+        self.client(&context)?
             .list_jobs(JobQuery {
                 limit: args.limit,
                 offset: args.offset,
@@ -531,8 +657,12 @@ impl Server {
     #[tool(
         description = "Return one job from GET /api/jobs/{id}. Job JSON can contain secret values in extra_vars; do not repeat those values to the user verbatim."
     )]
-    async fn get_job(&self, Parameters(args): Parameters<IdArgs>) -> Result<String, String> {
-        self.client
+    async fn get_job(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<IdArgs>,
+    ) -> Result<String, String> {
+        self.client(&context)?
             .get_job(&args.id, args.team_id.as_deref())
             .await
             .map(json_text)
@@ -542,8 +672,12 @@ impl Server {
     #[tool(
         description = "Return the capped text output from GET /api/jobs/{id}/output. The output can contain secret values; do not repeat them verbatim."
     )]
-    async fn job_output(&self, Parameters(args): Parameters<IdArgs>) -> Result<String, String> {
-        self.client
+    async fn job_output(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<IdArgs>,
+    ) -> Result<String, String> {
+        self.client(&context)?
             .job_output(&args.id, args.team_id.as_deref())
             .await
             .map_err(|error| error.text())
@@ -554,9 +688,10 @@ impl Server {
     )]
     async fn get_workflow_job(
         &self,
+        context: RequestContext<RoleServer>,
         Parameters(args): Parameters<IdArgs>,
     ) -> Result<String, String> {
-        self.client
+        self.client(&context)?
             .get_workflow_job(&args.id, args.team_id.as_deref())
             .await
             .map(json_text)
@@ -568,9 +703,10 @@ impl Server {
     )]
     async fn launch_template(
         &self,
+        context: RequestContext<RoleServer>,
         Parameters(args): Parameters<LaunchArgs>,
     ) -> Result<String, String> {
-        self.client
+        self.client(&context)?
             .launch_template(&args.id, args.extra_vars, args.team_id.as_deref())
             .await
             .map(json_text)
@@ -582,9 +718,10 @@ impl Server {
     )]
     async fn launch_workflow(
         &self,
+        context: RequestContext<RoleServer>,
         Parameters(args): Parameters<LaunchArgs>,
     ) -> Result<String, String> {
-        self.client
+        self.client(&context)?
             .launch_workflow(&args.id, args.extra_vars, args.team_id.as_deref())
             .await
             .map(json_text)
@@ -594,8 +731,12 @@ impl Server {
     #[tool(
         description = "Cancel a job with POST /api/jobs/{id}/cancel. The response is job JSON that can contain secret values in extra_vars; do not repeat those values to the user verbatim."
     )]
-    async fn cancel_job(&self, Parameters(args): Parameters<IdArgs>) -> Result<String, String> {
-        self.client
+    async fn cancel_job(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<IdArgs>,
+    ) -> Result<String, String> {
+        self.client(&context)?
             .cancel_job(&args.id, args.team_id.as_deref())
             .await
             .map(json_text)
@@ -605,8 +746,12 @@ impl Server {
     #[tool(
         description = "Relaunch a job with POST /api/jobs/{id}/relaunch. The response is job JSON that can contain secret values in extra_vars; do not repeat those values to the user verbatim."
     )]
-    async fn relaunch_job(&self, Parameters(args): Parameters<IdArgs>) -> Result<String, String> {
-        self.client
+    async fn relaunch_job(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<IdArgs>,
+    ) -> Result<String, String> {
+        self.client(&context)?
             .relaunch_job(&args.id, args.team_id.as_deref())
             .await
             .map(json_text)
@@ -614,8 +759,12 @@ impl Server {
     }
 
     #[tool(description = "Sync a project with POST /api/projects/{id}/sync.")]
-    async fn sync_project(&self, Parameters(args): Parameters<IdArgs>) -> Result<String, String> {
-        self.client
+    async fn sync_project(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<IdArgs>,
+    ) -> Result<String, String> {
+        self.client(&context)?
             .sync_project(&args.id, args.team_id.as_deref())
             .await
             .map(json_text)
@@ -623,8 +772,12 @@ impl Server {
     }
 
     #[tool(description = "Sync an inventory with POST /api/inventories/{id}/sync.")]
-    async fn sync_inventory(&self, Parameters(args): Parameters<IdArgs>) -> Result<String, String> {
-        self.client
+    async fn sync_inventory(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<IdArgs>,
+    ) -> Result<String, String> {
+        self.client(&context)?
             .sync_inventory(&args.id, args.team_id.as_deref())
             .await
             .map(json_text)

@@ -233,8 +233,13 @@ pub async fn serve(cfg: Config) -> anyhow::Result<()> {
     schedule::spawn(state.clone());
     let bind = state.cfg.bind.clone();
     let data_dir = state.cfg.data_dir.display().to_string();
-    let app = router(state);
+    let app = router(state.clone());
     let listener = tokio::net::TcpListener::bind(&bind).await?;
+    if state.cfg.mcp {
+        tracing::info!("MCP over HTTP is enabled at POST /mcp");
+    } else {
+        tracing::info!("MCP over HTTP is disabled");
+    }
     tracing::info!(%bind, %data_dir, "Koreograf is ready");
     axum::serve(listener, app).await?;
     Ok(())

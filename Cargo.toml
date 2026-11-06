@@ -23,7 +23,7 @@ nix = { version = "0.31", default-features = false, features = ["signal", "user"
 pbkdf2 = "0.13"
 rand = "0.10"
 reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }
-rmcp = { version = "3.9.0", features = ["transport-io"] }
+rmcp = { version = "3.9.0", features = ["transport-io", "transport-streamable-http-server"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "logging", "std", "tls12"] }
 rustls-native-certs = "0.8"
 rusqlite = { version = "0.41", features = ["bundled", "backup"] }

@@ -2,6 +2,8 @@
 
 `GET /api/version` does not need a session. It returns the version compiled from `Cargo.toml`. The browser UI reads this route for the build line on the sign-in page and in the sidebar. Session cookie `koreograf_session`, HttpOnly, SameSite=Lax, seven days, or `Authorization: Bearer <token>` with a personal API token. When both are present, the bearer token wins. `Secure` is added when `KOREOGRAF_COOKIE_SECURE` is `true`, and when it is `auto` and a trusted proxy sends `X-Forwarded-Proto: https`. The default is `auto` with that proxy off, so a plain HTTP sign-in still receives the cookie. Team routes need `X-Team-Id`. Job events use the team membership stored on the job, because `EventSource` cannot set custom headers. The stream is `GET /api/jobs/{id}/events?after=`.
 
+`POST /mcp` serves Streamable HTTP MCP on the same bind address as the API. It needs `Authorization: Bearer <personal API token>`; a missing or unknown token answers 401 with `sign_in_is_required`, and there is no anonymous session or cookie fallback. `KOREOGRAF_MCP=0` turns the route off with 404. The tools match the stdio subcommand and the HTTP API, including the `team_id` argument and `X-Team-Id`, and can launch what the token's role can already launch. `extra_vars` remain in the JSON and can contain secrets.
+
 ## Walkthrough
 
 These commands assume a fresh Compose stack from the [quick start](../README.md#docker-compose), `curl`, and `jq`. Sign in first and leave the password file in place until this session is done. The playbook is the demo in this repository. The HTTP calls succeed even when that playbook later fails.
