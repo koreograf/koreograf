@@ -27,8 +27,8 @@ use crate::error::{ApiError, AppResult};
 use crate::runner;
 use crate::Shared;
 
-pub fn router(state: Shared) -> Router {
-    let api = Router::new()
+fn api_routes() -> Router<Shared> {
+    Router::new()
         .route("/version", get(version))
         .route("/login", post(session::login))
         .route("/logout", post(session::logout))
@@ -211,9 +211,46 @@ pub fn router(state: Shared) -> Router {
                 .route("/admin/backup", get(admin::download).post(admin::restore))
                 .layer(DefaultBodyLimit::max(256 * 1024 * 1024)),
         )
-        .fallback(not_found);
+        .fallback(not_found)
+}
 
+pub(crate) fn api_router(state: Shared) -> Router {
+    Router::new().nest("/api", api_routes()).with_state(state)
+}
+
+fn mcp_router(state: Shared) -> Router<Shared> {
+    let service_state = state.clone();
+    let service = rmcp::transport::streamable_http_server::StreamableHttpService::new(
+        move || Ok(crate::mcp::Server::http(service_state.clone())),
+        std::sync::Arc::new(
+            rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default(),
+        ),
+        rmcp::transport::streamable_http_server::StreamableHttpServerConfig::default()
+            .disable_allowed_hosts(),
+    );
     Router::new()
+        .route_service("/mcp", service)
+        .route_layer(axum::middleware::from_fn_with_state(state, mcp_auth))
+}
+
+async fn mcp_auth(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let Some(token) = auth::bearer_token(&headers) else {
+        return ApiError::Unauthorized.into_response();
+    };
+    match auth::api_token_user(&state, &token) {
+        Ok(Some(_)) => next.run(request).await,
+        Ok(None) => ApiError::Unauthorized.into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+pub fn router(state: Shared) -> Router {
+    let mut app = Router::new()
         .route("/healthz", get(health))
         .route("/metrics", get(metrics))
         .route("/favicon.svg", get(favicon))
@@ -223,8 +260,11 @@ pub fn router(state: Shared) -> Router {
         .route("/i18n/de.json", get(messages_de))
         .route("/i18n/en.json", get(messages_en))
         .route("/hooks/{id}/{token}", post(work::ingest))
-        .nest("/api", api)
-        .layer(TraceLayer::new_for_http())
+        .nest("/api", api_routes());
+    if state.cfg.mcp {
+        app = app.merge(mcp_router(state.clone()));
+    }
+    app.layer(TraceLayer::new_for_http())
         .layer(response_headers(state.cfg.hsts))
         .with_state(state)
 }

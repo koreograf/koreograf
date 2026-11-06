@@ -183,6 +183,8 @@ pub struct Config {
     pub cookie_secure: CookieSecure,
     /// `KOREOGRAF_TRUSTED_PROXY`. Off ignores `X-Forwarded-Proto`.
     pub trusted_proxy: bool,
+    /// `KOREOGRAF_MCP`. `0` turns the MCP routes off.
+    pub mcp: bool,
 }
 
 impl Config {
@@ -251,6 +253,7 @@ impl Config {
             hsts: env_flag("KOREOGRAF_HSTS"),
             cookie_secure: CookieSecure::parse(&env_string("KOREOGRAF_COOKIE_SECURE")),
             trusted_proxy: env_flag("KOREOGRAF_TRUSTED_PROXY"),
+            mcp: env_string("KOREOGRAF_MCP") != "0",
         }
     }
 }

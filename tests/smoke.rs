@@ -26,6 +26,7 @@ fn config(dir: &std::path::Path) -> Config {
         hsts: false,
         cookie_secure: CookieSecure::Auto,
         trusted_proxy: false,
+        mcp: true,
         data_host: None,
         ldap: None,
     }
@@ -16633,6 +16634,43 @@ async fn mcp_tools_call_the_http_api() {
     assert_eq!(status, StatusCode::OK, "{viewer_me}");
     let viewer_cookie = viewer_cookie.expect("viewer cookie");
 
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        None,
+        Some(json!({
+            "username": "mcp-operator",
+            "display_name": "MCP operator",
+            "password": "operator-pass",
+            "is_admin": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{team}/members"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"username": "mcp-operator", "role": "operator"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, operator_me, operator_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "mcp-operator", "password": "operator-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{operator_me}");
+    let operator_cookie = operator_cookie.expect("operator cookie");
+
     let (status, admin_token, _) = call(
         &app,
         "POST",
@@ -16655,6 +16693,17 @@ async fn mcp_tools_call_the_http_api() {
     .await;
     assert_eq!(status, StatusCode::CREATED);
     let viewer_secret = viewer_token["secret"].as_str().unwrap().to_string();
+    let (status, operator_token, _) = call(
+        &app,
+        "POST",
+        "/api/me/tokens",
+        Some(&operator_cookie),
+        None,
+        Some(json!({"name": "mcp-operator"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let operator_secret = operator_token["secret"].as_str().unwrap().to_string();
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -16740,6 +16789,198 @@ async fn mcp_tools_call_the_http_api() {
     assert_eq!(denied.status, Some(route_status.as_u16()));
     assert_eq!(denied.key, route_body["error"].as_str().unwrap());
 
+    let session = mcp_session(&app, &operator_secret).await;
+    let (status, bytes, _) = mcp_request(
+        &app,
+        Some(&operator_secret),
+        Some(&session),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "launch_template",
+                "arguments": {
+                    "id": template_id,
+                    "extra_vars": {"from_mcp_http": "yes"},
+                    "team_id": team
+                }
+            }
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    let message = sse_message(&bytes);
+    assert_eq!(message["result"]["isError"], false, "{message}");
+    let launched: Value =
+        serde_json::from_str(message["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(launched["template_id"], template_id);
+    assert_eq!(launched["extra_vars"]["from_mcp_http"], "yes");
+    assert!(launched["id"].is_string(), "{launched}");
+
+    let viewer_session = mcp_session(&app, &viewer_secret).await;
+    let (status, bytes, _) = mcp_request(
+        &app,
+        Some(&viewer_secret),
+        Some(&viewer_session),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "launch_template",
+                "arguments": {"id": template_id, "extra_vars": {}, "team_id": team}
+            }
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    assert!(
+        sse_message(&bytes)
+            .to_string()
+            .contains("you_are_not_allowed_to_do_this"),
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+
+    let (status, bytes, _) = mcp_request(&app, None, None, mcp_initialize_body()).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let refused: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(refused["error"], "sign_in_is_required");
+
+    let (status, bytes, _) =
+        mcp_request(&app, Some("koro_unknown"), None, mcp_initialize_body()).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let refused: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(refused["error"], "sign_in_is_required");
+
     server.abort();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn mcp_initialize_body() -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {"name": "smoke", "version": "0.1"}
+        }
+    })
+}
+
+async fn mcp_request(
+    app: &axum::Router,
+    token: Option<&str>,
+    session: Option<&str>,
+    body: Value,
+) -> (StatusCode, Vec<u8>, axum::http::HeaderMap) {
+    let mut extra = vec![
+        ("host", "localhost".to_string()),
+        ("content-type", "application/json".to_string()),
+        ("accept", "application/json, text/event-stream".to_string()),
+    ];
+    if let Some(token) = token {
+        extra.push(("authorization", format!("Bearer {token}")));
+    }
+    if let Some(session) = session {
+        extra.push(("mcp-session-id", session.to_string()));
+    }
+    let extra: Vec<(&str, &str)> = extra
+        .iter()
+        .map(|(key, value)| (*key, value.as_str()))
+        .collect();
+    call_raw(
+        app,
+        "POST",
+        "/mcp",
+        None,
+        &extra,
+        Some(body.to_string().into_bytes()),
+    )
+    .await
+}
+
+async fn mcp_session(app: &axum::Router, token: &str) -> String {
+    let (status, bytes, headers) = mcp_request(app, Some(token), None, mcp_initialize_body()).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    let session = headers["mcp-session-id"].to_str().unwrap().to_string();
+    let (status, bytes, _) = mcp_request(
+        app,
+        Some(token),
+        Some(&session),
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::ACCEPTED,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    session
+}
+
+fn sse_message(bytes: &[u8]) -> Value {
+    for line in String::from_utf8_lossy(bytes).lines() {
+        let Some(data) = line.strip_prefix("data:") else {
+            continue;
+        };
+        if let Ok(value) = serde_json::from_str::<Value>(data.trim()) {
+            if value.get("jsonrpc").is_some() {
+                return value;
+            }
+        }
+    }
+    panic!("no SSE JSON message in {}", String::from_utf8_lossy(bytes));
+}
+
+#[tokio::test]
+async fn mcp_http_routes_can_be_turned_off() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-mcp-off-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut cfg = config(&dir);
+    cfg.mcp = false;
+    let state = koreograf::boot(cfg).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let (status, me, _) = call(&app, "GET", "/api/me", Some(&cookie), None, None).await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+
+    let (status, _, _) = mcp_request(&app, None, None, mcp_initialize_body()).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
     let _ = std::fs::remove_dir_all(&dir);
 }

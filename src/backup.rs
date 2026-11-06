@@ -687,6 +687,7 @@ mod tests {
             hsts: false,
             cookie_secure: CookieSecure::Auto,
             trusted_proxy: false,
+            mcp: true,
             data_host: None,
             ldap: None,
         }

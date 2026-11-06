@@ -5021,6 +5021,7 @@ exit 0
             hsts: false,
             cookie_secure: crate::config::CookieSecure::Auto,
             trusted_proxy: false,
+            mcp: true,
             data_host: None,
             ldap: None,
         })
