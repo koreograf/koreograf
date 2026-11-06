@@ -1241,6 +1241,34 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
         &mut env,
     )?;
     apply_proxy_env(&mut env, &settings.proxy);
+    if container_mode.is_some() {
+        match crate::tls::controller_trust_pem() {
+            Ok(Some(pem)) => match write_job_ca_bundle(&work, &pem) {
+                Ok(()) => {
+                    env.extend(job_ca_env("/runner/work/ca-bundle.pem"));
+                    log(
+                        state,
+                        job_id,
+                        "system",
+                        "The job container uses the controller CA bundle.",
+                    );
+                }
+                Err(err) => log(
+                    state,
+                    job_id,
+                    "system",
+                    &format!("The controller CA bundle was not given to the job ({err})."),
+                ),
+            },
+            Ok(None) => {}
+            Err(err) => log(
+                state,
+                job_id,
+                "system",
+                &format!("The controller CA bundle was not given to the job ({err})."),
+            ),
+        }
+    }
 
     if canceled(state, job_id) {
         return Ok(());
@@ -1481,6 +1509,39 @@ fn safe_cache_key(value: &str) -> bool {
     value.len() <= 80
         && (first.is_ascii_alphanumeric() || first == '_')
         && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+}
+
+fn job_ca_env(guest: &str) -> Vec<(String, String)> {
+    [
+        "GIT_SSL_CAINFO",
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+    ]
+    .into_iter()
+    .map(|key| (key.to_string(), guest.to_string()))
+    .collect()
+}
+
+fn write_job_ca_bundle(work: &Path, pem: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    let path = work.join("ca-bundle.pem");
+    let mut file = fs::File::create(&path)
+        .map_err(|err| format!("The job CA bundle could not be written ({err})."))?;
+    file.write_all(pem)
+        .map_err(|err| format!("The job CA bundle could not be written ({err})."))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = file
+            .metadata()
+            .map_err(|err| format!("The job CA bundle could not be written ({err})."))?
+            .permissions();
+        perms.set_mode(0o644);
+        fs::set_permissions(&path, perms)
+            .map_err(|err| format!("The job CA bundle could not be written ({err})."))?;
+    }
+    Ok(())
 }
 
 fn apply_proxy_env(env: &mut Vec<(String, String)>, proxy: &crate::settings::ProxySettings) {
@@ -4109,6 +4170,32 @@ mod tests {
         let added = passwd_with_uid(bare, "10001", "10001", "/runner/work").unwrap();
         assert!(added.contains("root:x:0:0:root:/root:/bin/bash\n10001:x:10001:"));
         assert!(passwd_with_uid(image, "10001", "10001", "/runner/work\n").is_none());
+        let guest = job_ca_env("/runner/work/ca-bundle.pem");
+        assert_eq!(
+            guest,
+            vec![
+                ("GIT_SSL_CAINFO".into(), "/runner/work/ca-bundle.pem".into()),
+                ("SSL_CERT_FILE".into(), "/runner/work/ca-bundle.pem".into()),
+                (
+                    "REQUESTS_CA_BUNDLE".into(),
+                    "/runner/work/ca-bundle.pem".into()
+                ),
+                ("CURL_CA_BUNDLE".into(), "/runner/work/ca-bundle.pem".into()),
+            ]
+        );
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-ca-bundle-{stamp}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        write_job_ca_bundle(&dir, b"SYSTEM ROOTS\n").unwrap();
+        let bundle = dir.join("ca-bundle.pem");
+        assert_eq!(std::fs::read(&bundle).unwrap(), b"SYSTEM ROOTS\n");
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&bundle).unwrap().permissions().mode() & 0o777;
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(mode, 0o644);
         assert_eq!(split_user("10001:10001"), Some(("10001", "10001")));
         assert!(split_user("10001").is_none());
         assert!(split_user("root:root").is_none());
@@ -4118,7 +4205,6 @@ mod tests {
             .as_nanos();
         let path = std::env::temp_dir().join(format!("koreograf-passwd-{nanos}"));
         write_private_passwd(&path, &added).unwrap();
-        use std::os::unix::fs::PermissionsExt;
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         let _ = std::fs::remove_file(&path);
         assert_eq!(mode, 0o644);
