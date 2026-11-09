@@ -27,6 +27,7 @@ fn config(dir: &std::path::Path) -> Config {
         cookie_secure: CookieSecure::Auto,
         trusted_proxy: false,
         mcp: true,
+        public_url: Vec::new(),
         data_host: None,
         ldap: None,
     }
@@ -9849,52 +9850,185 @@ async fn cross_origin_api_writes_are_refused() {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!("koreograf-origin-{nanos}"));
-    std::fs::create_dir_all(&dir).unwrap();
-    let state = koreograf::boot(config(&dir)).unwrap();
-    let app = koreograf::router(state);
 
-    let (status, me, cookie) = call(
-        &app,
-        "POST",
-        "/api/login",
-        None,
-        None,
-        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    async fn boot(
+        name: &str,
+        nanos: u128,
+        public_url: Vec<String>,
+    ) -> (axum::Router, String, String) {
+        let dir = std::env::temp_dir().join(format!("koreograf-origin-{name}-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut cfg = config(&dir);
+        cfg.public_url = public_url;
+        let state = koreograf::boot(cfg).unwrap();
+        let app = koreograf::router(state);
+        let (status, me, cookie) = call(
+            &app,
+            "POST",
+            "/api/login",
+            None,
+            None,
+            Some(json!({"username": "admin", "password": "test-admin-pass"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{me}");
+        let cookie = cookie.expect("session cookie");
+        let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+        (app, cookie, team)
+    }
+
+    fn send(
+        app: axum::Router,
+        method: &'static str,
+        path: &'static str,
+        host: &'static str,
+        origin: Option<&'static str>,
+        referer: Option<&'static str>,
+        cookie: String,
+        team: String,
+        body: String,
+    ) -> impl std::future::Future<Output = StatusCode> {
+        async move {
+            let mut builder = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("cookie", cookie)
+                .header("x-team-id", team)
+                .header("content-type", "application/json")
+                .header("host", host);
+            if let Some(origin) = origin {
+                builder = builder.header("origin", origin);
+            }
+            if let Some(referer) = referer {
+                builder = builder.header("referer", referer);
+            }
+            app.oneshot(builder.body(Body::from(body)).unwrap())
+                .await
+                .unwrap()
+                .status()
+        }
+    }
+
+    let body = json!({"name": "Origin", "body": "[web]\nhost-1\n"}).to_string();
+    let (app, cookie, team) = boot(
+        "public",
+        nanos,
+        vec!["https://koreograf.example.com".to_string()],
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{me}");
-    let cookie = cookie.expect("session cookie");
-    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
-    let body = json!({"name": "Origin", "body": "[web]\nhost-1\n"}).to_string();
+    let status = send(
+        app,
+        "POST",
+        "/api/inventories",
+        "127.0.0.1:8080",
+        Some("https://koreograf.example.com"),
+        None,
+        cookie,
+        team,
+        body.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "configured public url");
 
-    let request = Request::builder()
-        .method("POST")
-        .uri("/api/inventories")
-        .header("cookie", &cookie)
-        .header("x-team-id", &team)
-        .header("content-type", "application/json")
-        .header("host", "koreograf.test")
-        .header("origin", "https://other.example")
-        .body(Body::from(body.clone()))
-        .unwrap();
-    let response = app.clone().oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let (app, cookie, team) = boot("default", nanos, Vec::new()).await;
+    let status = send(
+        app.clone(),
+        "POST",
+        "/api/inventories",
+        "koreograf.test:8080",
+        Some("https://other.example"),
+        None,
+        cookie.clone(),
+        team.clone(),
+        body.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "foreign origin");
 
-    let request = Request::builder()
-        .method("POST")
-        .uri("/api/inventories")
-        .header("cookie", &cookie)
-        .header("x-team-id", &team)
-        .header("content-type", "application/json")
-        .header("host", "koreograf.test")
-        .header("origin", "https://koreograf.test")
-        .body(Body::from(body))
-        .unwrap();
-    let response = app.clone().oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::CREATED);
+    let status = send(
+        app.clone(),
+        "POST",
+        "/api/inventories",
+        "koreograf.test:8080",
+        Some("http://koreograf.test:9999"),
+        None,
+        cookie.clone(),
+        team.clone(),
+        body.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "other port");
 
-    let _ = std::fs::remove_dir_all(&dir);
+    let status = send(
+        app.clone(),
+        "POST",
+        "/api/inventories",
+        "koreograf.test:8080",
+        Some("null"),
+        None,
+        cookie.clone(),
+        team.clone(),
+        body.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "opaque origin");
+
+    let status = send(
+        app.clone(),
+        "POST",
+        "/api/inventories",
+        "koreograf.test:8080",
+        None,
+        Some("https://other.example/page"),
+        cookie.clone(),
+        team.clone(),
+        body.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "foreign referer");
+
+    let status = send(
+        app.clone(),
+        "POST",
+        "/api/inventories",
+        "[::1]:8080",
+        Some("http://[::1]:8080"),
+        None,
+        cookie.clone(),
+        team.clone(),
+        body.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "ipv6 same origin");
+
+    let body = json!({"name": "Origin two", "body": "[web]\nhost-2\n"}).to_string();
+    let status = send(
+        app.clone(),
+        "POST",
+        "/api/inventories",
+        "koreograf.test:8080",
+        None,
+        None,
+        cookie.clone(),
+        team.clone(),
+        body.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "no origin allows scripts");
+
+    let status = send(
+        app,
+        "DELETE",
+        "/api/inventories/missing",
+        "koreograf.test:8080",
+        Some("https://other.example"),
+        None,
+        cookie,
+        team,
+        String::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "delete is guarded");
 }
 
 #[tokio::test]
