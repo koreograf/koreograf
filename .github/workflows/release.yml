@@ -165,6 +165,7 @@ jobs:
           TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           if ! gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::notice::no release for $TAG, packages not uploaded"
             exit 0
           fi
           gh release upload "$TAG" dist/*.deb dist/*.rpm --clobber
