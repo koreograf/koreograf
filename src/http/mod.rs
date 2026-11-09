@@ -28,6 +28,17 @@ use crate::error::{ApiError, AppResult};
 use crate::runner;
 use crate::Shared;
 
+pub(crate) fn warn_public_urls(cfg: &crate::config::Config) {
+    for item in &cfg.public_url {
+        if parse_origin(item).is_none() {
+            tracing::warn!(
+                value = %item,
+                "KOREOGRAF_PUBLIC_URL entry is not an absolute URL with a scheme, host, and port; it is ignored"
+            );
+        }
+    }
+}
+
 fn bare_host(host: &str) -> String {
     host.trim_start_matches('[')
         .trim_end_matches(']')
@@ -41,38 +52,22 @@ fn parse_origin(value: &str) -> Option<(String, String, u16)> {
     Some((url.scheme().to_ascii_lowercase(), bare_host(host), port))
 }
 
-fn authority_origin(
-    value: &str,
-    scheme: Option<&str>,
-) -> Option<(Option<String>, String, Option<u16>)> {
+fn authority_origin(value: &str, scheme: Option<&str>) -> Option<(String, String, u16)> {
     let authority: axum::http::uri::Authority = value.parse().ok()?;
-    let scheme = scheme.map(str::trim).filter(|item| !item.is_empty());
-    Some((
-        scheme.map(str::to_ascii_lowercase),
-        bare_host(authority.host()),
-        authority.port_u16(),
-    ))
+    let scheme = scheme
+        .and_then(|item| item.split(',').next())
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .unwrap_or("http")
+        .to_ascii_lowercase();
+    let port = authority
+        .port_u16()
+        .unwrap_or(if scheme == "https" { 443 } else { 80 });
+    Some((scheme, bare_host(authority.host()), port))
 }
 
-fn same_origin(
-    expected: &(Option<String>, String, Option<u16>),
-    actual: &(String, String, u16),
-) -> bool {
-    let (scheme, host, port) = expected;
-    if host != &actual.1 {
-        return false;
-    }
-    if let Some(port) = port {
-        if *port != actual.2 {
-            return false;
-        }
-    }
-    if let Some(scheme) = scheme {
-        if scheme != &actual.0 {
-            return false;
-        }
-    }
-    true
+fn same_origin(expected: &(String, String, u16), actual: &(String, String, u16)) -> bool {
+    expected == actual
 }
 
 async fn origin_guard(State(state): State<Shared>, req: Request, next: Next) -> Response {
@@ -97,17 +92,13 @@ async fn origin_guard(State(state): State<Shared>, req: Request, next: Next) -> 
                 None => false,
                 Some(actual) => {
                     if !allowed.is_empty() {
-                        allowed.iter().any(|item| {
-                            same_origin(
-                                &(Some(item.0.clone()), item.1.clone(), Some(item.2)),
-                                &actual,
-                            )
-                        })
+                        allowed.iter().any(|item| same_origin(item, &actual))
                     } else {
                         let host = if state.cfg.trusted_proxy {
                             req.headers()
                                 .get("x-forwarded-host")
                                 .and_then(|value| value.to_str().ok())
+                                .and_then(|value| value.split(',').next())
                         } else {
                             None
                         }

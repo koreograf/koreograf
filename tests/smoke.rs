@@ -9964,6 +9964,25 @@ async fn cross_origin_api_writes_are_refused() {
         app.clone(),
         Call {
             method: "POST",
+            host: "koreograf.test",
+            origin: Some("http://koreograf.test:9999"),
+            referer: None,
+            cookie: &cookie,
+            team: &team,
+            body: &body,
+        },
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "other port without a host port"
+    );
+
+    let status = send(
+        app.clone(),
+        Call {
+            method: "POST",
             host: "koreograf.test:8080",
             origin: Some("null"),
             referer: None,

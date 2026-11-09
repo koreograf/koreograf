@@ -39,6 +39,7 @@ services:
       # true, false or auto. auto sets Secure only behind a trusted proxy.
       KOREOGRAF_COOKIE_SECURE: ${KOREOGRAF_COOKIE_SECURE:-auto}
       KOREOGRAF_TRUSTED_PROXY: ${KOREOGRAF_TRUSTED_PROXY:-false}
+      KOREOGRAF_PUBLIC_URL: ${KOREOGRAF_PUBLIC_URL:-}
       KOREOGRAF_DATABASE_URL: ${KOREOGRAF_DATABASE_URL:-}
       # Migration on first start. Ignored when the data directory already has data.
       KOREOGRAF_RESTORE_FROM: ${KOREOGRAF_RESTORE_FROM:-}
