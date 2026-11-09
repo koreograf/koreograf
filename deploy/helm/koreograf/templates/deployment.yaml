@@ -86,6 +86,13 @@ spec:
                 secretKeyRef:
                   name: {{ include "koreograf.secretName" . }}
                   key: {{ .Values.existingSecretKeys.secretKey }}
+            {{- if .Values.metrics.token }}
+            - name: KOREOGRAF_METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "koreograf.secretName" . }}
+                  key: {{ .Values.existingSecretKeys.metricsToken }}
+            {{- end }}
             {{- if .Values.ldap.url }}
             - name: KOREOGRAF_LDAP_URL
               value: {{ .Values.ldap.url | quote }}
