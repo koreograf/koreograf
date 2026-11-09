@@ -1,4 +1,8 @@
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
+use std::path::Path;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
@@ -141,6 +145,139 @@ pub fn local_password_ok(user: Option<&User>, password: &str) -> bool {
 fn dummy_hash() -> &'static str {
     static DUMMY: OnceLock<String> = OnceLock::new();
     DUMMY.get_or_init(|| hash_password("not-a-real-password"))
+}
+
+const SIGNIN_FAILURE_LIMIT: u32 = 5;
+const SIGNIN_FAILURE_WINDOW: Duration = Duration::from_secs(60);
+const SIGNIN_LOCKOUT: Duration = Duration::from_secs(60);
+const SIGNIN_TRACKED_KEYS: usize = 1024;
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct SignInKey {
+    data_dir: std::path::PathBuf,
+    username: String,
+    source: String,
+}
+
+struct SignInAttempt {
+    failures: u32,
+    first: Instant,
+    locked_until: Option<Instant>,
+}
+
+static SIGNIN_ATTEMPTS: OnceLock<Mutex<HashMap<SignInKey, SignInAttempt>>> = OnceLock::new();
+
+fn signin_attempts() -> &'static Mutex<HashMap<SignInKey, SignInAttempt>> {
+    SIGNIN_ATTEMPTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub(crate) fn signin_remaining(data_dir: &Path, username: &str, source: &str) -> Option<Duration> {
+    let key = signin_key(data_dir, username, source);
+    let mut attempts = signin_attempts().lock().ok()?;
+    remaining_at(&mut attempts, &key, Instant::now())
+}
+
+pub(crate) fn signin_failed(data_dir: &Path, username: &str, source: &str) {
+    let key = signin_key(data_dir, username, source);
+    if let Ok(mut attempts) = signin_attempts().lock() {
+        record_failure_at(&mut attempts, key, Instant::now());
+    }
+}
+
+pub(crate) fn signin_succeeded(data_dir: &Path, username: &str, source: &str) {
+    let key = signin_key(data_dir, username, source);
+    if let Ok(mut attempts) = signin_attempts().lock() {
+        attempts.remove(&key);
+    }
+}
+
+fn signin_key(data_dir: &Path, username: &str, source: &str) -> SignInKey {
+    SignInKey {
+        data_dir: data_dir.to_path_buf(),
+        username: username.to_string(),
+        source: source.to_string(),
+    }
+}
+
+fn remaining_at(
+    attempts: &mut HashMap<SignInKey, SignInAttempt>,
+    key: &SignInKey,
+    now: Instant,
+) -> Option<Duration> {
+    prune_attempts(attempts, now);
+    attempts.get(key).and_then(|attempt| {
+        attempt
+            .locked_until
+            .and_then(|until| until.checked_duration_since(now))
+            .filter(|remaining| !remaining.is_zero())
+    })
+}
+
+fn record_failure_at(
+    attempts: &mut HashMap<SignInKey, SignInAttempt>,
+    key: SignInKey,
+    now: Instant,
+) {
+    prune_attempts(attempts, now);
+    let attempt = attempts.entry(key).or_insert_with(|| SignInAttempt {
+        failures: 0,
+        first: now,
+        locked_until: None,
+    });
+    if now.saturating_duration_since(attempt.first) >= SIGNIN_FAILURE_WINDOW {
+        attempt.failures = 0;
+        attempt.first = now;
+        attempt.locked_until = None;
+    }
+    attempt.failures += 1;
+    if attempt.failures >= SIGNIN_FAILURE_LIMIT {
+        attempt.locked_until = Some(now + SIGNIN_LOCKOUT);
+    }
+    if attempts.len() > SIGNIN_TRACKED_KEYS {
+        if let Some(oldest) = attempts
+            .iter()
+            .min_by_key(|(_, attempt)| attempt.first)
+            .map(|(key, _)| key.clone())
+        {
+            attempts.remove(&oldest);
+        }
+    }
+}
+
+fn prune_attempts(attempts: &mut HashMap<SignInKey, SignInAttempt>, now: Instant) {
+    attempts.retain(|_, attempt| match attempt.locked_until {
+        Some(until) => now < until,
+        None => now.saturating_duration_since(attempt.first) < SIGNIN_FAILURE_WINDOW,
+    });
+}
+
+pub(crate) fn client_source(
+    cfg: &crate::config::Config,
+    headers: &HeaderMap,
+    peer: Option<SocketAddr>,
+) -> String {
+    client_source_from(cfg.trusted_proxy, headers, peer)
+}
+
+fn client_source_from(
+    trusted_proxy: bool,
+    headers: &HeaderMap,
+    peer: Option<SocketAddr>,
+) -> String {
+    if trusted_proxy {
+        if let Some(source) = headers
+            .get("x-forwarded-for")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(',').next())
+            .and_then(|value| value.trim().parse::<IpAddr>().ok())
+        {
+            return source.to_string();
+        }
+    }
+    match peer {
+        Some(address) => address.ip().to_string(),
+        None => "unknown".to_string(),
+    }
 }
 
 /// `launched_by` is an administrator username, or `workflow:<id>` whose
@@ -343,9 +480,100 @@ pub fn read_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{clear_cookie, command_matches_template, session_cookie};
+    use super::{
+        clear_cookie, client_source_from, command_matches_template, record_failure_at,
+        remaining_at, session_cookie, SignInKey, SIGNIN_FAILURE_LIMIT, SIGNIN_FAILURE_WINDOW,
+        SIGNIN_LOCKOUT,
+    };
     use crate::db::Template;
+    use axum::http::HeaderMap;
     use serde_json::json;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::time::Instant;
+
+    fn signin_key(username: &str, source: &str) -> SignInKey {
+        SignInKey {
+            data_dir: PathBuf::from("/tmp/koreograf-throttle-test"),
+            username: username.into(),
+            source: source.into(),
+        }
+    }
+
+    #[test]
+    fn repeated_failures_lock_one_account_and_source_until_the_lockout_ends() {
+        let mut attempts = HashMap::new();
+        let key = signin_key("ada", "203.0.113.10");
+        let start = Instant::now();
+        for _ in 0..SIGNIN_FAILURE_LIMIT - 1 {
+            record_failure_at(&mut attempts, key.clone(), start);
+        }
+        assert_eq!(remaining_at(&mut attempts, &key, start), None);
+        record_failure_at(&mut attempts, key.clone(), start);
+        assert!(remaining_at(&mut attempts, &key, start).is_some());
+        assert!(remaining_at(&mut attempts, &key, start + SIGNIN_LOCKOUT / 2).is_some());
+        assert_eq!(
+            remaining_at(&mut attempts, &key, start + SIGNIN_LOCKOUT),
+            None
+        );
+        assert!(!attempts.contains_key(&key));
+    }
+
+    #[test]
+    fn the_lockout_is_scoped_to_the_username_and_source() {
+        let mut attempts = HashMap::new();
+        let key = signin_key("ada", "203.0.113.10");
+        let start = Instant::now();
+        for _ in 0..SIGNIN_FAILURE_LIMIT {
+            record_failure_at(&mut attempts, key.clone(), start);
+        }
+        assert!(remaining_at(&mut attempts, &key, start).is_some());
+        assert_eq!(
+            remaining_at(&mut attempts, &signin_key("ada", "203.0.113.11"), start),
+            None
+        );
+        assert_eq!(
+            remaining_at(&mut attempts, &signin_key("grace", "203.0.113.10"), start),
+            None
+        );
+    }
+
+    #[test]
+    fn failures_older_than_the_window_do_not_add_up() {
+        let mut attempts = HashMap::new();
+        let key = signin_key("ada", "203.0.113.10");
+        let start = Instant::now();
+        for _ in 0..SIGNIN_FAILURE_LIMIT - 1 {
+            record_failure_at(&mut attempts, key.clone(), start);
+        }
+        for _ in 0..SIGNIN_FAILURE_LIMIT - 1 {
+            record_failure_at(
+                &mut attempts,
+                key.clone(),
+                start + SIGNIN_FAILURE_WINDOW + SIGNIN_FAILURE_WINDOW / 2,
+            );
+        }
+        assert_eq!(
+            remaining_at(
+                &mut attempts,
+                &key,
+                start + SIGNIN_FAILURE_WINDOW + SIGNIN_FAILURE_WINDOW / 2
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn the_forwarded_address_is_only_used_when_the_proxy_is_trusted() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "198.51.100.7, 10.0.0.1".parse().unwrap());
+        let peer = "192.0.2.5:4321".parse().ok();
+        assert_eq!(client_source_from(true, &headers, peer), "198.51.100.7");
+        assert_eq!(client_source_from(false, &headers, peer), "192.0.2.5");
+        assert_eq!(client_source_from(false, &headers, None), "unknown");
+        headers.insert("x-forwarded-for", "not-an-address".parse().unwrap());
+        assert_eq!(client_source_from(true, &headers, peer), "192.0.2.5");
+    }
 
     #[test]
     fn cookies_carry_secure_only_when_asked() {

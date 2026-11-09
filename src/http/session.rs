@@ -1,4 +1,9 @@
-use axum::extract::{Path, State};
+use std::convert::Infallible;
+use std::net::SocketAddr;
+use std::time::Duration;
+
+use axum::extract::{ConnectInfo, FromRequestParts, Path, State};
+use axum::http::request::Parts;
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -18,6 +23,21 @@ use crate::Shared;
 pub struct LoginBody {
     username: String,
     password: String,
+}
+
+pub struct ClientPeer(Option<SocketAddr>);
+
+impl<S: Send + Sync> FromRequestParts<S> for ClientPeer {
+    type Rejection = Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        Ok(Self(
+            parts
+                .extensions
+                .get::<ConnectInfo<SocketAddr>>()
+                .map(|info| info.0),
+        ))
+    }
 }
 
 #[derive(Deserialize)]
@@ -58,15 +78,33 @@ pub(super) struct UserUpdate {
 pub async fn login(
     State(state): State<Shared>,
     headers: HeaderMap,
+    peer: ClientPeer,
     ApiJson(body): ApiJson<LoginBody>,
 ) -> Result<Response, ApiError> {
     let username = normalize(&body.username)?;
+    let source = auth::client_source(&state.cfg, &headers, peer.0);
+    if let Some(retry) = auth::signin_remaining(&state.cfg.data_dir, &username, &source) {
+        tracing::warn!(
+            username = %username,
+            client_ip = %source,
+            retry_after = retry.as_secs().max(1),
+            "sign-in refused after repeated failures"
+        );
+        return Ok(throttled(retry));
+    }
     if body.password.is_empty() {
+        auth::signin_failed(&state.cfg.data_dir, &username, &source);
+        tracing::warn!(
+            username = %username,
+            client_ip = %source,
+            "sign-in failed"
+        );
         return Err(ApiError::SignInFailed);
     }
     let local = state.store().user_by_username(&username)?;
     if auth::local_password_ok(local.as_ref(), &body.password) {
         if let Some(user) = local {
+            auth::signin_succeeded(&state.cfg.data_dir, &username, &source);
             return session_response(&state, &headers, &user);
         }
     }
@@ -74,11 +112,15 @@ pub async fn login(
     if let Some(cfg) = directory {
         match ldap::authenticate(&cfg, &username, &body.password).await {
             Ok(identity) => {
+                auth::signin_succeeded(&state.cfg.data_dir, &username, &source);
                 let user = provision_ldap(&state, identity)?;
                 return session_response(&state, &headers, &user);
             }
             Err(err) => {
+                auth::signin_failed(&state.cfg.data_dir, &username, &source);
                 tracing::warn!(
+                    username = %username,
+                    client_ip = %source,
                     error = %err,
                     hint = ldap_failure_hint(&err),
                     "LDAP sign-in failed"
@@ -86,10 +128,30 @@ pub async fn login(
                 if directory_unreachable(&err) {
                     return Err(ApiError::DirectoryUnavailable);
                 }
+                return Err(ApiError::SignInFailed);
             }
         }
     }
+    auth::signin_failed(&state.cfg.data_dir, &username, &source);
+    tracing::warn!(
+        username = %username,
+        client_ip = %source,
+        "sign-in failed"
+    );
     Err(ApiError::SignInFailed)
+}
+
+fn throttled(retry: Duration) -> Response {
+    let seconds = retry.as_secs().max(1);
+    let mut response = (
+        StatusCode::TOO_MANY_REQUESTS,
+        Json(json!({ "error": "invalid_username_or_password" })),
+    )
+        .into_response();
+    if let Ok(value) = HeaderValue::from_str(&seconds.to_string()) {
+        response.headers_mut().insert(header::RETRY_AFTER, value);
+    }
+    response
 }
 
 pub async fn logout(
@@ -790,6 +852,7 @@ mod tests {
         let error = super::login(
             State(state),
             HeaderMap::new(),
+            super::ClientPeer(None),
             super::ApiJson(super::LoginBody {
                 username: "ada".into(),
                 password: "secret".into(),
@@ -814,6 +877,7 @@ mod tests {
         let response = super::login(
             State(state),
             HeaderMap::new(),
+            super::ClientPeer(None),
             super::ApiJson(super::LoginBody {
                 username: "admin".into(),
                 password: "test-admin-pass".into(),
