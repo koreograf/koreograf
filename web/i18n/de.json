@@ -144,6 +144,7 @@
   "credentials": "Zugänge",
   "credentials_are_not_json": "Zugangsdaten sind kein JSON.",
   "credentials_cannot_be_read": "Zugangsdaten lassen sich nicht lesen.",
+  "cross_origin_request_is_not_allowed": "Die Anfrage kam von einer anderen Herkunft und wurde abgelehnt.",
   "custom_key": "Eigener Schlüssel…",
   "daily": "Täglich",
   "danger_zone": "Gefahrenbereich",

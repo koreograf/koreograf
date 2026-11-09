@@ -9840,6 +9840,64 @@ async fn launch_overrides_follow_the_tool_credential_kinds() {
 }
 
 #[tokio::test]
+async fn cross_origin_api_writes_are_refused() {
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-origin-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+    let body = json!({"name": "Origin", "body": "[web]\nhost-1\n"}).to_string();
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/inventories")
+        .header("cookie", &cookie)
+        .header("x-team-id", &team)
+        .header("content-type", "application/json")
+        .header("host", "koreograf.test")
+        .header("origin", "https://other.example")
+        .body(Body::from(body.clone()))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/inventories")
+        .header("cookie", &cookie)
+        .header("x-team-id", &team)
+        .header("content-type", "application/json")
+        .header("host", "koreograf.test")
+        .header("origin", "https://koreograf.test")
+        .body(Body::from(body))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn admin_settings_hide_secrets_and_apply_without_restart() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

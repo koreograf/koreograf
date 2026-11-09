@@ -8,8 +8,9 @@ mod work;
 
 use std::path::Path;
 
-use axum::extract::{DefaultBodyLimit, State};
-use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
+use axum::extract::{DefaultBodyLimit, Request, State};
+use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::Json;
@@ -26,6 +27,40 @@ use crate::db::{self, Job, JobEvent};
 use crate::error::{ApiError, AppResult};
 use crate::runner;
 use crate::Shared;
+
+async fn origin_guard(req: Request, next: Next) -> Response {
+    let method = req.method();
+    if matches!(
+        *method,
+        Method::POST | Method::PUT | Method::PATCH | Method::DELETE
+    ) {
+        let host = req
+            .headers()
+            .get(header::HOST)
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.split(':').next().unwrap_or("").to_ascii_lowercase())
+            .unwrap_or_default();
+        let source = req
+            .headers()
+            .get(header::ORIGIN)
+            .or_else(|| req.headers().get(header::REFERER))
+            .and_then(|value| value.to_str().ok());
+        if let Some(source) = source {
+            let origin_host = url::Url::parse(source)
+                .ok()
+                .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+                .unwrap_or_default();
+            if !host.is_empty() && !origin_host.is_empty() && origin_host != host {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({"error": "cross_origin_request_is_not_allowed"})),
+                )
+                    .into_response();
+            }
+        }
+    }
+    next.run(req).await
+}
 
 fn api_routes() -> Router<Shared> {
     Router::new()
@@ -260,7 +295,10 @@ pub fn router(state: Shared) -> Router {
         .route("/i18n/de.json", get(messages_de))
         .route("/i18n/en.json", get(messages_en))
         .route("/hooks/{id}/{token}", post(work::ingest))
-        .nest("/api", api_routes());
+        .nest(
+            "/api",
+            api_routes().layer(axum::middleware::from_fn(origin_guard)),
+        );
     if state.cfg.mcp {
         app = app.merge(mcp_router(state.clone()));
     }
