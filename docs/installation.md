@@ -119,7 +119,7 @@ It does not compile. Build this checkout without replacing that published tag:
 docker compose -f docker-compose.yml -f docker-compose.build.yml up --build -d
 ```
 
-The local image is tagged `koreograf:local`. buildx is only for publishing a multi-architecture image. The published image holds the server binary, `git`, an SSH client, the static Docker CLI, a static `tini`, and CA certificates. Ansible, OpenTofu, and shell jobs run in the execution environments the first start seeds, so the image has no `ansible-playbook`, `tofu`, `python3`, or shell. The image sets `KOREOGRAF_CONTAINER_IMAGE=1`, and its runner preflight checks only the container CLI and socket. A saved `local` runner mode runs in a container there; the image has no local mode.
+The local image is tagged `koreograf:local`. buildx is only for publishing a multi-architecture image. The published image holds the server binary, `git`, a minimal `/bin/sh` for git's local transport, an SSH client, the static Docker CLI, a static `tini`, and CA certificates. Ansible, OpenTofu, and shell jobs run in the execution environments the first start seeds, so the image has no `ansible-playbook`, `tofu`, `python3`, or interactive shell. The image sets `KOREOGRAF_CONTAINER_IMAGE=1`, and its runner preflight checks only the container CLI and socket. A saved `local` runner mode runs in a container there; the image has no local mode.
 
 ### Upgrading from an earlier image
 
