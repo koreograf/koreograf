@@ -1,5 +1,6 @@
 # The image holds the server binary and the tools it calls:
-# git, an SSH client, the static Docker CLI, and CA certificates.
+# git, a minimal /bin/sh for git's local transport, an SSH client, the static
+# Docker CLI, and CA certificates.
 # Ansible, OpenTofu, and shell jobs run in execution environments.
 # The entrypoint in the binary creates the data directory, fixes ownership of
 # an existing volume when started as root, joins the socket group, drops to
@@ -54,9 +55,10 @@ RUN apt-get update \
     && rm -rf /tmp/docker /tmp/docker.tgz /tmp/tini-static \
     && mkdir -p /out/usr/bin /out/usr/lib /out/usr/share \
     && cp -a /usr/bin/git /usr/bin/ssh /out/usr/bin/ \
+    && install -D -m 755 /bin/sh /out/bin/sh \
     && cp -a /usr/lib/git-core /out/usr/lib/ \
     && cp -a /usr/share/git-core /out/usr/share/ \
-    && { for bin in /usr/bin/git /usr/bin/ssh /usr/lib/git-core/git-remote-http; do \
+    && { for bin in /bin/sh /usr/bin/git /usr/bin/ssh /usr/lib/git-core/git-remote-http; do \
             ldd "$bin"; \
          done | awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^\//) print $i }' | sort -u \
          | while read -r lib; do \
