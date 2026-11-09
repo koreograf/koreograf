@@ -11,6 +11,8 @@ use crate::Shared;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SettingsBody {
+    #[serde(default, rename = "source")]
+    _source: Option<Value>,
     #[serde(default)]
     reset: bool,
     ldap: Option<LdapBody>,
@@ -32,6 +34,8 @@ pub(super) struct SettingsBody {
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub(super) struct LdapBody {
+    #[serde(default, rename = "bind_password_set")]
+    _bind_password_set: Option<Value>,
     #[serde(default)]
     url: String,
     #[serde(default)]
@@ -59,6 +63,10 @@ pub(super) struct LdapBody {
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ProxyBody {
+    #[serde(default, rename = "password_set")]
+    _password_set: Option<Value>,
+    #[serde(default, rename = "unsupported_env")]
+    _unsupported_env: Option<Value>,
     #[serde(default)]
     url: String,
     #[serde(default)]

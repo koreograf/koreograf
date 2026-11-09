@@ -9917,6 +9917,26 @@ async fn admin_settings_hide_secrets_and_apply_without_restart() {
     let (status, current, _) = call(&app, "GET", "/api/settings", Some(&cookie), None, None).await;
     assert_eq!(status, StatusCode::OK, "{current}");
     assert_eq!(current["source"], "env");
+    {
+        let mut round_trip = current.clone();
+        if let Some(object) = round_trip.as_object_mut() {
+            object.remove("clear");
+        }
+        let (status, echoed, _) = call(
+            &app,
+            "PUT",
+            "/api/settings",
+            Some(&cookie),
+            None,
+            Some(round_trip),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "read-only fields rejected: {echoed}"
+        );
+    }
     assert_eq!(current["runner"], "local");
     assert_eq!(current["ldap"]["url"], "");
     assert!(current["ldap"].get("ca_file").is_none());
