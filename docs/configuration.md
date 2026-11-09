@@ -46,7 +46,7 @@ See `.env.example`. Comments in that file are English. Copy it to `.env` before 
 
 ## PostgreSQL
 
-SQLite stays the default. A `postgres://` or `postgresql://` URL selects the experimental PostgreSQL backend. This slice bootstraps the schema and serves sign-in, sessions, `/healthz`, `/api/version`, `/api/me` with API tokens, users, credentials, organizations, teams, projects, inventories with their sources, templates, execution environments, schedules, hooks, workflows, hook delivery records, project sync status, and the overview and dashboard. Job execution (including template and workflow launch, matching hook dispatch, and scheduled runs), the job list with events and output, workflow runs, and backups still answer 503 with `this_feature_is_not_available_with_postgresql_yet` until they are ported.
+SQLite stays the default. A `postgres://` or `postgresql://` URL selects the experimental PostgreSQL backend. This slice bootstraps the schema and serves sign-in, sessions, `/healthz`, `/api/version`, `/api/me` with API tokens, users, credentials, organizations, teams, projects, inventories with their sources, templates, execution environments, schedules, hooks, workflows, hook delivery records, project sync status, job execution with template and workflow launch, scheduled runs and matching hook dispatch, the job list with events and output, and the overview and dashboard. Backup and restore through the UI and the SQLite-to-PostgreSQL copy still answer 503 with `this_feature_is_not_available_with_postgresql_yet` until they are ported.
 
 ```bash
 KOREOGRAF_DATABASE_URL='postgresql://koreograf@db.example:5432/koreograf?sslmode=require'
@@ -56,7 +56,7 @@ The URL carries the host, port, database, and user. An empty database path uses 
 
 Keep the password out of the URL with `KOREOGRAF_DATABASE_PASSWORD_FILE`, for example a Docker or Kubernetes secret. The file is read once at startup and a trailing newline is ignored. The password is never written to logs, API responses, `koreograf doctor` output, or error messages. When both are present, the file wins.
 
-The data directory still holds `secret.key`, the cache, git checkouts, and job directories. Backup and restore through the UI, the CLI migration, and every object endpoint outside the list above still need SQLite in this build.
+The data directory still holds `secret.key`, the cache, git checkouts, and job directories. Backup and restore through the UI and the CLI migration still need SQLite in this build.
 
 Directory sign-in is described in [Organizations, teams, LDAP, and Active Directory](authentication.md). Company CAs are mounted at `/etc/koreograf/ca`; see [Installation](installation.md#company-certificate-authorities).
 

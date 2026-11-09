@@ -258,8 +258,8 @@ pub async fn launch_template(
             },
         },
     )?;
-    let db = state.db()?;
-    let job = db::job(&db, &job_id)?.ok_or(ApiError::NotFound)?;
+    let db = state.store();
+    let job = db.job(&job_id)?.ok_or(ApiError::NotFound)?;
     Ok(accepted(job_json(&job, None)))
 }
 
@@ -284,8 +284,8 @@ pub async fn list_jobs(
         since: query_date(query.since, "since")?,
         until: query_date(query.until, "until")?,
     };
-    let db = state.db()?;
-    let (jobs, total) = db::list_jobs(&db, &team, &filter)?;
+    let db = state.store();
+    let (jobs, total) = db.list_jobs(&team, &filter)?;
     Ok(Json(json!({
         "items": jobs.iter().map(|job| job_json(job, None)).collect::<Vec<_>>(),
         "total": total,
@@ -297,24 +297,24 @@ pub async fn get_job(
     user: AuthUser,
     Path(id): Path<String>,
 ) -> AppResult<Json<Value>> {
-    let db = state.db()?;
-    let job = db::job(&db, &id)?.ok_or(ApiError::NotFound)?;
-    crate::auth::authorize_connection(&db, &user, &job.team_id, Role::Viewer)?;
-    let events = events_for_page(&db, &id)?;
+    let db = state.store();
+    let job = db.job(&id)?.ok_or(ApiError::NotFound)?;
+    crate::auth::authorize(db, &user, &job.team_id, Role::Viewer)?;
+    let events = events_for_page(db, &id)?;
     let mut value = job_json(&job, Some(&events));
-    value["output_capped"] = json!(db::events_bytes(&db, &id)? > OUTPUT_LIMIT as i64);
+    value["output_capped"] = json!(db.events_bytes(&id)? > OUTPUT_LIMIT as i64);
     Ok(Json(value))
 }
 
 const PAGE_EVENTS: i64 = 2_000;
 const PAGE_TAIL: i64 = 500;
 
-fn events_for_page(db: &rusqlite::Connection, job_id: &str) -> AppResult<Vec<db::JobEvent>> {
-    let head = db::events_after(db, job_id, 0, PAGE_EVENTS)?;
+fn events_for_page(db: &dyn crate::backend::Backend, job_id: &str) -> AppResult<Vec<db::JobEvent>> {
+    let head = db.events_after(job_id, 0, PAGE_EVENTS)?;
     if (head.len() as i64) < PAGE_EVENTS {
         return Ok(head);
     }
-    let tail = db::events_last(db, job_id, PAGE_TAIL)?;
+    let tail = db.events_last(job_id, PAGE_TAIL)?;
     let keep = (PAGE_EVENTS - PAGE_TAIL) as usize;
     let next_id = head.get(keep).map(|event| event.id);
     let mut shown: Vec<db::JobEvent> = head.into_iter().take(keep).collect();
@@ -330,7 +330,7 @@ fn events_for_page(db: &rusqlite::Connection, job_id: &str) -> AppResult<Vec<db:
     };
     if !contiguous {
         let omitted = match tail.first() {
-            Some(first) => db::events_count_between(db, job_id, last_id, first.id)?,
+            Some(first) => db.events_count_between(job_id, last_id, first.id)?,
             None => 0,
         };
         shown.push(db::JobEvent {
@@ -369,11 +369,11 @@ fn output_filename(name: &str, id: &str) -> String {
     }
 }
 
-fn render_job_output(db: &rusqlite::Connection, job_id: &str) -> AppResult<String> {
+fn render_job_output(db: &dyn crate::backend::Backend, job_id: &str) -> AppResult<String> {
     let mut out = String::new();
     let mut after = 0_i64;
     loop {
-        let batch = db::events_after(db, job_id, after, 500)?;
+        let batch = db.events_after(job_id, after, 500)?;
         if batch.is_empty() {
             break;
         }
@@ -402,10 +402,10 @@ pub async fn job_output(
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let (body, filename) = {
-        let db = state.db()?;
-        let job = db::job(&db, &id)?.ok_or(ApiError::NotFound)?;
-        crate::auth::authorize_connection(&db, &user, &job.team_id, Role::Viewer)?;
-        let body = render_job_output(&db, &id)?;
+        let db = state.store();
+        let job = db.job(&id)?.ok_or(ApiError::NotFound)?;
+        crate::auth::authorize(db, &user, &job.team_id, Role::Viewer)?;
+        let body = render_job_output(db, &id)?;
         (body, output_filename(&job.name, &job.id))
     };
     let disposition = format!("attachment; filename=\"{filename}\"");
@@ -431,15 +431,15 @@ pub async fn cancel_job(
     Path(id): Path<String>,
 ) -> AppResult<Json<Value>> {
     let team = {
-        let db = state.db()?;
-        let job = db::job(&db, &id)?.ok_or(ApiError::NotFound)?;
-        crate::auth::authorize_connection(&db, &user, &job.team_id, Role::Operator)?;
+        let db = state.store();
+        let job = db.job(&id)?.ok_or(ApiError::NotFound)?;
+        crate::auth::authorize(db, &user, &job.team_id, Role::Operator)?;
         job.team_id
     };
     jobs::cancel(&state, &id)?;
     let _ = team;
-    let db = state.db()?;
-    let job = db::job(&db, &id)?.ok_or(ApiError::NotFound)?;
+    let db = state.store();
+    let job = db.job(&id)?.ok_or(ApiError::NotFound)?;
     Ok(Json(job_json(&job, None)))
 }
 
@@ -450,13 +450,13 @@ pub async fn relaunch_job(
     ApiJson(body): ApiJson<RelaunchBody>,
 ) -> AppResult<Response> {
     {
-        let db = state.db()?;
-        let job = db::job(&db, &id)?.ok_or(ApiError::NotFound)?;
-        crate::auth::authorize_connection(&db, &user, &job.team_id, Role::Operator)?;
+        let db = state.store();
+        let job = db.job(&id)?.ok_or(ApiError::NotFound)?;
+        crate::auth::authorize(db, &user, &job.team_id, Role::Operator)?;
     }
     let job_id = jobs::relaunch(&state, &id, &user.username, body.only_failed_hosts)?;
-    let db = state.db()?;
-    let job = db::job(&db, &job_id)?.ok_or(ApiError::NotFound)?;
+    let db = state.store();
+    let job = db.job(&job_id)?.ok_or(ApiError::NotFound)?;
     Ok(accepted(job_json(&job, None)))
 }
 
@@ -467,9 +467,9 @@ pub async fn job_events(
     Query(query): Query<AfterQuery>,
 ) -> AppResult<Sse<impl Stream<Item = Result<Event, Infallible>>>> {
     {
-        let db = state.db()?;
-        let job = db::job(&db, &id)?.ok_or(ApiError::NotFound)?;
-        crate::auth::authorize_connection(&db, &user, &job.team_id, Role::Viewer)?;
+        let db = state.store();
+        let job = db.job(&id)?.ok_or(ApiError::NotFound)?;
+        crate::auth::authorize(db, &user, &job.team_id, Role::Viewer)?;
     }
     let after = query.after.unwrap_or(0);
     let stream = async_stream::stream! {
@@ -477,9 +477,10 @@ pub async fn job_events(
         let mut waits = 0u32;
         loop {
             let snapshot = {
-                let Ok(db) = state.db() else { break };
-                let events = db::events_after(&db, &id, last, 200).unwrap_or_default();
-                let (status, finished_at) = db::job(&db, &id)
+                let db = state.store();
+                let events = db.events_after(&id, last, 200).unwrap_or_default();
+                let (status, finished_at) = db
+                    .job(&id)
                     .ok()
                     .flatten()
                     .map(|job| (job.status, job.finished_at))
@@ -599,11 +600,11 @@ pub async fn launch_workflow(
         return Err(ApiError::bad("extra_vars_must_be_an_object"));
     }
     let run_id = jobs::launch_workflow(&state, &team, &id, extra, &user.username, "manual")?;
-    let db = state.db()?;
-    let run = db::workflow_job(&db, &run_id)?.ok_or(ApiError::NotFound)?;
+    let db = state.store();
+    let run = db.workflow_job(&run_id)?.ok_or(ApiError::NotFound)?;
     // The connection mutex is not re-entrant. A second lock here froze every
     // request, including health checks, while this handler still held it.
-    Ok(accepted(run_json(&db, &run)?))
+    Ok(accepted(run_json(db, &run)?))
 }
 
 pub async fn get_workflow_job(
@@ -611,10 +612,10 @@ pub async fn get_workflow_job(
     user: AuthUser,
     Path(id): Path<String>,
 ) -> AppResult<Json<Value>> {
-    let db = state.db()?;
-    let run = db::workflow_job(&db, &id)?.ok_or(ApiError::NotFound)?;
-    crate::auth::authorize_connection(&db, &user, &run.team_id, Role::Viewer)?;
-    Ok(Json(run_json(&db, &run)?))
+    let db = state.store();
+    let run = db.workflow_job(&id)?.ok_or(ApiError::NotFound)?;
+    crate::auth::authorize(db, &user, &run.team_id, Role::Viewer)?;
+    Ok(Json(run_json(db, &run)?))
 }
 
 pub async fn list_hooks(
@@ -1097,18 +1098,18 @@ fn hook_json(hook: &Hook, reveal_token: bool) -> Value {
     })
 }
 
-fn run_json(db: &rusqlite::Connection, run: &db::WorkflowJob) -> AppResult<Value> {
+fn run_json(db: &dyn crate::backend::Backend, run: &db::WorkflowJob) -> AppResult<Value> {
     let graph = run
         .workflow_id
         .as_deref()
-        .and_then(|id| db::workflow(db, id).ok().flatten())
+        .and_then(|id| db.workflow(id).ok().flatten())
         .map(|item| db::json_object(&item.graph))
         .unwrap_or_else(|| json!({"nodes": [], "edges": []}));
-    let nodes = db::workflow_nodes(db, &run.id)?;
+    let nodes = db.workflow_nodes(&run.id)?;
     let mut node_rows = Vec::with_capacity(nodes.len());
     for node in &nodes {
         let job = match &node.job_id {
-            Some(id) => db::job(db, id)?,
+            Some(id) => db.job(id)?,
             None => None,
         };
         node_rows.push(json!({
@@ -1181,8 +1182,7 @@ mod tests {
                 db::insert_event(&db, "job", "stdout", &format!("line-{i}")).unwrap();
             }
         }
-        let db = state.db().unwrap();
-        let events = events_for_page(&db, "job").unwrap();
+        let events = events_for_page(state.store(), "job").unwrap();
         let gaps: Vec<_> = events
             .iter()
             .filter(|event| event.stream == "gap")
@@ -1208,8 +1208,7 @@ mod tests {
                 db::insert_event(&db, "other", "stdout", &format!("other-{i}")).unwrap();
             }
         }
-        let db = state.db().unwrap();
-        let events = events_for_page(&db, "job").unwrap();
+        let events = events_for_page(state.store(), "job").unwrap();
         let gaps: Vec<_> = events
             .iter()
             .filter(|event| event.stream == "gap")
@@ -1217,11 +1216,17 @@ mod tests {
         assert_eq!(gaps.len(), 1);
         assert_eq!(gaps[0].line, "500");
         assert_eq!(
-            db::events_count_between(&db, "job", 0, i64::MAX).unwrap(),
+            state
+                .store()
+                .events_count_between("job", 0, i64::MAX)
+                .unwrap(),
             2_500
         );
         assert_eq!(
-            db::events_count_between(&db, "other", 0, i64::MAX).unwrap(),
+            state
+                .store()
+                .events_count_between("other", 0, i64::MAX)
+                .unwrap(),
             2_500
         );
         assert!(events.iter().all(|event| !event.line.starts_with("other-")));

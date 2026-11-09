@@ -13,8 +13,9 @@ use rusqlite::params;
 use crate::config::{DatabaseConfig, PostgresConfig, SslMode};
 use crate::db::{
     self, ApiToken, Credential, CredentialUsage, Delivery, Environment, Hook, Inventory,
-    InventorySource, Job, JobActivity, Member, NewDelivery, Organization, Project, Schedule, Team,
-    Template, User, UserMembership, Workflow,
+    InventorySource, Job, JobActivity, JobEvent, JobQuery, Member, NewDelivery, Organization,
+    Project, Schedule, Team, Template, User, UserMembership, Workflow, WorkflowJob,
+    WorkflowNodeRow,
 };
 use crate::error::{ApiError, AppResult};
 
@@ -200,6 +201,30 @@ pub(crate) trait Backend: Send + Sync {
     fn delete_hook(&self, id: &str, team_id: &str) -> AppResult<()>;
     fn list_deliveries(&self, team_id: &str, limit: i64) -> AppResult<Vec<Delivery>>;
     fn insert_delivery(&self, item: &NewDelivery<'_>) -> AppResult<()>;
+    fn job(&self, id: &str) -> AppResult<Option<Job>>;
+    fn list_jobs(&self, team_id: &str, query: &JobQuery) -> AppResult<(Vec<Job>, i64)>;
+    fn insert_job(&self, item: &Job) -> AppResult<()>;
+    fn mark_running(&self, id: &str) -> AppResult<bool>;
+    fn set_failed_hosts(&self, id: &str, failed_hosts: &str) -> AppResult<()>;
+    fn set_job_parameters(&self, id: &str, parameters: &str) -> AppResult<()>;
+    fn finish_job(&self, id: &str, status: &str) -> AppResult<bool>;
+    fn insert_event(&self, job_id: &str, stream: &str, line: &str) -> AppResult<()>;
+    fn events_after(&self, job_id: &str, after: i64, limit: i64) -> AppResult<Vec<JobEvent>>;
+    fn events_count_between(&self, job_id: &str, after: i64, before: i64) -> AppResult<i64>;
+    fn events_bytes(&self, job_id: &str) -> AppResult<i64>;
+    fn events_last(&self, job_id: &str, limit: i64) -> AppResult<Vec<JobEvent>>;
+    fn workflow_job(&self, id: &str) -> AppResult<Option<WorkflowJob>>;
+    fn insert_workflow_job(&self, item: &WorkflowJob) -> AppResult<()>;
+    fn set_workflow_status(&self, id: &str, status: &str, finish: bool) -> AppResult<()>;
+    fn insert_workflow_node(&self, workflow_job_id: &str, node_id: &str) -> AppResult<()>;
+    fn set_workflow_node(
+        &self,
+        workflow_job_id: &str,
+        node_id: &str,
+        phase: &str,
+        job_id: Option<&str>,
+    ) -> AppResult<()>;
+    fn workflow_nodes(&self, workflow_job_id: &str) -> AppResult<Vec<WorkflowNodeRow>>;
     fn recent_jobs(&self, team_id: &str, limit: i64) -> AppResult<Vec<Job>>;
     fn job_activity(&self, team_id: &str, from: &str, to: &str) -> AppResult<Vec<JobActivity>>;
     fn import_report(&self) -> AppResult<Option<serde_json::Value>>;
@@ -885,6 +910,102 @@ impl Backend for SqliteBackend {
         db::insert_delivery(&conn, *item)
     }
 
+    fn job(&self, id: &str) -> AppResult<Option<Job>> {
+        let conn = lock(&self.conn)?;
+        db::job(&conn, id)
+    }
+
+    fn list_jobs(&self, team_id: &str, query: &JobQuery) -> AppResult<(Vec<Job>, i64)> {
+        let conn = lock(&self.conn)?;
+        db::list_jobs(&conn, team_id, query)
+    }
+
+    fn insert_job(&self, item: &Job) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::insert_job(&conn, item)
+    }
+
+    fn mark_running(&self, id: &str) -> AppResult<bool> {
+        let conn = lock(&self.conn)?;
+        db::mark_running(&conn, id)
+    }
+
+    fn set_failed_hosts(&self, id: &str, failed_hosts: &str) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::set_failed_hosts(&conn, id, failed_hosts)
+    }
+
+    fn set_job_parameters(&self, id: &str, parameters: &str) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::set_job_parameters(&conn, id, parameters)
+    }
+
+    fn finish_job(&self, id: &str, status: &str) -> AppResult<bool> {
+        let conn = lock(&self.conn)?;
+        db::finish_job(&conn, id, status)
+    }
+
+    fn insert_event(&self, job_id: &str, stream: &str, line: &str) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::insert_event(&conn, job_id, stream, line)
+    }
+
+    fn events_after(&self, job_id: &str, after: i64, limit: i64) -> AppResult<Vec<JobEvent>> {
+        let conn = lock(&self.conn)?;
+        db::events_after(&conn, job_id, after, limit)
+    }
+
+    fn events_count_between(&self, job_id: &str, after: i64, before: i64) -> AppResult<i64> {
+        let conn = lock(&self.conn)?;
+        db::events_count_between(&conn, job_id, after, before)
+    }
+
+    fn events_bytes(&self, job_id: &str) -> AppResult<i64> {
+        let conn = lock(&self.conn)?;
+        db::events_bytes(&conn, job_id)
+    }
+
+    fn events_last(&self, job_id: &str, limit: i64) -> AppResult<Vec<JobEvent>> {
+        let conn = lock(&self.conn)?;
+        db::events_last(&conn, job_id, limit)
+    }
+
+    fn workflow_job(&self, id: &str) -> AppResult<Option<WorkflowJob>> {
+        let conn = lock(&self.conn)?;
+        db::workflow_job(&conn, id)
+    }
+
+    fn insert_workflow_job(&self, item: &WorkflowJob) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::insert_workflow_job(&conn, item)
+    }
+
+    fn set_workflow_status(&self, id: &str, status: &str, finish: bool) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::set_workflow_status(&conn, id, status, finish)
+    }
+
+    fn insert_workflow_node(&self, workflow_job_id: &str, node_id: &str) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::insert_workflow_node(&conn, workflow_job_id, node_id)
+    }
+
+    fn set_workflow_node(
+        &self,
+        workflow_job_id: &str,
+        node_id: &str,
+        phase: &str,
+        job_id: Option<&str>,
+    ) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::set_workflow_node(&conn, workflow_job_id, node_id, phase, job_id)
+    }
+
+    fn workflow_nodes(&self, workflow_job_id: &str) -> AppResult<Vec<WorkflowNodeRow>> {
+        let conn = lock(&self.conn)?;
+        db::workflow_nodes(&conn, workflow_job_id)
+    }
+
     fn recent_jobs(&self, team_id: &str, limit: i64) -> AppResult<Vec<Job>> {
         let conn = lock(&self.conn)?;
         let (jobs, _) = db::list_jobs(
@@ -1272,6 +1393,38 @@ fn row_job_activity(row: &tokio_postgres::Row) -> AppResult<JobActivity> {
     })
 }
 
+fn row_job_event(row: &tokio_postgres::Row) -> AppResult<JobEvent> {
+    Ok(JobEvent {
+        id: row.try_get(0)?,
+        ts: row.try_get(1)?,
+        stream: row.try_get(2)?,
+        line: row.try_get(3)?,
+    })
+}
+
+fn row_workflow_job(row: &tokio_postgres::Row) -> AppResult<WorkflowJob> {
+    Ok(WorkflowJob {
+        id: row.try_get(0)?,
+        workflow_id: row.try_get(1)?,
+        team_id: row.try_get(2)?,
+        name: row.try_get(3)?,
+        status: row.try_get(4)?,
+        extra_vars: row.try_get(5)?,
+        launched_by: row.try_get(6)?,
+        trigger: row.try_get(7)?,
+        created_at: row.try_get(8)?,
+        finished_at: row.try_get(9)?,
+    })
+}
+
+fn row_workflow_node(row: &tokio_postgres::Row) -> AppResult<WorkflowNodeRow> {
+    Ok(WorkflowNodeRow {
+        node_id: row.try_get(0)?,
+        phase: row.try_get(1)?,
+        job_id: row.try_get(2)?,
+    })
+}
+
 fn row_team(row: &tokio_postgres::Row) -> AppResult<Team> {
     Ok(Team {
         id: row.try_get(0)?,
@@ -1338,6 +1491,19 @@ const USER_COLUMNS: &str =
 const JOB_COLUMNS: &str = "id, team_id, template_id, workflow_job_id, workflow_node_id, name, \
      tool, status, extra_vars, launched_by, trigger, started_at, finished_at, created_at, \
      parameters, failed_hosts";
+
+const JOB_FILTER: &str = "team_id = $1
+  AND ($2 = ''
+    OR strpos(lower(name), lower($2)) > 0
+    OR strpos(lower(tool), lower($2)) > 0
+    OR strpos(lower(status), lower($2)) > 0
+    OR strpos(lower(trigger), lower($2)) > 0)
+  AND ($3 = '' OR status = $3)
+  AND ($4 = '' OR tool = $4)
+  AND ($5 = '' OR trigger = $5)
+  AND ($6 = '' OR template_id = $6)
+  AND ($7 = '' OR created_at >= $7)
+  AND ($8 = '' OR created_at <= $8)";
 
 const TEAM_COLUMNS: &str = "t.id, t.name, t.description, t.ldap_group, t.created_at, \
      COALESCE(t.organization_id, ''), COALESCE(o.name, '')";
@@ -3623,6 +3789,342 @@ impl Backend for PostgresBackend {
                 )
                 .await?;
             Ok(())
+        })
+    }
+
+    fn job(&self, id: &str) -> AppResult<Option<Job>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let row = client
+                .query_opt(
+                    &format!("SELECT {JOB_COLUMNS} FROM jobs WHERE id = $1"),
+                    &[&id],
+                )
+                .await?;
+            row.as_ref().map(row_job).transpose()
+        })
+    }
+
+    fn list_jobs(&self, team_id: &str, query: &JobQuery) -> AppResult<(Vec<Job>, i64)> {
+        let limit = query.limit.clamp(1, 100);
+        let offset = query.offset.max(0);
+        block_on(async {
+            let client = self.client.lock().await;
+            let rows = client
+                .query(
+                    &format!(
+                        "SELECT {JOB_COLUMNS} FROM jobs WHERE {JOB_FILTER}
+                         ORDER BY created_at DESC, id DESC LIMIT $9 OFFSET $10"
+                    ),
+                    &[
+                        &team_id,
+                        &query.q,
+                        &query.status,
+                        &query.tool,
+                        &query.trigger,
+                        &query.template_id,
+                        &query.since,
+                        &query.until,
+                        &limit,
+                        &offset,
+                    ],
+                )
+                .await?;
+            let items = rows.iter().map(row_job).collect::<AppResult<Vec<_>>>()?;
+            let total = client
+                .query_one(
+                    &format!("SELECT COUNT(*) FROM jobs WHERE {JOB_FILTER}"),
+                    &[
+                        &team_id,
+                        &query.q,
+                        &query.status,
+                        &query.tool,
+                        &query.trigger,
+                        &query.template_id,
+                        &query.since,
+                        &query.until,
+                    ],
+                )
+                .await?
+                .get(0);
+            Ok((items, total))
+        })
+    }
+
+    fn insert_job(&self, item: &Job) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            client
+                .execute(
+                    "INSERT INTO jobs (
+                        id, team_id, template_id, workflow_job_id, workflow_node_id, name, tool,
+                        status, extra_vars, launched_by, trigger, started_at, finished_at,
+                        created_at, parameters, failed_hosts
+                     ) VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+                        $16
+                     )",
+                    &[
+                        &item.id,
+                        &item.team_id,
+                        &item.template_id,
+                        &item.workflow_job_id,
+                        &item.workflow_node_id,
+                        &item.name,
+                        &item.tool,
+                        &item.status,
+                        &item.extra_vars,
+                        &item.launched_by,
+                        &item.trigger,
+                        &item.started_at,
+                        &item.finished_at,
+                        &item.created_at,
+                        &item.parameters,
+                        &item.failed_hosts,
+                    ],
+                )
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn mark_running(&self, id: &str) -> AppResult<bool> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let changed = client
+                .execute(
+                    "UPDATE jobs SET status = 'running', started_at = COALESCE(started_at, $2)
+                     WHERE id = $1 AND status = 'pending'",
+                    &[&id, &db::now()],
+                )
+                .await?;
+            Ok(changed == 1)
+        })
+    }
+
+    fn set_failed_hosts(&self, id: &str, failed_hosts: &str) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            client
+                .execute(
+                    "UPDATE jobs SET failed_hosts = $2 WHERE id = $1",
+                    &[&id, &failed_hosts],
+                )
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn set_job_parameters(&self, id: &str, parameters: &str) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            client
+                .execute(
+                    "UPDATE jobs SET parameters = $2 WHERE id = $1",
+                    &[&id, &parameters],
+                )
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn finish_job(&self, id: &str, status: &str) -> AppResult<bool> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let changed = client
+                .execute(
+                    "UPDATE jobs SET status = $2, finished_at = $3
+                     WHERE id = $1 AND status IN ('pending', 'running')",
+                    &[&id, &status, &db::now()],
+                )
+                .await?;
+            Ok(changed == 1)
+        })
+    }
+
+    fn insert_event(&self, job_id: &str, stream: &str, line: &str) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            client
+                .execute(
+                    "INSERT INTO job_events (job_id, ts, stream, line) VALUES ($1, $2, $3, $4)",
+                    &[&job_id, &db::now(), &stream, &line],
+                )
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn events_after(&self, job_id: &str, after: i64, limit: i64) -> AppResult<Vec<JobEvent>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let rows = client
+                .query(
+                    "SELECT id, ts, stream, line FROM job_events
+                     WHERE job_id = $1 AND id > $2 ORDER BY id LIMIT $3",
+                    &[&job_id, &after, &limit],
+                )
+                .await?;
+            rows.iter().map(row_job_event).collect()
+        })
+    }
+
+    fn events_count_between(&self, job_id: &str, after: i64, before: i64) -> AppResult<i64> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let row = client
+                .query_one(
+                    "SELECT COUNT(*) FROM job_events
+                     WHERE job_id = $1 AND id > $2 AND id < $3",
+                    &[&job_id, &after, &before],
+                )
+                .await?;
+            Ok(row.get(0))
+        })
+    }
+
+    fn events_bytes(&self, job_id: &str) -> AppResult<i64> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let row = client
+                .query_one(
+                    "SELECT COALESCE(SUM(octet_length(line) + 1), 0)
+                     FROM job_events WHERE job_id = $1",
+                    &[&job_id],
+                )
+                .await?;
+            Ok(row.get(0))
+        })
+    }
+
+    fn events_last(&self, job_id: &str, limit: i64) -> AppResult<Vec<JobEvent>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let rows = client
+                .query(
+                    "SELECT id, ts, stream, line FROM job_events
+                     WHERE job_id = $1 ORDER BY id DESC LIMIT $2",
+                    &[&job_id, &limit],
+                )
+                .await?;
+            let mut events = rows
+                .iter()
+                .map(row_job_event)
+                .collect::<AppResult<Vec<_>>>()?;
+            events.reverse();
+            Ok(events)
+        })
+    }
+
+    fn workflow_job(&self, id: &str) -> AppResult<Option<WorkflowJob>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let row = client
+                .query_opt(
+                    "SELECT id, workflow_id, team_id, name, status, extra_vars, launched_by,
+                            trigger, created_at, finished_at
+                     FROM workflow_jobs WHERE id = $1",
+                    &[&id],
+                )
+                .await?;
+            row.as_ref().map(row_workflow_job).transpose()
+        })
+    }
+
+    fn insert_workflow_job(&self, item: &WorkflowJob) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            client
+                .execute(
+                    "INSERT INTO workflow_jobs (
+                        id, workflow_id, team_id, name, status, extra_vars, launched_by,
+                        trigger, created_at, finished_at
+                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                    &[
+                        &item.id,
+                        &item.workflow_id,
+                        &item.team_id,
+                        &item.name,
+                        &item.status,
+                        &item.extra_vars,
+                        &item.launched_by,
+                        &item.trigger,
+                        &item.created_at,
+                        &item.finished_at,
+                    ],
+                )
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn set_workflow_status(&self, id: &str, status: &str, finish: bool) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            if finish {
+                client
+                    .execute(
+                        "UPDATE workflow_jobs SET status = $2, finished_at = $3 WHERE id = $1",
+                        &[&id, &status, &db::now()],
+                    )
+                    .await?;
+            } else {
+                client
+                    .execute(
+                        "UPDATE workflow_jobs SET status = $2 WHERE id = $1",
+                        &[&id, &status],
+                    )
+                    .await?;
+            }
+            Ok(())
+        })
+    }
+
+    fn insert_workflow_node(&self, workflow_job_id: &str, node_id: &str) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            client
+                .execute(
+                    "INSERT INTO workflow_nodes (workflow_job_id, node_id, phase, job_id)
+                     VALUES ($1, $2, 'pending', NULL)",
+                    &[&workflow_job_id, &node_id],
+                )
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn set_workflow_node(
+        &self,
+        workflow_job_id: &str,
+        node_id: &str,
+        phase: &str,
+        job_id: Option<&str>,
+    ) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            client
+                .execute(
+                    "UPDATE workflow_nodes SET phase = $3, job_id = COALESCE($4, job_id)
+                     WHERE workflow_job_id = $1 AND node_id = $2",
+                    &[&workflow_job_id, &node_id, &phase, &job_id],
+                )
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn workflow_nodes(&self, workflow_job_id: &str) -> AppResult<Vec<WorkflowNodeRow>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let rows = client
+                .query(
+                    "SELECT node_id, phase, job_id FROM workflow_nodes
+                     WHERE workflow_job_id = $1",
+                    &[&workflow_job_id],
+                )
+                .await?;
+            rows.iter().map(row_workflow_node).collect()
         })
     }
 

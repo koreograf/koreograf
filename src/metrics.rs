@@ -570,12 +570,10 @@ pub(crate) fn gauges_from_dir(data_dir: &Path, names: &HashMap<String, String>) 
 }
 
 fn team_names(state: &Shared, ids: &[String]) -> HashMap<String, String> {
-    let Ok(db) = state.db() else {
-        return HashMap::new();
-    };
+    let db = state.store();
     let mut names = HashMap::new();
     for id in ids {
-        if let Ok(Some(team)) = db::team_by_id(&db, id) {
+        if let Ok(Some(team)) = db.team_by_id(id) {
             names.insert(id.clone(), team.name);
         }
     }

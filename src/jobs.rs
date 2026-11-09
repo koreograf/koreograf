@@ -41,8 +41,8 @@ pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
     let settings = crate::settings::load(state)?;
     let id = Uuid::new_v4().to_string();
     {
-        let db = state.db()?;
-        let template = db::template(&db, &req.template_id)?.ok_or(ApiError::NotFound)?;
+        let db = state.store();
+        let template = db.template(&req.template_id)?.ok_or(ApiError::NotFound)?;
         if template.team_id != req.team_id {
             return Err(ApiError::Forbidden);
         }
@@ -73,7 +73,7 @@ pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
         }
         let parameters = parameters_for_launch(
             state,
-            &db,
+            db,
             &template,
             &req,
             default_environment,
@@ -81,7 +81,7 @@ pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
         )?;
         let parsed = db::json_object(&parameters);
         {
-            let workflow_id = workflow_definition_id(&db, req.workflow_job_id.as_deref())?;
+            let workflow_id = workflow_definition_id(db, req.workflow_job_id.as_deref())?;
             let requires_workflow = req
                 .workflow_job_id
                 .as_deref()
@@ -92,7 +92,7 @@ pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
                     settings.runner,
                     parameter_has_environment(&template, &parsed),
                 ),
-                &db,
+                db,
                 &template,
                 &parsed,
                 &req.launched_by,
@@ -141,7 +141,7 @@ pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
             parameters,
             failed_hosts: "[]".into(),
         };
-        db::insert_job(&db, &job)?;
+        db.insert_job(&job)?;
     }
     let shared = state.clone();
     let job_id = id.clone();
@@ -159,7 +159,7 @@ fn refuses_local_launch(local_jobs: LocalJobs, runner: RunnerMode, has_environme
 /// reject a delivery before any run starts, with the same rules as [`launch`].
 fn local_launch_refused(
     refused_by_policy: bool,
-    db: &rusqlite::Connection,
+    store: &dyn crate::backend::Backend,
     template: &db::Template,
     parameters: &Value,
     launched_by: &str,
@@ -172,8 +172,8 @@ fn local_launch_refused(
     let matches = crate::auth::command_matches_template(template, parameters);
     let requires_workflow = requires_workflow || !matches;
     let effective = template_with_saved_targets(template, parameters);
-    let allowed = crate::auth::launcher_is_admin(db, launched_by)?
-        && crate::auth::content_saved_by_admin(db, &effective, workflow_id, requires_workflow)?;
+    let allowed = crate::auth::launcher_is_admin(store, launched_by)?
+        && crate::auth::content_saved_by_admin(store, &effective, workflow_id, requires_workflow)?;
     Ok(!allowed)
 }
 
@@ -185,8 +185,8 @@ pub fn relaunch(
 ) -> AppResult<String> {
     let settings = crate::settings::load(state)?;
     let (team_id, template_id, extra, parameters, workflow_job_id) = {
-        let db = state.db()?;
-        let job = db::job(&db, source_id)?.ok_or(ApiError::NotFound)?;
+        let db = state.store();
+        let job = db.job(source_id)?.ok_or(ApiError::NotFound)?;
         if job.status != "failed" && job.status != "canceled" {
             return Err(ApiError::bad(
                 "only_a_failed_or_canceled_job_can_be_relaunched",
@@ -196,7 +196,8 @@ pub fn relaunch(
             .template_id
             .clone()
             .ok_or_else(|| ApiError::bad("this_job_s_template_is_missing"))?;
-        let template = db::template(&db, &template_id)?
+        let template = db
+            .template(&template_id)?
             .ok_or_else(|| ApiError::bad("this_job_s_template_is_missing"))?;
         if template.team_id != job.team_id {
             return Err(ApiError::Forbidden);
@@ -212,7 +213,7 @@ pub fn relaunch(
             job.parameters.clone()
         } else {
             capture_parameters(
-                &db,
+                db,
                 &template,
                 &db::json_object(&job.extra_vars),
                 None,
@@ -297,13 +298,13 @@ fn template_with_saved_targets(template: &db::Template, params: &Value) -> db::T
 }
 
 fn workflow_definition_id(
-    db: &rusqlite::Connection,
+    store: &dyn crate::backend::Backend,
     workflow_job_id: Option<&str>,
 ) -> AppResult<Option<String>> {
     let Some(id) = workflow_job_id.filter(|id| !id.is_empty()) else {
         return Ok(None);
     };
-    Ok(db::workflow_job(db, id)?.and_then(|run| run.workflow_id))
+    Ok(store.workflow_job(id)?.and_then(|run| run.workflow_id))
 }
 
 fn stored_parameters(raw: &str) -> AppResult<String> {
@@ -319,7 +320,7 @@ fn stored_parameters(raw: &str) -> AppResult<String> {
 }
 
 fn parameters_for_node(
-    db: &rusqlite::Connection,
+    db: &dyn crate::backend::Backend,
     template: &db::Template,
     node: &workflow::GraphNode,
     workflow_extra: &Value,
@@ -378,14 +379,15 @@ fn parameters_for_node(
 }
 
 fn refresh_inventory(
-    db: &rusqlite::Connection,
+    db: &dyn crate::backend::Backend,
     team_id: &str,
     params: &mut serde_json::Map<String, Value>,
 ) -> AppResult<()> {
     match params.get("inventory_id").and_then(Value::as_str) {
         Some(id) if !id.is_empty() => {
-            let inventory =
-                db::inventory(db, id)?.ok_or_else(|| ApiError::bad("inventory_is_missing"))?;
+            let inventory = db
+                .inventory(id)?
+                .ok_or_else(|| ApiError::bad("inventory_is_missing"))?;
             if inventory.team_id != team_id {
                 return Err(ApiError::bad("the_inventory_belongs_to_another_team"));
             }
@@ -401,7 +403,7 @@ fn refresh_inventory(
 }
 
 fn refresh_credential(
-    db: &rusqlite::Connection,
+    db: &dyn crate::backend::Backend,
     team_id: &str,
     params: &mut serde_json::Map<String, Value>,
 ) -> AppResult<()> {
@@ -417,8 +419,9 @@ fn refresh_credential(
         params.insert("credentials".into(), json!([]));
         return Ok(());
     };
-    let credential =
-        db::credential(db, &id)?.ok_or_else(|| ApiError::bad("credential_is_missing"))?;
+    let credential = db
+        .credential(&id)?
+        .ok_or_else(|| ApiError::bad("credential_is_missing"))?;
     if credential.team_id != team_id {
         return Err(ApiError::bad("the_credential_belongs_to_another_team"));
     }
@@ -474,7 +477,7 @@ fn replace_credential_kind(list: &mut Vec<Value>, credential: &db::Credential) {
 
 fn parameters_for_launch(
     state: &Shared,
-    db: &rusqlite::Connection,
+    db: &dyn crate::backend::Backend,
     template: &db::Template,
     req: &LaunchRequest,
     default_environment: &str,
@@ -491,7 +494,7 @@ fn parameters_for_launch(
             .and_then(Value::as_str)
             .is_some_and(|id| !id.is_empty());
         if !has_environment && !default_environment.is_empty() {
-            if let Some(item) = db::environment(db, default_environment)? {
+            if let Some(item) = db.environment(default_environment)? {
                 if let Some(map) = params.as_object_mut() {
                     map.insert("environment_id".into(), json!(item.id));
                     map.insert("environment_name".into(), json!(item.name));
@@ -532,8 +535,9 @@ fn parameters_for_launch(
     if let Some(inventory_id) = &req.overrides.inventory_id {
         let inventory_id = blank_text(inventory_id);
         if let Some(id) = &inventory_id {
-            let inventory =
-                db::inventory(db, id)?.ok_or_else(|| ApiError::bad("inventory_is_missing"))?;
+            let inventory = db
+                .inventory(id)?
+                .ok_or_else(|| ApiError::bad("inventory_is_missing"))?;
             if inventory.team_id != template.team_id {
                 return Err(ApiError::bad("the_inventory_belongs_to_another_team"));
             }
@@ -585,7 +589,7 @@ fn blank_text(value: &str) -> Option<String> {
 
 fn credentials_for_launch(
     state: &Shared,
-    db: &rusqlite::Connection,
+    db: &dyn crate::backend::Backend,
     team_id: &str,
     tool: &str,
     ids: &[String],
@@ -596,8 +600,9 @@ fn credentials_for_launch(
         if id.is_empty() {
             return Err(ApiError::bad("credential_is_missing"));
         }
-        let credential =
-            db::credential(db, id)?.ok_or_else(|| ApiError::bad("credential_is_missing"))?;
+        let credential = db
+            .credential(id)?
+            .ok_or_else(|| ApiError::bad("credential_is_missing"))?;
         if !crate::credentials::kind_fits_tool(tool, &credential.kind) {
             return Err(ApiError::bad("this_credential_kind_does_not_fit_the_tool"));
         }
@@ -635,7 +640,7 @@ fn merge_prompt_spec(base: &Value, overlay: &Value) -> Result<Value, String> {
 }
 
 fn capture_parameters(
-    db: &rusqlite::Connection,
+    db: &dyn crate::backend::Backend,
     template: &db::Template,
     request_extra: &Value,
     credential_override: Option<&[String]>,
@@ -645,20 +650,21 @@ fn capture_parameters(
     let project_name = template
         .project_id
         .as_deref()
-        .and_then(|id| db::project(db, id).ok().flatten().map(|item| item.name));
+        .and_then(|id| db.project(id).ok().flatten().map(|item| item.name));
     let inventory_name = template
         .inventory_id
         .as_deref()
-        .and_then(|id| db::inventory(db, id).ok().flatten().map(|item| item.name));
+        .and_then(|id| db.inventory(id).ok().flatten().map(|item| item.name));
     let credential = template
         .credential_id
         .as_deref()
-        .and_then(|id| db::credential(db, id).ok().flatten())
+        .and_then(|id| db.credential(id).ok().flatten())
         .map(|item| (item.name, item.kind));
     let linked = if let Some(ids) = credential_override {
         ids.to_vec()
     } else {
-        let linked = db::template_credential_ids(db, &template.id)
+        let linked = db
+            .template_credential_ids(&template.id)
             .ok()
             .unwrap_or_default();
         if linked.is_empty() {
@@ -673,14 +679,14 @@ fn capture_parameters(
     };
     let credentials = linked
         .iter()
-        .filter_map(|id| db::credential(db, id).ok().flatten())
+        .filter_map(|id| db.credential(id).ok().flatten())
         .map(|item| credential_entry(&item))
         .collect::<Vec<_>>();
     let environment_id =
         runner::resolved_environment_id(template, default_environment, controller_can_run);
     let environment = environment_id
         .as_deref()
-        .and_then(|id| db::environment(db, id).ok().flatten())
+        .and_then(|id| db.environment(id).ok().flatten())
         .map(|item| (item.name, item.image));
     json!({
         "template_id": template.id,
@@ -746,13 +752,13 @@ pub async fn sync_project(state: &Shared, project: &db::Project) -> AppResult<St
 
 pub fn cancel(state: &Shared, job_id: &str) -> AppResult<()> {
     let unstarted = {
-        let db = state.db()?;
-        let job = db::job(&db, job_id)?.ok_or(ApiError::NotFound)?;
+        let db = state.store();
+        let job = db.job(job_id)?.ok_or(ApiError::NotFound)?;
         if matches!(job.status.as_str(), "successful" | "failed" | "canceled") {
             return Ok(());
         }
-        let changed = db::finish_job(&db, job_id, "canceled")?;
-        db::insert_event(&db, job_id, "system", "Cancel requested.")?;
+        let changed = db.finish_job(job_id, "canceled")?;
+        db.insert_event(job_id, "system", "Cancel requested.")?;
         changed.then(|| crate::metrics::job_labels(&job))
     };
     if let Some(labels) = unstarted {
@@ -806,8 +812,8 @@ pub fn launch_workflow(
 ) -> AppResult<String> {
     let id = Uuid::new_v4().to_string();
     {
-        let db = state.db()?;
-        let item = db::workflow(&db, workflow_id)?.ok_or(ApiError::NotFound)?;
+        let db = state.store();
+        let item = db.workflow(workflow_id)?.ok_or(ApiError::NotFound)?;
         if item.team_id != team_id {
             return Err(ApiError::Forbidden);
         }
@@ -818,7 +824,7 @@ pub fn launch_workflow(
         }
         workflow::validate(&graph).map_err(ApiError::bad)?;
         for node in &graph.nodes {
-            let template = db::template(&db, &node.template_id)?.ok_or_else(|| {
+            let template = db.template(&node.template_id)?.ok_or_else(|| {
                 ApiError::bad_vars("template.missing_named", [("name", node.name.as_str())])
             })?;
             if template.team_id != team_id {
@@ -840,9 +846,9 @@ pub fn launch_workflow(
             created_at: db::now(),
             finished_at: None,
         };
-        db::insert_workflow_job(&db, &run)?;
+        db.insert_workflow_job(&run)?;
         for node in &graph.nodes {
-            db::insert_workflow_node(&db, &id, &node.id)?;
+            db.insert_workflow_node(&id, &node.id)?;
         }
     }
     let shared = state.clone();
@@ -850,9 +856,7 @@ pub fn launch_workflow(
     tokio::spawn(async move {
         if let Err(err) = drive(shared.clone(), run_id.clone()).await {
             tracing::error!(error = %err, workflow_job = %run_id, "workflow");
-            if let Ok(db) = shared.db() {
-                let _ = db::set_workflow_status(&db, &run_id, "failed", true);
-            }
+            let _ = shared.store().set_workflow_status(&run_id, "failed", true);
         }
     });
     Ok(id)
@@ -860,9 +864,10 @@ pub fn launch_workflow(
 
 async fn drive(state: Shared, wf_job_id: String) -> AppResult<()> {
     let (graph, team_id, extra) = {
-        let db = state.db()?;
-        let run = db::workflow_job(&db, &wf_job_id)?.ok_or(ApiError::NotFound)?;
-        let item = db::workflow(&db, run.workflow_id.as_deref().unwrap_or(""))?
+        let db = state.store();
+        let run = db.workflow_job(&wf_job_id)?.ok_or(ApiError::NotFound)?;
+        let item = db
+            .workflow(run.workflow_id.as_deref().unwrap_or(""))?
             .ok_or(ApiError::NotFound)?;
         let graph: workflow::Graph = serde_json::from_str(&item.graph)
             .map_err(|_| ApiError::bad("the_workflow_graph_is_invalid"))?;
@@ -872,16 +877,18 @@ async fn drive(state: Shared, wf_job_id: String) -> AppResult<()> {
         let phase = refresh(&state, &wf_job_id, &graph)?;
         if workflow::settled(&graph, &phase) {
             let status = workflow::final_status(&graph, &phase);
-            let db = state.db()?;
-            db::set_workflow_status(&db, &wf_job_id, status, true)?;
+            state
+                .store()
+                .set_workflow_status(&wf_job_id, status, true)?;
             return Ok(());
         }
         let steps = workflow::advance(&graph, &phase);
         if steps.is_empty() {
             let running = phase.values().any(|item| *item == NodePhase::Running);
             if !running {
-                let db = state.db()?;
-                db::set_workflow_status(&db, &wf_job_id, "failed", true)?;
+                state
+                    .store()
+                    .set_workflow_status(&wf_job_id, "failed", true)?;
                 return Ok(());
             }
             tokio::time::sleep(Duration::from_millis(400)).await;
@@ -891,8 +898,9 @@ async fn drive(state: Shared, wf_job_id: String) -> AppResult<()> {
             apply_step(&state, &wf_job_id, &graph, &team_id, &extra, step)?;
         }
     }
-    let db = state.db()?;
-    db::set_workflow_status(&db, &wf_job_id, "failed", true)?;
+    state
+        .store()
+        .set_workflow_status(&wf_job_id, "failed", true)?;
     Ok(())
 }
 
@@ -901,17 +909,17 @@ fn refresh(
     wf_job_id: &str,
     graph: &workflow::Graph,
 ) -> AppResult<HashMap<String, NodePhase>> {
-    let db = state.db()?;
-    let rows = db::workflow_nodes(&db, wf_job_id)?;
+    let db = state.store();
+    let rows = db.workflow_nodes(wf_job_id)?;
     let mut phase = HashMap::new();
     for row in rows {
         let mut current = NodePhase::parse(&row.phase);
         if !current.is_terminal() {
             if let Some(job_id) = &row.job_id {
-                if let Some(job) = db::job(&db, job_id)? {
+                if let Some(job) = db.job(job_id)? {
                     if matches!(job.status.as_str(), "successful" | "failed" | "canceled") {
                         current = NodePhase::parse(&job.status);
-                        db::set_workflow_node(&db, wf_job_id, &row.node_id, current.as_db(), None)?;
+                        db.set_workflow_node(wf_job_id, &row.node_id, current.as_db(), None)?;
                     } else {
                         current = NodePhase::Running;
                     }
@@ -936,8 +944,8 @@ fn apply_step(
 ) -> AppResult<()> {
     match step {
         workflow::Step::Skip(node_id) => {
-            let db = state.db()?;
-            db::set_workflow_node(&db, wf_job_id, &node_id, NodePhase::Skipped.as_db(), None)?;
+            let db = state.store();
+            db.set_workflow_node(wf_job_id, &node_id, NodePhase::Skipped.as_db(), None)?;
         }
         workflow::Step::Launch(node_id) => {
             let Some(node) = graph.nodes.iter().find(|item| item.id == node_id) else {
@@ -945,8 +953,8 @@ fn apply_step(
             };
             let prepared = {
                 let settings = crate::settings::load(state)?;
-                let db = state.db()?;
-                match db::template(&db, &node.template_id)? {
+                let db = state.store();
+                match db.template(&node.template_id)? {
                     Some(template) if template.team_id == team_id => {
                         let local_tool = runner::local_tool_available(state, &template.tool);
                         let controller_can_run = runner::controller_can_run(
@@ -955,7 +963,7 @@ fn apply_step(
                             local_tool,
                         );
                         parameters_for_node(
-                            &db,
+                            db,
                             &template,
                             node,
                             extra,
@@ -987,10 +995,11 @@ fn apply_step(
                     Err(err)
                 }
             };
-            let db = state.db()?;
+            let db = state.store();
             match launched {
                 Ok(job_id) => {
-                    let status = db::job(&db, &job_id)?
+                    let status = db
+                        .job(&job_id)?
                         .map(|job| job.status)
                         .unwrap_or_else(|| "failed".into());
                     let phase = match status.as_str() {
@@ -998,16 +1007,10 @@ fn apply_step(
                         "failed" | "canceled" => NodePhase::Failed,
                         _ => NodePhase::Running,
                     };
-                    db::set_workflow_node(&db, wf_job_id, &node_id, phase.as_db(), Some(&job_id))?;
+                    db.set_workflow_node(wf_job_id, &node_id, phase.as_db(), Some(&job_id))?;
                 }
                 Err(_) => {
-                    db::set_workflow_node(
-                        &db,
-                        wf_job_id,
-                        &node_id,
-                        NodePhase::Failed.as_db(),
-                        None,
-                    )?;
+                    db.set_workflow_node(wf_job_id, &node_id, NodePhase::Failed.as_db(), None)?;
                 }
             }
         }
@@ -1039,8 +1042,8 @@ fn workflow_hook_refuses_local_run(
         return Ok(false);
     }
     let settings = crate::settings::load(state)?;
-    let db = state.db()?;
-    let item = match db::workflow(&db, workflow_id)? {
+    let db = state.store();
+    let item = match db.workflow(workflow_id)? {
         Some(item) => item,
         None => return Ok(false),
     };
@@ -1052,7 +1055,7 @@ fn workflow_hook_refuses_local_run(
         Err(_) => return Ok(false),
     };
     for node in &graph.nodes {
-        let Some(template) = db::template(&db, &node.template_id)? else {
+        let Some(template) = db.template(&node.template_id)? else {
             continue;
         };
         if template.team_id != team_id {
@@ -1062,7 +1065,7 @@ fn workflow_hook_refuses_local_run(
         let controller_can_run =
             runner::controller_can_run(settings.runner, state.cfg.container_image, local_tool);
         let parameters = match parameters_for_node(
-            &db,
+            db,
             &template,
             node,
             extra,
@@ -1079,7 +1082,7 @@ fn workflow_hook_refuses_local_run(
                 settings.runner,
                 parameter_has_environment(&template, &parsed),
             ),
-            &db,
+            db,
             &template,
             &parsed,
             launched_by,
@@ -1339,10 +1342,11 @@ mod tests {
             .as_nanos();
         let dir = std::env::temp_dir().join(format!("koreograf-capture-env-{nanos}"));
         std::fs::create_dir_all(&dir).expect("dir");
-        let conn = db::open(&dir.join("koreograf.db")).expect("database");
+        let conn =
+            crate::backend::open(&crate::config::DatabaseConfig::Sqlite, &dir).expect("database");
         let template = template_without_environment();
         let kept = db::json_object(&capture_parameters(
-            &conn,
+            &*conn,
             &template,
             &json!({}),
             None,
@@ -1351,7 +1355,7 @@ mod tests {
         ));
         assert!(kept["environment_id"].is_null());
         let inherited = db::json_object(&capture_parameters(
-            &conn,
+            &*conn,
             &template,
             &json!({}),
             None,
