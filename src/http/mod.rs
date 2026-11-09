@@ -422,7 +422,10 @@ async fn health(State(state): State<Shared>) -> Response {
     }
 }
 
-async fn metrics(State(state): State<Shared>) -> impl IntoResponse {
+async fn metrics(State(state): State<Shared>, headers: HeaderMap) -> Response {
+    if !metrics_allowed(&state, &headers) {
+        return ApiError::Unauthorized.into_response();
+    }
     (
         [
             (
@@ -433,6 +436,23 @@ async fn metrics(State(state): State<Shared>) -> impl IntoResponse {
         ],
         crate::metrics::scrape(&state),
     )
+        .into_response()
+}
+
+fn metrics_allowed(state: &Shared, headers: &HeaderMap) -> bool {
+    let Some(expected) = crate::config::metrics_token() else {
+        return true;
+    };
+    if auth::bearer_token(headers).is_some_and(|token| token == expected) {
+        return true;
+    }
+    let Some(token) = auth::read_cookie(headers, "koreograf_session") else {
+        return false;
+    };
+    match state.store().user_by_session(&token) {
+        Ok(Some(user)) => user.is_admin && !user.disabled,
+        _ => false,
+    }
 }
 
 async fn not_found() -> ApiError {
