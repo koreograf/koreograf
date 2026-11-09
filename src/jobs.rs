@@ -1113,19 +1113,15 @@ pub fn accept_hook(
     if !hook.enabled {
         let summary = format!("{marker}Hook is disabled.");
         let id = Uuid::new_v4().to_string();
-        let db = state.db()?;
-        db::insert_delivery(
-            &db,
-            db::NewDelivery {
-                id: &id,
-                hook_id: &hook.id,
-                status: "ignored",
-                summary: &summary,
-                payload: &payload_text,
-                job_id: None,
-                workflow_job_id: None,
-            },
-        )?;
+        state.store().insert_delivery(&db::NewDelivery {
+            id: &id,
+            hook_id: &hook.id,
+            status: "ignored",
+            summary: &summary,
+            payload: &payload_text,
+            job_id: None,
+            workflow_job_id: None,
+        })?;
         return Ok(Dispatch {
             status: "ignored".into(),
             summary,
@@ -1144,19 +1140,15 @@ pub fn accept_hook(
             )
         };
         let summary = format!("{marker}{summary}");
-        let db = state.db()?;
-        db::insert_delivery(
-            &db,
-            db::NewDelivery {
-                id: &id,
-                hook_id: &hook.id,
-                status: "ignored",
-                summary: &summary,
-                payload: &payload_text,
-                job_id: None,
-                workflow_job_id: None,
-            },
-        )?;
+        state.store().insert_delivery(&db::NewDelivery {
+            id: &id,
+            hook_id: &hook.id,
+            status: "ignored",
+            summary: &summary,
+            payload: &payload_text,
+            job_id: None,
+            workflow_job_id: None,
+        })?;
         return Ok(Dispatch {
             status: "ignored".into(),
             summary,
@@ -1188,19 +1180,15 @@ pub fn accept_hook(
                         "{marker}Local runs are limited to administrators. Set KOREOGRAF_LOCAL_RUNNER_FOR=all on a trusted network or attach an execution environment with the Docker socket."
                     );
                     let id = Uuid::new_v4().to_string();
-                    let db = state.db()?;
-                    db::insert_delivery(
-                        &db,
-                        db::NewDelivery {
-                            id: &id,
-                            hook_id: &hook.id,
-                            status: "rejected",
-                            summary: &summary,
-                            payload: &payload_text,
-                            job_id: None,
-                            workflow_job_id: None,
-                        },
-                    )?;
+                    state.store().insert_delivery(&db::NewDelivery {
+                        id: &id,
+                        hook_id: &hook.id,
+                        status: "rejected",
+                        summary: &summary,
+                        payload: &payload_text,
+                        job_id: None,
+                        workflow_job_id: None,
+                    })?;
                     return Err(ApiError::bad("local_runs_are_limited_to_administrators"));
                 }
             }
@@ -1238,19 +1226,15 @@ pub fn accept_hook(
                         "{marker}Local runs are limited to administrators. Set KOREOGRAF_LOCAL_RUNNER_FOR=all on a trusted network or attach an execution environment with the Docker socket."
                     );
                     let id = Uuid::new_v4().to_string();
-                    let db = state.db()?;
-                    db::insert_delivery(
-                        &db,
-                        db::NewDelivery {
-                            id: &id,
-                            hook_id: &hook.id,
-                            status: "rejected",
-                            summary: &summary,
-                            payload: &payload_text,
-                            job_id: None,
-                            workflow_job_id: None,
-                        },
-                    )?;
+                    state.store().insert_delivery(&db::NewDelivery {
+                        id: &id,
+                        hook_id: &hook.id,
+                        status: "rejected",
+                        summary: &summary,
+                        payload: &payload_text,
+                        job_id: None,
+                        workflow_job_id: None,
+                    })?;
                     return Err(ApiError::bad("local_runs_are_limited_to_administrators"));
                 }
                 Err(error) => return Err(error),
@@ -1269,19 +1253,15 @@ pub fn accept_hook(
     );
     let id = Uuid::new_v4().to_string();
     {
-        let db = state.db()?;
-        db::insert_delivery(
-            &db,
-            db::NewDelivery {
-                id: &id,
-                hook_id: &hook.id,
-                status: "accepted",
-                summary: &summary,
-                payload: &payload_text,
-                job_id: first_job.as_deref(),
-                workflow_job_id: first_workflow.as_deref(),
-            },
-        )?;
+        state.store().insert_delivery(&db::NewDelivery {
+            id: &id,
+            hook_id: &hook.id,
+            status: "accepted",
+            summary: &summary,
+            payload: &payload_text,
+            job_id: first_job.as_deref(),
+            workflow_job_id: first_workflow.as_deref(),
+        })?;
     }
     Ok(Dispatch {
         status: "accepted".into(),

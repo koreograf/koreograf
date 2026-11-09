@@ -3089,6 +3089,7 @@ pub fn first_hook(c: &Connection, team_id: &str) -> AppResult<Option<Hook>> {
     .map_err(Into::into)
 }
 
+#[derive(Clone, Copy)]
 pub struct NewDelivery<'a> {
     pub id: &'a str,
     pub hook_id: &'a str,
