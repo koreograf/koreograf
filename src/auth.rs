@@ -74,10 +74,12 @@ impl FromRequestParts<Shared> for AuthUser {
         }
         let token =
             read_cookie(&parts.headers, "koreograf_session").ok_or(ApiError::Unauthorized)?;
-        let db = state.db()?;
-        let user = db::user_by_session(&db, &token)?.ok_or(ApiError::Unauthorized)?;
+        let user = state
+            .store()
+            .user_by_session(&token)?
+            .ok_or(ApiError::Unauthorized)?;
         if user.disabled {
-            db::delete_session(&db, &token)?;
+            state.store().delete_session(&token)?;
             return Err(ApiError::Unauthorized);
         }
         Ok(user.into())
@@ -97,8 +99,7 @@ pub fn bearer_token(headers: &HeaderMap) -> Option<String> {
 }
 
 pub fn api_token_user(state: &Shared, token: &str) -> AppResult<Option<AuthUser>> {
-    let db = state.db()?;
-    let Some(user) = db::user_by_api_token(&db, &hash_api_token(token))? else {
+    let Some(user) = state.store().user_by_api_token(&hash_api_token(token))? else {
         return Ok(None);
     };
     if user.disabled {

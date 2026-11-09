@@ -6,6 +6,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::backend::Backend;
 use crate::config::Config;
 use crate::crypto::{self, hash_password};
 use crate::db::{self, Environment, Hook, Inventory, InventorySource, Project, Template, Workflow};
@@ -60,6 +61,36 @@ pub fn seed(conn: &Connection, cfg: &Config) -> AppResult<Option<String>> {
         write_password_file(&cfg.data_dir.join("initial-admin-password"), password)?;
     }
     Ok(generated)
+}
+
+pub(crate) fn seed_postgres(backend: &dyn Backend, cfg: &Config) -> AppResult<Option<String>> {
+    backend.purge_sessions()?;
+    if backend.user_by_username(&cfg.admin_user)?.is_some() {
+        return Ok(None);
+    }
+    let (password, generated) = admin_credentials(cfg);
+    backend.insert_user(
+        &Uuid::new_v4().to_string(),
+        &cfg.admin_user,
+        "Administrator",
+        Some(&hash_password(&password)),
+        "local",
+        true,
+    )?;
+    if let Some(password) = &generated {
+        write_password_file(&cfg.data_dir.join("initial-admin-password"), password)?;
+    }
+    Ok(generated)
+}
+
+fn admin_credentials(cfg: &Config) -> (String, Option<String>) {
+    match &cfg.admin_password {
+        Some(password) => (password.clone(), None),
+        None => {
+            let password = crypto::random_password();
+            (password.clone(), Some(password))
+        }
+    }
 }
 
 fn ensure_admin(conn: &Connection, cfg: &Config) -> AppResult<Option<String>> {

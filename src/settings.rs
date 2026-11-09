@@ -3,9 +3,10 @@
 
 use std::collections::HashMap;
 
-use rusqlite::{params, Connection};
+use rusqlite::Connection;
 use serde_json::{json, Value};
 
+use crate::backend::Backend;
 use crate::config::{LdapConfig, RunnerMode, OUTPUT_LINES_MAX, OUTPUT_LINES_MIN};
 use crate::error::{ApiError, AppResult};
 use crate::Shared;
@@ -241,10 +242,7 @@ pub fn configured_mode(cfg: &crate::Config) -> RunnerMode {
 }
 
 pub fn load(state: &Shared) -> AppResult<Effective> {
-    let rows = {
-        let db = state.db()?;
-        read_rows(&db)?
-    };
+    let rows = state.store().settings_rows()?;
     if rows.get(SAVED).map(String::as_str) == Some("1") {
         let mut effective = from_saved(state, &rows)?;
         effective.runner = effective.runner.in_container(state.cfg.container_image);
@@ -272,18 +270,13 @@ pub fn view(state: &Shared) -> AppResult<Value> {
 
 pub fn save(state: &Shared, input: &SettingsWrite) -> AppResult<Value> {
     if input.reset {
-        let db = state.db()?;
-        db.execute("DELETE FROM settings", [])?;
-        drop(db);
+        state.store().replace_settings(&[])?;
         let effective = from_env(state);
         crate::tls::warn_directory(&effective.ldap);
         return Ok(public_json(&effective));
     }
     let current = load(state)?;
-    let draft = {
-        let db = state.db()?;
-        validate(input, &current, &db)?
-    };
+    let draft = validate(input, &current, state.store())?;
     let mut draft = draft;
     if state.cfg.container_image && draft.runner == RunnerMode::Local {
         tracing::warn!("The container image has no local runner; using docker.");
@@ -291,9 +284,6 @@ pub fn save(state: &Shared, input: &SettingsWrite) -> AppResult<Value> {
     }
     let ldap_secret = encrypt_secret(state, &draft.ldap_bind_password)?;
     let proxy_secret = encrypt_secret(state, &draft.proxy_password)?;
-    let mut db = state.db()?;
-    let tx = db.transaction()?;
-    tx.execute("DELETE FROM settings", [])?;
     let mut pairs = vec![
         (SAVED, "1".to_string()),
         ("ldap_url", draft.ldap_url.clone()),
@@ -331,14 +321,11 @@ pub fn save(state: &Shared, input: &SettingsWrite) -> AppResult<Value> {
     if let Some(secret) = proxy_secret {
         pairs.push((PROXY_PASSWORD, secret));
     }
-    for (key, value) in &pairs {
-        tx.execute(
-            "INSERT INTO settings (key, value) VALUES (?1, ?2)",
-            params![key, value],
-        )?;
-    }
-    tx.commit()?;
-    drop(db);
+    let pairs: Vec<(String, String)> = pairs
+        .into_iter()
+        .map(|(key, value)| (key.to_string(), value))
+        .collect();
+    state.store().replace_settings(&pairs)?;
     let mut effective = from_env(state);
     effective.saved = true;
     effective.unsupported_proxy = false;
@@ -524,7 +511,7 @@ fn empty_ldap() -> LdapConfig {
     }
 }
 
-fn validate(input: &SettingsWrite, current: &Effective, db: &Connection) -> AppResult<Draft> {
+fn validate(input: &SettingsWrite, current: &Effective, store: &dyn Backend) -> AppResult<Draft> {
     let ldap_mode = match input.ldap_mode.trim().to_ascii_lowercase().as_str() {
         "ldap" => "ldap",
         "ad" => "ad",
@@ -608,11 +595,11 @@ fn validate(input: &SettingsWrite, current: &Effective, db: &Connection) -> AppR
         input.job_output_lines
     };
     let default_environment_ansible =
-        validate_default_environment(db, "ansible", &input.default_environment_ansible)?;
+        validate_default_environment(store, "ansible", &input.default_environment_ansible)?;
     let default_environment_opentofu =
-        validate_default_environment(db, "opentofu", &input.default_environment_opentofu)?;
+        validate_default_environment(store, "opentofu", &input.default_environment_opentofu)?;
     let default_environment_shell =
-        validate_default_environment(db, "shell", &input.default_environment_shell)?;
+        validate_default_environment(store, "shell", &input.default_environment_shell)?;
     Ok(Draft {
         ldap_url,
         ldap_mode: ldap_mode.to_string(),
@@ -638,12 +625,13 @@ fn validate(input: &SettingsWrite, current: &Effective, db: &Connection) -> AppR
     })
 }
 
-fn validate_default_environment(db: &Connection, tool: &str, raw: &str) -> AppResult<String> {
+fn validate_default_environment(store: &dyn Backend, tool: &str, raw: &str) -> AppResult<String> {
     let id = raw.trim();
     if id.is_empty() {
         return Ok(String::new());
     }
-    let environment = crate::db::environment(db, id)?
+    let environment = store
+        .environment(id)?
         .ok_or_else(|| ApiError::bad("the_default_environment_is_missing"))?;
     if environment.scope != "global" {
         return Err(ApiError::bad("the_default_environment_must_be_global"));
@@ -697,7 +685,7 @@ fn decrypt_secret(state: &Shared, raw: Option<&String>) -> AppResult<String> {
         .map_err(|_| ApiError::bad("the_saved_setting_cannot_be_read"))
 }
 
-fn read_rows(db: &Connection) -> AppResult<HashMap<String, String>> {
+pub(crate) fn read_rows(db: &Connection) -> AppResult<HashMap<String, String>> {
     let mut stmt = db.prepare("SELECT key, value FROM settings")?;
     let mapped = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
     let mut rows = HashMap::new();

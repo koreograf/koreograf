@@ -31,7 +31,9 @@ See `.env.example`. Comments in that file are English. Copy it to `.env` before 
 | `KOREOGRAF_HSTS` | false. `true` sends `Strict-Transport-Security` |
 | `KOREOGRAF_COOKIE_SECURE` | `auto`. `true` sets `Secure` on the session cookie |
 | `KOREOGRAF_TRUSTED_PROXY` | false. When true, `auto` reads `X-Forwarded-Proto` |
-| `KOREOGRAF_DATABASE_URL` | empty, SQLite. `postgres://` is rejected |
+| `KOREOGRAF_DATABASE_URL` | empty, SQLite in `data/koreograf.db`. `postgres://` or `postgresql://` selects PostgreSQL |
+| `KOREOGRAF_DATABASE_PASSWORD_FILE` | empty. File with the PostgreSQL password; it overrides a password in the URL |
+| `KOREOGRAF_DATABASE_CA_FILE` | empty. PEM file with the CA for PostgreSQL TLS |
 | `KOREOGRAF_RESTORE_FROM` | empty. A mounted zip restored before the port opens when the data directory is empty |
 | `KOREOGRAF_IMPORT_FROM` | empty. An old data directory copied on first start when the data directory is empty |
 | `KOREOGRAF_PATH_MAP` | empty. Comma-separated `OLD=NEW` absolute prefixes applied once during an import |
@@ -41,6 +43,20 @@ See `.env.example`. Comments in that file are English. Copy it to `.env` before 
 | `KOREOGRAF_LDAP_USER_BASE` | empty. Required when `KOREOGRAF_LDAP_URL` is set |
 | `KOREOGRAF_LDAP_GROUP_BASE` | empty |
 | `KOREOGRAF_LDAP_TLS_INSECURE` | false. Skips certificate checks and writes a warning |
+
+## PostgreSQL
+
+SQLite stays the default. A `postgres://` or `postgresql://` URL selects the experimental PostgreSQL backend. This foundation slice bootstraps the schema and serves sign-in, sessions, `/healthz`, `/api/version`, and `/api/me`. Every other endpoint answers 503 with `this_feature_is_not_available_with_postgresql_yet` until it is ported.
+
+```bash
+KOREOGRAF_DATABASE_URL='postgresql://koreograf@db.example:5432/koreograf?sslmode=require'
+```
+
+The URL carries the host, port, database, and user. An empty database path uses the user name. `sslmode` is `disable`, `prefer` (the default), `require`, `verify-ca`, or `verify-full`. For an internal CA, add `sslrootcert=/etc/koreograf/postgres-ca.pem` or set `KOREOGRAF_DATABASE_CA_FILE`. The CA file must be PEM. Without a CA file, Koreograf uses the system roots.
+
+Keep the password out of the URL with `KOREOGRAF_DATABASE_PASSWORD_FILE`, for example a Docker or Kubernetes secret. The file is read once at startup and a trailing newline is ignored. The password is never written to logs, API responses, `koreograf doctor` output, or error messages. When both are present, the file wins.
+
+The data directory still holds `secret.key`, the cache, git checkouts, and job directories. Backup and restore through the UI, the CLI migration, and every object endpoint that is not in the list above still need SQLite in this build.
 
 Directory sign-in is described in [Organizations, teams, LDAP, and Active Directory](authentication.md). Company CAs are mounted at `/etc/koreograf/ca`; see [Installation](installation.md#company-certificate-authorities).
 
@@ -60,7 +76,7 @@ The container image has no local tool set and no local runner. There `auto` uses
 
 `KOREOGRAF_JOB_OUTPUT_LINES` is the number of lines kept for each of stdout and stderr. The process clamps a value outside 100 to 100000. The job keeps the first three quarters and the last quarter. Download and the job page are described in the [README](../README.md#job-output).
 
-What the database file holds, and why a `postgres://` URL stops startup, is in [Database and backup](backup-restore.md). Log fields are in [Logs and Prometheus](observability.md). Directory, proxy, runner, timeout, and output-line values saved in the UI are in [Organizations, teams, LDAP, and Active Directory](authentication.md#saved-settings).
+What the database file holds, and which engine serves the backup, is in [Database and backup](backup-restore.md). Log fields are in [Logs and Prometheus](observability.md). Directory, proxy, runner, timeout, and output-line values saved in the UI are in [Organizations, teams, LDAP, and Active Directory](authentication.md#saved-settings).
 
 ## Docker Compose
 

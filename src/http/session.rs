@@ -64,10 +64,7 @@ pub async fn login(
     if body.password.is_empty() {
         return Err(ApiError::SignInFailed);
     }
-    let local = {
-        let db = state.db()?;
-        db::user_by_username(&db, &username)?
-    };
+    let local = state.store().user_by_username(&username)?;
     if auth::local_password_ok(local.as_ref(), &body.password) {
         if let Some(user) = local {
             return session_response(&state, &headers, &user);
@@ -100,8 +97,7 @@ pub async fn logout(
     headers: axum::http::HeaderMap,
 ) -> Result<Response, ApiError> {
     if let Some(token) = auth::read_cookie(&headers, "koreograf_session") {
-        let db = state.db()?;
-        db::delete_session(&db, &token)?;
+        state.store().delete_session(&token)?;
     }
     let mut response = StatusCode::NO_CONTENT.into_response();
     response.headers_mut().insert(
@@ -115,8 +111,7 @@ pub async fn logout(
 }
 
 pub async fn me(State(state): State<Shared>, user: AuthUser) -> Result<Json<Value>, ApiError> {
-    let db = state.db()?;
-    Ok(Json(profile_json(&db, &user)?))
+    Ok(Json(profile_json(&state, &user)?))
 }
 
 pub async fn update_me(
@@ -146,7 +141,8 @@ pub async fn update_me(
         password_hash.as_deref(),
     )?;
     let updated = db::user_by_id(&db, &user.id)?.ok_or(ApiError::NotFound)?;
-    Ok(Json(profile_json(&db, &updated.into())?))
+    drop(db);
+    Ok(Json(profile_json(&state, &updated.into())?))
 }
 
 pub async fn list_tokens(State(state): State<Shared>, user: AuthUser) -> AppResult<Json<Value>> {
@@ -348,11 +344,9 @@ fn session_response(state: &Shared, headers: &HeaderMap, user: &User) -> AppResu
         return Err(ApiError::bad("the_account_is_disabled"));
     }
     let token = crypto::random_token();
-    let db = state.db()?;
-    db::create_session(&db, &token, &user.id)?;
+    state.store().create_session(&token, &user.id)?;
     let auth_user = AuthUser::from(user.clone());
-    let body = profile_json(&db, &auth_user)?;
-    drop(db);
+    let body = profile_json(state, &auth_user)?;
     let mut response = (StatusCode::OK, Json(body)).into_response();
     let cookie = HeaderValue::from_str(&auth::session_cookie(
         &token,
@@ -363,9 +357,9 @@ fn session_response(state: &Shared, headers: &HeaderMap, user: &User) -> AppResu
     Ok(response)
 }
 
-fn profile_json(db: &rusqlite::Connection, user: &AuthUser) -> AppResult<Value> {
-    let teams = db::list_teams_for_user(db, &user.id, user.is_admin)?;
-    let memberships = db::list_user_memberships(db, &user.id)?;
+fn profile_json(state: &Shared, user: &AuthUser) -> AppResult<Value> {
+    let teams = state.store().list_teams_for_user(&user.id, user.is_admin)?;
+    let memberships = state.store().list_user_memberships(&user.id)?;
     Ok(user_payload(user, &teams, &memberships))
 }
 

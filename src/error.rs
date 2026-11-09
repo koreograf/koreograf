@@ -42,6 +42,8 @@ pub enum ApiError {
     /// The body is larger than the route limit. The key is still a catalog key.
     #[error("{0}")]
     PayloadTooLarge(UserMessage),
+    #[error("the database backend does not support this feature yet")]
+    BackendUnavailable,
     #[error("{0}")]
     Internal(String),
 }
@@ -122,6 +124,24 @@ impl From<rusqlite::Error> for ApiError {
     }
 }
 
+impl From<tokio_postgres::Error> for ApiError {
+    fn from(err: tokio_postgres::Error) -> Self {
+        if let Some(db) = err.as_db_error() {
+            match db.code().code() {
+                "23505" => return Self::bad("that_name_is_already_used_in_this_team"),
+                "23503" => return Self::bad("the_entry_is_still_in_use"),
+                "42501" => {
+                    return Self::Internal(
+                        "The PostgreSQL user lacks the required rights.".to_string(),
+                    );
+                }
+                _ => {}
+            }
+        }
+        Self::Internal(err.to_string())
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, key, vars) = match self {
@@ -155,6 +175,11 @@ impl IntoResponse for ApiError {
             Self::PayloadTooLarge(message) => {
                 (StatusCode::PAYLOAD_TOO_LARGE, message.key, message.vars)
             }
+            Self::BackendUnavailable => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "this_feature_is_not_available_with_postgresql_yet".to_string(),
+                BTreeMap::new(),
+            ),
             Self::Internal(detail) => {
                 tracing::error!(error = %detail, "internal error");
                 (

@@ -301,8 +301,15 @@ async fn version() -> Json<Value> {
     Json(crate::version_payload())
 }
 
-async fn health() -> &'static str {
-    "ok"
+async fn health(State(state): State<Shared>) -> Response {
+    match state.store().ping() {
+        Ok(()) => (StatusCode::OK, format!("ok ({})", state.engine())).into_response(),
+        Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("database unavailable ({})", state.engine()),
+        )
+            .into_response(),
+    }
 }
 
 async fn metrics(State(state): State<Shared>) -> impl IntoResponse {

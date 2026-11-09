@@ -668,7 +668,7 @@ fn write_private(path: &Path, bytes: &[u8]) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{database_choice, Config, CookieSecure, LocalJobs, RunnerMode};
+    use crate::config::{Config, CookieSecure, LocalJobs, RunnerMode};
 
     fn config(dir: &Path) -> Config {
         Config {
@@ -691,16 +691,6 @@ mod tests {
             data_host: None,
             ldap: None,
         }
-    }
-
-    #[test]
-    fn postgres_url_is_rejected_and_sqlite_stays() {
-        assert!(database_choice("").is_ok());
-        assert!(database_choice("sqlite:data/koreograf.db").is_ok());
-        let err = database_choice("postgres://koreograf@db/koreograf").expect_err("postgres");
-        assert!(err.contains("PostgreSQL is not connected yet"), "{err}");
-        assert!(database_choice("postgresql://db/koreograf").is_err());
-        assert!(database_choice("mysql://db/koreograf").is_err());
     }
 
     #[test]

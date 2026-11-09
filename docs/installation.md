@@ -28,7 +28,7 @@ The paths differ when a package manager or Homebrew prefix installs elsewhere. T
 
 The UI is at `http://127.0.0.1:8080`. The language menu at the bottom of the sidebar and on the sign-in page switches the language. Create-lists share the same pill button, for example `+ Projekt`, `+ Zugang`, and `+ Umgebung` (English: `+ Project`, `+ Credential`, `+ Environment`). Without `KOREOGRAF_ADMIN_PASSWORD`, the first start writes the password to `data/initial-admin-password` (mode `0600`) and logs the path. The password is not in the log. The process does not delete the file. Remove it after the first sign-in, and set a new password of at least 8 characters on the account page.
 
-Environment variables, including the runner mode, are in [Configuration](configuration.md).
+`KOREOGRAF_DATABASE_URL` with a `postgres://` or `postgresql://` value selects the experimental PostgreSQL backend; SQLite stays the default. Environment variables, including the runner mode, the database URL, the password file, and TLS, are in [Configuration](configuration.md).
 
 ## Debian and RPM packages
 

@@ -21,6 +21,7 @@ http-body-util = "0.1"
 ldap3 = { version = "0.12.0", default-features = false, features = ["tls-rustls-aws-lc-rs"] }
 nix = { version = "0.31", default-features = false, features = ["signal", "user", "fs", "process"] }
 pbkdf2 = "0.13"
+percent-encoding = "2"
 rand = "0.10"
 reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }
 rmcp = { version = "3.9.0", features = ["transport-io", "transport-streamable-http-server"] }
@@ -35,10 +36,13 @@ shlex = "2"
 subtle = "2"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
+tokio-postgres = "0.7"
+tokio-postgres-rustls = { version = "0.14", features = ["aws-lc-rs"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.7", features = ["set-header", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+url = "2"
 uuid = { version = "1", features = ["v4"] }
 zip = { version = "9", default-features = false }
 
