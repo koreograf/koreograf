@@ -225,6 +225,8 @@ pub fn relaunch(
         if let Some(map) = parsed.as_object_mut() {
             map.remove("project_commit");
             map.remove("project_commit_full");
+            refresh_inventory(db, &job.team_id, map)?;
+            refresh_credential(db, &job.team_id, map)?;
             parameters = parsed.to_string();
         }
         if only_failed_hosts {
@@ -385,11 +387,9 @@ fn refresh_inventory(
 ) -> AppResult<()> {
     match params.get("inventory_id").and_then(Value::as_str) {
         Some(id) if !id.is_empty() => {
-            let inventory = db
-                .inventory(id)?
-                .ok_or_else(|| ApiError::bad("inventory_is_missing"))?;
+            let inventory = db.inventory(id)?.ok_or(ApiError::NotFound)?;
             if inventory.team_id != team_id {
-                return Err(ApiError::bad("the_inventory_belongs_to_another_team"));
+                return Err(ApiError::NotFound);
             }
             params.insert("inventory_id".into(), json!(inventory.id));
             params.insert("inventory_name".into(), json!(inventory.name));
@@ -419,11 +419,9 @@ fn refresh_credential(
         params.insert("credentials".into(), json!([]));
         return Ok(());
     };
-    let credential = db
-        .credential(&id)?
-        .ok_or_else(|| ApiError::bad("credential_is_missing"))?;
+    let credential = db.credential(&id)?.ok_or(ApiError::NotFound)?;
     if credential.team_id != team_id {
-        return Err(ApiError::bad("the_credential_belongs_to_another_team"));
+        return Err(ApiError::NotFound);
     }
     let mut list = params
         .get("credentials")
@@ -535,11 +533,9 @@ fn parameters_for_launch(
     if let Some(inventory_id) = &req.overrides.inventory_id {
         let inventory_id = blank_text(inventory_id);
         if let Some(id) = &inventory_id {
-            let inventory = db
-                .inventory(id)?
-                .ok_or_else(|| ApiError::bad("inventory_is_missing"))?;
+            let inventory = db.inventory(id)?.ok_or(ApiError::NotFound)?;
             if inventory.team_id != template.team_id {
-                return Err(ApiError::bad("the_inventory_belongs_to_another_team"));
+                return Err(ApiError::NotFound);
             }
         }
         effective.inventory_id = inventory_id;
@@ -600,15 +596,16 @@ fn credentials_for_launch(
         if id.is_empty() {
             return Err(ApiError::bad("credential_is_missing"));
         }
-        let credential = db
-            .credential(id)?
-            .ok_or_else(|| ApiError::bad("credential_is_missing"))?;
+        let credential = db.credential(id)?.ok_or(ApiError::NotFound)?;
+        loaded.push(credential);
+    }
+    let chosen = crate::credentials::assign_loaded(state, team_id, &loaded)?;
+    for credential in &loaded {
         if !crate::credentials::kind_fits_tool(tool, &credential.kind) {
             return Err(ApiError::bad("this_credential_kind_does_not_fit_the_tool"));
         }
-        loaded.push(credential);
     }
-    crate::credentials::assign_loaded(state, team_id, &loaded).map_err(ApiError::bad)
+    Ok(chosen)
 }
 
 /// Prompt fields replace the template spec. An empty string or null clears the key.
