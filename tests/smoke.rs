@@ -2603,11 +2603,8 @@ async fn projects_use_a_source_control_credential() {
         })),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{wrong_team}");
-    assert_eq!(
-        wrong_team["error"],
-        "the_credential_belongs_to_another_team"
-    );
+    assert_eq!(status, StatusCode::NOT_FOUND, "{wrong_team}");
+    assert_eq!(wrong_team["error"], "not_found");
 
     let (status, embedded, _) = call(
         &app,
@@ -2841,8 +2838,8 @@ async fn project_credentials_stay_with_the_project_team() {
         })),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{foreign}");
-    assert_eq!(foreign["error"], "the_credential_belongs_to_another_team");
+    assert_eq!(status, StatusCode::NOT_FOUND, "{foreign}");
+    assert_eq!(foreign["error"], "not_found");
 
     let demo = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("examples/demo")
@@ -4926,11 +4923,8 @@ async fn netbox_sources_share_a_normal_credential() {
         })),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{wrong_team}");
-    assert_eq!(
-        wrong_team["error"],
-        "the_credential_belongs_to_another_team"
-    );
+    assert_eq!(status, StatusCode::NOT_FOUND, "{wrong_team}");
+    assert_eq!(wrong_team["error"], "not_found");
 
     let (status, listed, _) = call(
         &app,
