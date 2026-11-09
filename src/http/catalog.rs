@@ -654,7 +654,7 @@ fn validate_project_source(
                 &state.cfg.project_roots,
                 user.is_admin,
             )
-            .map_err(project_path_error)?;
+            .map_err(|err| project_path_error(err, user.is_admin))?;
         }
         "git" => {
             if !runner::valid_git(source) {
@@ -674,7 +674,7 @@ fn validate_project_source(
                     &state.cfg.project_roots,
                     user.is_admin,
                 )
-                .map_err(project_path_error)?;
+                .map_err(|err| project_path_error(err, user.is_admin))?;
             }
         }
         _ => return Err(ApiError::bad("source_is_path_or_git")),
@@ -692,12 +692,14 @@ fn sync_json(result: AppResult<String>) -> Value {
     }
 }
 
-fn project_path_error(err: runner::ProjectPathError) -> ApiError {
+fn project_path_error(err: runner::ProjectPathError, is_admin: bool) -> ApiError {
     match err {
-        runner::ProjectPathError::NotDirectory => {
+        runner::ProjectPathError::NotDirectory if is_admin => {
             ApiError::bad("the_project_path_is_not_a_directory")
         }
-        runner::ProjectPathError::Denied => ApiError::bad("the_project_path_is_not_allowed"),
+        runner::ProjectPathError::NotDirectory | runner::ProjectPathError::Denied => {
+            ApiError::bad("the_project_path_is_not_allowed")
+        }
         runner::ProjectPathError::AdminsOnly => {
             ApiError::bad("path_projects_are_limited_to_administrators")
         }
@@ -720,9 +722,7 @@ fn validate_project_credential(
     let Some(id) = credential_id else {
         return Ok(None);
     };
-    let credential = db
-        .credential(id)?
-        .ok_or_else(|| ApiError::bad("credential_is_missing"))?;
+    let credential = db.credential(id)?.ok_or(ApiError::NotFound)?;
     if credential.kind != "scm" {
         return Err(ApiError::bad(
             "the_credential_is_not_a_source_control_credential",
@@ -732,7 +732,7 @@ fn validate_project_credential(
         return Err(ApiError::bad("the_source_control_credential_is_disabled"));
     }
     if credential.team_id != team {
-        return Err(ApiError::bad("the_credential_belongs_to_another_team"));
+        return Err(ApiError::NotFound);
     }
     Ok(Some(credential.id))
 }

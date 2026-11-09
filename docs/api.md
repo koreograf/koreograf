@@ -86,6 +86,10 @@ curl -fsS -b "$JAR" "$BASE/api/jobs/$JOB_ID/output"
 
 On a machine without Compose, read `data/initial-admin-password` instead of `docker compose exec`, and use the same JSON.
 
+## Errors
+
+API errors are `{"error": "<key>"}` with optional `vars`. A missing team role is 403 `you_are_not_allowed_to_do_this`. An id that is unknown or belongs to another team is 404 `not_found`; those responses do not say that an object belongs to another team, so a client cannot tell a foreign id from a missing one. A non-administrator who saves a path project gets 400 `the_project_path_is_not_allowed` for both a missing directory and a disallowed path. Administrators keep the clearer `the_project_path_is_not_a_directory` for a missing directory; sensitive and data paths remain `the_project_path_is_not_allowed`.
+
 ## Request bodies
 
 Names are at most 120 characters. Empty optional strings are omitted.
