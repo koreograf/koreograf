@@ -1,0 +1,53 @@
+name: koreograf
+arch: ${PACKAGE_ARCH}
+platform: linux
+version: ${VERSION}
+version_schema: none
+section: admin
+priority: optional
+maintainer: Koreograf contributors <koreograf@users.noreply.github.com>
+description: Team-scoped automation with a dependency cache and workflows.
+vendor: Koreograf
+homepage: https://github.com/koreograf/koreograf
+license: MIT
+depends:
+  - git
+  - ca-certificates
+overrides:
+  deb:
+    depends:
+      - git
+      - openssh-client
+      - ca-certificates
+  rpm:
+    depends:
+      - git
+      - openssh-clients
+      - ca-certificates
+contents:
+  - src: target/${TARGET}/release/koreograf
+    dst: /usr/bin/koreograf
+    expand: true
+    file_info:
+      mode: 0755
+  - src: packaging/koreograf.service
+    dst: /lib/systemd/system/koreograf.service
+    file_info:
+      mode: 0644
+  - src: packaging/koreograf.env
+    dst: /etc/koreograf/koreograf.env
+    type: config|noreplace
+    file_info:
+      mode: 0600
+      owner: root
+      group: root
+  - src: web/
+    dst: /opt/koreograf/web
+    type: tree
+  - src: examples/
+    dst: /opt/koreograf/examples
+    type: tree
+scripts:
+  postinstall: packaging/postinstall.sh
+  preremove: packaging/preremove.sh
+  postremove: packaging/postremove.sh

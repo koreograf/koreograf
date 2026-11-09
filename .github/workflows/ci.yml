@@ -77,6 +77,44 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-unknown-linux-musl-gcc
         run: cargo build --release --locked --target aarch64-unknown-linux-musl
 
+  package:
+    name: package
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.99.1
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Install musl and nfpm
+        env:
+          NFPM_VERSION: 2.48.0
+          NFPM_SHA256: 6d7f9a28b2f397934403950fcbba83f598b08d02edbe79a0815b3b4897341750
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          curl -fsSL -o /tmp/nfpm.tar.gz "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+          printf '%s  %s\n' "$NFPM_SHA256" /tmp/nfpm.tar.gz | sha256sum -c -
+          tar -xzf /tmp/nfpm.tar.gz -C /tmp nfpm
+          sudo install -m 0755 /tmp/nfpm /usr/local/bin/nfpm
+      - name: Build the amd64 deb
+        env:
+          CC_x86_64_unknown_linux_musl: musl-gcc
+          AR_x86_64_unknown_linux_musl: ar
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+        run: |
+          cargo build --release --locked --target x86_64-unknown-linux-musl
+          version="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
+          mkdir -p dist
+          VERSION="$version" PACKAGE_ARCH=amd64 TARGET=x86_64-unknown-linux-musl \
+            nfpm package --config packaging/nfpm.yaml --packager deb \
+            --target "dist/koreograf_${version}_amd64.deb"
+          test "$(dpkg-deb -f "dist/koreograf_${version}_amd64.deb" Version)" = "$version"
+          dpkg-deb -I "dist/koreograf_${version}_amd64.deb"
+          dpkg-deb -c "dist/koreograf_${version}_amd64.deb"
+
   web:
     name: web
     runs-on: ubuntu-latest
@@ -99,7 +137,7 @@ jobs:
         run: |
           curl -fsSL -o /tmp/shellcheck.tar.xz https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
           tar -xJf /tmp/shellcheck.tar.xz -C /tmp
-          /tmp/shellcheck-v0.11.0/shellcheck src/wrapper.sh examples/demo/health.sh examples/demo/escalate.sh tests/harness/scripts/image-entrypoint.sh tests/harness/scripts/image-smoke.sh
+          /tmp/shellcheck-v0.11.0/shellcheck src/wrapper.sh examples/demo/health.sh examples/demo/escalate.sh packaging/*.sh tests/harness/scripts/image-entrypoint.sh tests/harness/scripts/image-smoke.sh
 
   hooks:
     name: pre-commit
