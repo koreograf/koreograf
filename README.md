@@ -9,7 +9,7 @@ Koreograf is a prototype for team-scoped automation. One Rust binary serves the 
 Alpha [0.1.0-alpha.9](CHANGELOG.md). <!-- x-release-please-version -->
 `Cargo.toml` uses the same pre-release version.
 
-This is an early prototype, not a replacement for AWX and not a rebuild of Semaphore. There are no surveys, no Receptor, and no high-availability setup. A schedule can start a job or a workflow at a local clock time. SQLite is the default database. PostgreSQL is an experimental second backend with a small slice available; the rest still needs SQLite.
+This is an early prototype, not a replacement for AWX and not a rebuild of Semaphore. There are no surveys, no Receptor, and no high-availability setup. A schedule can start a job or a workflow at a local clock time. SQLite is the default database. PostgreSQL is an experimental second backend for credentials, organizations, teams, projects, and inventories; the rest still needs SQLite.
 
 ## Quick start
 

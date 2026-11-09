@@ -728,7 +728,7 @@ fn actor_may_launch(c: &rusqlite::Connection, team_id: &str, actor: &str) -> App
     if user.disabled {
         return Ok(false);
     }
-    match crate::auth::authorize(c, &user.into(), team_id, crate::auth::Role::Operator) {
+    match crate::auth::authorize_connection(c, &user.into(), team_id, crate::auth::Role::Operator) {
         Ok(()) => Ok(true),
         Err(ApiError::Forbidden) => Ok(false),
         Err(err) => Err(err),

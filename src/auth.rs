@@ -109,6 +109,28 @@ pub fn api_token_user(state: &Shared, token: &str) -> AppResult<Option<AuthUser>
 }
 
 pub fn authorize(
+    store: &dyn crate::backend::Backend,
+    user: &AuthUser,
+    team_id: &str,
+    min: Role,
+) -> AppResult<()> {
+    if user.is_admin {
+        return Ok(());
+    }
+    let Some(role) = store.role_of(team_id, &user.id)? else {
+        return Err(ApiError::Forbidden);
+    };
+    let Some(role) = Role::parse(&role) else {
+        return Err(ApiError::Forbidden);
+    };
+    if role >= min {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden)
+    }
+}
+
+pub fn authorize_connection(
     c: &rusqlite::Connection,
     user: &AuthUser,
     team_id: &str,

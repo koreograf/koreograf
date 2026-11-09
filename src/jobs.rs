@@ -730,9 +730,7 @@ pub async fn sync_project(state: &Shared, project: &db::Project) -> AppResult<St
     match result {
         Ok(path) => {
             let commit = runner::head_commit(&path).await;
-            let db = state.db()?;
-            db::set_project_sync_success(
-                &db,
+            state.store().set_project_sync_success(
                 &project.id,
                 &db::now(),
                 commit.as_deref().unwrap_or(""),
@@ -740,8 +738,7 @@ pub async fn sync_project(state: &Shared, project: &db::Project) -> AppResult<St
             Ok(path.display().to_string())
         }
         Err(err) => {
-            let db = state.db()?;
-            db::set_project_sync_failed(&db, &project.id)?;
+            state.store().set_project_sync_failed(&project.id)?;
             Err(ApiError::bad(err))
         }
     }

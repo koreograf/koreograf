@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, Role};
+use crate::backend::Backend;
 use crate::db::{self, Inventory, Project};
 use crate::error::{ApiError, ApiJson, AppResult};
 use crate::netbox::{self, NetboxSource};
@@ -219,12 +220,9 @@ pub async fn import_inventory(
         position: 0,
         created_at: item.created_at.clone(),
     };
-    let mut db = state.db()?;
-    let tx = db.transaction()?;
-    db::insert_inventory(&tx, &item)?;
-    db::insert_inventory_source(&tx, &source_row)?;
-    tx.commit()?;
-    Ok(created(inventory_json(&db, &item)?))
+    let db = state.store();
+    db.insert_inventory(&item, std::slice::from_ref(&source_row), false)?;
+    Ok(created(inventory_json(db, &item)?))
 }
 
 pub async fn create_netbox(
@@ -278,14 +276,10 @@ pub async fn create_netbox(
         position: 0,
         created_at: item.created_at.clone(),
     };
-    let mut db = state.db()?;
-    let tx = db.transaction()?;
-    db::insert_inventory(&tx, &item)?;
-    db::insert_inventory_source(&tx, &source_row)?;
-    db::refresh_inventory_summary(&tx, &item.id)?;
-    tx.commit()?;
-    let item = db::inventory(&db, &item.id)?.ok_or(ApiError::NotFound)?;
-    Ok(created(inventory_json(&db, &item)?))
+    let db = state.store();
+    db.insert_inventory(&item, std::slice::from_ref(&source_row), true)?;
+    let item = db.inventory(&item.id)?.ok_or(ApiError::NotFound)?;
+    Ok(created(inventory_json(db, &item)?))
 }
 
 pub async fn test_netbox(
@@ -367,12 +361,12 @@ pub async fn sync_inventory(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let sources = {
-        let db = state.db()?;
-        let item = db::inventory(&db, &id)?.ok_or(ApiError::NotFound)?;
+        let db = state.store();
+        let item = db.inventory(&id)?.ok_or(ApiError::NotFound)?;
         if item.team_id != team {
             return Err(ApiError::NotFound);
         }
-        db::list_inventory_sources(&db, &id)?
+        db.list_inventory_sources(&id)?
     };
     let mut fresh = Vec::new();
     for source in &sources {
@@ -403,14 +397,14 @@ pub async fn sync_inventory(
         .iter()
         .flat_map(|(_, fetched)| fetched.dropped_vars.clone())
         .collect();
-    let db = state.db()?;
-    for (source_id, fetched) in &fresh {
-        db::set_inventory_source_body(&db, source_id, &fetched.body)?;
-    }
-    db::refresh_inventory_summary(&db, &id)?;
-    db::set_inventory_admin_saved(&db, &id, user.is_admin)?;
-    let item = db::inventory(&db, &id)?.ok_or(ApiError::NotFound)?;
-    let mut value = inventory_json(&db, &item)?;
+    let bodies: Vec<(String, String)> = fresh
+        .iter()
+        .map(|(source_id, fetched)| (source_id.clone(), fetched.body.clone()))
+        .collect();
+    let db = state.store();
+    db.sync_inventory_sources(&id, &bodies, user.is_admin)?;
+    let item = db.inventory(&id)?.ok_or(ApiError::NotFound)?;
+    let mut value = inventory_json(db, &item)?;
     value["collisions"] = json!(collisions);
     value["dropped_vars"] = json!(dropped_vars);
     Ok(Json(value))
@@ -649,8 +643,9 @@ fn ensure_certificate_override(
 
 fn credential_secret(state: &Shared, id: &str, team: &str) -> AppResult<Value> {
     let (blob, kind, credential_team, disabled) = {
-        let db = state.db()?;
-        let item = db::credential(&db, id)?
+        let db = state.store();
+        let item = db
+            .credential(id)?
             .ok_or_else(|| ApiError::bad("netbox_credential_is_required"))?;
         (item.secret_blob, item.kind, item.team_id, item.disabled)
     };
@@ -676,11 +671,11 @@ fn token_from_value(value: &Value) -> AppResult<String> {
 }
 
 fn visible_project(state: &Shared, id: &str, team: &str) -> AppResult<Project> {
-    let db = state.db()?;
-    if !db::project_visible(&db, id, team)? {
+    let db = state.store();
+    if !db.project_visible(id, team)? {
         return Err(ApiError::NotFound);
     }
-    db::project(&db, id)?.ok_or(ApiError::NotFound)
+    db.project(id)?.ok_or(ApiError::NotFound)
 }
 
 fn project_dir(state: &Shared, project: &Project) -> AppResult<PathBuf> {
@@ -765,16 +760,25 @@ pub(super) async fn create_with_sources(
         credential_id: None,
         admin_saved,
     };
-    let mut db = state.db()?;
-    let tx = db.transaction()?;
-    db::insert_inventory(&tx, &item)?;
-    for (position, source) in resolved.iter().enumerate() {
-        store_source(&tx, &inventory_id, position as i64, source, &created_at)?;
-    }
-    db::refresh_inventory_summary(&tx, &inventory_id)?;
-    tx.commit()?;
-    let item = db::inventory(&db, &inventory_id)?.ok_or(ApiError::NotFound)?;
-    Ok(created(inventory_json(&db, &item)?))
+    let sources: Vec<db::InventorySource> = resolved
+        .iter()
+        .enumerate()
+        .map(|(position, source)| db::InventorySource {
+            id: Uuid::new_v4().to_string(),
+            inventory_id: inventory_id.clone(),
+            name: source.name.clone(),
+            kind: source.kind.clone(),
+            source_json: source.source_json.clone(),
+            credential_id: source.credential_id.clone(),
+            body: source.body.clone(),
+            position: position as i64,
+            created_at: created_at.clone(),
+        })
+        .collect();
+    let db = state.store();
+    db.insert_inventory(&item, &sources, true)?;
+    let item = db.inventory(&inventory_id)?.ok_or(ApiError::NotFound)?;
+    Ok(created(inventory_json(db, &item)?))
 }
 
 pub async fn add_source(
@@ -787,26 +791,33 @@ pub async fn add_source(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let position = {
-        let db = state.db()?;
-        let item = db::inventory(&db, &id)?.ok_or(ApiError::NotFound)?;
+        let db = state.store();
+        let item = db.inventory(&id)?.ok_or(ApiError::NotFound)?;
         if item.team_id != team {
             return Err(ApiError::NotFound);
         }
-        let count = db::list_inventory_sources(&db, &id)?.len();
+        let count = db.list_inventory_sources(&id)?.len();
         if count >= MAX_SOURCES {
             return Err(ApiError::bad("at_most_8_sources"));
         }
         count as i64
     };
     let resolved = resolve_source(&state, &team, &body, &user).await?;
-    let mut db = state.db()?;
-    let tx = db.transaction()?;
-    store_source(&tx, &id, position, &resolved, &db::now())?;
-    db::refresh_inventory_summary(&tx, &id)?;
-    db::set_inventory_admin_saved(&tx, &id, user.is_admin)?;
-    tx.commit()?;
-    let item = db::inventory(&db, &id)?.ok_or(ApiError::NotFound)?;
-    Ok(Json(inventory_json(&db, &item)?))
+    let source = db::InventorySource {
+        id: Uuid::new_v4().to_string(),
+        inventory_id: id.clone(),
+        name: resolved.name,
+        kind: resolved.kind,
+        source_json: resolved.source_json,
+        credential_id: resolved.credential_id,
+        body: resolved.body,
+        position,
+        created_at: db::now(),
+    };
+    let db = state.store();
+    db.add_inventory_source(&id, &source, user.is_admin)?;
+    let item = db.inventory(&id)?.ok_or(ApiError::NotFound)?;
+    Ok(Json(inventory_json(db, &item)?))
 }
 
 pub async fn get_source(
@@ -817,8 +828,8 @@ pub async fn get_source(
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
-    let db = state.db()?;
-    let source = owned_source(&db, &inventory_id, &source_id, &team)?;
+    let db = state.store();
+    let source = owned_source(db, &inventory_id, &source_id, &team)?;
     Ok(Json(json!({
         "id": source.id,
         "inventory_id": source.inventory_id,
@@ -841,16 +852,16 @@ pub async fn update_source(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let (source, before) = {
-        let db = state.db()?;
-        let item = db::inventory(&db, &inventory_id)?.ok_or(ApiError::NotFound)?;
+        let db = state.store();
+        let item = db.inventory(&inventory_id)?.ok_or(ApiError::NotFound)?;
         if item.team_id != team {
             return Err(ApiError::NotFound);
         }
-        let source = db::inventory_source(&db, &source_id)?.ok_or(ApiError::NotFound)?;
+        let source = db.inventory_source(&source_id)?.ok_or(ApiError::NotFound)?;
         if source.inventory_id != inventory_id {
             return Err(ApiError::NotFound);
         }
-        let before = inventory_json(&db, &item)?["host_count"]
+        let before = inventory_json(db, &item)?["host_count"]
             .as_u64()
             .unwrap_or(0);
         (source, before)
@@ -862,25 +873,18 @@ pub async fn update_source(
         "netbox" => resolve_netbox_update(&state, &team, &source, &body, &user).await?,
         _ => return Err(ApiError::bad("a_source_is_manual_project_or_netbox")),
     };
-    let mut db = state.db()?;
-    let tx = db.transaction()?;
-    let credential_id = resolved
+    let mut updated = source.clone();
+    updated.name = resolved.name;
+    updated.source_json = resolved.source_json;
+    updated.credential_id = resolved
         .credential_id
         .clone()
         .or_else(|| source.credential_id.clone());
-    db::update_inventory_source(
-        &tx,
-        &source_id,
-        &resolved.name,
-        &resolved.source_json,
-        credential_id.as_deref(),
-        &resolved.body,
-    )?;
-    db::refresh_inventory_summary(&tx, &inventory_id)?;
-    db::set_inventory_admin_saved(&tx, &inventory_id, user.is_admin)?;
-    tx.commit()?;
-    let item = db::inventory(&db, &inventory_id)?.ok_or(ApiError::NotFound)?;
-    let mut value = inventory_json(&db, &item)?;
+    updated.body = resolved.body;
+    let db = state.store();
+    db.update_inventory_source(&updated, user.is_admin)?;
+    let item = db.inventory(&inventory_id)?.ok_or(ApiError::NotFound)?;
+    let mut value = inventory_json(db, &item)?;
     if source.kind == "project" || source.kind == "netbox" {
         let after = value["host_count"].as_u64().unwrap_or(0);
         value["sync"] = json!({"ok": true, "before": before, "after": after});
@@ -898,13 +902,11 @@ pub async fn delete_source(
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let db = state.db()?;
-    owned_source(&db, &inventory_id, &source_id, &team)?;
-    db::delete_inventory_source(&db, &source_id, &inventory_id)?;
-    db::refresh_inventory_summary(&db, &inventory_id)?;
-    db::set_inventory_admin_saved(&db, &inventory_id, user.is_admin)?;
-    let item = db::inventory(&db, &inventory_id)?.ok_or(ApiError::NotFound)?;
-    Ok(Json(inventory_json(&db, &item)?))
+    let db = state.store();
+    owned_source(db, &inventory_id, &source_id, &team)?;
+    db.delete_inventory_source(&source_id, &inventory_id, user.is_admin)?;
+    let item = db.inventory(&inventory_id)?.ok_or(ApiError::NotFound)?;
+    Ok(Json(inventory_json(db, &item)?))
 }
 
 pub async fn sync_source(
@@ -916,8 +918,8 @@ pub async fn sync_source(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let source = {
-        let db = state.db()?;
-        owned_source(&db, &inventory_id, &source_id, &team)?
+        let db = state.store();
+        owned_source(db, &inventory_id, &source_id, &team)?
     };
     let fetched = match source.kind.as_str() {
         "project" => netbox::NetboxResult {
@@ -930,12 +932,14 @@ pub async fn sync_source(
         }
         _ => return Err(ApiError::bad("this_inventory_has_no_external_source")),
     };
-    let db = state.db()?;
-    db::set_inventory_source_body(&db, &source_id, &fetched.body)?;
-    db::refresh_inventory_summary(&db, &inventory_id)?;
-    db::set_inventory_admin_saved(&db, &inventory_id, user.is_admin)?;
-    let item = db::inventory(&db, &inventory_id)?.ok_or(ApiError::NotFound)?;
-    let mut value = inventory_json(&db, &item)?;
+    let db = state.store();
+    db.sync_inventory_sources(
+        &inventory_id,
+        &[(source_id.clone(), fetched.body)],
+        user.is_admin,
+    )?;
+    let item = db.inventory(&inventory_id)?.ok_or(ApiError::NotFound)?;
+    let mut value = inventory_json(db, &item)?;
     value["collisions"] = json!(fetched.collisions);
     value["dropped_vars"] = json!(fetched.dropped_vars);
     Ok(Json(value))
@@ -1156,43 +1160,20 @@ async fn resolve_netbox_update(
 }
 
 fn owned_source(
-    db: &rusqlite::Connection,
+    db: &dyn Backend,
     inventory_id: &str,
     source_id: &str,
     team: &str,
 ) -> AppResult<db::InventorySource> {
-    let item = db::inventory(db, inventory_id)?.ok_or(ApiError::NotFound)?;
+    let item = db.inventory(inventory_id)?.ok_or(ApiError::NotFound)?;
     if item.team_id != team {
         return Err(ApiError::NotFound);
     }
-    let source = db::inventory_source(db, source_id)?.ok_or(ApiError::NotFound)?;
+    let source = db.inventory_source(source_id)?.ok_or(ApiError::NotFound)?;
     if source.inventory_id != inventory_id {
         return Err(ApiError::NotFound);
     }
     Ok(source)
-}
-
-fn store_source(
-    db: &rusqlite::Connection,
-    inventory_id: &str,
-    position: i64,
-    source: &ResolvedSource,
-    created_at: &str,
-) -> AppResult<()> {
-    db::insert_inventory_source(
-        db,
-        &db::InventorySource {
-            id: Uuid::new_v4().to_string(),
-            inventory_id: inventory_id.to_string(),
-            name: source.name.clone(),
-            kind: source.kind.clone(),
-            source_json: source.source_json.clone(),
-            credential_id: source.credential_id.clone(),
-            body: source.body.clone(),
-            position,
-            created_at: created_at.to_string(),
-        },
-    )
 }
 
 async fn resolve_source(

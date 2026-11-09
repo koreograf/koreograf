@@ -2425,8 +2425,9 @@ pub fn project_credential_secret(
         return Ok(None);
     };
     let credential = {
-        let db = state.db().map_err(|err| err.to_string())?;
-        db::credential(&db, id)
+        let store = state.store();
+        store
+            .credential(id)
             .map_err(|err| err.to_string())?
             .ok_or_else(|| "Source control credential is missing.".to_string())?
     };

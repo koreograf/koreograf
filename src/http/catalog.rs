@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, Role};
+use crate::backend::Backend;
 use crate::cacheinfo;
 use crate::db::{self, Credential, Environment, Inventory, InventorySource, Project};
 use crate::error::{ApiError, ApiJson, AppResult};
@@ -339,8 +340,7 @@ pub async fn dashboard(
 }
 
 pub async fn list_teams(State(state): State<Shared>, user: AuthUser) -> AppResult<Json<Value>> {
-    let db = state.db()?;
-    let teams = db::list_teams_for_user(&db, &user.id, user.is_admin)?;
+    let teams = state.store().list_teams_for_user(&user.id, user.is_admin)?;
     Ok(Json(json!(teams
         .into_iter()
         .map(|(team, role)| json!({
@@ -367,18 +367,18 @@ pub async fn create_team(
     let name = require_name(&body.name)?;
     let id = Uuid::new_v4().to_string();
     let ldap_group = blank(body.ldap_group);
-    let db = state.db()?;
-    let organization_id = organization_for_new_team(&db, body.organization_id, &name)?;
-    db::insert_team(
-        &db,
+    let organization_id = organization_for_new_team(state.store(), body.organization_id, &name)?;
+    state.store().insert_team(
         &id,
         &organization_id,
         &name,
         &require_description(&body.description)?,
         ldap_group.as_deref(),
     )?;
-    db::upsert_membership(&db, &id, &user.id, "owner", "manual")?;
-    let team = db::team_by_id(&db, &id)?.ok_or(ApiError::NotFound)?;
+    state
+        .store()
+        .upsert_membership(&id, &user.id, "owner", "manual")?;
+    let team = state.store().team_by_id(&id)?.ok_or(ApiError::NotFound)?;
     Ok(created(team_json(&team)))
 }
 
@@ -391,41 +391,42 @@ pub async fn update_team(
     gate(&state, &user, &id, Role::Owner)?;
     let name = require_name(&body.name)?;
     let ldap_group = blank(body.ldap_group);
-    let db = state.db()?;
     if let Some(organization_id) = blank(body.organization_id) {
         if !user.is_admin {
             return Err(ApiError::Forbidden);
         }
-        db::organization(&db, &organization_id)?
+        state
+            .store()
+            .organization(&organization_id)?
             .ok_or_else(|| ApiError::bad("organization_is_missing"))?;
-        db::set_team_organization(&db, &id, &organization_id)?;
+        state.store().set_team_organization(&id, &organization_id)?;
     }
-    db::update_team(
-        &db,
+    state.store().update_team(
         &id,
         &name,
         &require_description(&body.description)?,
         ldap_group.as_deref(),
     )?;
-    let team = db::team_by_id(&db, &id)?.ok_or(ApiError::NotFound)?;
+    let team = state.store().team_by_id(&id)?.ok_or(ApiError::NotFound)?;
     Ok(Json(team_json(&team)))
 }
 
 fn organization_for_new_team(
-    db: &rusqlite::Connection,
+    store: &dyn Backend,
     requested: Option<String>,
     team_name: &str,
 ) -> AppResult<String> {
     if let Some(organization_id) = blank(requested) {
-        db::organization(db, &organization_id)?
+        store
+            .organization(&organization_id)?
             .ok_or_else(|| ApiError::bad("organization_is_missing"))?;
         return Ok(organization_id);
     }
-    if let Some(existing) = db::organization_by_name(db, team_name)? {
+    if let Some(existing) = store.organization_by_name(team_name)? {
         return Ok(existing.id);
     }
     let organization_id = Uuid::new_v4().to_string();
-    db::insert_organization(db, &organization_id, team_name, "")?;
+    store.insert_organization(&organization_id, team_name, "")?;
     Ok(organization_id)
 }
 
@@ -435,8 +436,7 @@ pub async fn list_members(
     Path(id): Path<String>,
 ) -> AppResult<Json<Value>> {
     gate(&state, &user, &id, Role::Viewer)?;
-    let db = state.db()?;
-    let members = db::list_members(&db, &id)?;
+    let members = state.store().list_members(&id)?;
     Ok(Json(json!(members)))
 }
 
@@ -450,10 +450,13 @@ pub async fn add_member(
     let role =
         Role::parse(&body.role).ok_or_else(|| ApiError::bad("role_is_viewer_operator_or_owner"))?;
     let username = body.username.trim().to_ascii_lowercase();
-    let db = state.db()?;
-    let member = db::user_by_username(&db, &username)?
+    let member = state
+        .store()
+        .user_by_username(&username)?
         .ok_or_else(|| ApiError::bad("unknown_user_create_the_account_first"))?;
-    db::grant_manual_membership(&db, &id, &member.id, role.as_str())?;
+    state
+        .store()
+        .grant_manual_membership(&id, &member.id, role.as_str())?;
     Ok(created(
         json!({"user_id": member.id, "role": role.as_str()}),
     ))
@@ -468,8 +471,8 @@ pub async fn remove_member(
     if user_id == user.id && !user.is_admin {
         return Err(ApiError::bad("you_cannot_remove_yourself_from_the_team"));
     }
-    let db = state.db()?;
-    db::delete_membership(&db, &id, &user_id)?;
+    let db = state.store();
+    db.delete_membership(&id, &user_id)?;
     Ok(no_content())
 }
 
@@ -481,11 +484,11 @@ pub async fn get_project(
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
-    let db = state.db()?;
-    if !db::project_visible(&db, &id, &team)? {
+    let db = state.store();
+    if !db.project_visible(&id, &team)? {
         return Err(ApiError::NotFound);
     }
-    let project = db::project(&db, &id)?.ok_or(ApiError::NotFound)?;
+    let project = db.project(&id)?.ok_or(ApiError::NotFound)?;
     Ok(Json(project_json(&project, &team)))
 }
 
@@ -496,9 +499,9 @@ pub async fn list_projects(
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
-    let db = state.db()?;
+    let db = state.store();
     Ok(Json(Value::Array(
-        db::list_projects(&db, &team)?
+        db.list_projects(&team)?
             .iter()
             .map(|project| project_json(project, &team))
             .collect(),
@@ -515,11 +518,11 @@ pub async fn update_project(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let (updated, sync_changed, discard_checkout) = {
-        let db = state.db()?;
-        if !db::project_visible(&db, &id, &team)? {
+        let db = state.store();
+        if !db.project_visible(&id, &team)? {
             return Err(ApiError::NotFound);
         }
-        let project = db::project(&db, &id)?.ok_or(ApiError::NotFound)?;
+        let project = db.project(&id)?.ok_or(ApiError::NotFound)?;
         let name = match body.name {
             Some(name) => require_name(&name)?,
             None => project.name.clone(),
@@ -531,20 +534,20 @@ pub async fn update_project(
         let revision = body.revision.unwrap_or_else(|| project.revision.clone());
         let (source, revision) =
             validate_project_source(&state, &user, &source_type, &source, &revision)?;
-        let team_row = db::team_by_id(&db, &team)?.ok_or(ApiError::NotFound)?;
+        let team_row = db.team_by_id(&team)?.ok_or(ApiError::NotFound)?;
         let organization_id = match blank(body.organization_id) {
             Some(organization_id) => {
                 if !user.is_admin && organization_id != team_row.organization_id {
                     return Err(ApiError::bad("a_project_stays_in_the_organization_of_the"));
                 }
-                db::organization(&db, &organization_id)?
+                db.organization(&organization_id)?
                     .ok_or_else(|| ApiError::bad("organization_is_missing"))?;
                 organization_id
             }
             None => project.organization_id.clone(),
         };
         let team_ids = body.team_ids.unwrap_or_else(|| project.team_ids.clone());
-        check_team_ids(&db, &organization_id, &team_ids)?;
+        check_team_ids(db, &organization_id, &team_ids)?;
         let source_changed = project.source_type != source_type || project.source != source;
         let owner = team == project.team_id;
         let credential_id = match body.credential_id {
@@ -553,25 +556,25 @@ pub async fn update_project(
                 if requested.is_none() && !owner && !source_changed {
                     project.credential_id.clone()
                 } else {
-                    validate_project_credential(&db, &team, requested.as_deref())?
+                    validate_project_credential(db, &team, requested.as_deref())?
                 }
             }
             None if source_changed && !owner => None,
             None if source_changed => {
-                validate_project_credential(&db, &team, project.credential_id.as_deref())?
+                validate_project_credential(db, &team, project.credential_id.as_deref())?
             }
             None => project.credential_id.clone(),
         };
-        db::set_project_details(&db, &id, &name, &source_type, &source, &revision)?;
-        db::set_project_organization(&db, &id, &organization_id)?;
-        db::replace_project_teams(&db, &id, &team_ids)?;
-        db::set_project_credential(&db, &id, credential_id.as_deref())?;
-        db::set_project_admin_saved(&db, &id, user.is_admin)?;
+        db.set_project_details(&id, &name, &source_type, &source, &revision)?;
+        db.set_project_organization(&id, &organization_id)?;
+        db.replace_project_teams(&id, &team_ids)?;
+        db.set_project_credential(&id, credential_id.as_deref())?;
+        db.set_project_admin_saved(&id, user.is_admin)?;
         let changed = project.source_type != source_type
             || project.source != source
             || project.revision != revision;
         let discard = changed && (project.source_type == "git" || source_type == "git");
-        let updated = db::project(&db, &id)?.ok_or(ApiError::NotFound)?;
+        let updated = db.project(&id)?.ok_or(ApiError::NotFound)?;
         (updated, changed && source_type == "git", discard)
     };
     let mut value = project_json(&updated, &team);
@@ -580,8 +583,8 @@ pub async fn update_project(
     }
     if sync_changed {
         let sync = sync_json(jobs::sync_project(&state, &updated).await);
-        let db = state.db()?;
-        value = project_json(&db::project(&db, &id)?.ok_or(ApiError::NotFound)?, &team);
+        let db = state.store();
+        value = project_json(&db.project(&id)?.ok_or(ApiError::NotFound)?, &team);
         value["sync"] = sync;
     }
     Ok(Json(value))
@@ -603,22 +606,22 @@ pub async fn create_project(
         &body.source,
         &body.revision,
     )?;
-    let db = state.db()?;
-    let current = db::team_by_id(&db, &team)?.ok_or(ApiError::NotFound)?;
+    let db = state.store();
+    let current = db.team_by_id(&team)?.ok_or(ApiError::NotFound)?;
     let organization_id = match blank(body.organization_id) {
         Some(organization_id) => {
             if !user.is_admin && organization_id != current.organization_id {
                 return Err(ApiError::bad("a_project_stays_in_the_organization_of_the"));
             }
-            db::organization(&db, &organization_id)?
+            db.organization(&organization_id)?
                 .ok_or_else(|| ApiError::bad("organization_is_missing"))?;
             organization_id
         }
         None => current.organization_id,
     };
-    check_team_ids(&db, &organization_id, &body.team_ids)?;
+    check_team_ids(db, &organization_id, &body.team_ids)?;
     let credential_id =
-        validate_project_credential(&db, &team, blank(body.credential_id).as_deref())?;
+        validate_project_credential(db, &team, blank(body.credential_id).as_deref())?;
     let project = Project {
         id: Uuid::new_v4().to_string(),
         team_id: team,
@@ -636,8 +639,8 @@ pub async fn create_project(
         last_sync_status: String::new(),
         admin_saved: user.is_admin,
     };
-    db::insert_project(&db, &project)?;
-    let stored = db::project(&db, &project.id)?.ok_or(ApiError::NotFound)?;
+    db.insert_project(&project)?;
+    let stored = db.project(&project.id)?.ok_or(ApiError::NotFound)?;
     Ok(created(json!(stored)))
 }
 
@@ -723,15 +726,16 @@ fn project_json(project: &Project, team: &str) -> Value {
 }
 
 fn validate_project_credential(
-    db: &Connection,
+    db: &dyn Backend,
     team: &str,
     credential_id: Option<&str>,
 ) -> AppResult<Option<String>> {
     let Some(id) = credential_id else {
         return Ok(None);
     };
-    let credential =
-        db::credential(db, id)?.ok_or_else(|| ApiError::bad("credential_is_missing"))?;
+    let credential = db
+        .credential(id)?
+        .ok_or_else(|| ApiError::bad("credential_is_missing"))?;
     if credential.kind != "scm" {
         return Err(ApiError::bad(
             "the_credential_is_not_a_source_control_credential",
@@ -746,13 +750,11 @@ fn validate_project_credential(
     Ok(Some(credential.id))
 }
 
-fn check_team_ids(
-    db: &rusqlite::Connection,
-    organization_id: &str,
-    team_ids: &[String],
-) -> AppResult<()> {
+fn check_team_ids(db: &dyn Backend, organization_id: &str, team_ids: &[String]) -> AppResult<()> {
     for team_id in team_ids {
-        let team = db::team_by_id(db, team_id)?.ok_or_else(|| ApiError::bad("team_is_missing"))?;
+        let team = db
+            .team_by_id(team_id)?
+            .ok_or_else(|| ApiError::bad("team_is_missing"))?;
         if team.organization_id != organization_id {
             return Err(ApiError::bad(
                 "assigned_teams_must_belong_to_the_project_organization",
@@ -770,8 +772,7 @@ pub async fn delete_project(
 ) -> AppResult<axum::response::Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let db = state.db()?;
-    db::delete_project(&db, &id, &team)?;
+    state.store().delete_project(&id, &team)?;
     Ok(no_content())
 }
 
@@ -784,9 +785,9 @@ pub async fn sync_project(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let project = {
-        let db = state.db()?;
-        let project = db::project(&db, &id)?.ok_or(ApiError::NotFound)?;
-        if !db::project_visible(&db, &id, &team)? {
+        let db = state.store();
+        let project = db.project(&id)?.ok_or(ApiError::NotFound)?;
+        if !db.project_visible(&id, &team)? {
             return Err(ApiError::NotFound);
         }
         project
@@ -802,11 +803,11 @@ pub async fn list_inventories(
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
-    let db = state.db()?;
-    let items = db::list_inventories(&db, &team)?;
+    let db = state.store();
+    let items = db.list_inventories(&team)?;
     let mut rows = Vec::with_capacity(items.len());
     for item in &items {
-        rows.push(inventory_summary_json(&db, item)?);
+        rows.push(inventory_summary_json(db, item)?);
     }
     Ok(Json(json!(rows)))
 }
@@ -819,9 +820,9 @@ pub async fn get_inventory(
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
-    let db = state.db()?;
-    let item = visible_inventory(&db, &id, &team)?;
-    Ok(Json(inventory_summary_json(&db, &item)?))
+    let db = state.store();
+    let item = visible_inventory(db, &id, &team)?;
+    Ok(Json(inventory_summary_json(db, &item)?))
 }
 
 const HOST_PAGE_SIZE: usize = 50;
@@ -854,9 +855,9 @@ pub async fn list_inventory_hosts(
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
-    let db = state.db()?;
-    let item = visible_inventory(&db, &id, &team)?;
-    let sources = db::list_inventory_sources(&db, &item.id)?;
+    let db = state.store();
+    let item = visible_inventory(db, &id, &team)?;
+    let sources = db.list_inventory_sources(&item.id)?;
     let data = inventory_data(&item, &sources);
     let groups = group_names(&data);
     let needle = query.search.trim().to_lowercase();
@@ -917,9 +918,9 @@ pub async fn get_inventory_host(
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
-    let db = state.db()?;
-    let item = visible_inventory(&db, &id, &team)?;
-    let sources = db::list_inventory_sources(&db, &item.id)?;
+    let db = state.store();
+    let item = visible_inventory(db, &id, &team)?;
+    let sources = db.list_inventory_sources(&item.id)?;
     let data = inventory_data(&item, &sources);
     let Some(host) = data.hosts.iter().find(|host| host.name == name) else {
         return Err(ApiError::NotFound);
@@ -949,7 +950,7 @@ pub async fn get_inventory_host(
         "source": source_json,
         "vars": vars,
         "netbox_id": netbox_id,
-        "netbox_url": netbox_url(&state, &db, source, netbox_id.as_deref()),
+        "netbox_url": netbox_url(&state, db, source, netbox_id.as_deref()),
     })))
 }
 
@@ -961,9 +962,9 @@ pub async fn list_inventory_groups(
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
-    let db = state.db()?;
-    let item = visible_inventory(&db, &id, &team)?;
-    let sources = db::list_inventory_sources(&db, &item.id)?;
+    let db = state.store();
+    let item = visible_inventory(db, &id, &team)?;
+    let sources = db.list_inventory_sources(&item.id)?;
     let data = inventory_data(&item, &sources);
     let groups: Vec<Value> = data
         .groups
@@ -993,9 +994,9 @@ pub async fn get_inventory_group(
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
-    let db = state.db()?;
-    let item = visible_inventory(&db, &id, &team)?;
-    let sources = db::list_inventory_sources(&db, &item.id)?;
+    let db = state.store();
+    let item = visible_inventory(db, &id, &team)?;
+    let sources = db.list_inventory_sources(&item.id)?;
     let data = inventory_data(&item, &sources);
     let Some(group) = data.groups.iter().find(|group| group.name == name).cloned() else {
         return Err(ApiError::NotFound);
@@ -1030,8 +1031,8 @@ pub async fn get_inventory_group(
     })))
 }
 
-fn visible_inventory(c: &Connection, id: &str, team: &str) -> AppResult<Inventory> {
-    let item = db::inventory(c, id)?.ok_or(ApiError::NotFound)?;
+fn visible_inventory(db: &dyn Backend, id: &str, team: &str) -> AppResult<Inventory> {
+    let item = db.inventory(id)?.ok_or(ApiError::NotFound)?;
     if item.team_id != team {
         return Err(ApiError::NotFound);
     }
@@ -1074,7 +1075,7 @@ fn host_source<'a>(sources: &'a [InventorySource], name: &str) -> Option<&'a Inv
 
 fn netbox_url(
     state: &Shared,
-    db: &Connection,
+    db: &dyn Backend,
     source: Option<&InventorySource>,
     netbox_id: Option<&str>,
 ) -> Option<String> {
@@ -1084,7 +1085,7 @@ fn netbox_url(
         return None;
     }
     let credential_id = source.credential_id.as_deref()?;
-    let credential = db::credential(db, credential_id).ok()??;
+    let credential = db.credential(credential_id).ok()??;
     let plain = state.decrypt(&credential.secret_blob).ok()?;
     let value: Value = serde_json::from_str(&plain).ok()?;
     let endpoint = value
@@ -1149,12 +1150,12 @@ pub async fn update_inventory(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let name = require_name(&body.name)?;
-    let db = state.db()?;
-    let existing = db::inventory(&db, &id)?.ok_or(ApiError::NotFound)?;
+    let db = state.store();
+    let existing = db.inventory(&id)?.ok_or(ApiError::NotFound)?;
     if existing.team_id != team {
         return Err(ApiError::NotFound);
     }
-    let sources = db::list_inventory_sources(&db, &id)?;
+    let sources = db.list_inventory_sources(&id)?;
     if !body.body.trim().is_empty() {
         if sources.len() > 1 {
             return Err(ApiError::bad(
@@ -1168,18 +1169,18 @@ pub async fn update_inventory(
         }
     }
     check_static_ini(&body.body)?;
-    db::update_inventory(&db, &id, &team, &name, &existing.body)?;
+    db.update_inventory(&id, &team, &name, &existing.body)?;
     if !body.body.trim().is_empty() {
         if let Some(source) = sources.first() {
-            db::set_inventory_source_body(&db, &source.id, &body.body)?;
-            db::refresh_inventory_summary(&db, &id)?;
+            db.set_inventory_source_body(&source.id, &body.body)?;
+            db.refresh_inventory_summary(&id)?;
         } else {
-            db::set_inventory_body(&db, &id, &team, &body.body)?;
+            db.set_inventory_body(&id, &team, &body.body)?;
         }
     }
-    db::set_inventory_admin_saved(&db, &id, user.is_admin)?;
-    let item = db::inventory(&db, &id)?.ok_or(ApiError::NotFound)?;
-    Ok(Json(inventory_json(&db, &item)?))
+    db.set_inventory_admin_saved(&id, user.is_admin)?;
+    let item = db.inventory(&id)?.ok_or(ApiError::NotFound)?;
+    Ok(Json(inventory_json(db, &item)?))
 }
 
 pub async fn create_inventory(
@@ -1229,14 +1230,10 @@ pub async fn create_inventory(
             created_at: item.created_at.clone(),
         })
     };
-    let mut db = state.db()?;
-    let tx = db.transaction()?;
-    db::insert_inventory(&tx, &item)?;
-    if let Some(source) = &source {
-        db::insert_inventory_source(&tx, source)?;
-    }
-    tx.commit()?;
-    Ok(created(inventory_json(&db, &item)?))
+    let sources: Vec<db::InventorySource> = source.into_iter().collect();
+    let db = state.store();
+    db.insert_inventory(&item, &sources, false)?;
+    Ok(created(inventory_json(db, &item)?))
 }
 
 fn source_json(source: &InventorySource) -> Value {
@@ -1250,8 +1247,8 @@ fn source_json(source: &InventorySource) -> Value {
     })
 }
 
-pub(super) fn inventory_summary_json(c: &Connection, item: &Inventory) -> AppResult<Value> {
-    let sources = db::list_inventory_sources(c, &item.id)?;
+pub(super) fn inventory_summary_json(c: &dyn Backend, item: &Inventory) -> AppResult<Value> {
+    let sources = c.list_inventory_sources(&item.id)?;
     let data = inventory_data(item, &sources);
     Ok(json!({
         "id": item.id,
@@ -1268,8 +1265,8 @@ pub(super) fn inventory_summary_json(c: &Connection, item: &Inventory) -> AppRes
     }))
 }
 
-pub(super) fn inventory_json(c: &Connection, item: &Inventory) -> AppResult<Value> {
-    let sources = db::list_inventory_sources(c, &item.id)?;
+pub(super) fn inventory_json(c: &dyn Backend, item: &Inventory) -> AppResult<Value> {
+    let sources = c.list_inventory_sources(&item.id)?;
     let data = inventory_data(item, &sources);
     Ok(json!({
         "id": item.id,
@@ -1300,16 +1297,16 @@ pub async fn delete_inventory(
 ) -> AppResult<axum::response::Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let mut db = state.db()?;
-    let mut names = db::templates_using_inventory(&db, &id, &team)?;
-    names.extend(db::workflows_using_inventory(&db, &id, &team)?);
+    let db = state.store();
+    let mut names = db.templates_using_inventory(&id, &team)?;
+    names.extend(db.workflows_using_inventory(&id, &team)?);
     if !names.is_empty() {
         return Err(ApiError::conflict_vars(
             "inventory_is_in_use",
             [("names", names.join(", "))],
         ));
     }
-    db::delete_inventory(&mut db, &id, &team)?;
+    db.delete_inventory(&id, &team)?;
     Ok(no_content())
 }
 
@@ -1320,15 +1317,15 @@ pub async fn list_credentials(
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
-    let db = state.db()?;
+    let db = state.store();
     let mut items = Vec::new();
-    for item in db::list_credentials(&db, &team)? {
+    for item in db.list_credentials(&team)? {
         items.push(json!({
             "id": item.id,
             "name": item.name,
             "kind": item.kind,
             "created_at": item.created_at,
-            "usages": usage_json(&db, &item.id, &team)?,
+            "usages": usage_json(db, &item.id, &team)?,
         }));
     }
     Ok(Json(json!(items)))
@@ -1362,8 +1359,8 @@ pub async fn create_credential(
         auto: false,
         disabled: false,
     };
-    let db = state.db()?;
-    db::insert_credential(&db, &item)?;
+    let db = state.store();
+    db.insert_credential(&item)?;
     Ok(created(json!({
         "id": item.id,
         "name": item.name,
@@ -1379,8 +1376,9 @@ pub async fn delete_credential(
 ) -> AppResult<axum::response::Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Owner)?;
-    let db = state.db()?;
-    let names = db::credential_usages(&db, &id, &team)?
+    let db = state.store();
+    let names = db
+        .credential_usages(&id, &team)?
         .into_iter()
         .map(|usage| usage_label(&usage))
         .collect::<Vec<_>>();
@@ -1390,7 +1388,7 @@ pub async fn delete_credential(
             [("names", names.join(", "))],
         ));
     }
-    db::delete_credential(&db, &id, &team)?;
+    db.delete_credential(&id, &team)?;
     Ok(no_content())
 }
 
@@ -1405,8 +1403,9 @@ fn usage_label(usage: &db::CredentialUsage) -> String {
     }
 }
 
-fn usage_json(c: &Connection, id: &str, team: &str) -> AppResult<Value> {
-    Ok(json!(db::credential_usages(c, id, team)?
+fn usage_json(c: &dyn Backend, id: &str, team: &str) -> AppResult<Value> {
+    Ok(json!(c
+        .credential_usages(id, team)?
         .into_iter()
         .map(|usage| json!({
             "inventory_id": usage.inventory_id,
@@ -1421,8 +1420,8 @@ fn usage_json(c: &Connection, id: &str, team: &str) -> AppResult<Value> {
 
 fn open_credential(state: &Shared, id: &str, team: &str) -> AppResult<(Credential, Value)> {
     let item = {
-        let db = state.db()?;
-        db::credential(&db, id)?
+        let db = state.store();
+        db.credential(id)?
             .filter(|item| item.team_id == team)
             .ok_or(ApiError::NotFound)?
     };
@@ -1457,8 +1456,8 @@ pub async fn get_credential(
     gate(&state, &user, &team, Role::Viewer)?;
     let (item, secret) = open_credential(&state, &id, &team)?;
     let usages = {
-        let db = state.db()?;
-        usage_json(&db, &item.id, &team)?
+        let db = state.store();
+        usage_json(db, &item.id, &team)?
     };
     Ok(Json(credential_json(&item, &secret, usages)))
 }
@@ -1485,9 +1484,9 @@ pub async fn update_credential(
     item.name = require_name(&body.name)?;
     item.secret_blob = state.encrypt(&raw)?;
     item.disabled = false;
-    let db = state.db()?;
-    db::update_credential(&db, &item)?;
-    let usages = usage_json(&db, &item.id, &team)?;
+    let db = state.store();
+    db.update_credential(&item)?;
+    let usages = usage_json(db, &item.id, &team)?;
     Ok(Json(credential_json(&item, &secret, usages)))
 }
 
@@ -1715,8 +1714,8 @@ pub async fn list_organizations(
     State(state): State<Shared>,
     user: AuthUser,
 ) -> AppResult<Json<Value>> {
-    let db = state.db()?;
-    let items = db::list_organizations(&db, &user.id, user.is_admin)?;
+    let db = state.store();
+    let items = db.list_organizations(&user.id, user.is_admin)?;
     Ok(Json(json!(items)))
 }
 
@@ -1730,9 +1729,9 @@ pub async fn create_organization(
     }
     let name = require_name(&body.name)?;
     let id = Uuid::new_v4().to_string();
-    let db = state.db()?;
-    db::insert_organization(&db, &id, &name, &require_description(&body.description)?)?;
-    let item = db::organization(&db, &id)?.ok_or(ApiError::NotFound)?;
+    let db = state.store();
+    db.insert_organization(&id, &name, &require_description(&body.description)?)?;
+    let item = db.organization(&id)?.ok_or(ApiError::NotFound)?;
     Ok(created(json!(item)))
 }
 
@@ -1741,16 +1740,17 @@ pub async fn get_organization(
     user: AuthUser,
     Path(id): Path<String>,
 ) -> AppResult<Json<Value>> {
-    let db = state.db()?;
-    let item = db::organization(&db, &id)?.ok_or(ApiError::NotFound)?;
+    let db = state.store();
+    let item = db.organization(&id)?.ok_or(ApiError::NotFound)?;
     if !user.is_admin
-        && !db::list_organizations(&db, &user.id, false)?
+        && !db
+            .list_organizations(&user.id, false)?
             .iter()
             .any(|org| org.id == id)
     {
         return Err(ApiError::Forbidden);
     }
-    let teams = db::teams_in_organization(&db, &id)?;
+    let teams = db.teams_in_organization(&id)?;
     Ok(Json(json!({
         "id": item.id,
         "name": item.name,
@@ -1770,9 +1770,9 @@ pub async fn update_organization(
         return Err(ApiError::Forbidden);
     }
     let name = require_name(&body.name)?;
-    let db = state.db()?;
-    db::update_organization(&db, &id, &name, &require_description(&body.description)?)?;
-    let item = db::organization(&db, &id)?.ok_or(ApiError::NotFound)?;
+    let db = state.store();
+    db.update_organization(&id, &name, &require_description(&body.description)?)?;
+    let item = db.organization(&id)?.ok_or(ApiError::NotFound)?;
     Ok(Json(json!(item)))
 }
 
