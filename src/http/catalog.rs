@@ -5,7 +5,6 @@ use axum::http::HeaderMap;
 use axum::Json;
 use chrono::{DateTime, Duration as ChronoDuration, NaiveDate, SecondsFormat, TimeZone, Utc};
 use chrono_tz::Tz;
-use rusqlite::Connection;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -1497,9 +1496,8 @@ pub async fn list_environments(
 ) -> AppResult<Json<Value>> {
     let team_id = team_header(&headers)?;
     gate(&state, &user, &team_id, Role::Viewer)?;
-    let db = state.db()?;
-    let team = db::team_by_id(&db, &team_id)?.ok_or(ApiError::NotFound)?;
-    Ok(Json(json!(db::list_environments(&db, &team)?)))
+    let db = state.store();
+    Ok(Json(json!(db.list_environments(&team_id)?)))
 }
 
 fn environment_scope(raw: Option<&str>, fallback: &str) -> AppResult<String> {
@@ -1539,8 +1537,8 @@ fn apply_environment_scope(item: &mut Environment, scope: &str, team: &db::Team)
     Ok(())
 }
 
-fn visible_environment(db: &Connection, id: &str, team: &db::Team) -> AppResult<Environment> {
-    let item = db::environment(db, id)?.ok_or(ApiError::NotFound)?;
+fn visible_environment(db: &dyn Backend, id: &str, team: &db::Team) -> AppResult<Environment> {
+    let item = db.environment(id)?.ok_or(ApiError::NotFound)?;
     if !db::environment_visible(&item, team) {
         return Err(ApiError::NotFound);
     }
@@ -1599,8 +1597,8 @@ pub async fn create_environment(
     if !may_manage_environment(&user, &scope) {
         return Err(ApiError::Forbidden);
     }
-    let db = state.db()?;
-    let team = db::team_by_id(&db, &team_id)?.ok_or(ApiError::NotFound)?;
+    let db = state.store();
+    let team = db.team_by_id(&team_id)?.ok_or(ApiError::NotFound)?;
     let mut item = Environment {
         id: Uuid::new_v4().to_string(),
         team_id: None,
@@ -1617,8 +1615,8 @@ pub async fn create_environment(
         team_name: String::new(),
     };
     apply_environment_scope(&mut item, &scope, &team)?;
-    db::insert_environment(&db, &item)?;
-    let stored = db::environment(&db, &item.id)?.ok_or(ApiError::NotFound)?;
+    db.insert_environment(&item)?;
+    let stored = db.environment(&item.id)?.ok_or(ApiError::NotFound)?;
     Ok(created(json!(stored)))
 }
 
@@ -1630,9 +1628,9 @@ pub async fn get_environment(
 ) -> AppResult<Json<Value>> {
     let team_id = team_header(&headers)?;
     gate(&state, &user, &team_id, Role::Viewer)?;
-    let db = state.db()?;
-    let team = db::team_by_id(&db, &team_id)?.ok_or(ApiError::NotFound)?;
-    let item = visible_environment(&db, &id, &team)?;
+    let db = state.store();
+    let team = db.team_by_id(&team_id)?.ok_or(ApiError::NotFound)?;
+    let item = visible_environment(db, &id, &team)?;
     Ok(Json(json!(item)))
 }
 
@@ -1645,9 +1643,9 @@ pub async fn update_environment(
 ) -> AppResult<Json<Value>> {
     let team_id = team_header(&headers)?;
     gate(&state, &user, &team_id, Role::Owner)?;
-    let db = state.db()?;
-    let team = db::team_by_id(&db, &team_id)?.ok_or(ApiError::NotFound)?;
-    let mut item = visible_environment(&db, &id, &team)?;
+    let db = state.store();
+    let team = db.team_by_id(&team_id)?.ok_or(ApiError::NotFound)?;
+    let mut item = visible_environment(db, &id, &team)?;
     let (name, image, pull_policy, network, description, tool) =
         environment_fields(&user, &body, Some(&item))?;
     let scope = environment_scope(body.scope.as_deref(), &item.scope)?;
@@ -1661,8 +1659,8 @@ pub async fn update_environment(
     item.network = network;
     item.description = description;
     apply_environment_scope(&mut item, &scope, &team)?;
-    db::update_environment(&db, &item)?;
-    let stored = db::environment(&db, &item.id)?.ok_or(ApiError::NotFound)?;
+    db.update_environment(&item)?;
+    let stored = db.environment(&item.id)?.ok_or(ApiError::NotFound)?;
     Ok(Json(json!(stored)))
 }
 
@@ -1674,13 +1672,13 @@ pub async fn delete_environment(
 ) -> AppResult<axum::response::Response> {
     let team_id = team_header(&headers)?;
     gate(&state, &user, &team_id, Role::Owner)?;
-    let db = state.db()?;
-    let team = db::team_by_id(&db, &team_id)?.ok_or(ApiError::NotFound)?;
-    let item = visible_environment(&db, &id, &team)?;
+    let db = state.store();
+    let team = db.team_by_id(&team_id)?.ok_or(ApiError::NotFound)?;
+    let item = visible_environment(db, &id, &team)?;
     if !may_manage_environment(&user, &item.scope) {
         return Err(ApiError::Forbidden);
     }
-    db::delete_environment(&db, &id)?;
+    db.delete_environment(&id)?;
     Ok(no_content())
 }
 

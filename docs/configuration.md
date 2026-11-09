@@ -46,7 +46,7 @@ See `.env.example`. Comments in that file are English. Copy it to `.env` before 
 
 ## PostgreSQL
 
-SQLite stays the default. A `postgres://` or `postgresql://` URL selects the experimental PostgreSQL backend. This slice bootstraps the schema and serves sign-in, sessions, `/healthz`, `/api/version`, `/api/me`, credentials, organizations, teams, projects, and inventories with their sources. Jobs, templates, schedules, workflows, hooks, environments, the admin user API, and backups still answer 503 with `this_feature_is_not_available_with_postgresql_yet` until they are ported.
+SQLite stays the default. A `postgres://` or `postgresql://` URL selects the experimental PostgreSQL backend. This slice bootstraps the schema and serves sign-in, sessions, `/healthz`, `/api/version`, `/api/me`, credentials, organizations, teams, projects, inventories with their sources, templates, execution environments, schedules, and hooks. Job execution (including project sync, template and workflow launch, and scheduled runs), workflows, hook ingest and deliveries, the overview and dashboard, the admin user API, and backups still answer 503 with `this_feature_is_not_available_with_postgresql_yet` until they are ported.
 
 ```bash
 KOREOGRAF_DATABASE_URL='postgresql://koreograf@db.example:5432/koreograf?sslmode=require'

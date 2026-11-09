@@ -17,7 +17,7 @@ use chrono::{
 use chrono_tz::Tz;
 use serde_json::json;
 
-use crate::db::{self, Schedule};
+use crate::db::Schedule;
 use crate::error::{ApiError, AppResult};
 use crate::jobs::{self, LaunchRequest};
 use crate::Shared;
@@ -649,8 +649,8 @@ pub(crate) fn spawn(state: Shared) {
 async fn pass(state: &Shared, startup: bool) -> AppResult<()> {
     let now = Utc::now();
     let due = {
-        let db = state.db()?;
-        db::due_schedules(&db, &format_utc(now))?
+        let db = state.store();
+        db.due_schedules(&format_utc(now))?
     };
     for item in due {
         if let Err(err) = one(state, &item, now, startup).await {
@@ -671,20 +671,20 @@ async fn one(state: &Shared, item: &Schedule, now: DateTime<Utc>, startup: bool)
     match decided.action {
         Action::Idle => {
             if item.next_run_at.as_deref() != next.as_deref() || item.occurrence_count != count {
-                let db = state.db()?;
-                db::advance_schedule(&db, &item.id, next.as_deref(), count)?;
+                let db = state.store();
+                db.advance_schedule(&item.id, next.as_deref(), count)?;
             }
         }
         Action::Miss(at) => {
-            let db = state.db()?;
-            db::advance_schedule(&db, &item.id, next.as_deref(), count)?;
-            db::note_miss(&db, &item.id, Some(&format_utc(at)))?;
+            let db = state.store();
+            db.advance_schedule(&item.id, next.as_deref(), count)?;
+            db.note_miss(&item.id, Some(&format_utc(at)))?;
         }
         Action::Fire(at) => {
             let actor = launch_actor(item);
             let allowed = {
-                let db = state.db()?;
-                actor_may_launch(&db, &item.team_id, actor)?
+                let db = state.store();
+                actor_may_launch(db, &item.team_id, actor)?
             };
             if !allowed {
                 tracing::warn!(
@@ -703,10 +703,10 @@ async fn one(state: &Shared, item: &Schedule, now: DateTime<Utc>, startup: bool)
                     tracing::warn!(schedule = %item.id, error = %err, "schedule did not start");
                 }
             }
-            let db = state.db()?;
-            db::advance_schedule(&db, &item.id, next.as_deref(), count)?;
+            let db = state.store();
+            db.advance_schedule(&item.id, next.as_deref(), count)?;
             if started.is_err() {
-                db::note_miss(&db, &item.id, Some(&format_utc(at)))?;
+                db.note_miss(&item.id, Some(&format_utc(at)))?;
             }
             let block = if allowed {
                 None
@@ -714,21 +714,25 @@ async fn one(state: &Shared, item: &Schedule, now: DateTime<Utc>, startup: bool)
                 Some("schedule_needs_a_new_owner")
             };
             if item.launch_block.as_deref() != block {
-                db::set_launch_block(&db, &item.id, block)?;
+                db.set_launch_block(&item.id, block)?;
             }
         }
     }
     Ok(())
 }
 
-fn actor_may_launch(c: &rusqlite::Connection, team_id: &str, actor: &str) -> AppResult<bool> {
-    let Some(user) = db::user_by_username(c, actor)? else {
+fn actor_may_launch(
+    store: &dyn crate::backend::Backend,
+    team_id: &str,
+    actor: &str,
+) -> AppResult<bool> {
+    let Some(user) = store.user_by_username(actor)? else {
         return Ok(false);
     };
     if user.disabled {
         return Ok(false);
     }
-    match crate::auth::authorize_connection(c, &user.into(), team_id, crate::auth::Role::Operator) {
+    match crate::auth::authorize(store, &user.into(), team_id, crate::auth::Role::Operator) {
         Ok(()) => Ok(true),
         Err(ApiError::Forbidden) => Ok(false),
         Err(err) => Err(err),
@@ -819,6 +823,7 @@ fn weekday(code: &str) -> Option<Weekday> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db;
     use chrono::Timelike;
 
     fn berlin() -> Tz {
