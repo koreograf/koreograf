@@ -628,6 +628,7 @@ mod tests {
             cookie_secure: CookieSecure::Auto,
             trusted_proxy: false,
             mcp: true,
+            public_url: Vec::new(),
             data_host: None,
             ldap: None,
         })
@@ -698,6 +699,7 @@ mod tests {
             cookie_secure: CookieSecure::Auto,
             trusted_proxy: false,
             mcp: true,
+            public_url: Vec::new(),
             data_host: None,
             ldap: None,
         })
@@ -750,6 +752,7 @@ mod tests {
             cookie_secure: CookieSecure::Auto,
             trusted_proxy: false,
             mcp: true,
+            public_url: Vec::new(),
             data_host: None,
             ldap: Some(LdapConfig {
                 url,

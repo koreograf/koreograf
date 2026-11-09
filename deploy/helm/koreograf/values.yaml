@@ -84,6 +84,10 @@ cookieSecure: ""
 # true liest X-Forwarded-Proto für das Session-Cookie. Nur hinter einem Proxy.
 trustedProxy: false
 
+# Oeffentliche Origin(s) fuer Browser-Schreibzugriffe hinter einem Proxy,
+# zum Beispiel https://koreograf.example.com. Leer nutzt den Request-Host.
+publicUrl: ""
+
 persistence:
   size: 2Gi
   storageClass: ""

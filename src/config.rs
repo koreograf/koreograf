@@ -376,6 +376,9 @@ pub struct Config {
     pub trusted_proxy: bool,
     /// `KOREOGRAF_MCP`. `0` turns the MCP routes off.
     pub mcp: bool,
+    /// `KOREOGRAF_PUBLIC_URL`. Public origins (scheme, host, port) that
+    /// browser writes may come from. Empty falls back to the request host.
+    pub public_url: Vec<String>,
 }
 
 impl Config {
@@ -445,6 +448,7 @@ impl Config {
             cookie_secure: CookieSecure::parse(&env_string("KOREOGRAF_COOKIE_SECURE")),
             trusted_proxy: env_flag("KOREOGRAF_TRUSTED_PROXY"),
             mcp: env_string("KOREOGRAF_MCP") != "0",
+            public_url: env_list("KOREOGRAF_PUBLIC_URL"),
         }
     }
 }
@@ -467,6 +471,15 @@ fn env_paths(key: &str) -> Vec<PathBuf> {
         .map(str::trim)
         .filter(|part| !part.is_empty())
         .map(PathBuf::from)
+        .collect()
+}
+
+fn env_list(key: &str) -> Vec<String> {
+    env_string(key)
+        .split([',', ' '])
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
         .collect()
 }
 

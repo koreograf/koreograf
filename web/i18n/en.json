@@ -144,6 +144,7 @@
   "credentials": "Credentials",
   "credentials_are_not_json": "Credentials are not JSON.",
   "credentials_cannot_be_read": "Credentials cannot be read.",
+  "cross_origin_request_is_not_allowed": "The request came from another origin and was refused.",
   "custom_key": "Custom key…",
   "daily": "Daily",
   "danger_zone": "Danger zone",

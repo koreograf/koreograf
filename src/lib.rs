@@ -213,6 +213,7 @@ pub fn boot_with(mut cfg: Config, database: DatabaseConfig) -> anyhow::Result<Sh
     // A relative data directory would be resolved again from the job work
     // directory. Local runs then miss wrapper.sh and the other job files.
     cfg.data_dir = std::path::absolute(&cfg.data_dir)?;
+    crate::http::warn_public_urls(&cfg);
     runner::scrub_job_dirs(&cfg.data_dir);
     let backend = backend::open(&database, &cfg.data_dir)?;
     let cipher = crypto::load_cipher(&cfg.data_dir)?;

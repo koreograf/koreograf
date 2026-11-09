@@ -28,6 +28,7 @@ fn config(dir: &Path) -> Config {
         cookie_secure: CookieSecure::Auto,
         trusted_proxy: false,
         mcp: false,
+        public_url: Vec::new(),
         data_host: None,
         ldap: None,
     }
