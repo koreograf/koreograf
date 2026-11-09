@@ -644,13 +644,11 @@ fn ensure_certificate_override(
 fn credential_secret(state: &Shared, id: &str, team: &str) -> AppResult<Value> {
     let (blob, kind, credential_team, disabled) = {
         let db = state.store();
-        let item = db
-            .credential(id)?
-            .ok_or_else(|| ApiError::bad("netbox_credential_is_required"))?;
+        let item = db.credential(id)?.ok_or(ApiError::NotFound)?;
         (item.secret_blob, item.kind, item.team_id, item.disabled)
     };
     if credential_team != team {
-        return Err(ApiError::bad("the_credential_belongs_to_another_team"));
+        return Err(ApiError::NotFound);
     }
     if kind != "netbox" {
         return Err(ApiError::bad("netbox_credential_has_the_wrong_kind"));

@@ -8,6 +8,8 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
+use crate::error::{ApiError, AppResult};
+
 pub const KINDS: &[&str] = &[
     "ssh",
     "vault",
@@ -114,20 +116,20 @@ pub fn assign_loaded(
     state: &crate::Shared,
     team: &str,
     loaded: &[crate::db::Credential],
-) -> Result<AssignedSet, String> {
+) -> AppResult<AssignedSet> {
     let mut ids = Vec::with_capacity(loaded.len());
     let mut vault_labels = Vec::with_capacity(loaded.len());
     for credential in loaded {
         if credential.team_id != team {
-            return Err("the_credential_belongs_to_another_team".into());
+            return Err(ApiError::NotFound);
         }
         let vault_id = if credential.kind == "vault" {
             let plain = state
                 .decrypt(&credential.secret_blob)
-                .map_err(|_| "credentials_cannot_be_read".to_string())?;
-            let secret: Value =
-                serde_json::from_str(&plain).map_err(|_| "credentials_are_not_json".to_string())?;
-            check("vault", &secret)?;
+                .map_err(|_| ApiError::bad("credentials_cannot_be_read"))?;
+            let secret: Value = serde_json::from_str(&plain)
+                .map_err(|_| ApiError::bad("credentials_are_not_json"))?;
+            check("vault", &secret).map_err(ApiError::bad)?;
             secret
                 .get("vault_id")
                 .and_then(Value::as_str)
@@ -149,7 +151,7 @@ pub fn assign_loaded(
             vault_id,
         })
         .collect::<Vec<_>>();
-    check_assignment(&view)?;
+    check_assignment(&view).map_err(ApiError::bad)?;
     let primary_id = loaded
         .iter()
         .find(|row| row.kind != "vault")

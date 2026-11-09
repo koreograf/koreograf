@@ -487,6 +487,12 @@ fn env_string(key: &str) -> String {
     std::env::var(key).unwrap_or_default().trim().to_string()
 }
 
+/// `KOREOGRAF_METRICS_TOKEN`. Empty keeps `/metrics` open.
+pub(crate) fn metrics_token() -> Option<String> {
+    let token = env_string("KOREOGRAF_METRICS_TOKEN");
+    (!token.is_empty()).then_some(token)
+}
+
 /// An empty value means the path is detected. A relative path is ignored.
 fn absolute_env_path(key: &str) -> Option<PathBuf> {
     let value = env_string(key);
