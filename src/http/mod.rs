@@ -398,11 +398,11 @@ pub fn team_header(headers: &HeaderMap) -> AppResult<String> {
 }
 
 pub fn gate(state: &Shared, user: &AuthUser, team_id: &str, min: Role) -> AppResult<()> {
-    let db = state.db()?;
-    if db::team_by_id(&db, team_id)?.is_none() {
+    let store = state.store();
+    if store.team_by_id(team_id)?.is_none() {
         return Err(ApiError::NotFound);
     }
-    auth::authorize(&db, user, team_id, min)
+    auth::authorize(store, user, team_id, min)
 }
 
 pub fn require_name(name: &str) -> AppResult<String> {

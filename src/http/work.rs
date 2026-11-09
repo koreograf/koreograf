@@ -305,7 +305,7 @@ pub async fn get_job(
 ) -> AppResult<Json<Value>> {
     let db = state.db()?;
     let job = db::job(&db, &id)?.ok_or(ApiError::NotFound)?;
-    crate::auth::authorize(&db, &user, &job.team_id, Role::Viewer)?;
+    crate::auth::authorize_connection(&db, &user, &job.team_id, Role::Viewer)?;
     let events = events_for_page(&db, &id)?;
     let mut value = job_json(&job, Some(&events));
     value["output_capped"] = json!(db::events_bytes(&db, &id)? > OUTPUT_LIMIT as i64);
@@ -410,7 +410,7 @@ pub async fn job_output(
     let (body, filename) = {
         let db = state.db()?;
         let job = db::job(&db, &id)?.ok_or(ApiError::NotFound)?;
-        crate::auth::authorize(&db, &user, &job.team_id, Role::Viewer)?;
+        crate::auth::authorize_connection(&db, &user, &job.team_id, Role::Viewer)?;
         let body = render_job_output(&db, &id)?;
         (body, output_filename(&job.name, &job.id))
     };
@@ -439,7 +439,7 @@ pub async fn cancel_job(
     let team = {
         let db = state.db()?;
         let job = db::job(&db, &id)?.ok_or(ApiError::NotFound)?;
-        crate::auth::authorize(&db, &user, &job.team_id, Role::Operator)?;
+        crate::auth::authorize_connection(&db, &user, &job.team_id, Role::Operator)?;
         job.team_id
     };
     jobs::cancel(&state, &id)?;
@@ -458,7 +458,7 @@ pub async fn relaunch_job(
     {
         let db = state.db()?;
         let job = db::job(&db, &id)?.ok_or(ApiError::NotFound)?;
-        crate::auth::authorize(&db, &user, &job.team_id, Role::Operator)?;
+        crate::auth::authorize_connection(&db, &user, &job.team_id, Role::Operator)?;
     }
     let job_id = jobs::relaunch(&state, &id, &user.username, body.only_failed_hosts)?;
     let db = state.db()?;
@@ -475,7 +475,7 @@ pub async fn job_events(
     {
         let db = state.db()?;
         let job = db::job(&db, &id)?.ok_or(ApiError::NotFound)?;
-        crate::auth::authorize(&db, &user, &job.team_id, Role::Viewer)?;
+        crate::auth::authorize_connection(&db, &user, &job.team_id, Role::Viewer)?;
     }
     let after = query.after.unwrap_or(0);
     let stream = async_stream::stream! {
@@ -543,7 +543,7 @@ pub async fn get_workflow(
 ) -> AppResult<Json<Value>> {
     let db = state.db()?;
     let item = db::workflow(&db, &id)?.ok_or(ApiError::NotFound)?;
-    crate::auth::authorize(&db, &user, &item.team_id, Role::Viewer)?;
+    crate::auth::authorize_connection(&db, &user, &item.team_id, Role::Viewer)?;
     Ok(Json(workflow_json(&item)))
 }
 
@@ -619,7 +619,7 @@ pub async fn get_workflow_job(
 ) -> AppResult<Json<Value>> {
     let db = state.db()?;
     let run = db::workflow_job(&db, &id)?.ok_or(ApiError::NotFound)?;
-    crate::auth::authorize(&db, &user, &run.team_id, Role::Viewer)?;
+    crate::auth::authorize_connection(&db, &user, &run.team_id, Role::Viewer)?;
     Ok(Json(run_json(&db, &run)?))
 }
 
@@ -707,7 +707,7 @@ pub async fn test_hook(
     let hook = {
         let db = state.db()?;
         let hook = db::hook(&db, &id)?.ok_or(ApiError::NotFound)?;
-        crate::auth::authorize(&db, &user, &hook.team_id, Role::Operator)?;
+        crate::auth::authorize_connection(&db, &user, &hook.team_id, Role::Operator)?;
         hook
     };
     let payload = json!({
