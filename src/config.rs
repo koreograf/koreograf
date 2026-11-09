@@ -219,7 +219,7 @@ pub fn parse_database_config(
     } else {
         database
     };
-    let mut sslmode = SslMode::Prefer;
+    let mut sslmode = SslMode::Require;
     let mut connect_timeout_secs = 10;
     let mut root_cert = ca_file;
     for (key, value) in parsed.query_pairs() {
@@ -650,6 +650,16 @@ mod tests {
         assert!(!debug.contains("url-secret"), "{debug}");
         let _ = std::fs::remove_file(&path);
         assert!(parse_database_config("postgres://koreo@db/automation", Some(path), None).is_err());
+    }
+
+    #[test]
+    fn the_default_sslmode_is_require() {
+        let database =
+            parse_database_config("postgres://u@db/x", None, None).expect("postgres url");
+        let DatabaseConfig::Postgres(config) = &database else {
+            panic!("expected postgres");
+        };
+        assert_eq!(config.sslmode, SslMode::Require);
     }
 
     #[test]

@@ -169,7 +169,7 @@ impl Backend for SqliteBackend {
 }
 
 pub(crate) struct PostgresBackend {
-    client: Client,
+    client: tokio::sync::Mutex<Client>,
     runtime: Option<tokio::runtime::Runtime>,
 }
 
@@ -185,7 +185,7 @@ impl PostgresBackend {
     pub(crate) fn open(config: &PostgresConfig) -> anyhow::Result<Self> {
         let (client, runtime) = connect(config)?;
         let backend = Self {
-            client,
+            client: tokio::sync::Mutex::new(client),
             runtime: Some(runtime),
         };
         backend.ensure_schema()?;
@@ -193,27 +193,34 @@ impl PostgresBackend {
     }
 
     fn ensure_schema(&self) -> AppResult<()> {
-        block_on(self.client.batch_execute(&db::postgres_schema()))?;
-        let found: Option<String> = block_on(self.client.query_opt(
-            "SELECT value FROM schema_meta WHERE key = 'schema_version'",
-            &[],
-        ))?
-        .map(|row| row.get(0));
-        if let Some(found) = found {
-            let version = found.parse::<u32>().unwrap_or(u32::MAX);
-            if version > db::SCHEMA_VERSION {
-                return Err(ApiError::Internal(format!(
-                    "The database uses schema {version}, but this build supports {}. Upgrade Koreograf before opening it.",
-                    db::SCHEMA_VERSION
-                )));
+        block_on(async {
+            let client = self.client.lock().await;
+            client.batch_execute(&db::postgres_schema()).await?;
+            let found: Option<String> = client
+                .query_opt(
+                    "SELECT value FROM schema_meta WHERE key = 'schema_version'",
+                    &[],
+                )
+                .await?
+                .map(|row| row.get(0));
+            if let Some(found) = found {
+                let version = found.parse::<u32>().unwrap_or(u32::MAX);
+                if version > db::SCHEMA_VERSION {
+                    return Err(ApiError::Internal(format!(
+                        "The database uses schema {version}, but this build supports {}. Upgrade Koreograf before opening it.",
+                        db::SCHEMA_VERSION
+                    )));
+                }
             }
-        }
-        block_on(self.client.execute(
-            "INSERT INTO schema_meta (key, value) VALUES ('schema_version', $1)
-             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-            &[&db::SCHEMA_VERSION.to_string()],
-        ))?;
-        Ok(())
+            client
+                .execute(
+                    "INSERT INTO schema_meta (key, value) VALUES ('schema_version', $1)
+                     ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                    &[&db::SCHEMA_VERSION.to_string()],
+                )
+                .await?;
+            Ok(())
+        })
     }
 }
 
@@ -346,7 +353,10 @@ fn connection_error(err: tokio_postgres::Error, target: &str) -> anyhow::Error {
         };
         return anyhow::anyhow!(message);
     }
-    anyhow::anyhow!("PostgreSQL at {target} is unreachable.")
+    anyhow::anyhow!(
+        "PostgreSQL at {target} is unreachable: {:#}",
+        anyhow::Error::new(err)
+    )
 }
 
 fn row_user(row: &tokio_postgres::Row) -> AppResult<User> {
@@ -441,33 +451,49 @@ impl Backend for PostgresBackend {
     }
 
     fn ping(&self) -> AppResult<()> {
-        block_on(self.client.query_one("SELECT 1", &[]))?;
-        Ok(())
+        block_on(async {
+            let client = self.client.lock().await;
+            client.query_one("SELECT 1", &[]).await?;
+            Ok(())
+        })
     }
 
     fn settings_rows(&self) -> AppResult<HashMap<String, String>> {
-        let rows = block_on(self.client.query("SELECT key, value FROM settings", &[]))?;
-        Ok(rows
-            .into_iter()
-            .map(|row| (row.get(0), row.get(1)))
-            .collect())
+        block_on(async {
+            let client = self.client.lock().await;
+            let rows = client.query("SELECT key, value FROM settings", &[]).await?;
+            Ok(rows
+                .into_iter()
+                .map(|row| (row.get(0), row.get(1)))
+                .collect())
+        })
     }
 
     fn user_by_username(&self, username: &str) -> AppResult<Option<User>> {
-        let row = block_on(self.client.query_opt(
-            &format!("SELECT {USER_COLUMNS} FROM users WHERE lower(username) = lower($1)"),
-            &[&username],
-        ))?;
-        row.as_ref().map(row_user).transpose()
+        block_on(async {
+            let client = self.client.lock().await;
+            let row = client
+                .query_opt(
+                    &format!("SELECT {USER_COLUMNS} FROM users WHERE lower(username) = lower($1)"),
+                    &[&username],
+                )
+                .await?;
+            row.as_ref().map(row_user).transpose()
+        })
     }
 
     fn user_by_session(&self, token: &str) -> AppResult<Option<User>> {
-        let row = block_on(self.client.query_opt(
-            "SELECT u.id, u.username, u.display_name, u.password_hash, u.auth_source,
-                    u.is_admin, u.disabled, u.created_at, u.email, s.expires_at
-             FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = $1",
-            &[&token],
-        ))?;
+        let row = block_on(async {
+            let client = self.client.lock().await;
+            client
+                .query_opt(
+                    "SELECT u.id, u.username, u.display_name, u.password_hash, u.auth_source,
+                            u.is_admin, u.disabled, u.created_at, u.email, s.expires_at
+                     FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = $1",
+                    &[&token],
+                )
+                .await
+        })?;
         let Some(row) = row else {
             return Ok(None);
         };
@@ -480,45 +506,64 @@ impl Backend for PostgresBackend {
     }
 
     fn user_by_api_token(&self, token_hash: &str) -> AppResult<Option<User>> {
-        let row = block_on(self.client.query_opt(
-            "SELECT u.id, u.username, u.display_name, u.password_hash, u.auth_source,
-                    u.is_admin, u.disabled, u.created_at, u.email, t.id
-             FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = $1",
-            &[&token_hash],
-        ))?;
+        let row = block_on(async {
+            let client = self.client.lock().await;
+            client
+                .query_opt(
+                    "SELECT u.id, u.username, u.display_name, u.password_hash, u.auth_source,
+                            u.is_admin, u.disabled, u.created_at, u.email, t.id
+                     FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = $1",
+                    &[&token_hash],
+                )
+                .await
+        })?;
         let Some(row) = row else {
             return Ok(None);
         };
         let token_id: String = row.try_get(9)?;
-        block_on(self.client.execute(
-            "UPDATE api_tokens SET last_used_at = $2 WHERE id = $1",
-            &[&token_id, &db::now()],
-        ))?;
+        block_on(async {
+            let client = self.client.lock().await;
+            client
+                .execute(
+                    "UPDATE api_tokens SET last_used_at = $2 WHERE id = $1",
+                    &[&token_id, &db::now()],
+                )
+                .await
+        })?;
         Ok(Some(row_user(&row)?))
     }
 
     fn create_session(&self, token: &str, user_id: &str) -> AppResult<()> {
-        block_on(self.client.execute(
-            "INSERT INTO sessions (token, user_id, expires_at) VALUES ($1, $2, $3)",
-            &[&token, &user_id, &db::plus_secs(7 * 24 * 3600)],
-        ))?;
-        Ok(())
+        block_on(async {
+            let client = self.client.lock().await;
+            client
+                .execute(
+                    "INSERT INTO sessions (token, user_id, expires_at) VALUES ($1, $2, $3)",
+                    &[&token, &user_id, &db::plus_secs(7 * 24 * 3600)],
+                )
+                .await?;
+            Ok(())
+        })
     }
 
     fn delete_session(&self, token: &str) -> AppResult<()> {
-        block_on(
-            self.client
-                .execute("DELETE FROM sessions WHERE token = $1", &[&token]),
-        )?;
-        Ok(())
+        block_on(async {
+            let client = self.client.lock().await;
+            client
+                .execute("DELETE FROM sessions WHERE token = $1", &[&token])
+                .await?;
+            Ok(())
+        })
     }
 
     fn purge_sessions(&self) -> AppResult<()> {
-        block_on(
-            self.client
-                .execute("DELETE FROM sessions WHERE expires_at < $1", &[&db::now()]),
-        )?;
-        Ok(())
+        block_on(async {
+            let client = self.client.lock().await;
+            client
+                .execute("DELETE FROM sessions WHERE expires_at < $1", &[&db::now()])
+                .await?;
+            Ok(())
+        })
     }
 
     fn insert_user(
@@ -530,21 +575,26 @@ impl Backend for PostgresBackend {
         auth_source: &str,
         is_admin: bool,
     ) -> AppResult<()> {
-        block_on(self.client.execute(
-            "INSERT INTO users
-                (id, username, display_name, password_hash, auth_source, is_admin, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)",
-            &[
-                &id,
-                &username,
-                &display_name,
-                &password_hash,
-                &auth_source,
-                &(is_admin as i32),
-                &db::now(),
-            ],
-        ))?;
-        Ok(())
+        block_on(async {
+            let client = self.client.lock().await;
+            client
+                .execute(
+                    "INSERT INTO users
+                        (id, username, display_name, password_hash, auth_source, is_admin, created_at)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                    &[
+                        &id,
+                        &username,
+                        &display_name,
+                        &password_hash,
+                        &auth_source,
+                        &(is_admin as i32),
+                        &db::now(),
+                    ],
+                )
+                .await?;
+            Ok(())
+        })
     }
 
     fn list_teams_for_user(&self, user_id: &str, admin: bool) -> AppResult<Vec<(Team, String)>> {
@@ -562,63 +612,82 @@ impl Backend for PostgresBackend {
                  WHERE m.user_id = $1 ORDER BY t.name"
             )
         };
-        let rows = block_on(self.client.query(&sql, &[&user_id]))?;
-        rows.iter()
-            .map(|row| Ok((row_team(row)?, row.try_get::<_, String>(7)?)))
-            .collect()
+        block_on(async {
+            let client = self.client.lock().await;
+            let rows = client.query(&sql, &[&user_id]).await?;
+            rows.iter()
+                .map(|row| Ok((row_team(row)?, row.try_get::<_, String>(7)?)))
+                .collect()
+        })
     }
 
     fn list_user_memberships(&self, user_id: &str) -> AppResult<Vec<UserMembership>> {
-        let rows = block_on(self.client.query(
-            "SELECT t.id, t.name, COALESCE(t.organization_id, ''), COALESCE(o.name, ''), m.role, m.source
-             FROM memberships m
-             JOIN teams t ON t.id = m.team_id
-             LEFT JOIN organizations o ON o.id = t.organization_id
-             WHERE m.user_id = $1
-             ORDER BY o.name, t.name",
-            &[&user_id],
-        ))?;
-        rows.iter()
-            .map(|row| {
-                Ok(UserMembership {
-                    team_id: row.try_get(0)?,
-                    team_name: row.try_get(1)?,
-                    organization_id: row.try_get(2)?,
-                    organization_name: row.try_get(3)?,
-                    role: row.try_get(4)?,
-                    source: row.try_get(5)?,
+        block_on(async {
+            let client = self.client.lock().await;
+            let rows = client
+                .query(
+                    "SELECT t.id, t.name, COALESCE(t.organization_id, ''), COALESCE(o.name, ''), m.role, m.source
+                     FROM memberships m
+                     JOIN teams t ON t.id = m.team_id
+                     LEFT JOIN organizations o ON o.id = t.organization_id
+                     WHERE m.user_id = $1
+                     ORDER BY o.name, t.name",
+                    &[&user_id],
+                )
+                .await?;
+            rows.iter()
+                .map(|row| {
+                    Ok(UserMembership {
+                        team_id: row.try_get(0)?,
+                        team_name: row.try_get(1)?,
+                        organization_id: row.try_get(2)?,
+                        organization_name: row.try_get(3)?,
+                        role: row.try_get(4)?,
+                        source: row.try_get(5)?,
+                    })
                 })
-            })
-            .collect()
+                .collect()
+        })
     }
 
     fn replace_settings(&self, rows: &[(String, String)]) -> AppResult<()> {
-        for (key, value) in rows {
-            block_on(self.client.execute(
-                "INSERT INTO settings (key, value) VALUES ($1, $2)
-                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-                &[key, value],
-            ))?;
-        }
         let keys: Vec<&str> = rows.iter().map(|(key, _)| key.as_str()).collect();
-        block_on(
-            self.client
-                .execute("DELETE FROM settings WHERE NOT (key = ANY($1))", &[&keys]),
-        )?;
-        Ok(())
+        block_on(async {
+            let mut client = self.client.lock().await;
+            let transaction = client.transaction().await?;
+            for (key, value) in rows {
+                transaction
+                    .execute(
+                        "INSERT INTO settings (key, value) VALUES ($1, $2)
+                         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                        &[key, value],
+                    )
+                    .await?;
+            }
+            transaction
+                .execute("DELETE FROM settings WHERE NOT (key = ANY($1))", &[&keys])
+                .await?;
+            transaction.commit().await?;
+            Ok(())
+        })
     }
 
     fn environment(&self, id: &str) -> AppResult<Option<Environment>> {
-        let row = block_on(self.client.query_opt(
-            "SELECT e.id, e.team_id, e.organization_id, e.name, e.image, e.pull_policy,
-                    e.network, e.description, e.created_at, COALESCE(o.name, ''),
-                    COALESCE(t.name, ''), e.tool
-             FROM environments e
-             LEFT JOIN organizations o ON o.id = e.organization_id
-             LEFT JOIN teams t ON t.id = e.team_id
-             WHERE e.id = $1",
-            &[&id],
-        ))?;
-        row.as_ref().map(row_environment).transpose()
+        block_on(async {
+            let client = self.client.lock().await;
+            let row = client
+                .query_opt(
+                    "SELECT e.id, e.team_id, e.organization_id, e.name, e.image, e.pull_policy,
+                            e.network, e.description, e.created_at, COALESCE(o.name, ''),
+                            COALESCE(t.name, ''), e.tool
+                     FROM environments e
+                     LEFT JOIN organizations o ON o.id = e.organization_id
+                     LEFT JOIN teams t ON t.id = e.team_id
+                     WHERE e.id = $1",
+                    &[&id],
+                )
+                .await?;
+            row.as_ref().map(row_environment).transpose()
+        })
     }
 }

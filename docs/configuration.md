@@ -52,7 +52,7 @@ SQLite stays the default. A `postgres://` or `postgresql://` URL selects the exp
 KOREOGRAF_DATABASE_URL='postgresql://koreograf@db.example:5432/koreograf?sslmode=require'
 ```
 
-The URL carries the host, port, database, and user. An empty database path uses the user name. `sslmode` is `disable`, `prefer` (the default), `require`, `verify-ca`, or `verify-full`. For an internal CA, add `sslrootcert=/etc/koreograf/postgres-ca.pem` or set `KOREOGRAF_DATABASE_CA_FILE`. The CA file must be PEM. Without a CA file, Koreograf uses the system roots.
+The URL carries the host, port, database, and user. An empty database path uses the user name. `sslmode` is `disable`, `prefer`, `require` (the default), `verify-ca`, or `verify-full`. `require` and `verify-ca` behave like `verify-full`, which verifies the certificate chain and the host name; that is stricter than libpq. For an internal CA, add `sslrootcert=/etc/koreograf/postgres-ca.pem` or set `KOREOGRAF_DATABASE_CA_FILE`. The CA file must be PEM. Without a CA file, Koreograf uses the system roots.
 
 Keep the password out of the URL with `KOREOGRAF_DATABASE_PASSWORD_FILE`, for example a Docker or Kubernetes secret. The file is read once at startup and a trailing newline is ignored. The password is never written to logs, API responses, `koreograf doctor` output, or error messages. When both are present, the file wins.
 
