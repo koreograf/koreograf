@@ -1082,11 +1082,8 @@ async fn prompt_on_launch_overrides_the_job_and_keeps_the_template() {
         Some(json!({"extra_vars": {}, "inventory_id": foreign_inventory_id})),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{wrong_inventory}");
-    assert_eq!(
-        wrong_inventory["error"],
-        "the_inventory_belongs_to_another_team"
-    );
+    assert_eq!(status, StatusCode::NOT_FOUND, "{wrong_inventory}");
+    assert_eq!(wrong_inventory["error"], "not_found");
     let (status, wrong_credential, _) = call(
         &app,
         "POST",
@@ -1096,11 +1093,8 @@ async fn prompt_on_launch_overrides_the_job_and_keeps_the_template() {
         Some(json!({"extra_vars": {}, "credential_ids": [foreign_credential_id]})),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{wrong_credential}");
-    assert_eq!(
-        wrong_credential["error"],
-        "the_credential_belongs_to_another_team"
-    );
+    assert_eq!(status, StatusCode::NOT_FOUND, "{wrong_credential}");
+    assert_eq!(wrong_credential["error"], "not_found");
 
     let (status, launched, _) = call(
         &app,
@@ -6585,8 +6579,8 @@ async fn workflow_node_can_override_template_parameters() {
         })),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{missing}");
-    assert_eq!(missing["error"], "inventory_is_missing");
+    assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
+    assert_eq!(missing["error"], "not_found");
 
     let (status, bad_extra, _) = call(
         &app,
@@ -15084,7 +15078,6 @@ function check(key, want) {{
 }}
 check("tool_is_ansible_opentofu_or_shell", "tool");
 check("project_is_missing", "project_id");
-check("inventory_is_missing", "inventory_id");
 check("execution_environment_is_missing", "environment_id");
 check("the_execution_environment_is_for_another_tool", "environment_id");
 check("action_is_plan_or_apply", "action");

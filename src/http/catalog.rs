@@ -723,6 +723,9 @@ fn validate_project_credential(
         return Ok(None);
     };
     let credential = db.credential(id)?.ok_or(ApiError::NotFound)?;
+    if credential.team_id != team {
+        return Err(ApiError::NotFound);
+    }
     if credential.kind != "scm" {
         return Err(ApiError::bad(
             "the_credential_is_not_a_source_control_credential",
@@ -730,9 +733,6 @@ fn validate_project_credential(
     }
     if credential.disabled {
         return Err(ApiError::bad("the_source_control_credential_is_disabled"));
-    }
-    if credential.team_id != team {
-        return Err(ApiError::NotFound);
     }
     Ok(Some(credential.id))
 }

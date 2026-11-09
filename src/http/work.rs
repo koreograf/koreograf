@@ -806,11 +806,9 @@ fn build_template(
             }
         }
         if let Some(inventory_id) = &inventory_id {
-            let inventory = db
-                .inventory(inventory_id)?
-                .ok_or_else(|| ApiError::bad("inventory_is_missing"))?;
+            let inventory = db.inventory(inventory_id)?.ok_or(ApiError::NotFound)?;
             if inventory.team_id != team {
-                return Err(ApiError::bad("the_inventory_belongs_to_another_team"));
+                return Err(ApiError::NotFound);
             }
         }
         if let Some(environment_id) = &environment_id {
@@ -838,9 +836,7 @@ fn build_template(
         };
         let mut loaded = Vec::with_capacity(requested_ids.len());
         for credential_id in &requested_ids {
-            let credential = db
-                .credential(credential_id)?
-                .ok_or_else(|| ApiError::bad("credential_is_missing"))?;
+            let credential = db.credential(credential_id)?.ok_or(ApiError::NotFound)?;
             loaded.push(credential);
         }
         let previous_ids = match &id {
@@ -849,7 +845,7 @@ fn build_template(
         };
         (created_at, loaded, previous_ids)
     };
-    let chosen = credentials::assign_loaded(state, team, &loaded).map_err(ApiError::bad)?;
+    let chosen = credentials::assign_loaded(state, team, &loaded)?;
     for credential in &loaded {
         if !credentials::kind_fits_tool(&body.tool, &credential.kind)
             && !previous_ids.iter().any(|id| id == &credential.id)
@@ -898,19 +894,15 @@ fn check_node_overrides(
 ) -> AppResult<()> {
     let over = &node.overrides;
     if let Some(id) = over.inventory_id.as_deref().filter(|id| !id.is_empty()) {
-        let inventory = store
-            .inventory(id)?
-            .ok_or_else(|| ApiError::bad("inventory_is_missing"))?;
+        let inventory = store.inventory(id)?.ok_or(ApiError::NotFound)?;
         if inventory.team_id != team {
-            return Err(ApiError::bad("the_inventory_belongs_to_another_team"));
+            return Err(ApiError::NotFound);
         }
     }
     if let Some(id) = over.credential_id.as_deref().filter(|id| !id.is_empty()) {
-        let credential = store
-            .credential(id)?
-            .ok_or_else(|| ApiError::bad("credential_is_missing"))?;
+        let credential = store.credential(id)?.ok_or(ApiError::NotFound)?;
         if credential.team_id != team {
-            return Err(ApiError::bad("the_credential_belongs_to_another_team"));
+            return Err(ApiError::NotFound);
         }
     }
     if let Some(extra) = &over.extra_vars {
@@ -961,7 +953,7 @@ fn build_workflow(
             ApiError::bad_vars("template.missing_named", [("name", node.name.as_str())])
         })?;
         if template.team_id != team {
-            return Err(ApiError::bad("a_template_belongs_to_another_team"));
+            return Err(ApiError::NotFound);
         }
         check_node_overrides(db, team, &template, node)?;
     }
@@ -1010,19 +1002,15 @@ fn build_hook(
     }
     let db = state.store();
     if let Some(template_id) = &template_id {
-        let template = db
-            .template(template_id)?
-            .ok_or_else(|| ApiError::bad("template_is_missing"))?;
+        let template = db.template(template_id)?.ok_or(ApiError::NotFound)?;
         if template.team_id != team {
-            return Err(ApiError::bad("the_template_belongs_to_another_team"));
+            return Err(ApiError::NotFound);
         }
     }
     if let Some(workflow_id) = &workflow_id {
-        let owner = db
-            .workflow_team(workflow_id)?
-            .ok_or_else(|| ApiError::bad("workflow_is_missing"))?;
+        let owner = db.workflow_team(workflow_id)?.ok_or(ApiError::NotFound)?;
         if owner != team {
-            return Err(ApiError::bad("the_workflow_belongs_to_another_team"));
+            return Err(ApiError::NotFound);
         }
     }
     Ok(Hook {

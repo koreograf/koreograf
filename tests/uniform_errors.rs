@@ -4,7 +4,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use koreograf::{Config, CookieSecure, LocalJobs, RunnerMode};
+use koreograf::{Config, CookieSecure, LocalJobs, RunnerMode, Shared};
+use rusqlite::params;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
@@ -126,6 +127,36 @@ fn demo() -> String {
         .join("examples/demo")
         .display()
         .to_string()
+}
+
+fn insert_failed_job(state: &Shared, id: &str, team: &str, template: &str, parameters: Value) {
+    let db = state.db().unwrap();
+    db.execute(
+        "INSERT INTO jobs (
+            id, team_id, template_id, workflow_job_id, workflow_node_id, name, tool, status,
+            extra_vars, launched_by, trigger, started_at, finished_at, created_at,
+            parameters, failed_hosts
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+        params![
+            id,
+            team,
+            template,
+            Option::<String>::None,
+            Option::<String>::None,
+            "Relaunch",
+            "ansible",
+            "failed",
+            "{}",
+            "admin",
+            "manual",
+            Option::<String>::None,
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:00:00Z",
+            parameters.to_string(),
+            "[]"
+        ],
+    )
+    .unwrap();
 }
 
 #[tokio::test]
@@ -268,6 +299,22 @@ async fn foreign_ids_answer_404_not_found() {
     assert_eq!(status, StatusCode::CREATED, "{credential}");
     let foreign_credential = credential["id"].as_str().unwrap().to_string();
 
+    let (status, foreign_ssh, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&admin),
+        Some(&other_team),
+        Some(json!({
+            "name": "Foreign SSH",
+            "kind": "ssh",
+            "secret": {"username": "foreign", "password": "foreign-pass"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{foreign_ssh}");
+    let foreign_ssh = foreign_ssh["id"].as_str().unwrap().to_string();
+
     let (status, inventory, _) = call(
         &app,
         "POST",
@@ -296,7 +343,11 @@ async fn foreign_ids_answer_404_not_found() {
     assert_eq!(status, StatusCode::CREATED, "{project}");
     let foreign_project = project["id"].as_str().unwrap().to_string();
 
-    for credential_id in [foreign_credential.as_str(), "missing-credential-id"] {
+    for credential_id in [
+        foreign_credential.as_str(),
+        foreign_ssh.as_str(),
+        "missing-credential-id",
+    ] {
         let (status, body, _) = call(
             &app,
             "POST",
@@ -342,6 +393,288 @@ async fn foreign_ids_answer_404_not_found() {
         let (status, body, _) = call(&app, "GET", &uri, Some(&owner), Some(&team), None).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{uri}: {body}");
         assert_eq!(body["error"], "not_found", "{uri}: {body}");
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn foreign_ids_in_templates_and_workflows_answer_404() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-uniform-work-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state);
+    let admin = login(&app, "admin", "test-admin-pass").await;
+    let (status, me, _) = call(&app, "GET", "/api/me", Some(&admin), None, None).await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+    let owner = add_member(&app, &admin, &team, "work-owner", "owner").await;
+
+    let (status, other, _) = call(
+        &app,
+        "POST",
+        "/api/teams",
+        Some(&admin),
+        Some(&team),
+        Some(json!({"name": "Work foreign team"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{other}");
+    let other_team = other["id"].as_str().unwrap().to_string();
+
+    let (status, credential, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&admin),
+        Some(&other_team),
+        Some(json!({
+            "name": "Work foreign credential",
+            "kind": "scm",
+            "secret": {"password": "foreign-token"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{credential}");
+    let foreign_credential = credential["id"].as_str().unwrap().to_string();
+
+    let (status, inventory, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&admin),
+        Some(&other_team),
+        Some(json!({"name": "Work foreign inventory", "body": "[web]\nweb-1\n"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{inventory}");
+    let foreign_inventory = inventory["id"].as_str().unwrap().to_string();
+
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&owner),
+        Some(&team),
+        Some(json!({
+            "name": "Node template",
+            "tool": "ansible",
+            "entrypoint": "site.yml"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().unwrap().to_string();
+
+    for (index, inventory_id) in [foreign_inventory.as_str(), "missing-inventory-id"]
+        .into_iter()
+        .enumerate()
+    {
+        let (status, body, _) = call(
+            &app,
+            "POST",
+            "/api/templates",
+            Some(&owner),
+            Some(&team),
+            Some(json!({
+                "name": format!("Bad inventory {index}"),
+                "tool": "ansible",
+                "entrypoint": "site.yml",
+                "inventory_id": inventory_id
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(body["error"], "not_found", "{body}");
+    }
+
+    for (index, credential_id) in [foreign_credential.as_str(), "missing-credential-id"]
+        .into_iter()
+        .enumerate()
+    {
+        let (status, body, _) = call(
+            &app,
+            "POST",
+            "/api/templates",
+            Some(&owner),
+            Some(&team),
+            Some(json!({
+                "name": format!("Bad credential {index}"),
+                "tool": "ansible",
+                "entrypoint": "site.yml",
+                "credential_ids": [credential_id]
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(body["error"], "not_found", "{body}");
+    }
+
+    for (index, inventory_id) in [foreign_inventory.as_str(), "missing-inventory-id"]
+        .into_iter()
+        .enumerate()
+    {
+        let (status, body, _) = call(
+            &app,
+            "POST",
+            "/api/workflows",
+            Some(&owner),
+            Some(&team),
+            Some(json!({
+                "name": format!("Bad workflow inventory {index}"),
+                "graph": {
+                    "nodes": [{
+                        "id": "one",
+                        "template_id": template_id,
+                        "name": "One",
+                        "overrides": {"inventory_id": inventory_id}
+                    }],
+                    "edges": []
+                }
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(body["error"], "not_found", "{body}");
+    }
+
+    for (index, credential_id) in [foreign_credential.as_str(), "missing-credential-id"]
+        .into_iter()
+        .enumerate()
+    {
+        let (status, body, _) = call(
+            &app,
+            "POST",
+            "/api/workflows",
+            Some(&owner),
+            Some(&team),
+            Some(json!({
+                "name": format!("Bad workflow credential {index}"),
+                "graph": {
+                    "nodes": [{
+                        "id": "one",
+                        "template_id": template_id,
+                        "name": "One",
+                        "overrides": {"credential_id": credential_id}
+                    }],
+                    "edges": []
+                }
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(body["error"], "not_found", "{body}");
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn foreign_ids_on_relaunch_answer_404() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-uniform-relaunch-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir)).unwrap();
+    let app = koreograf::router(state.clone());
+    let admin = login(&app, "admin", "test-admin-pass").await;
+    let (status, me, _) = call(&app, "GET", "/api/me", Some(&admin), None, None).await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, other, _) = call(
+        &app,
+        "POST",
+        "/api/teams",
+        Some(&admin),
+        Some(&team),
+        Some(json!({"name": "Relaunch foreign team"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{other}");
+    let other_team = other["id"].as_str().unwrap().to_string();
+
+    let (status, credential, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&admin),
+        Some(&other_team),
+        Some(json!({
+            "name": "Relaunch foreign credential",
+            "kind": "scm",
+            "secret": {"password": "foreign-token"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{credential}");
+    let foreign_credential = credential["id"].as_str().unwrap().to_string();
+
+    let (status, inventory, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&admin),
+        Some(&other_team),
+        Some(json!({"name": "Relaunch foreign inventory", "body": "[web]\nweb-1\n"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{inventory}");
+    let foreign_inventory = inventory["id"].as_str().unwrap().to_string();
+
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&admin),
+        Some(&team),
+        Some(json!({
+            "name": "Relaunch template",
+            "tool": "ansible",
+            "entrypoint": "site.yml"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().unwrap().to_string();
+
+    let cases = [
+        (
+            "foreign-inventory",
+            json!({"tool": "ansible", "inventory_id": foreign_inventory}),
+        ),
+        (
+            "unknown-inventory",
+            json!({"tool": "ansible", "inventory_id": "missing-inventory-id"}),
+        ),
+        (
+            "foreign-credential",
+            json!({"tool": "ansible", "credential_id": foreign_credential}),
+        ),
+        (
+            "unknown-credential",
+            json!({"tool": "ansible", "credential_id": "missing-credential-id"}),
+        ),
+    ];
+    for (id, parameters) in cases {
+        insert_failed_job(&state, id, &team, &template_id, parameters);
+        let (status, body, _) = call(
+            &app,
+            "POST",
+            &format!("/api/jobs/{id}/relaunch"),
+            Some(&admin),
+            None,
+            Some(json!({})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{id}: {body}");
+        assert_eq!(body["error"], "not_found", "{id}: {body}");
     }
 
     let _ = std::fs::remove_dir_all(&dir);
