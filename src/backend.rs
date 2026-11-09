@@ -55,6 +55,7 @@ pub(crate) trait Backend: Send + Sync {
         email: Option<&str>,
         password_hash: Option<&str>,
     ) -> AppResult<()>;
+    fn set_user_email(&self, id: &str, email: Option<&str>) -> AppResult<()>;
     fn update_user(
         &self,
         id: &str,
@@ -105,6 +106,7 @@ pub(crate) trait Backend: Send + Sync {
     fn organization_by_name(&self, name: &str) -> AppResult<Option<Organization>>;
     fn list_organizations(&self, user_id: &str, admin: bool) -> AppResult<Vec<Organization>>;
     fn teams_in_organization(&self, organization_id: &str) -> AppResult<Vec<Team>>;
+    fn teams_with_ldap(&self) -> AppResult<Vec<Team>>;
     fn upsert_membership(
         &self,
         team_id: &str,
@@ -115,6 +117,7 @@ pub(crate) trait Backend: Send + Sync {
     fn grant_manual_membership(&self, team_id: &str, user_id: &str, role: &str) -> AppResult<()>;
     fn list_members(&self, team_id: &str) -> AppResult<Vec<Member>>;
     fn delete_membership(&self, team_id: &str, user_id: &str) -> AppResult<()>;
+    fn delete_ldap_membership(&self, team_id: &str, user_id: &str) -> AppResult<()>;
     fn list_projects(&self, team_id: &str) -> AppResult<Vec<Project>>;
     fn project(&self, id: &str) -> AppResult<Option<Project>>;
     fn project_visible(&self, id: &str, team_id: &str) -> AppResult<bool>;
@@ -427,6 +430,11 @@ impl Backend for SqliteBackend {
         db::update_profile(&conn, id, display_name, email, password_hash)
     }
 
+    fn set_user_email(&self, id: &str, email: Option<&str>) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::set_user_email(&conn, id, email)
+    }
+
     fn update_user(
         &self,
         id: &str,
@@ -574,6 +582,11 @@ impl Backend for SqliteBackend {
         db::teams_in_organization(&conn, organization_id)
     }
 
+    fn teams_with_ldap(&self) -> AppResult<Vec<Team>> {
+        let conn = lock(&self.conn)?;
+        db::teams_with_ldap(&conn)
+    }
+
     fn upsert_membership(
         &self,
         team_id: &str,
@@ -598,6 +611,11 @@ impl Backend for SqliteBackend {
     fn delete_membership(&self, team_id: &str, user_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
         db::delete_membership(&conn, team_id, user_id)
+    }
+
+    fn delete_ldap_membership(&self, team_id: &str, user_id: &str) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::delete_ldap_membership(&conn, team_id, user_id)
     }
 
     fn list_projects(&self, team_id: &str) -> AppResult<Vec<Project>> {
@@ -2266,6 +2284,16 @@ impl Backend for PostgresBackend {
         })
     }
 
+    fn set_user_email(&self, id: &str, email: Option<&str>) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            client
+                .execute("UPDATE users SET email = $2 WHERE id = $1", &[&id, &email])
+                .await?;
+            Ok(())
+        })
+    }
+
     fn update_user(
         &self,
         id: &str,
@@ -2672,6 +2700,23 @@ impl Backend for PostgresBackend {
         })
     }
 
+    fn teams_with_ldap(&self) -> AppResult<Vec<Team>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let rows = client
+                .query(
+                    &format!(
+                        "SELECT {TEAM_COLUMNS} FROM teams t
+                         LEFT JOIN organizations o ON o.id = t.organization_id
+                         WHERE t.ldap_group IS NOT NULL AND t.ldap_group != ''"
+                    ),
+                    &[],
+                )
+                .await?;
+            rows.iter().map(row_team).collect()
+        })
+    }
+
     fn upsert_membership(
         &self,
         team_id: &str,
@@ -2735,6 +2780,19 @@ impl Backend for PostgresBackend {
             client
                 .execute(
                     "DELETE FROM memberships WHERE team_id = $1 AND user_id = $2",
+                    &[&team_id, &user_id],
+                )
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn delete_ldap_membership(&self, team_id: &str, user_id: &str) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            client
+                .execute(
+                    "DELETE FROM memberships WHERE team_id = $1 AND user_id = $2 AND source = 'ldap'",
                     &[&team_id, &user_id],
                 )
                 .await?;

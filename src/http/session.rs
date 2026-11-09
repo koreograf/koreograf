@@ -307,8 +307,8 @@ pub async fn delete_user(
 }
 
 fn provision_ldap(state: &Shared, identity: ldap::LdapIdentity) -> AppResult<User> {
-    let db = state.db()?;
-    let user = if let Some(user) = db::user_by_username(&db, &identity.username)? {
+    let store = state.store();
+    let user = if let Some(user) = store.user_by_username(&identity.username)? {
         if user.auth_source != "ldap" {
             tracing::warn!(
                 username = %identity.username,
@@ -319,8 +319,7 @@ fn provision_ldap(state: &Shared, identity: ldap::LdapIdentity) -> AppResult<Use
         user
     } else {
         let id = Uuid::new_v4().to_string();
-        db::insert_user(
-            &db,
+        store.insert_user(
             &id,
             &identity.username,
             &identity.display_name,
@@ -328,15 +327,15 @@ fn provision_ldap(state: &Shared, identity: ldap::LdapIdentity) -> AppResult<Use
             "ldap",
             false,
         )?;
-        db::user_by_id(&db, &id)?.ok_or(ApiError::NotFound)?
+        store.user_by_id(&id)?.ok_or(ApiError::NotFound)?
     };
-    auth::sync_ldap_teams(&db, &user.id, &identity.groups)?;
+    auth::sync_ldap_teams(store, &user.id, &identity.groups)?;
     if let Some(raw) = identity.email.as_deref() {
         if let Ok(Some(email)) = normalize_email(raw) {
-            db::set_user_email(&db, &user.id, Some(&email))?;
+            store.set_user_email(&user.id, Some(&email))?;
         }
     }
-    db::user_by_id(&db, &user.id)?.ok_or(ApiError::NotFound)
+    store.user_by_id(&user.id)?.ok_or(ApiError::NotFound)
 }
 
 fn session_response(state: &Shared, headers: &HeaderMap, user: &User) -> AppResult<Response> {
@@ -600,6 +599,74 @@ mod tests {
             Some("ada@example.com")
         );
         assert_eq!(profile_email("local", None, Some("")).unwrap(), None);
+    }
+
+    #[test]
+    fn ldap_sign_in_provisions_and_syncs_teams_on_sqlite() {
+        use crate::config::{Config, CookieSecure, LocalJobs, RunnerMode};
+        use std::path::PathBuf;
+
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("koreograf-ldap-sqlite-{nanos}"));
+        let state = crate::boot(Config {
+            bind: "127.0.0.1:0".into(),
+            data_dir: dir.clone(),
+            web_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web"),
+            examples_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples"),
+            admin_user: "admin".into(),
+            admin_password: Some("test-admin-pass".into()),
+            runner: RunnerMode::Local,
+            container_image: false,
+            job_timeout_secs: 60,
+            job_output_lines: 8_000,
+            local_jobs: LocalJobs::All,
+            project_roots: Vec::new(),
+            hsts: false,
+            cookie_secure: CookieSecure::Auto,
+            trusted_proxy: false,
+            mcp: true,
+            data_host: None,
+            ldap: None,
+        })
+        .expect("boot");
+        let store = state.store();
+        let org_id = uuid::Uuid::new_v4().to_string();
+        store
+            .insert_organization(&org_id, &format!("Org {nanos}"), "")
+            .expect("organization");
+        let team_id = uuid::Uuid::new_v4().to_string();
+        store
+            .insert_team(
+                &team_id,
+                &org_id,
+                &format!("Plattform {nanos}"),
+                "",
+                Some("cn=Plattform,ou=groups,dc=example,dc=com"),
+            )
+            .expect("team");
+
+        let user = super::provision_ldap(
+            &state,
+            crate::ldap::LdapIdentity {
+                username: "ada".into(),
+                display_name: "Ada Lovelace".into(),
+                email: Some("ada@example.com".into()),
+                groups: vec!["cn=Plattform,ou=groups,dc=example,dc=com".into()],
+            },
+        )
+        .expect("provision");
+        assert_eq!(user.auth_source, "ldap");
+        assert_eq!(user.email.as_deref(), Some("ada@example.com"));
+        let memberships = store.list_user_memberships(&user.id).expect("memberships");
+        assert_eq!(memberships.len(), 1);
+        assert_eq!(memberships[0].team_id, team_id);
+        assert_eq!(memberships[0].role, "operator");
+        assert_eq!(memberships[0].source, "ldap");
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
