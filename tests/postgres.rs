@@ -2674,8 +2674,8 @@ async fn postgres_serves_users_tokens_and_overview() {
         Some(json!({"username": username, "password": "new-user-password"})),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(disabled_login["error"], "the_account_is_disabled");
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(disabled_login["error"], "invalid_username_or_password");
 
     let (status, self_disable, _) = call(
         &app,

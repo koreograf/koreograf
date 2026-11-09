@@ -542,10 +542,23 @@ pub fn require_name(name: &str) -> AppResult<String> {
     if name.is_empty() || name.chars().count() > 120 {
         return Err(ApiError::bad("name_is_missing_or_too_long"));
     }
-    if name.chars().any(char::is_control) {
+    if name.chars().any(char::is_control) || has_bidi_control(name) {
         return Err(ApiError::bad("the_name_has_invalid_characters"));
     }
     Ok(name.to_string())
+}
+
+fn has_bidi_control(value: &str) -> bool {
+    value.chars().any(|ch| {
+        matches!(
+            ch,
+            '\u{061c}'
+                | '\u{200e}'
+                | '\u{200f}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2066}'..='\u{2069}'
+        )
+    })
 }
 
 /// A static INI body with a broken line is rejected before it is stored.
@@ -563,6 +576,9 @@ pub fn require_description(description: &str) -> AppResult<String> {
     let description = description.trim();
     if description.chars().count() > 1000 {
         return Err(ApiError::bad("description_is_too_long"));
+    }
+    if has_bidi_control(description) {
+        return Err(ApiError::bad("the_value_contains_invalid_characters"));
     }
     Ok(description.to_string())
 }
@@ -657,9 +673,31 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("the_name_has_invalid_characters"));
+        for mark in [
+            '\u{061c}', '\u{200e}', '\u{200f}', '\u{202a}', '\u{202b}', '\u{202c}', '\u{202d}',
+            '\u{202e}', '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}',
+        ] {
+            let name = format!("team{mark}name");
+            assert!(require_name(&name)
+                .unwrap_err()
+                .to_string()
+                .contains("the_name_has_invalid_characters"));
+        }
         assert!(require_name("")
             .unwrap_err()
             .to_string()
             .contains("name_is_missing_or_too_long"));
+    }
+
+    #[test]
+    fn descriptions_reject_bidi_controls() {
+        assert_eq!(
+            require_description("plain description").unwrap(),
+            "plain description"
+        );
+        assert!(require_description("a\u{202e}b")
+            .unwrap_err()
+            .to_string()
+            .contains("the_value_contains_invalid_characters"));
     }
 }
