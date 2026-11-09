@@ -1016,6 +1016,131 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
 }
 
 #[tokio::test]
+async fn postgres_first_run_seeds_the_demo_and_curated_environments() {
+    let Some(url) = postgres_test_url() else {
+        return;
+    };
+    let _guard = postgres_guard().await;
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let name = format!("koreograf_seed_{nanos}");
+    let target = create_database(&url, &name).await;
+    let dir = std::env::temp_dir().join(format!("koreograf-postgres-seed-{nanos}"));
+    let mut cfg = config(&dir);
+    cfg.admin_user = format!("seedadmin{nanos}");
+    let database = koreograf::parse_database_config(&target, None, None).expect("postgres url");
+
+    let state = koreograf::boot_with(cfg.clone(), database.clone()).expect("first boot");
+    assert_eq!(state.engine(), "postgresql");
+    drop(state);
+
+    let client = postgres_client(&target).await;
+    let count = |sql: &'static str| {
+        let client = &client;
+        async move {
+            client
+                .query_one(sql, &[])
+                .await
+                .expect("row count")
+                .get::<_, i64>(0)
+        }
+    };
+    assert_eq!(count("SELECT COUNT(*) FROM teams").await, 1);
+    assert_eq!(count("SELECT COUNT(*) FROM organizations").await, 1);
+    assert_eq!(
+        count("SELECT COUNT(*) FROM memberships WHERE role = 'owner'").await,
+        1
+    );
+    assert_eq!(count("SELECT COUNT(*) FROM projects").await, 1);
+    assert_eq!(count("SELECT COUNT(*) FROM inventories").await, 1);
+    assert_eq!(count("SELECT COUNT(*) FROM inventory_sources").await, 1);
+    assert_eq!(count("SELECT COUNT(*) FROM templates").await, 4);
+    assert_eq!(count("SELECT COUNT(*) FROM workflows").await, 1);
+    assert_eq!(count("SELECT COUNT(*) FROM hooks").await, 1);
+    assert_eq!(count("SELECT COUNT(*) FROM environments").await, 4);
+    assert_eq!(
+        count("SELECT COUNT(*) FROM environments WHERE id LIKE 'seeded-%'").await,
+        3
+    );
+    let team: String = client
+        .query_one("SELECT name FROM teams", &[])
+        .await
+        .expect("team")
+        .get(0);
+    assert_eq!(team, "Plattform");
+    let project: String = client
+        .query_one("SELECT name FROM projects", &[])
+        .await
+        .expect("project")
+        .get(0);
+    assert_eq!(project, "Demo");
+    let workflow: String = client
+        .query_one("SELECT name FROM workflows", &[])
+        .await
+        .expect("workflow")
+        .get(0);
+    assert_eq!(workflow, "Self-Heal Ablauf");
+    for (tool, id) in [
+        ("ansible", "seeded-ansible"),
+        ("opentofu", "seeded-opentofu"),
+        ("shell", "seeded-shell"),
+    ] {
+        let value: String = client
+            .query_one(
+                "SELECT value FROM settings WHERE key = $1",
+                &[&format!("default_environment_{tool}")],
+            )
+            .await
+            .expect("default environment")
+            .get(0);
+        assert_eq!(value, id);
+    }
+
+    client
+        .execute(
+            "UPDATE environments SET name = 'Renamed by admin' WHERE id = 'seeded-ansible'",
+            &[],
+        )
+        .await
+        .expect("rename environment");
+    client
+        .execute("DELETE FROM environments WHERE id = 'seeded-opentofu'", &[])
+        .await
+        .expect("delete environment");
+
+    let state = koreograf::boot_with(cfg, database).expect("second boot");
+    assert_eq!(state.engine(), "postgresql");
+    drop(state);
+
+    let name: String = client
+        .query_one(
+            "SELECT name FROM environments WHERE id = 'seeded-ansible'",
+            &[],
+        )
+        .await
+        .expect("renamed environment")
+        .get(0);
+    assert_eq!(name, "Renamed by admin");
+    assert_eq!(
+        count("SELECT COUNT(*) FROM environments WHERE id = 'seeded-opentofu'").await,
+        0
+    );
+    assert_eq!(count("SELECT COUNT(*) FROM environments").await, 3);
+    assert_eq!(count("SELECT COUNT(*) FROM teams").await, 1);
+    assert_eq!(count("SELECT COUNT(*) FROM projects").await, 1);
+    assert_eq!(count("SELECT COUNT(*) FROM inventories").await, 1);
+    assert_eq!(count("SELECT COUNT(*) FROM templates").await, 4);
+    assert_eq!(count("SELECT COUNT(*) FROM workflows").await, 1);
+    assert_eq!(count("SELECT COUNT(*) FROM hooks").await, 1);
+
+    drop(client);
+    drop_database(&url, &name).await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn postgres_serves_the_auth_and_resource_slice() {
     let Ok(url) = std::env::var("KOREOGRAF_TEST_POSTGRES_URL") else {
         eprintln!("skipping PostgreSQL test: KOREOGRAF_TEST_POSTGRES_URL is not set");
