@@ -287,19 +287,19 @@ fn spec_map(value: &serde_json::Value, prompt: bool) -> serde_json::Map<String, 
 }
 
 pub fn sync_ldap_teams(
-    c: &rusqlite::Connection,
+    store: &dyn crate::backend::Backend,
     user_id: &str,
     groups: &[String],
 ) -> AppResult<()> {
     let keys = ldap::group_keys(groups);
-    for team in db::teams_with_ldap(c)? {
+    for team in store.teams_with_ldap()? {
         let Some(group) = team.ldap_group.as_deref() else {
             continue;
         };
         if ldap::group_matches(&keys, group) {
-            db::upsert_membership(c, &team.id, user_id, Role::Operator.as_str(), "ldap")?;
+            store.upsert_membership(&team.id, user_id, Role::Operator.as_str(), "ldap")?;
         } else {
-            db::delete_ldap_membership(c, &team.id, user_id)?;
+            store.delete_ldap_membership(&team.id, user_id)?;
         }
     }
     Ok(())
