@@ -37,13 +37,17 @@ jobs:
           fi
           base="${{ github.event.pull_request.base.sha }}"
           git fetch --no-tags --depth=1 origin "$base"
-          code=false
-          while IFS= read -r file; do
-            case "$file" in
-              docs/*|*.md|LICENSE) ;;
-              *) code=true; break ;;
-            esac
-          done < <(git diff --name-only "$base" HEAD)
+          files=$(git diff --name-only --no-renames "$base" HEAD)
+          code=true
+          if [ -n "$files" ]; then
+            code=false
+            while IFS= read -r file; do
+              case "$file" in
+                docs/*|*.md|LICENSE) ;;
+                *) code=true; break ;;
+              esac
+            done <<< "$files"
+          fi
           echo "code=$code" >> "$GITHUB_OUTPUT"
 
   rust:
