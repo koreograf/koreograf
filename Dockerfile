@@ -5,7 +5,7 @@
 # an existing volume when started as root, joins the socket group, drops to
 # uid 10001, and replaces itself with the server.
 
-FROM rust:1.99.1-alpine@sha256:7e9e2d068a107a2adafd19930011178d14a78326053cd4c3a9f7ad3fd049557d AS build
+FROM rust:1.99.1-alpine@sha256:44819b27be4c97b0e4d7203bd2e02c4820f97700211b6a37fb4c246a2de59383 AS build
 # hadolint ignore=DL3018 # Alpine package names stay unpinned so security updates still apply.
 RUN apk add --no-cache build-base cmake perl pkgconf
 SHELL ["/bin/ash", "-o", "pipefail", "-c"]
