@@ -2835,7 +2835,10 @@ async fn postgres_serves_jobs_and_their_output() {
         &format!("/api/templates/{success_template}/launch"),
         Some(&cookie),
         Some(&team_id),
-        Some(json!({"extra_vars": {"from_postgres": true}})),
+        Some(json!({
+            "extra_vars": {"from_postgres": true},
+            "launch_with_options": true
+        })),
     )
     .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{launched}");
