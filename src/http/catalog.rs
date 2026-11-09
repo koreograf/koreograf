@@ -1453,7 +1453,7 @@ pub async fn get_credential(
     Path(id): Path<String>,
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
-    gate(&state, &user, &team, Role::Viewer)?;
+    gate(&state, &user, &team, Role::Owner)?;
     let (item, secret) = open_credential(&state, &id, &team)?;
     let usages = {
         let db = state.store();

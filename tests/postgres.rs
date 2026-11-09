@@ -82,6 +82,49 @@ async fn call_team(
     (status, parsed, cookie)
 }
 
+async fn postgres_session(
+    url: &str,
+    user_id: &str,
+    username: &str,
+    memberships: &[(&str, &str)],
+    token: &str,
+) {
+    let (client, connection) = tokio_postgres::connect(url, tokio_postgres::NoTls)
+        .await
+        .expect("postgres connection");
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    client
+        .execute(
+            "INSERT INTO users
+                (id, username, display_name, password_hash, auth_source, is_admin, created_at)
+             VALUES ($1, $2, $3, NULL, 'local', 0,
+                to_char(now(), 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'))",
+            &[&user_id, &username, &username],
+        )
+        .await
+        .expect("insert postgres user");
+    for (team_id, role) in memberships {
+        client
+            .execute(
+                "INSERT INTO memberships (team_id, user_id, role, source)
+                 VALUES ($1, $2, $3, 'manual')",
+                &[team_id, &user_id, role],
+            )
+            .await
+            .expect("insert postgres membership");
+    }
+    client
+        .execute(
+            "INSERT INTO sessions (token, user_id, expires_at)
+             VALUES ($1, $2, '9999-12-31T23:59:59Z')",
+            &[&token, &user_id],
+        )
+        .await
+        .expect("insert postgres session");
+}
+
 #[tokio::test]
 async fn postgres_serves_the_auth_and_resource_slice() {
     let Ok(url) = std::env::var("KOREOGRAF_TEST_POSTGRES_URL") else {
@@ -352,6 +395,104 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     .await;
     assert_eq!(status, StatusCode::OK, "{updated}");
     assert_eq!(updated["name"], format!("Project {nanos} renamed"));
+
+    let (status, second_team, _) = call(
+        &app,
+        "POST",
+        "/api/teams",
+        Some(&cookie),
+        Some(json!({
+            "name": format!("Second team {nanos}"),
+            "description": "Postgres second team",
+            "organization_id": org_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{second_team}");
+    let second_team_id = second_team["id"]
+        .as_str()
+        .expect("second team id")
+        .to_string();
+
+    let nonmember_username = format!("nonmember{nanos}");
+    let viewer_username = format!("viewer{nanos}");
+    let nonmember_token = format!("nonmember-session-{nanos}");
+    let viewer_token = format!("viewer-session-{nanos}");
+    postgres_session(
+        &url,
+        &format!("user-{nanos}-nonmember"),
+        &nonmember_username,
+        &[(&second_team_id, "owner")],
+        &nonmember_token,
+    )
+    .await;
+    postgres_session(
+        &url,
+        &format!("user-{nanos}-viewer"),
+        &viewer_username,
+        &[(&team_id, "viewer")],
+        &viewer_token,
+    )
+    .await;
+    let nonmember_cookie = format!("koreograf_session={nonmember_token}");
+    let viewer_cookie = format!("koreograf_session={viewer_token}");
+
+    for (actor, actor_cookie) in [
+        ("non-member", &nonmember_cookie),
+        ("viewer", &viewer_cookie),
+    ] {
+        let (status, denied, _) = call_team(
+            &app,
+            "POST",
+            "/api/credentials",
+            Some(actor_cookie),
+            Some(&team_id),
+            Some(json!({
+                "name": format!("Denied {actor}"),
+                "kind": "scm",
+                "secret": {"username": "git", "password": "secret"}
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{actor} create: {denied}");
+
+        let (status, denied, _) = call_team(
+            &app,
+            "GET",
+            &format!("/api/credentials/{credential_id}"),
+            Some(actor_cookie),
+            Some(&team_id),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{actor} get: {denied}");
+
+        let (status, denied, _) = call_team(
+            &app,
+            "DELETE",
+            &format!("/api/projects/{project_id}"),
+            Some(actor_cookie),
+            Some(&team_id),
+            None,
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "{actor} project delete: {denied}"
+        );
+    }
+
+    let (status, _, _) = call_team(
+        &app,
+        "GET",
+        &format!("/api/credentials/{credential_id}"),
+        Some(&nonmember_cookie),
+        Some(&second_team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 
     let (status, conflict, _) = call_team(
         &app,
