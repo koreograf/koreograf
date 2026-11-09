@@ -73,6 +73,34 @@ async fn login(app: &axum::Router) -> String {
         .expect("session cookie")
 }
 
+#[test]
+fn the_deployments_forward_the_metrics_token() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let compose =
+        std::fs::read_to_string(root.join("docker-compose.yml")).expect("docker-compose.yml");
+    assert!(
+        compose.contains("KOREOGRAF_METRICS_TOKEN: ${KOREOGRAF_METRICS_TOKEN:-}"),
+        "{compose}"
+    );
+    let deployment =
+        std::fs::read_to_string(root.join("deploy/helm/koreograf/templates/deployment.yaml"))
+            .expect("deployment.yaml");
+    assert!(
+        deployment.contains("name: KOREOGRAF_METRICS_TOKEN"),
+        "{deployment}"
+    );
+    assert!(
+        deployment.contains("existingSecretKeys.metricsToken"),
+        "{deployment}"
+    );
+    let secret = std::fs::read_to_string(root.join("deploy/helm/koreograf/templates/secret.yaml"))
+        .expect("secret.yaml");
+    assert!(secret.contains("metrics.token"), "{secret}");
+    let values = std::fs::read_to_string(root.join("deploy/helm/koreograf/values.yaml"))
+        .expect("values.yaml");
+    assert!(values.contains("metrics:\n  token: \"\""), "{values}");
+}
+
 #[tokio::test]
 async fn metrics_require_the_configured_token_or_an_admin_session() {
     std::env::remove_var("KOREOGRAF_METRICS_TOKEN");

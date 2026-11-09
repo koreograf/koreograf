@@ -443,7 +443,9 @@ fn metrics_allowed(state: &Shared, headers: &HeaderMap) -> bool {
     let Some(expected) = crate::config::metrics_token() else {
         return true;
     };
-    if auth::bearer_token(headers).is_some_and(|token| token == expected) {
+    if auth::bearer_token(headers)
+        .is_some_and(|token| crate::crypto::tokens_equal(&token, &expected))
+    {
         return true;
     }
     let Some(token) = auth::read_cookie(headers, "koreograf_session") else {

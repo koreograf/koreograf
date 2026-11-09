@@ -242,9 +242,12 @@ jobs:
             --set runner.dockerSocket.enabled=true >/tmp/koreograf-root.yaml
           helm template koreograf deploy/helm/koreograf \
             --set existingSecret=koreograf-secrets >/tmp/koreograf-external.yaml
+          helm template koreograf deploy/helm/koreograf \
+            --set metrics.token=test-token >/tmp/koreograf-metrics.yaml
+          grep -A4 'name: KOREOGRAF_METRICS_TOKEN' /tmp/koreograf-metrics.yaml | grep -q 'secretKeyRef'
           curl -fsSL -o /tmp/kubeconform.tar.gz https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
           tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
-          /tmp/kubeconform -strict -summary /tmp/koreograf.yaml /tmp/koreograf-root.yaml /tmp/koreograf-external.yaml
+          /tmp/kubeconform -strict -summary /tmp/koreograf.yaml /tmp/koreograf-root.yaml /tmp/koreograf-external.yaml /tmp/koreograf-metrics.yaml
 
   compose:
     name: compose
