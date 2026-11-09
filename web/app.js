@@ -554,6 +554,24 @@ function handle(error) {
   control.focus();
 }
 
+function renderRouteError(error) {
+  if (error && error.name === "AbortError") return;
+  if (error && error.status === 401) {
+    me = null;
+    renderLogin("session.expired");
+    return;
+  }
+  const message = t(error.message || "error.generic", error.vars);
+  shell(t("route_error_title"), `
+    <div class="card">
+      <div class="banner bad">${esc(message)}</div>
+      <p class="muted">${h("route_error_explanation")}</p>
+      <div class="row"><button class="btn primary" type="button" id="route-retry">${h("retry")}</button><a class="btn" href="#/">${h("back_to_overview")}</a></div>
+    </div>`);
+  const retry = document.querySelector("#route-retry");
+  if (retry) retry.addEventListener("click", () => route());
+}
+
 function go(hash) {
   if ((location.hash || "#/") === hash) route();
   else location.hash = hash;
@@ -7512,7 +7530,7 @@ async function route() {
     else shell(t("page"), `<div class="card">${h("this_page_does_not_exist")}</div>`);
   } catch (error) {
     if (token !== navToken) return;
-    handle(error);
+    renderRouteError(error);
   }
 }
 
