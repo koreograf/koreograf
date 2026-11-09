@@ -184,6 +184,83 @@ async fn postgres_job(
         .expect("insert postgres job");
 }
 
+struct PostgresJob<'a> {
+    id: &'a str,
+    name: &'a str,
+    status: &'a str,
+    trigger: &'a str,
+    created_at: &'a str,
+}
+
+async fn postgres_job_record(
+    url: &str,
+    team_id: &str,
+    template_id: Option<&str>,
+    job: PostgresJob<'_>,
+) {
+    let (client, connection) = tokio_postgres::connect(url, tokio_postgres::NoTls)
+        .await
+        .expect("postgres connection");
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    client
+        .execute(
+            "INSERT INTO jobs (
+                id, team_id, template_id, name, tool, status, extra_vars, launched_by, trigger,
+                started_at, finished_at, created_at, parameters, failed_hosts
+             ) VALUES ($1, $2, $3, $4, 'shell', $5, '{}', 'admin', $6, NULL, NULL, $7, '{}',
+                '[]')",
+            &[
+                &job.id,
+                &team_id,
+                &template_id,
+                &job.name,
+                &job.status,
+                &job.trigger,
+                &job.created_at,
+            ],
+        )
+        .await
+        .expect("insert postgres job");
+}
+
+async fn postgres_job_lines(url: &str, job_id: &str, prefix: &str, count: i64) {
+    let (client, connection) = tokio_postgres::connect(url, tokio_postgres::NoTls)
+        .await
+        .expect("postgres connection");
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    client
+        .execute(
+            "INSERT INTO job_events (job_id, ts, stream, line)
+             SELECT $1, '2026-01-01T00:00:00Z', 'stdout', $2 || '-' || g
+             FROM generate_series(1, $3::bigint) AS g",
+            &[&job_id, &prefix, &count],
+        )
+        .await
+        .expect("insert postgres job events");
+}
+
+async fn postgres_job_bulk_lines(url: &str, job_id: &str, count: i64, bytes: i32) {
+    let (client, connection) = tokio_postgres::connect(url, tokio_postgres::NoTls)
+        .await
+        .expect("postgres connection");
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    client
+        .execute(
+            "INSERT INTO job_events (job_id, ts, stream, line)
+             SELECT $1, '2026-01-01T00:00:00Z', 'stdout', repeat('x', $2)
+             FROM generate_series(1, $3::bigint)",
+            &[&job_id, &bytes, &count],
+        )
+        .await
+        .expect("insert postgres bulk job events");
+}
+
 fn git(dir: &Path, args: &[&str]) {
     let status = std::process::Command::new("git")
         .arg("-C")
@@ -2353,6 +2430,568 @@ async fn postgres_serves_users_tokens_and_overview() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{gone}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn postgres_serves_jobs_and_their_output() {
+    let Ok(url) = std::env::var("KOREOGRAF_TEST_POSTGRES_URL") else {
+        eprintln!("skipping PostgreSQL test: KOREOGRAF_TEST_POSTGRES_URL is not set");
+        return;
+    };
+    if url.trim().is_empty() {
+        eprintln!("skipping PostgreSQL test: KOREOGRAF_TEST_POSTGRES_URL is empty");
+        return;
+    }
+    let _guard = postgres_guard().await;
+    let database = koreograf::parse_database_config(&url, None, None).expect("postgres url");
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-postgres-jobs-{nanos}"));
+    let mut cfg = config(&dir);
+    let admin_name = format!("jobadm{nanos}");
+    cfg.admin_user = admin_name.clone();
+    let state = koreograf::boot_with(cfg, database).expect("boot");
+    assert_eq!(state.engine(), "postgresql");
+    let app = koreograf::router(state);
+
+    let (status, _, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        Some(json!({"username": admin_name, "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let cookie = cookie.expect("session cookie");
+
+    let (status, org, _) = call(
+        &app,
+        "POST",
+        "/api/organizations",
+        Some(&cookie),
+        Some(json!({
+            "name": format!("Jobs org {nanos}"),
+            "description": "Postgres jobs organization"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{org}");
+    let org_id = org["id"].as_str().expect("organization id").to_string();
+
+    let (status, team, _) = call(
+        &app,
+        "POST",
+        "/api/teams",
+        Some(&cookie),
+        Some(json!({
+            "name": format!("Jobs team {nanos}"),
+            "description": "Postgres jobs team",
+            "organization_id": org_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{team}");
+    let team_id = team["id"].as_str().expect("team id").to_string();
+
+    let create_template = |name: String, script: &'static str| {
+        let app = app.clone();
+        let cookie = cookie.clone();
+        let team = team_id.clone();
+        async move {
+            let (status, body, _) = call_team(
+                &app,
+                "POST",
+                "/api/templates",
+                Some(&cookie),
+                Some(&team),
+                Some(json!({
+                    "name": name,
+                    "description": "Postgres job template",
+                    "tool": "shell",
+                    "entrypoint": "",
+                    "no_environment": true,
+                    "spec": {"script": script}
+                })),
+            )
+            .await;
+            assert_eq!(status, StatusCode::CREATED, "{body}");
+            body["id"].as_str().expect("template id").to_string()
+        }
+    };
+    let success_template = create_template(
+        format!("Postgres success {nanos}"),
+        "echo postgres-job-line",
+    )
+    .await;
+    let fail_template = create_template(
+        format!("Postgres fail {nanos}"),
+        "echo postgres-failure; exit 1",
+    )
+    .await;
+    let sleep_template =
+        create_template(format!("Postgres sleep {nanos}"), "sleep 30; echo done").await;
+
+    let (status, launched, _) = call_team(
+        &app,
+        "POST",
+        &format!("/api/templates/{success_template}/launch"),
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({"extra_vars": {"from_postgres": true}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{launched}");
+    let success_job = launched["id"].as_str().expect("job id").to_string();
+    assert_eq!(launched["status"], "pending");
+    assert_eq!(launched["parameters"]["tool"], "shell");
+    assert_eq!(launched["parameters"]["extra_vars"]["from_postgres"], true);
+
+    let mut successful = Value::Null;
+    for _ in 0..80 {
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        let (status, body, _) = call_team(
+            &app,
+            "GET",
+            &format!("/api/jobs/{success_job}"),
+            Some(&cookie),
+            Some(&team_id),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        if body["status"] == "successful" {
+            successful = body;
+            break;
+        }
+    }
+    assert_eq!(successful["status"], "successful", "{successful}");
+    assert!(successful["events"].as_array().is_some_and(|events| events
+        .iter()
+        .any(|event| event["line"] == "postgres-job-line")));
+    assert_eq!(successful["output_capped"], false);
+
+    let output_request = Request::builder()
+        .method("GET")
+        .uri(format!("/api/jobs/{success_job}/output"))
+        .header("cookie", &cookie)
+        .header("x-team-id", &team_id)
+        .body(Body::empty())
+        .unwrap();
+    let output = app.clone().oneshot(output_request).await.unwrap();
+    assert_eq!(output.status(), StatusCode::OK);
+    let output_body = output.into_body().collect().await.unwrap().to_bytes();
+    assert!(String::from_utf8_lossy(&output_body).contains("postgres-job-line"));
+
+    let (status, denied, _) = call_team(
+        &app,
+        "POST",
+        &format!("/api/jobs/{success_job}/relaunch"),
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{denied}");
+    assert_eq!(
+        denied["error"],
+        "only_a_failed_or_canceled_job_can_be_relaunched"
+    );
+
+    let (status, failed_launch, _) = call_team(
+        &app,
+        "POST",
+        &format!("/api/templates/{fail_template}/launch"),
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{failed_launch}");
+    let failed_job = failed_launch["id"].as_str().expect("job id").to_string();
+    let mut failed = Value::Null;
+    for _ in 0..80 {
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        let (status, body, _) = call_team(
+            &app,
+            "GET",
+            &format!("/api/jobs/{failed_job}"),
+            Some(&cookie),
+            Some(&team_id),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        if body["status"] == "failed" {
+            failed = body;
+            break;
+        }
+    }
+    assert_eq!(failed["status"], "failed", "{failed}");
+
+    let (status, relaunched, _) = call_team(
+        &app,
+        "POST",
+        &format!("/api/jobs/{failed_job}/relaunch"),
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{relaunched}");
+    assert_eq!(relaunched["trigger"], "relaunch");
+    assert_ne!(relaunched["id"], failed["id"]);
+    let relaunched_id = relaunched["id"].as_str().expect("job id").to_string();
+    let _ = call_team(
+        &app,
+        "POST",
+        &format!("/api/jobs/{relaunched_id}/cancel"),
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({})),
+    )
+    .await;
+
+    let (status, canceled_launch, _) = call_team(
+        &app,
+        "POST",
+        &format!("/api/templates/{sleep_template}/launch"),
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{canceled_launch}");
+    let sleep_job = canceled_launch["id"].as_str().expect("job id").to_string();
+    let (status, canceled, _) = call_team(
+        &app,
+        "POST",
+        &format!("/api/jobs/{sleep_job}/cancel"),
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{canceled}");
+    assert_eq!(canceled["status"], "canceled");
+
+    let (status, relaunched_sleep, _) = call_team(
+        &app,
+        "POST",
+        &format!("/api/jobs/{sleep_job}/relaunch"),
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{relaunched_sleep}");
+    assert_eq!(relaunched_sleep["trigger"], "relaunch");
+    let relaunched_sleep_id = relaunched_sleep["id"].as_str().expect("job id").to_string();
+    let _ = call_team(
+        &app,
+        "POST",
+        &format!("/api/jobs/{relaunched_sleep_id}/cancel"),
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({})),
+    )
+    .await;
+
+    let (status, workflow, _) = call_team(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({
+            "name": format!("Jobs workflow {nanos}"),
+            "description": "Postgres jobs workflow",
+            "graph": {
+                "nodes": [{
+                    "id": "start",
+                    "template_id": success_template,
+                    "name": "Start"
+                }],
+                "edges": []
+            }
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{workflow}");
+    let workflow_id = workflow["id"].as_str().expect("workflow id").to_string();
+    let (status, run, _) = call_team(
+        &app,
+        "POST",
+        &format!("/api/workflows/{workflow_id}/launch"),
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({"extra_vars": {}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{run}");
+    let run_id = run["id"].as_str().expect("workflow job id").to_string();
+    assert_eq!(run["status"], "running");
+    let mut finished = Value::Null;
+    for _ in 0..80 {
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        let (status, body, _) = call_team(
+            &app,
+            "GET",
+            &format!("/api/workflow-jobs/{run_id}"),
+            Some(&cookie),
+            Some(&team_id),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        if matches!(
+            body["status"].as_str(),
+            Some("successful" | "failed" | "canceled")
+        ) {
+            finished = body;
+            break;
+        }
+    }
+    assert_eq!(finished["status"], "successful", "{finished}");
+    assert_eq!(finished["nodes"][0]["phase"], "successful", "{finished}");
+    assert!(finished["nodes"][0]["job_id"].is_string(), "{finished}");
+
+    let token = format!("joblist{nanos}");
+    let list_dates = [
+        "2026-01-01T00:00:00Z",
+        "2026-01-02T00:00:00Z",
+        "2026-01-03T00:00:00Z",
+    ];
+    let list_statuses = ["successful", "failed", "canceled"];
+    let list_triggers = ["manual", "relaunch", "workflow"];
+    for index in 0..3 {
+        let id = format!("{token}-{index}");
+        postgres_job_record(
+            &url,
+            &team_id,
+            Some(&success_template),
+            PostgresJob {
+                id: &id,
+                name: &id,
+                status: list_statuses[index],
+                trigger: list_triggers[index],
+                created_at: list_dates[index],
+            },
+        )
+        .await;
+    }
+
+    let list_call = |query: String| {
+        let app = app.clone();
+        let cookie = cookie.clone();
+        let team_id = team_id.clone();
+        async move {
+            call_team(
+                &app,
+                "GET",
+                &format!("/api/jobs?{query}"),
+                Some(&cookie),
+                Some(&team_id),
+                None,
+            )
+            .await
+        }
+    };
+    let (status, listed, _) = list_call(format!("q={token}&limit=2")).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(listed["total"], 3);
+    assert_eq!(listed["items"].as_array().map(Vec::len), Some(2));
+    let (status, second_page, _) = list_call(format!("q={token}&limit=2&offset=2")).await;
+    assert_eq!(status, StatusCode::OK, "{second_page}");
+    assert_eq!(second_page["total"], 3);
+    assert_eq!(second_page["items"].as_array().map(Vec::len), Some(1));
+    let (_, filtered, _) = list_call(format!("q={token}&status=failed")).await;
+    assert_eq!(filtered["total"], 1);
+    assert_eq!(filtered["items"][0]["status"], "failed");
+    let (_, by_tool, _) = list_call(format!("q={token}&tool=shell")).await;
+    assert_eq!(by_tool["total"], 3);
+    let (_, by_trigger, _) = list_call(format!("q={token}&trigger=workflow")).await;
+    assert_eq!(by_trigger["total"], 1);
+    let (_, by_template, _) = list_call(format!("q={token}&template_id={success_template}")).await;
+    assert_eq!(by_template["total"], 3);
+    let (_, by_date, _) = list_call(format!(
+        "q={token}&since=2026-01-02T00:00:00Z&until=2026-01-02T23:59:59Z"
+    ))
+    .await;
+    assert_eq!(by_date["total"], 1);
+    assert_eq!(by_date["items"][0]["id"], format!("{token}-1"));
+
+    let gap_job = format!("{token}-gap");
+    postgres_job_record(
+        &url,
+        &team_id,
+        Some(&success_template),
+        PostgresJob {
+            id: &gap_job,
+            name: "Gap job",
+            status: "successful",
+            trigger: "manual",
+            created_at: "2026-01-04T00:00:00Z",
+        },
+    )
+    .await;
+    postgres_job_lines(&url, &gap_job, "gap", 2_500).await;
+    let (status, gap_detail, _) = call_team(
+        &app,
+        "GET",
+        &format!("/api/jobs/{gap_job}"),
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{gap_detail}");
+    let events = gap_detail["events"].as_array().expect("events");
+    assert_eq!(events.len(), 2_001);
+    let gaps: Vec<&Value> = events
+        .iter()
+        .filter(|event| event["stream"] == "gap")
+        .collect();
+    assert_eq!(gaps.len(), 1, "{gap_detail}");
+    assert_eq!(gaps[0]["line"], "500");
+    assert_eq!(gap_detail["output_capped"], false);
+    let output_request = Request::builder()
+        .method("GET")
+        .uri(format!("/api/jobs/{gap_job}/output"))
+        .header("cookie", &cookie)
+        .header("x-team-id", &team_id)
+        .body(Body::empty())
+        .unwrap();
+    let output = app.clone().oneshot(output_request).await.unwrap();
+    assert_eq!(output.status(), StatusCode::OK);
+    let output_text =
+        String::from_utf8_lossy(&output.into_body().collect().await.unwrap().to_bytes())
+            .to_string();
+    assert!(output_text.contains("gap-1"), "{output_text}");
+    assert!(output_text.contains("gap-2500"), "{output_text}");
+
+    let capped_job = format!("{token}-capped");
+    postgres_job_record(
+        &url,
+        &team_id,
+        Some(&success_template),
+        PostgresJob {
+            id: &capped_job,
+            name: "Capped job",
+            status: "successful",
+            trigger: "manual",
+            created_at: "2026-01-05T00:00:00Z",
+        },
+    )
+    .await;
+    postgres_job_bulk_lines(&url, &capped_job, 9, 1_000_000).await;
+    let (status, capped_detail, _) = call_team(
+        &app,
+        "GET",
+        &format!("/api/jobs/{capped_job}"),
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{capped_detail}");
+    assert_eq!(capped_detail["output_capped"], true);
+    let output_request = Request::builder()
+        .method("GET")
+        .uri(format!("/api/jobs/{capped_job}/output"))
+        .header("cookie", &cookie)
+        .header("x-team-id", &team_id)
+        .body(Body::empty())
+        .unwrap();
+    let output = app.clone().oneshot(output_request).await.unwrap();
+    assert_eq!(output.status(), StatusCode::OK);
+    let output_body = output.into_body().collect().await.unwrap().to_bytes();
+    assert!(
+        String::from_utf8_lossy(&output_body).contains("output truncated"),
+        "download did not mark the truncation"
+    );
+    assert!(output_body.len() < 8 * 1024 * 1024 + 100);
+
+    let viewer_id = format!("viewer{nanos}");
+    let viewer_name = format!("viewer{nanos}");
+    let viewer_token = format!("viewer-session-{nanos}");
+    postgres_session(
+        &url,
+        &viewer_id,
+        &viewer_name,
+        &[(&team_id, "viewer")],
+        &viewer_token,
+    )
+    .await;
+    let viewer_cookie = format!("koreograf_session={viewer_token}");
+    let (status, denied, _) = call_team(
+        &app,
+        "POST",
+        &format!("/api/templates/{success_template}/launch"),
+        Some(&viewer_cookie),
+        Some(&team_id),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+    let (status, denied, _) = call_team(
+        &app,
+        "POST",
+        &format!("/api/jobs/{success_job}/cancel"),
+        Some(&viewer_cookie),
+        Some(&team_id),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+    let (status, denied, _) = call_team(
+        &app,
+        "POST",
+        &format!("/api/jobs/{failed_job}/relaunch"),
+        Some(&viewer_cookie),
+        Some(&team_id),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+
+    let outsider_id = format!("outsider{nanos}");
+    let outsider_name = format!("outsider{nanos}");
+    let outsider_token = format!("outsider-session-{nanos}");
+    postgres_session(&url, &outsider_id, &outsider_name, &[], &outsider_token).await;
+    let outsider_cookie = format!("koreograf_session={outsider_token}");
+    let (status, denied, _) = call(
+        &app,
+        "GET",
+        &format!("/api/jobs/{success_job}"),
+        Some(&outsider_cookie),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+    let (status, denied, _) = call_team(
+        &app,
+        "GET",
+        "/api/jobs",
+        Some(&outsider_cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+    let (status, denied, _) = call(
+        &app,
+        "GET",
+        &format!("/api/jobs/{success_job}/output"),
+        Some(&outsider_cookie),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

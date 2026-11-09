@@ -130,28 +130,6 @@ pub fn authorize(
     }
 }
 
-pub fn authorize_connection(
-    c: &rusqlite::Connection,
-    user: &AuthUser,
-    team_id: &str,
-    min: Role,
-) -> AppResult<()> {
-    if user.is_admin {
-        return Ok(());
-    }
-    let Some(role) = db::role_of(c, team_id, &user.id)? else {
-        return Err(ApiError::Forbidden);
-    };
-    let Some(role) = Role::parse(&role) else {
-        return Err(ApiError::Forbidden);
-    };
-    if role >= min {
-        Ok(())
-    } else {
-        Err(ApiError::Forbidden)
-    }
-}
-
 pub fn local_password_ok(user: Option<&User>, password: &str) -> bool {
     let stored = user
         .and_then(|item| item.password_hash.as_deref())
@@ -167,24 +145,31 @@ fn dummy_hash() -> &'static str {
 
 /// `launched_by` is an administrator username, or `workflow:<id>` whose
 /// own launcher resolves to one. Hooks do not count.
-pub fn launcher_is_admin(c: &rusqlite::Connection, launched_by: &str) -> AppResult<bool> {
-    principal_is_admin(c, launched_by, 0)
+pub fn launcher_is_admin(
+    store: &dyn crate::backend::Backend,
+    launched_by: &str,
+) -> AppResult<bool> {
+    principal_is_admin(store, launched_by, 0)
 }
 
-fn principal_is_admin(c: &rusqlite::Connection, launched_by: &str, depth: u8) -> AppResult<bool> {
+fn principal_is_admin(
+    store: &dyn crate::backend::Backend,
+    launched_by: &str,
+    depth: u8,
+) -> AppResult<bool> {
     if depth > 8 {
         return Ok(false);
     }
     if let Some(id) = launched_by.strip_prefix("workflow:") {
-        let Some(job) = db::workflow_job(c, id)? else {
+        let Some(job) = store.workflow_job(id)? else {
             return Ok(false);
         };
-        return principal_is_admin(c, &job.launched_by, depth + 1);
+        return principal_is_admin(store, &job.launched_by, depth + 1);
     }
     if launched_by.is_empty() || launched_by.starts_with("hook:") {
         return Ok(false);
     }
-    let Some(user) = db::user_by_username(c, launched_by)? else {
+    let Some(user) = store.user_by_username(launched_by)? else {
         return Ok(false);
     };
     Ok(user.is_admin && !user.disabled)
@@ -196,7 +181,7 @@ fn principal_is_admin(c: &rusqlite::Connection, launched_by: &str, depth: u8) ->
 /// workflow an administrator saved. That covers a node override and a stored
 /// snapshot that is not the current template.
 pub fn content_saved_by_admin(
-    c: &rusqlite::Connection,
+    store: &dyn crate::backend::Backend,
     template: &db::Template,
     workflow_id: Option<&str>,
     requires_workflow: bool,
@@ -205,19 +190,23 @@ pub fn content_saved_by_admin(
         return Ok(false);
     }
     if let Some(project_id) = template.project_id.as_deref().filter(|id| !id.is_empty()) {
-        if !db::project(c, project_id)?.is_some_and(|project| project.admin_saved) {
+        if !store
+            .project(project_id)?
+            .is_some_and(|project| project.admin_saved)
+        {
             return Ok(false);
         }
     }
     if let Some(inventory_id) = template.inventory_id.as_deref().filter(|id| !id.is_empty()) {
-        let Some(inventory) = db::inventory(c, inventory_id)? else {
+        let Some(inventory) = store.inventory(inventory_id)? else {
             return Ok(false);
         };
         if !inventory.admin_saved {
             return Ok(false);
         }
         if crate::netbox::loads_config_context(&inventory.source_json)
-            || db::list_inventory_sources(c, inventory_id)?
+            || store
+                .list_inventory_sources(inventory_id)?
                 .iter()
                 .any(|source| {
                     source.kind == "netbox"
@@ -233,7 +222,9 @@ pub fn content_saved_by_admin(
     let Some(workflow_id) = workflow_id.filter(|id| !id.is_empty()) else {
         return Ok(false);
     };
-    Ok(db::workflow(c, workflow_id)?.is_some_and(|item| item.admin_saved))
+    Ok(store
+        .workflow(workflow_id)?
+        .is_some_and(|item| item.admin_saved))
 }
 
 /// True when `params` would run the same command as `template`. A missing

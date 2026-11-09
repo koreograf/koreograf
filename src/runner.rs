@@ -972,19 +972,16 @@ fn classify_inspect(success: bool, stdout: &str, stderr: &str) -> ContainerPrese
 }
 
 pub async fn execute(state: Shared, job_id: String) {
-    let started = match state.db() {
-        Ok(db) => db::mark_running(&db, &job_id).unwrap_or(false),
-        Err(_) => false,
-    };
+    let started = state.store().mark_running(&job_id).unwrap_or(false);
     if !started {
         // This task never stored a process. A duplicate start must not clear
         // a run that is already in progress.
-        let finished = state.db().ok().and_then(|db| {
-            db::job(&db, &job_id)
-                .ok()
-                .flatten()
-                .map(|job| matches!(job.status.as_str(), "successful" | "failed" | "canceled"))
-        });
+        let finished = state
+            .store()
+            .job(&job_id)
+            .ok()
+            .flatten()
+            .map(|job| matches!(job.status.as_str(), "successful" | "failed" | "canceled"));
         if finished == Some(true) {
             if let Ok(mut canceled) = state.canceled.lock() {
                 canceled.remove(&job_id);
@@ -1007,12 +1004,14 @@ pub async fn execute(state: Shared, job_id: String) {
 
 async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
     let (job, template) = {
-        let db = state.db().map_err(|e| e.to_string())?;
-        let job = db::job(&db, job_id)
+        let db = state.store();
+        let job = db
+            .job(job_id)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| "Job is missing.".to_string())?;
         let template = match &job.template_id {
-            Some(id) => db::template(&db, id)
+            Some(id) => db
+                .template(id)
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| "Job template is missing.".to_string())?,
             None => return Err("Job has no template.".into()),
@@ -1315,13 +1314,14 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
     } else {
         if state.cfg.local_jobs == LocalJobs::Admins {
             let allowed = {
-                let db = state.db().map_err(|e| e.to_string())?;
-                let launcher = crate::auth::launcher_is_admin(&db, &job.launched_by)
+                let db = state.store();
+                let launcher = crate::auth::launcher_is_admin(db, &job.launched_by)
                     .map_err(|e| e.to_string())?;
                 let params = db::json_object(&job.parameters);
                 let matches = crate::auth::command_matches_template(&original, &params);
                 let workflow_id = match job.workflow_job_id.as_deref().filter(|id| !id.is_empty()) {
-                    Some(id) => db::workflow_job(&db, id)
+                    Some(id) => db
+                        .workflow_job(id)
                         .map_err(|e| e.to_string())?
                         .and_then(|run| run.workflow_id),
                     None => None,
@@ -1332,7 +1332,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
                     .is_some_and(|id| !id.is_empty())
                     || !matches;
                 let content = crate::auth::content_saved_by_admin(
-                    &db,
+                    db,
                     &template,
                     workflow_id.as_deref(),
                     requires_workflow,
@@ -1607,8 +1607,8 @@ fn apply_credentials(
     let mut vault_lines = Vec::new();
     for (index, id) in ids.iter().enumerate() {
         let credential = {
-            let db = state.db().map_err(|e| e.to_string())?;
-            db::credential(&db, id)
+            let db = state.store();
+            db.credential(id)
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| "Credential is missing.".to_string())?
         };
@@ -1741,11 +1741,14 @@ async fn load_project(state: &Shared, template: &Template) -> Result<Option<Proj
     let Some(id) = &template.project_id else {
         return Ok(None);
     };
-    let db = state.db().map_err(|e| e.to_string())?;
-    let project = db::project(&db, id)
+    let db = state.store();
+    let project = db
+        .project(id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "Project is missing.".to_string())?;
-    let visible = db::project_visible(&db, id, &template.team_id).map_err(|e| e.to_string())?;
+    let visible = db
+        .project_visible(id, &template.team_id)
+        .map_err(|e| e.to_string())?;
     if !visible {
         return Err("This project is not visible to this team.".into());
     }
@@ -1757,14 +1760,15 @@ fn write_job_inventory(state: &Shared, template: &Template, work: &Path) -> Resu
         fs::write(work.join("inventory"), DEFAULT_INVENTORY).map_err(|err| err.to_string())?;
         return Ok("inventory".into());
     };
-    let db = state.db().map_err(|e| e.to_string())?;
-    let inventory = db::inventory(&db, id)
+    let db = state.store();
+    let inventory = db
+        .inventory(id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "Inventory is missing.".to_string())?;
     if inventory.team_id != template.team_id {
         return Err("The inventory belongs to another team.".into());
     }
-    let sources = db::list_inventory_sources(&db, id).map_err(|e| e.to_string())?;
+    let sources = db.list_inventory_sources(id).map_err(|e| e.to_string())?;
     if sources.len() <= 1 {
         let body = sources
             .first()
@@ -1820,11 +1824,13 @@ fn load_environment(
     let Some(id) = &template.environment_id else {
         return Ok(None);
     };
-    let db = state.db().map_err(|e| e.to_string())?;
-    let environment = db::environment(&db, id)
+    let db = state.store();
+    let environment = db
+        .environment(id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "execution_environment_is_missing".to_string())?;
-    let team = db::team_by_id(&db, &template.team_id)
+    let team = db
+        .team_by_id(&template.team_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "team_is_missing".to_string())?;
     if !db::environment_visible(&environment, &team) {
@@ -1840,7 +1846,7 @@ fn load_environment(
         return Err("the_network_name_is_invalid".into());
     }
     if state.cfg.local_jobs == LocalJobs::Admins && privileged_network(&environment.network) {
-        let admin = crate::auth::launcher_is_admin(&db, launched_by).map_err(|e| e.to_string())?;
+        let admin = crate::auth::launcher_is_admin(db, launched_by).map_err(|e| e.to_string())?;
         if !admin {
             return Err("The execution environment network needs an administrator.".into());
         }
@@ -2348,10 +2354,8 @@ async fn rev_parse(path: &Path, args: &[&str]) -> Option<String> {
 }
 
 fn store_project_commit(state: &Shared, job_id: &str, commit: &str) {
-    let Ok(db) = state.db() else {
-        return;
-    };
-    let Ok(Some(job)) = db::job(&db, job_id) else {
+    let db = state.store();
+    let Ok(Some(job)) = db.job(job_id) else {
         return;
     };
     let mut parameters = db::json_object(&job.parameters);
@@ -2365,7 +2369,7 @@ fn store_project_commit(state: &Shared, job_id: &str, commit: &str) {
         Value::String(commit.to_string()),
     );
     if let Ok(raw) = serde_json::to_string(&parameters) {
-        let _ = db::set_job_parameters(&db, job_id, &raw);
+        let _ = db.set_job_parameters(job_id, &raw);
     }
 }
 
@@ -3875,20 +3879,17 @@ fn flush_tail(state: &Shared, job_id: &str, stream: &str, kept: &mut OutputTail)
 }
 
 fn store_event(state: &Shared, job_id: &str, stream: &str, line: &str) {
-    if let Ok(db) = state.db() {
-        let _ = db::insert_event(&db, job_id, stream, line);
-    }
+    let _ = state.store().insert_event(job_id, stream, line);
 }
 
 fn note_hosts(state: &Shared, job_id: &str, stream: &str, line: &str) {
     if !(matches!(stream, "stdout" | "stderr") && host_line(line)) {
         return;
     }
-    if let Ok(db) = state.db() {
-        if let Ok(Some(job)) = db::job(&db, job_id) {
-            if let Some(next) = observe_host_line(&job.failed_hosts, line) {
-                let _ = db::set_failed_hosts(&db, job_id, &next);
-            }
+    let db = state.store();
+    if let Ok(Some(job)) = db.job(job_id) {
+        if let Some(next) = observe_host_line(&job.failed_hosts, line) {
+            let _ = db.set_failed_hosts(job_id, &next);
         }
     }
 }
@@ -3940,16 +3941,11 @@ fn saved_id(params: &Value, key: &str) -> Option<String> {
 
 fn finish(state: &Shared, job_id: &str, success: bool) {
     let status = if success { "successful" } else { "failed" };
-    if let Ok(db) = state.db() {
-        let _ = db::finish_job(&db, job_id, status);
-    }
+    let _ = state.store().finish_job(job_id, status);
 }
 
 fn close_observation(state: &Shared, job_id: &str) {
-    let loaded = state
-        .db()
-        .ok()
-        .and_then(|db| db::job(&db, job_id).ok().flatten());
+    let loaded = state.store().job(job_id).ok().flatten();
     let (status, labels) = match loaded {
         Some(job) => (job.status.clone(), Some(metrics::job_labels(&job))),
         None => ("failed".to_string(), None),
