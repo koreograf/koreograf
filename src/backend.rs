@@ -12,9 +12,9 @@ use rusqlite::params;
 
 use crate::config::{DatabaseConfig, PostgresConfig, SslMode};
 use crate::db::{
-    self, Credential, CredentialUsage, Delivery, Environment, Hook, Inventory, InventorySource,
-    Member, NewDelivery, Organization, Project, Schedule, Team, Template, User, UserMembership,
-    Workflow,
+    self, ApiToken, Credential, CredentialUsage, Delivery, Environment, Hook, Inventory,
+    InventorySource, Job, JobActivity, Member, NewDelivery, Organization, Project, Schedule, Team,
+    Template, User, UserMembership, Workflow,
 };
 use crate::error::{ApiError, AppResult};
 
@@ -38,6 +38,37 @@ pub(crate) trait Backend: Send + Sync {
         auth_source: &str,
         is_admin: bool,
     ) -> AppResult<()>;
+    fn user_by_id(&self, id: &str) -> AppResult<Option<User>>;
+    fn list_users(&self) -> AppResult<Vec<(User, i64)>>;
+    fn update_profile(
+        &self,
+        id: &str,
+        display_name: &str,
+        email: Option<&str>,
+        password_hash: Option<&str>,
+    ) -> AppResult<()>;
+    fn update_user(
+        &self,
+        id: &str,
+        display_name: &str,
+        is_admin: bool,
+        disabled: bool,
+        password_hash: Option<&str>,
+    ) -> AppResult<()>;
+    fn delete_user_sessions(&self, user_id: &str) -> AppResult<()>;
+    fn delete_user(&self, id: &str) -> AppResult<bool>;
+    fn other_active_admins(&self, user_id: &str) -> AppResult<i64>;
+    fn create_api_token(
+        &self,
+        id: &str,
+        user_id: &str,
+        name: &str,
+        prefix: &str,
+        token_hash: &str,
+        created_at: &str,
+    ) -> AppResult<()>;
+    fn list_api_tokens(&self, user_id: &str) -> AppResult<Vec<ApiToken>>;
+    fn delete_api_token(&self, id: &str, user_id: &str) -> AppResult<bool>;
     fn list_teams_for_user(&self, user_id: &str, admin: bool) -> AppResult<Vec<(Team, String)>>;
     fn list_user_memberships(&self, user_id: &str) -> AppResult<Vec<UserMembership>>;
     fn replace_settings(&self, rows: &[(String, String)]) -> AppResult<()>;
@@ -169,6 +200,11 @@ pub(crate) trait Backend: Send + Sync {
     fn delete_hook(&self, id: &str, team_id: &str) -> AppResult<()>;
     fn list_deliveries(&self, team_id: &str, limit: i64) -> AppResult<Vec<Delivery>>;
     fn insert_delivery(&self, item: &NewDelivery<'_>) -> AppResult<()>;
+    fn recent_jobs(&self, team_id: &str, limit: i64) -> AppResult<Vec<Job>>;
+    fn job_activity(&self, team_id: &str, from: &str, to: &str) -> AppResult<Vec<JobActivity>>;
+    fn import_report(&self) -> AppResult<Option<serde_json::Value>>;
+    fn first_workflow(&self, team_id: &str) -> AppResult<Option<Workflow>>;
+    fn first_hook(&self, team_id: &str) -> AppResult<Option<Hook>>;
     fn list_workflows(&self, team_id: &str) -> AppResult<Vec<Workflow>>;
     fn workflow(&self, id: &str) -> AppResult<Option<Workflow>>;
     fn insert_workflow(&self, item: &Workflow) -> AppResult<()>;
@@ -298,6 +334,77 @@ impl Backend for SqliteBackend {
             auth_source,
             is_admin,
         )
+    }
+
+    fn user_by_id(&self, id: &str) -> AppResult<Option<User>> {
+        let conn = lock(&self.conn)?;
+        db::user_by_id(&conn, id)
+    }
+
+    fn list_users(&self) -> AppResult<Vec<(User, i64)>> {
+        let conn = lock(&self.conn)?;
+        db::list_users(&conn)
+    }
+
+    fn update_profile(
+        &self,
+        id: &str,
+        display_name: &str,
+        email: Option<&str>,
+        password_hash: Option<&str>,
+    ) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::update_profile(&conn, id, display_name, email, password_hash)
+    }
+
+    fn update_user(
+        &self,
+        id: &str,
+        display_name: &str,
+        is_admin: bool,
+        disabled: bool,
+        password_hash: Option<&str>,
+    ) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::update_user(&conn, id, display_name, is_admin, disabled, password_hash)
+    }
+
+    fn delete_user_sessions(&self, user_id: &str) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::delete_user_sessions(&conn, user_id)
+    }
+
+    fn delete_user(&self, id: &str) -> AppResult<bool> {
+        let conn = lock(&self.conn)?;
+        db::delete_user(&conn, id)
+    }
+
+    fn other_active_admins(&self, user_id: &str) -> AppResult<i64> {
+        let conn = lock(&self.conn)?;
+        db::other_active_admins(&conn, user_id)
+    }
+
+    fn create_api_token(
+        &self,
+        id: &str,
+        user_id: &str,
+        name: &str,
+        prefix: &str,
+        token_hash: &str,
+        created_at: &str,
+    ) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::create_api_token(&conn, id, user_id, name, prefix, token_hash, created_at)
+    }
+
+    fn list_api_tokens(&self, user_id: &str) -> AppResult<Vec<ApiToken>> {
+        let conn = lock(&self.conn)?;
+        db::list_api_tokens(&conn, user_id)
+    }
+
+    fn delete_api_token(&self, id: &str, user_id: &str) -> AppResult<bool> {
+        let conn = lock(&self.conn)?;
+        db::delete_api_token(&conn, id, user_id)
     }
 
     fn list_teams_for_user(&self, user_id: &str, admin: bool) -> AppResult<Vec<(Team, String)>> {
@@ -778,6 +885,39 @@ impl Backend for SqliteBackend {
         db::insert_delivery(&conn, *item)
     }
 
+    fn recent_jobs(&self, team_id: &str, limit: i64) -> AppResult<Vec<Job>> {
+        let conn = lock(&self.conn)?;
+        let (jobs, _) = db::list_jobs(
+            &conn,
+            team_id,
+            &db::JobQuery {
+                limit,
+                ..Default::default()
+            },
+        )?;
+        Ok(jobs)
+    }
+
+    fn job_activity(&self, team_id: &str, from: &str, to: &str) -> AppResult<Vec<JobActivity>> {
+        let conn = lock(&self.conn)?;
+        db::job_activity(&conn, team_id, from, to)
+    }
+
+    fn import_report(&self) -> AppResult<Option<serde_json::Value>> {
+        let conn = lock(&self.conn)?;
+        crate::migration::report(&conn)
+    }
+
+    fn first_workflow(&self, team_id: &str) -> AppResult<Option<Workflow>> {
+        let conn = lock(&self.conn)?;
+        db::first_workflow(&conn, team_id)
+    }
+
+    fn first_hook(&self, team_id: &str) -> AppResult<Option<Hook>> {
+        let conn = lock(&self.conn)?;
+        db::first_hook(&conn, team_id)
+    }
+
     fn list_workflows(&self, team_id: &str) -> AppResult<Vec<Workflow>> {
         let conn = lock(&self.conn)?;
         db::list_workflows(&conn, team_id)
@@ -1093,6 +1233,45 @@ fn row_user(row: &tokio_postgres::Row) -> AppResult<User> {
     })
 }
 
+fn row_api_token(row: &tokio_postgres::Row) -> AppResult<ApiToken> {
+    Ok(ApiToken {
+        id: row.try_get(0)?,
+        name: row.try_get(1)?,
+        prefix: row.try_get(2)?,
+        created_at: row.try_get(3)?,
+        last_used_at: row.try_get(4)?,
+    })
+}
+
+fn row_job(row: &tokio_postgres::Row) -> AppResult<Job> {
+    Ok(Job {
+        id: row.try_get(0)?,
+        team_id: row.try_get(1)?,
+        template_id: row.try_get(2)?,
+        workflow_job_id: row.try_get(3)?,
+        workflow_node_id: row.try_get(4)?,
+        name: row.try_get(5)?,
+        tool: row.try_get(6)?,
+        status: row.try_get(7)?,
+        extra_vars: row.try_get(8)?,
+        launched_by: row.try_get(9)?,
+        trigger: row.try_get(10)?,
+        started_at: row.try_get(11)?,
+        finished_at: row.try_get(12)?,
+        created_at: row.try_get(13)?,
+        parameters: row.try_get(14)?,
+        failed_hosts: row.try_get(15)?,
+    })
+}
+
+fn row_job_activity(row: &tokio_postgres::Row) -> AppResult<JobActivity> {
+    Ok(JobActivity {
+        status: row.try_get(0)?,
+        started_at: row.try_get(1)?,
+        finished_at: row.try_get(2)?,
+    })
+}
+
 fn row_team(row: &tokio_postgres::Row) -> AppResult<Team> {
     Ok(Team {
         id: row.try_get(0)?,
@@ -1155,6 +1334,10 @@ fn row_environment(row: &tokio_postgres::Row) -> AppResult<Environment> {
 
 const USER_COLUMNS: &str =
     "id, username, display_name, password_hash, auth_source, is_admin, disabled, created_at, email";
+
+const JOB_COLUMNS: &str = "id, team_id, template_id, workflow_job_id, workflow_node_id, name, \
+     tool, status, extra_vars, launched_by, trigger, started_at, finished_at, created_at, \
+     parameters, failed_hosts";
 
 const TEAM_COLUMNS: &str = "t.id, t.name, t.description, t.ldap_group, t.created_at, \
      COALESCE(t.organization_id, ''), COALESCE(o.name, '')";
@@ -1717,6 +1900,188 @@ impl Backend for PostgresBackend {
                 )
                 .await?;
             Ok(())
+        })
+    }
+
+    fn user_by_id(&self, id: &str) -> AppResult<Option<User>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let row = client
+                .query_opt(
+                    &format!("SELECT {USER_COLUMNS} FROM users WHERE id = $1"),
+                    &[&id],
+                )
+                .await?;
+            row.as_ref().map(row_user).transpose()
+        })
+    }
+
+    fn list_users(&self) -> AppResult<Vec<(User, i64)>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let rows = client
+                .query(
+                    &format!(
+                        "SELECT {USER_COLUMNS},
+                                (SELECT COUNT(*) FROM memberships m WHERE m.user_id = users.id)
+                         FROM users ORDER BY lower(username)"
+                    ),
+                    &[],
+                )
+                .await?;
+            rows.iter()
+                .map(|row| Ok((row_user(row)?, row.try_get::<_, i64>(9)?)))
+                .collect()
+        })
+    }
+
+    fn update_profile(
+        &self,
+        id: &str,
+        display_name: &str,
+        email: Option<&str>,
+        password_hash: Option<&str>,
+    ) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            if let Some(password_hash) = password_hash {
+                client
+                    .execute(
+                        "UPDATE users SET display_name = $2, email = $3, password_hash = $4
+                         WHERE id = $1",
+                        &[&id, &display_name, &email, &password_hash],
+                    )
+                    .await?;
+            } else {
+                client
+                    .execute(
+                        "UPDATE users SET display_name = $2, email = $3 WHERE id = $1",
+                        &[&id, &display_name, &email],
+                    )
+                    .await?;
+            }
+            Ok(())
+        })
+    }
+
+    fn update_user(
+        &self,
+        id: &str,
+        display_name: &str,
+        is_admin: bool,
+        disabled: bool,
+        password_hash: Option<&str>,
+    ) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            if let Some(password_hash) = password_hash {
+                client
+                    .execute(
+                        "UPDATE users SET display_name = $2, is_admin = $3, disabled = $4,
+                            password_hash = $5
+                         WHERE id = $1",
+                        &[
+                            &id,
+                            &display_name,
+                            &(is_admin as i32),
+                            &(disabled as i32),
+                            &password_hash,
+                        ],
+                    )
+                    .await?;
+            } else {
+                client
+                    .execute(
+                        "UPDATE users SET display_name = $2, is_admin = $3, disabled = $4
+                         WHERE id = $1",
+                        &[&id, &display_name, &(is_admin as i32), &(disabled as i32)],
+                    )
+                    .await?;
+            }
+            Ok(())
+        })
+    }
+
+    fn delete_user_sessions(&self, user_id: &str) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            client
+                .execute("DELETE FROM sessions WHERE user_id = $1", &[&user_id])
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn delete_user(&self, id: &str) -> AppResult<bool> {
+        block_on(async {
+            let client = self.client.lock().await;
+            Ok(client
+                .execute("DELETE FROM users WHERE id = $1", &[&id])
+                .await?
+                > 0)
+        })
+    }
+
+    fn other_active_admins(&self, user_id: &str) -> AppResult<i64> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let row = client
+                .query_one(
+                    "SELECT COUNT(*) FROM users
+                     WHERE is_admin != 0 AND disabled = 0 AND id != $1",
+                    &[&user_id],
+                )
+                .await?;
+            Ok(row.get(0))
+        })
+    }
+
+    fn create_api_token(
+        &self,
+        id: &str,
+        user_id: &str,
+        name: &str,
+        prefix: &str,
+        token_hash: &str,
+        created_at: &str,
+    ) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            client
+                .execute(
+                    "INSERT INTO api_tokens (id, user_id, name, prefix, token_hash, created_at)
+                     VALUES ($1, $2, $3, $4, $5, $6)",
+                    &[&id, &user_id, &name, &prefix, &token_hash, &created_at],
+                )
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn list_api_tokens(&self, user_id: &str) -> AppResult<Vec<ApiToken>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let rows = client
+                .query(
+                    "SELECT id, name, prefix, created_at, last_used_at
+                     FROM api_tokens WHERE user_id = $1 ORDER BY created_at, name",
+                    &[&user_id],
+                )
+                .await?;
+            rows.iter().map(row_api_token).collect()
+        })
+    }
+
+    fn delete_api_token(&self, id: &str, user_id: &str) -> AppResult<bool> {
+        block_on(async {
+            let client = self.client.lock().await;
+            Ok(client
+                .execute(
+                    "DELETE FROM api_tokens WHERE id = $1 AND user_id = $2",
+                    &[&id, &user_id],
+                )
+                .await?
+                > 0)
         })
     }
 
@@ -3258,6 +3623,89 @@ impl Backend for PostgresBackend {
                 )
                 .await?;
             Ok(())
+        })
+    }
+
+    fn recent_jobs(&self, team_id: &str, limit: i64) -> AppResult<Vec<Job>> {
+        let limit = limit.clamp(1, 100);
+        block_on(async {
+            let client = self.client.lock().await;
+            let rows = client
+                .query(
+                    &format!(
+                        "SELECT {JOB_COLUMNS} FROM jobs WHERE team_id = $1
+                         ORDER BY created_at DESC, id DESC LIMIT $2"
+                    ),
+                    &[&team_id, &limit],
+                )
+                .await?;
+            rows.iter().map(row_job).collect()
+        })
+    }
+
+    fn job_activity(&self, team_id: &str, from: &str, to: &str) -> AppResult<Vec<JobActivity>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let rows = client
+                .query(
+                    "SELECT status, started_at, finished_at FROM jobs
+                     WHERE team_id = $1
+                       AND ((finished_at IS NOT NULL AND finished_at >= $2
+                             AND finished_at <= $3)
+                         OR (started_at IS NOT NULL AND started_at >= $2
+                             AND started_at <= $3))",
+                    &[&team_id, &from, &to],
+                )
+                .await?;
+            rows.iter().map(row_job_activity).collect()
+        })
+    }
+
+    fn import_report(&self) -> AppResult<Option<serde_json::Value>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let row = client
+                .query_opt(
+                    "SELECT value FROM settings WHERE key = $1",
+                    &[&crate::migration::REPORT_KEY],
+                )
+                .await?;
+            Ok(row.and_then(|row| {
+                let raw: String = row.get(0);
+                serde_json::from_str(&raw).ok()
+            }))
+        })
+    }
+
+    fn first_workflow(&self, team_id: &str) -> AppResult<Option<Workflow>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let row = client
+                .query_opt(
+                    &format!(
+                        "SELECT {WORKFLOW_COLUMNS} FROM workflows
+                         WHERE team_id = $1 ORDER BY created_at LIMIT 1"
+                    ),
+                    &[&team_id],
+                )
+                .await?;
+            row.as_ref().map(row_workflow).transpose()
+        })
+    }
+
+    fn first_hook(&self, team_id: &str) -> AppResult<Option<Hook>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let row = client
+                .query_opt(
+                    &format!(
+                        "SELECT {HOOK_COLUMNS} FROM hooks
+                         WHERE team_id = $1 ORDER BY created_at LIMIT 1"
+                    ),
+                    &[&team_id],
+                )
+                .await?;
+            row.as_ref().map(row_hook).transpose()
         })
     }
 

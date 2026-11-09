@@ -120,8 +120,10 @@ pub async fn update_me(
     ApiJson(body): ApiJson<MeUpdate>,
 ) -> AppResult<Json<Value>> {
     let display = trimmed_display(&body.display_name)?;
-    let db = state.db()?;
-    let existing = db::user_by_id(&db, &user.id)?.ok_or(ApiError::NotFound)?;
+    let existing = state
+        .store()
+        .user_by_id(&user.id)?
+        .ok_or(ApiError::NotFound)?;
     if existing.auth_source != "local" && !body.password.is_empty() {
         return Err(ApiError::bad(
             "the_password_comes_from_ldap_or_active_directory",
@@ -133,21 +135,21 @@ pub async fn update_me(
         body.email.as_deref(),
     )?;
     let password_hash = new_password(&existing, &body.password)?;
-    db::update_profile(
-        &db,
+    state.store().update_profile(
         &user.id,
         display,
         email.as_deref(),
         password_hash.as_deref(),
     )?;
-    let updated = db::user_by_id(&db, &user.id)?.ok_or(ApiError::NotFound)?;
-    drop(db);
+    let updated = state
+        .store()
+        .user_by_id(&user.id)?
+        .ok_or(ApiError::NotFound)?;
     Ok(Json(profile_json(&state, &updated.into())?))
 }
 
 pub async fn list_tokens(State(state): State<Shared>, user: AuthUser) -> AppResult<Json<Value>> {
-    let db = state.db()?;
-    let tokens = db::list_api_tokens(&db, &user.id)?;
+    let tokens = state.store().list_api_tokens(&user.id)?;
     Ok(Json(json!(tokens)))
 }
 
@@ -161,9 +163,7 @@ pub async fn create_token(
     let prefix = crypto::token_prefix(&secret);
     let created_at = db::now();
     let id = Uuid::new_v4().to_string();
-    let db = state.db()?;
-    db::create_api_token(
-        &db,
+    state.store().create_api_token(
         &id,
         &user.id,
         &name,
@@ -186,8 +186,7 @@ pub async fn delete_token(
     user: AuthUser,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let db = state.db()?;
-    if !db::delete_api_token(&db, &id, &user.id)? {
+    if !state.store().delete_api_token(&id, &user.id)? {
         return Err(ApiError::NotFound);
     }
     Ok(super::no_content())
@@ -195,8 +194,7 @@ pub async fn delete_token(
 
 pub async fn list_users(State(state): State<Shared>, user: AuthUser) -> AppResult<Json<Value>> {
     require_admin(&user)?;
-    let db = state.db()?;
-    let users = db::list_users(&db)?;
+    let users = state.store().list_users()?;
     Ok(Json(Value::Array(
         users
             .iter()
@@ -211,9 +209,8 @@ pub async fn get_user(
     Path(id): Path<String>,
 ) -> AppResult<Json<Value>> {
     require_admin(&user)?;
-    let db = state.db()?;
-    let found = db::user_by_id(&db, &id)?.ok_or(ApiError::NotFound)?;
-    let memberships = db::list_user_memberships(&db, &id)?;
+    let found = state.store().user_by_id(&id)?.ok_or(ApiError::NotFound)?;
+    let memberships = state.store().list_user_memberships(&id)?;
     Ok(Json(account_detail(&found, &memberships)))
 }
 
@@ -235,12 +232,10 @@ pub async fn create_user(
         return Err(ApiError::bad("password_needs_at_least_8_characters"));
     }
     let display = trimmed_display(&body.display_name)?;
-    let db = state.db()?;
-    if db::user_by_username(&db, &username)?.is_some() {
+    if state.store().user_by_username(&username)?.is_some() {
         return Err(ApiError::bad("that_username_is_already_used"));
     }
-    db::insert_user(
-        &db,
+    state.store().insert_user(
         &Uuid::new_v4().to_string(),
         &username,
         display,
@@ -248,7 +243,10 @@ pub async fn create_user(
         "local",
         body.is_admin,
     )?;
-    let created = db::user_by_username(&db, &username)?.ok_or(ApiError::NotFound)?;
+    let created = state
+        .store()
+        .user_by_username(&username)?
+        .ok_or(ApiError::NotFound)?;
     Ok(super::created(account_json(&created, 0)))
 }
 
@@ -260,8 +258,7 @@ pub async fn update_user(
 ) -> AppResult<Json<Value>> {
     require_admin(&user)?;
     let display = trimmed_display(&body.display_name)?;
-    let db = state.db()?;
-    let existing = db::user_by_id(&db, &id)?.ok_or(ApiError::NotFound)?;
+    let existing = state.store().user_by_id(&id)?.ok_or(ApiError::NotFound)?;
     if body.disabled && id == user.id {
         return Err(ApiError::bad("you_cannot_disable_your_own_account"));
     }
@@ -269,11 +266,10 @@ pub async fn update_user(
         &existing,
         body.is_admin,
         body.disabled,
-        db::other_active_admins(&db, &id)?,
+        state.store().other_active_admins(&id)?,
     )?;
     let password_hash = new_password(&existing, &body.password)?;
-    db::update_user(
-        &db,
+    state.store().update_user(
         &id,
         display,
         body.is_admin,
@@ -281,10 +277,10 @@ pub async fn update_user(
         password_hash.as_deref(),
     )?;
     if id != user.id && (password_hash.is_some() || (body.disabled && !existing.disabled)) {
-        db::delete_user_sessions(&db, &id)?;
+        state.store().delete_user_sessions(&id)?;
     }
-    let updated = db::user_by_id(&db, &id)?.ok_or(ApiError::NotFound)?;
-    let memberships = db::list_user_memberships(&db, &id)?;
+    let updated = state.store().user_by_id(&id)?.ok_or(ApiError::NotFound)?;
+    let memberships = state.store().list_user_memberships(&id)?;
     Ok(Json(account_detail(&updated, &memberships)))
 }
 
@@ -297,10 +293,14 @@ pub async fn delete_user(
     if id == user.id {
         return Err(ApiError::bad("you_cannot_delete_your_own_account"));
     }
-    let db = state.db()?;
-    let existing = db::user_by_id(&db, &id)?.ok_or(ApiError::NotFound)?;
-    ensure_last_admin(&existing, false, true, db::other_active_admins(&db, &id)?)?;
-    if !db::delete_user(&db, &id)? {
+    let existing = state.store().user_by_id(&id)?.ok_or(ApiError::NotFound)?;
+    ensure_last_admin(
+        &existing,
+        false,
+        true,
+        state.store().other_active_admins(&id)?,
+    )?;
+    if !state.store().delete_user(&id)? {
         return Err(ApiError::NotFound);
     }
     Ok(super::no_content())

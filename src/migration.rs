@@ -13,7 +13,7 @@ use crate::db;
 use crate::error::{ApiError, AppResult};
 
 const PATH_MAP_KEY: &str = "import_path_map";
-const REPORT_KEY: &str = "import_report";
+pub(crate) const REPORT_KEY: &str = "import_report";
 const DATABASE: &str = "koreograf.db";
 const SECRET: &str = "secret.key";
 
