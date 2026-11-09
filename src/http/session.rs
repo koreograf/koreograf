@@ -104,6 +104,9 @@ pub async fn login(
     let local = state.store().user_by_username(&username)?;
     if auth::local_password_ok(local.as_ref(), &body.password) {
         if let Some(user) = local {
+            if user.disabled {
+                return Err(disabled_sign_in(&state, &username, &source));
+            }
             auth::signin_succeeded(&state.cfg.data_dir, &username, &source);
             return session_response(&state, &headers, &user);
         }
@@ -112,8 +115,11 @@ pub async fn login(
     if let Some(cfg) = directory {
         match ldap::authenticate(&cfg, &username, &body.password).await {
             Ok(identity) => {
-                auth::signin_succeeded(&state.cfg.data_dir, &username, &source);
                 let user = provision_ldap(&state, identity)?;
+                if user.disabled {
+                    return Err(disabled_sign_in(&state, &username, &source));
+                }
+                auth::signin_succeeded(&state.cfg.data_dir, &username, &source);
                 return session_response(&state, &headers, &user);
             }
             Err(err) => {
@@ -139,6 +145,17 @@ pub async fn login(
         "sign-in failed"
     );
     Err(ApiError::SignInFailed)
+}
+
+fn disabled_sign_in(state: &Shared, username: &str, source: &str) -> ApiError {
+    auth::signin_failed(&state.cfg.data_dir, username, source);
+    tracing::warn!(
+        username = %username,
+        client_ip = %source,
+        reason = "disabled",
+        "sign-in failed"
+    );
+    ApiError::SignInFailed
 }
 
 fn throttled(retry: Duration) -> Response {
@@ -402,7 +419,12 @@ fn provision_ldap(state: &Shared, identity: ldap::LdapIdentity) -> AppResult<Use
 
 fn session_response(state: &Shared, headers: &HeaderMap, user: &User) -> AppResult<Response> {
     if user.disabled {
-        return Err(ApiError::bad("the_account_is_disabled"));
+        tracing::warn!(
+            username = %user.username,
+            reason = "disabled",
+            "sign-in failed"
+        );
+        return Err(ApiError::SignInFailed);
     }
     let token = crypto::random_token();
     state.store().create_session(&token, &user.id)?;

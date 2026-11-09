@@ -7193,8 +7193,8 @@ async fn admin_can_list_and_update_users() {
         Some(json!({"username": "ada", "password": "ada-secret-2"})),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "{blocked}");
-    assert_eq!(blocked["error"], "the_account_is_disabled");
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{blocked}");
+    assert_eq!(blocked["error"], "invalid_username_or_password");
     let (status, ended, _) = call(&app, "GET", "/api/me", Some(&fresh_cookie), None, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{ended}");
 
