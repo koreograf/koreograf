@@ -151,6 +151,7 @@ const SIGNIN_FAILURE_LIMIT: u32 = 5;
 const SIGNIN_FAILURE_WINDOW: Duration = Duration::from_secs(60);
 const SIGNIN_LOCKOUT: Duration = Duration::from_secs(60);
 const SIGNIN_TRACKED_KEYS: usize = 1024;
+const UNKNOWN_SOURCE: &str = "unknown";
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct SignInKey {
@@ -172,12 +173,18 @@ fn signin_attempts() -> &'static Mutex<HashMap<SignInKey, SignInAttempt>> {
 }
 
 pub(crate) fn signin_remaining(data_dir: &Path, username: &str, source: &str) -> Option<Duration> {
+    if source == UNKNOWN_SOURCE {
+        return None;
+    }
     let key = signin_key(data_dir, username, source);
     let mut attempts = signin_attempts().lock().ok()?;
     remaining_at(&mut attempts, &key, Instant::now())
 }
 
 pub(crate) fn signin_failed(data_dir: &Path, username: &str, source: &str) {
+    if source == UNKNOWN_SOURCE {
+        return;
+    }
     let key = signin_key(data_dir, username, source);
     if let Ok(mut attempts) = signin_attempts().lock() {
         record_failure_at(&mut attempts, key, Instant::now());
@@ -185,6 +192,9 @@ pub(crate) fn signin_failed(data_dir: &Path, username: &str, source: &str) {
 }
 
 pub(crate) fn signin_succeeded(data_dir: &Path, username: &str, source: &str) {
+    if source == UNKNOWN_SOURCE {
+        return;
+    }
     let key = signin_key(data_dir, username, source);
     if let Ok(mut attempts) = signin_attempts().lock() {
         attempts.remove(&key);
@@ -219,6 +229,7 @@ fn record_failure_at(
     now: Instant,
 ) {
     prune_attempts(attempts, now);
+    let current = key.clone();
     let attempt = attempts.entry(key).or_insert_with(|| SignInAttempt {
         failures: 0,
         first: now,
@@ -234,12 +245,22 @@ fn record_failure_at(
         attempt.locked_until = Some(now + SIGNIN_LOCKOUT);
     }
     if attempts.len() > SIGNIN_TRACKED_KEYS {
-        if let Some(oldest) = attempts
-            .iter()
-            .min_by_key(|(_, attempt)| attempt.first)
-            .map(|(key, _)| key.clone())
-        {
-            attempts.remove(&oldest);
+        evict_attempt(attempts, &current);
+    }
+}
+
+fn evict_attempt(attempts: &mut HashMap<SignInKey, SignInAttempt>, current: &SignInKey) {
+    let oldest_unlocked = attempts
+        .iter()
+        .filter(|(_, attempt)| attempt.locked_until.is_none())
+        .min_by_key(|(_, attempt)| attempt.first)
+        .map(|(key, _)| key.clone());
+    match oldest_unlocked {
+        Some(key) => {
+            attempts.remove(&key);
+        }
+        None => {
+            attempts.remove(current);
         }
     }
 }
@@ -483,7 +504,7 @@ mod tests {
     use super::{
         clear_cookie, client_source_from, command_matches_template, record_failure_at,
         remaining_at, session_cookie, SignInKey, SIGNIN_FAILURE_LIMIT, SIGNIN_FAILURE_WINDOW,
-        SIGNIN_LOCKOUT,
+        SIGNIN_LOCKOUT, SIGNIN_TRACKED_KEYS,
     };
     use crate::db::Template;
     use axum::http::HeaderMap;
@@ -536,6 +557,40 @@ mod tests {
             remaining_at(&mut attempts, &signin_key("grace", "203.0.113.10"), start),
             None
         );
+    }
+
+    #[test]
+    fn spraying_usernames_does_not_evict_a_lock() {
+        let mut attempts = HashMap::new();
+        let start = Instant::now();
+        let locked = signin_key("admin", "203.0.113.10");
+        for _ in 0..SIGNIN_FAILURE_LIMIT {
+            record_failure_at(&mut attempts, locked.clone(), start);
+        }
+        for index in 0..SIGNIN_TRACKED_KEYS {
+            record_failure_at(
+                &mut attempts,
+                signin_key(&format!("user{index}"), "203.0.113.99"),
+                start,
+            );
+        }
+        assert!(remaining_at(&mut attempts, &locked, start).is_some());
+    }
+
+    #[test]
+    fn new_keys_are_not_tracked_once_every_slot_holds_a_lock() {
+        let mut attempts = HashMap::new();
+        let start = Instant::now();
+        for index in 0..SIGNIN_TRACKED_KEYS {
+            let key = signin_key(&format!("locked{index}"), "203.0.113.99");
+            for _ in 0..SIGNIN_FAILURE_LIMIT {
+                record_failure_at(&mut attempts, key.clone(), start);
+            }
+        }
+        let extra = signin_key("extra", "203.0.113.99");
+        record_failure_at(&mut attempts, extra.clone(), start);
+        assert!(!attempts.contains_key(&extra));
+        assert_eq!(attempts.len(), SIGNIN_TRACKED_KEYS);
     }
 
     #[test]

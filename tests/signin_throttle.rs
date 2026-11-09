@@ -1,13 +1,17 @@
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Once, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
+use axum::extract::ConnectInfo;
 use axum::http::{HeaderMap, Request, StatusCode};
+use axum::Extension;
 use http_body_util::BodyExt;
 use koreograf::{Config, CookieSecure, LdapConfig, LocalJobs, RunnerMode};
 use serde_json::{json, Value};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tower::ServiceExt;
 
 fn temp_dir(label: &str) -> PathBuf {
@@ -95,18 +99,66 @@ fn retry_after(reply: &Reply) -> u64 {
         .unwrap()
 }
 
-async fn directory_probe() -> (String, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
+async fn rejecting_directory() -> (String, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let connections = Arc::new(AtomicUsize::new(0));
     let counter = connections.clone();
     let handle = tokio::spawn(async move {
-        while let Ok((socket, _)) = listener.accept().await {
+        while let Ok((mut socket, _)) = listener.accept().await {
             counter.fetch_add(1, Ordering::SeqCst);
-            drop(socket);
+            let mut buffer = [0_u8; 4096];
+            loop {
+                match socket.read(&mut buffer).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(read) => {
+                        if let Some(id) = ldap_message_id(&buffer[..read]) {
+                            let _ = socket.write_all(&ldap_rejection(&id)).await;
+                        }
+                    }
+                }
+            }
         }
     });
     (format!("ldap://{address}"), connections, handle)
+}
+
+fn ldap_message_id(message: &[u8]) -> Option<Vec<u8>> {
+    if message.first() != Some(&0x30) {
+        return None;
+    }
+    let (_, mut index) = ldap_length(message, 1)?;
+    if message.get(index) != Some(&0x02) {
+        return None;
+    }
+    let (length, start) = ldap_length(message, index + 1)?;
+    index = start;
+    message.get(index..index + length).map(<[u8]>::to_vec)
+}
+
+fn ldap_length(bytes: &[u8], index: usize) -> Option<(usize, usize)> {
+    let first = *bytes.get(index)?;
+    if first & 0x80 == 0 {
+        return Some((usize::from(first), index + 1));
+    }
+    let count = usize::from(first & 0x7f);
+    if count == 0 || count > 4 {
+        return None;
+    }
+    let mut length = 0;
+    for offset in 0..count {
+        length = (length << 8) | usize::from(*bytes.get(index + 1 + offset)?);
+    }
+    Some((length, index + 1 + count))
+}
+
+fn ldap_rejection(id: &[u8]) -> Vec<u8> {
+    let mut body = vec![0x02, id.len() as u8];
+    body.extend_from_slice(id);
+    body.extend_from_slice(&[0x61, 0x07, 0x0a, 0x01, 0x31, 0x04, 0x00, 0x04, 0x00]);
+    let mut response = vec![0x30, body.len() as u8];
+    response.extend(body);
+    response
 }
 
 fn directory_config(url: String) -> LdapConfig {
@@ -129,7 +181,10 @@ fn directory_config(url: String) -> LdapConfig {
 async fn a_burst_of_bad_passwords_ends_in_a_retry_after() {
     let dir = temp_dir("burst");
     let state = koreograf::boot(config(&dir, false, None)).unwrap();
-    let app = koreograf::router(state);
+    let app = koreograf::router(state).layer(Extension(ConnectInfo(SocketAddr::from((
+        [127, 0, 0, 1],
+        40000,
+    )))));
 
     for _ in 0..5 {
         let reply = login(&app, None, "admin", "wrong-password").await;
@@ -176,15 +231,91 @@ async fn another_source_is_not_locked_out() {
 }
 
 #[tokio::test]
+async fn an_unknown_source_is_not_throttled() {
+    let dir = temp_dir("unknown");
+    let state = koreograf::boot(config(&dir, false, None)).unwrap();
+    let app = koreograf::router(state);
+
+    for _ in 0..6 {
+        let reply = login(&app, None, "admin", "wrong-password").await;
+        assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
+    }
+
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+async fn direct_login(client: &reqwest::Client, url: &str, password: &str) -> StatusCode {
+    client
+        .post(url)
+        .json(&json!({ "username": "admin", "password": password }))
+        .send()
+        .await
+        .unwrap()
+        .status()
+}
+
+#[tokio::test]
+async fn a_busy_direct_peer_does_not_lock_out_another_loopback_address() {
+    let dir = temp_dir("peer");
+    let state = koreograf::boot(config(&dir, false, None)).unwrap();
+    let app = koreograf::router(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+    let url = format!("http://{address}/api/login");
+    let first = reqwest::Client::builder()
+        .local_address(IpAddr::from([127, 0, 0, 2]))
+        .build()
+        .unwrap();
+    let second = reqwest::Client::builder()
+        .local_address(IpAddr::from([127, 0, 0, 3]))
+        .build()
+        .unwrap();
+
+    for _ in 0..5 {
+        assert_eq!(
+            direct_login(&first, &url, "wrong-password").await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    assert_eq!(
+        direct_login(&first, &url, "wrong-password").await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        direct_login(&second, &url, "wrong-password").await,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        direct_login(&second, &url, "test-admin-pass").await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        direct_login(&first, &url, "test-admin-pass").await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+
+    server.abort();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
 async fn a_refused_sign_in_does_not_contact_the_directory() {
     let dir = temp_dir("directory");
-    let (url, connections, handle) = directory_probe().await;
+    let (url, connections, handle) = rejecting_directory().await;
     let state = koreograf::boot(config(&dir, true, Some(directory_config(url)))).unwrap();
     let app = koreograf::router(state);
 
     for _ in 0..5 {
         let reply = login(&app, Some("203.0.113.20"), "ada", "wrong-password").await;
-        assert_eq!(reply.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
     }
     tokio::time::sleep(Duration::from_millis(200)).await;
     let before = connections.load(Ordering::SeqCst);

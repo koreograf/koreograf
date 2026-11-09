@@ -117,7 +117,6 @@ pub async fn login(
                 return session_response(&state, &headers, &user);
             }
             Err(err) => {
-                auth::signin_failed(&state.cfg.data_dir, &username, &source);
                 tracing::warn!(
                     username = %username,
                     client_ip = %source,
@@ -128,6 +127,7 @@ pub async fn login(
                 if directory_unreachable(&err) {
                     return Err(ApiError::DirectoryUnavailable);
                 }
+                auth::signin_failed(&state.cfg.data_dir, &username, &source);
                 return Err(ApiError::SignInFailed);
             }
         }

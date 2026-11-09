@@ -284,7 +284,11 @@ pub async fn serve(cfg: Config) -> anyhow::Result<()> {
         tracing::info!("MCP over HTTP is disabled");
     }
     tracing::info!(%bind, %data_dir, "Koreograf is ready");
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 
