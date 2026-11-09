@@ -21,7 +21,7 @@ RUN case "$TARGETARCH" in \
     && cargo build --release --locked --target "$target" \
     && cp "target/$target/release/koreograf" /koreograf
 
-FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS tools
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS tools
 # Renovate updates DOCKER_VERSION and TINI_VERSION but not the checksums.
 # Copy DOCKER_SHA256_* and TINI_SHA256_* from the release download. A stale
 # checksum fails the build.
