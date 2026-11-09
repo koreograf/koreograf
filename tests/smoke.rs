@@ -13790,6 +13790,43 @@ fn the_image_labels_name_the_version_and_the_source() {
     assert!(release.contains("BUILT_AT=${{ steps.build-info.outputs.date }}"));
 }
 
+#[test]
+fn the_packages_ship_a_systemd_unit_and_a_pinned_nfpm_config() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let nfpm = std::fs::read_to_string(root.join("packaging/nfpm.yaml")).expect("nfpm.yaml");
+    assert!(nfpm.contains("version_schema: none"));
+    assert!(nfpm.contains("openssh-client"));
+    assert!(nfpm.contains("openssh-clients"));
+    assert!(nfpm.contains("ca-certificates"));
+    assert!(nfpm.contains("type: config|noreplace"));
+    assert!(nfpm.contains("type: ghost"));
+    assert!(nfpm.contains("/lib/systemd/system/koreograf.service"));
+    assert!(nfpm.contains("/etc/koreograf/koreograf.env"));
+    let unit =
+        std::fs::read_to_string(root.join("packaging/koreograf.service")).expect("unit file");
+    assert!(unit.contains("User=koreograf"));
+    assert!(unit.contains("Group=koreograf"));
+    assert!(unit.contains("EnvironmentFile=/etc/koreograf/koreograf.env"));
+    assert!(unit.contains("ExecStart=/usr/bin/koreograf"));
+    assert!(unit.contains("Restart=on-failure"));
+    assert!(!unit.contains("entrypoint"));
+    let env = std::fs::read_to_string(root.join("packaging/koreograf.env")).expect("env file");
+    assert!(env.contains("KOREOGRAF_DATA=/var/lib/koreograf"));
+    assert!(env.contains("KOREOGRAF_BIND=127.0.0.1:8080"));
+    let release =
+        std::fs::read_to_string(root.join(".github/workflows/release.yml")).expect("release.yml");
+    assert!(release.contains("NFPM_VERSION: 2.48.0"));
+    assert!(release.contains("dist/koreograf_${version}_${PACKAGE_ARCH}.deb"));
+    assert!(release.contains("dist/koreograf_${version}_${PACKAGE_ARCH}.rpm"));
+    assert!(release.contains("gh release upload \"$TAG\" dist/*.deb dist/*.rpm"));
+    let ci = std::fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("ci.yml");
+    assert!(ci.contains("--packager deb"));
+    assert!(!ci.contains("--packager rpm"));
+    let docs = std::fs::read_to_string(root.join("docs/installation.md")).expect("installation.md");
+    assert!(docs.contains("sudo apt install ./koreograf_<version>_amd64.deb"));
+    assert!(docs.contains("sudo dnf install ./koreograf_<version>_amd64.rpm"));
+}
+
 #[tokio::test]
 async fn version_is_available_without_signing_in() {
     let nanos = SystemTime::now()

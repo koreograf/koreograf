@@ -95,6 +95,76 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: cosign sign --yes "ghcr.io/koreograf/koreograf@${DIGEST}"
 
+  packages:
+    name: packages (${{ matrix.arch }})
+    needs: tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            target: x86_64-unknown-linux-musl
+          - arch: arm64
+            target: aarch64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.99.1
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Install the linker
+        run: |
+          if [ "${{ matrix.arch }}" = amd64 ]; then
+            sudo apt-get update
+            sudo apt-get install -y musl-tools
+          else
+            image="ghcr.io/cross-rs/aarch64-unknown-linux-musl@sha256:183f923c24aaf6220d0107a26a737cdec7c18dcf04c571b2c52fe49ed9f6045e"
+            mkdir -p /tmp/koreograf-toolchain
+            docker run --rm -v /tmp/koreograf-toolchain:/out --entrypoint sh "$image" -c 'cp -a /x-tools/aarch64-unknown-linux-musl /out/'
+            echo "/tmp/koreograf-toolchain/aarch64-unknown-linux-musl/bin" >> "$GITHUB_PATH"
+          fi
+      - name: Build the binary
+        env:
+          CC_x86_64_unknown_linux_musl: musl-gcc
+          AR_x86_64_unknown_linux_musl: ar
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+          CC_aarch64_unknown_linux_musl: aarch64-unknown-linux-musl-gcc
+          AR_aarch64_unknown_linux_musl: aarch64-unknown-linux-musl-ar
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-unknown-linux-musl-gcc
+        run: cargo build --release --locked --target "${{ matrix.target }}"
+      - name: Install nfpm
+        env:
+          NFPM_VERSION: 2.48.0
+          NFPM_SHA256: 6d7f9a28b2f397934403950fcbba83f598b08d02edbe79a0815b3b4897341750
+        run: |
+          curl -fsSL -o /tmp/nfpm.tar.gz "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+          printf '%s  %s\n' "$NFPM_SHA256" /tmp/nfpm.tar.gz | sha256sum -c -
+          tar -xzf /tmp/nfpm.tar.gz -C /tmp nfpm
+          sudo install -m 0755 /tmp/nfpm /usr/local/bin/nfpm
+      - name: Build the packages
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+          PACKAGE_ARCH: ${{ matrix.arch }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          version="${TAG#v}"
+          mkdir -p dist
+          VERSION="$version" nfpm package --config packaging/nfpm.yaml --packager deb \
+            --target "dist/koreograf_${version}_${PACKAGE_ARCH}.deb"
+          VERSION="$version" nfpm package --config packaging/nfpm.yaml --packager rpm \
+            --target "dist/koreograf_${version}_${PACKAGE_ARCH}.rpm"
+      - name: Upload the packages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: gh release upload "$TAG" dist/*.deb dist/*.rpm --clobber
+
   notes:
     name: release notes
     needs: image
