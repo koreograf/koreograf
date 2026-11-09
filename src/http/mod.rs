@@ -8,8 +8,9 @@ mod work;
 
 use std::path::Path;
 
-use axum::extract::{DefaultBodyLimit, State};
-use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
+use axum::extract::{DefaultBodyLimit, Request, State};
+use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::Json;
@@ -26,6 +27,109 @@ use crate::db::{self, Job, JobEvent};
 use crate::error::{ApiError, AppResult};
 use crate::runner;
 use crate::Shared;
+
+pub(crate) fn warn_public_urls(cfg: &crate::config::Config) {
+    for item in &cfg.public_url {
+        if parse_origin(item).is_none() {
+            tracing::warn!(
+                value = %item,
+                "KOREOGRAF_PUBLIC_URL entry is not an absolute URL with a scheme, host, and port; it is ignored"
+            );
+        }
+    }
+}
+
+fn bare_host(host: &str) -> String {
+    host.trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_ascii_lowercase()
+}
+
+fn parse_origin(value: &str) -> Option<(String, String, u16)> {
+    let url = url::Url::parse(value).ok()?;
+    let host = url.host_str()?;
+    let port = url.port_or_known_default()?;
+    Some((url.scheme().to_ascii_lowercase(), bare_host(host), port))
+}
+
+fn authority_origin(value: &str, scheme: Option<&str>) -> Option<(String, String, u16)> {
+    let authority: axum::http::uri::Authority = value.parse().ok()?;
+    let scheme = scheme
+        .and_then(|item| item.split(',').next())
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .unwrap_or("http")
+        .to_ascii_lowercase();
+    let port = authority
+        .port_u16()
+        .unwrap_or(if scheme == "https" { 443 } else { 80 });
+    Some((scheme, bare_host(authority.host()), port))
+}
+
+fn same_origin(expected: &(String, String, u16), actual: &(String, String, u16)) -> bool {
+    expected == actual
+}
+
+async fn origin_guard(State(state): State<Shared>, req: Request, next: Next) -> Response {
+    let method = req.method();
+    if matches!(
+        *method,
+        Method::POST | Method::PUT | Method::PATCH | Method::DELETE
+    ) {
+        let source = req
+            .headers()
+            .get(header::ORIGIN)
+            .or_else(|| req.headers().get(header::REFERER));
+        if let Some(source) = source {
+            let actual = source.to_str().ok().and_then(parse_origin);
+            let allowed = state
+                .cfg
+                .public_url
+                .iter()
+                .filter_map(|item| parse_origin(item))
+                .collect::<Vec<_>>();
+            let ok = match actual {
+                None => false,
+                Some(actual) => {
+                    if !allowed.is_empty() {
+                        allowed.iter().any(|item| same_origin(item, &actual))
+                    } else {
+                        let host = if state.cfg.trusted_proxy {
+                            req.headers()
+                                .get("x-forwarded-host")
+                                .and_then(|value| value.to_str().ok())
+                                .and_then(|value| value.split(',').next())
+                        } else {
+                            None
+                        }
+                        .or_else(|| {
+                            req.headers()
+                                .get(header::HOST)
+                                .and_then(|value| value.to_str().ok())
+                        });
+                        let scheme = if state.cfg.trusted_proxy {
+                            req.headers()
+                                .get("x-forwarded-proto")
+                                .and_then(|value| value.to_str().ok())
+                        } else {
+                            None
+                        };
+                        host.and_then(|item| authority_origin(item, scheme))
+                            .is_some_and(|expected| same_origin(&expected, &actual))
+                    }
+                }
+            };
+            if !ok {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({"error": "cross_origin_request_is_not_allowed"})),
+                )
+                    .into_response();
+            }
+        }
+    }
+    next.run(req).await
+}
 
 fn api_routes() -> Router<Shared> {
     Router::new()
@@ -260,7 +364,13 @@ pub fn router(state: Shared) -> Router {
         .route("/i18n/de.json", get(messages_de))
         .route("/i18n/en.json", get(messages_en))
         .route("/hooks/{id}/{token}", post(work::ingest))
-        .nest("/api", api_routes());
+        .nest(
+            "/api",
+            api_routes().layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                origin_guard,
+            )),
+        );
     if state.cfg.mcp {
         app = app.merge(mcp_router(state.clone()));
     }
