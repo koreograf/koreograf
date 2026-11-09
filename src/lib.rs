@@ -14,7 +14,9 @@ mod cacheinfo;
 mod config;
 mod credentials;
 mod crypto;
+mod datalock;
 mod db;
+mod dbmigrate;
 mod entrypoint;
 mod error;
 mod health;
@@ -27,6 +29,7 @@ pub mod mcp;
 mod metrics;
 mod migration;
 mod netbox;
+mod portable;
 mod preflight;
 mod runner;
 mod scan;
@@ -50,6 +53,8 @@ pub use config::{
     database_from_env, parse_database_config, Config, CookieSecure, DatabaseConfig, LdapConfig,
     LocalJobs, PostgresConfig, RunnerMode, SslMode,
 };
+pub use datalock::lock_data_directory;
+pub use dbmigrate::{db_migrate, db_migrate_requested};
 pub use entrypoint::{entrypoint, entrypoint_requested};
 pub use health::{healthcheck, healthcheck_requested};
 
@@ -248,6 +253,9 @@ pub async fn serve(cfg: Config) -> anyhow::Result<()> {
         tracing::error!(%error, "Company CA directory is invalid");
         return Err(anyhow::Error::msg(error));
     }
+    let data_dir = std::path::absolute(&cfg.data_dir)?;
+    std::fs::create_dir_all(&data_dir)?;
+    let _data_lock = datalock::lock_data_directory(&data_dir)?;
     if database.engine() == "sqlite" {
         migration::prepare(&cfg)?;
     }
