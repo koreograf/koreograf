@@ -48,49 +48,62 @@ struct Manifest {
 
 struct TempPath(PathBuf);
 
+fn sidecars(path: &Path) -> Vec<PathBuf> {
+    let mut paths = vec![path.to_path_buf()];
+    for suffix in ["-wal", "-shm"] {
+        let mut name = path.as_os_str().to_os_string();
+        name.push(suffix);
+        paths.push(PathBuf::from(name));
+    }
+    paths
+}
+
 impl Drop for TempPath {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
+        for path in sidecars(&self.0) {
+            let _ = fs::remove_file(path);
+        }
     }
 }
 
 pub(crate) fn export(state: &Shared, include_tofu_state: bool) -> AppResult<Vec<u8>> {
     let _maintenance = lock_maintenance(state)?;
     let key = read_key(&state.cfg.data_dir)?;
-    let live = state.db()?;
-    snapshot_zip(&state.cfg.data_dir, &live, &key, include_tofu_state)
+    let snapshot = state
+        .cfg
+        .data_dir
+        .join(format!("backup-{}.db", Uuid::new_v4()));
+    let _cleanup = TempPath(snapshot.clone());
+    state.store().export_sqlite(&snapshot)?;
+    snapshot_zip_from_file(&snapshot, &key, &state.cfg.data_dir, include_tofu_state)
 }
 
 pub(crate) fn restore(state: &Shared, bytes: &[u8]) -> AppResult<()> {
     let _maintenance = lock_maintenance(state)?;
     let incoming = prepare_incoming(&state.cfg.data_dir, bytes)?;
     let current_key = read_key(&state.cfg.data_dir)?;
+    if state.store().busy()? {
+        return Err(ApiError::bad("backup.still_running"));
+    }
     let snapshot = state
         .cfg
         .data_dir
         .join(format!("backup-{}.db", Uuid::new_v4()));
     let _cleanup = TempPath(snapshot.clone());
-    {
-        let mut live = state.db()?;
-        if busy(&live)? {
-            return Err(ApiError::bad("backup.still_running"));
-        }
-        {
-            let mut saved = Connection::open(&snapshot)?;
-            copy_database(&live, &mut saved)?;
-        }
-        let previous = snapshot_zip_from_file(&snapshot, &current_key, &state.cfg.data_dir, false)?;
-        write_private(&state.cfg.data_dir.join("restore-previous.zip"), &previous)?;
-        let source = Connection::open(&incoming.path)?;
-        if let Err(err) = copy_database(&source, &mut live).and_then(|_| db::ensure_schema(&live)) {
-            if let Err(rollback) = rollback(&snapshot, &mut live) {
+    state.store().export_sqlite(&snapshot)?;
+    let previous = snapshot_zip_from_file(&snapshot, &current_key, &state.cfg.data_dir, false)?;
+    write_private(&state.cfg.data_dir.join("restore-previous.zip"), &previous)?;
+    let engine = state.engine();
+    if let Err(err) = state.store().restore_sqlite(&incoming.path) {
+        if engine == "sqlite" {
+            if let Err(rollback) = state.store().restore_sqlite(&snapshot) {
                 tracing::error!(
                     error = %rollback,
                     "backup rollback failed"
                 );
             }
-            return Err(err);
         }
+        return Err(err);
     }
     let cipher = crypto::install_key(&state.cfg.data_dir, &incoming.key)?;
     state.replace_cipher(cipher)?;
@@ -271,6 +284,9 @@ fn prepare_incoming(data_dir: &Path, bytes: &[u8]) -> AppResult<Incoming> {
     if version > db::SCHEMA_VERSION {
         return Err(ApiError::bad("the_backup_is_from_a_newer_koreograf"));
     }
+    drop(conn);
+    let conn = db::open(&incoming.path)?;
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
     Ok(incoming)
 }
 
@@ -284,7 +300,9 @@ struct Incoming {
 
 impl Drop for Incoming {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
+        for path in sidecars(&self.path) {
+            let _ = fs::remove_file(path);
+        }
     }
 }
 
@@ -294,21 +312,6 @@ fn entry<'a>(entries: &'a [(String, Vec<u8>)], name: &str, missing: &str) -> App
         .find(|(item, _)| item == name)
         .map(|(_, bytes)| bytes.as_slice())
         .ok_or_else(|| ApiError::bad(missing))
-}
-
-fn snapshot_zip(
-    data_dir: &Path,
-    live: &Connection,
-    key: &[u8],
-    include_tofu_state: bool,
-) -> AppResult<Vec<u8>> {
-    let path = data_dir.join(format!("backup-{}.db", Uuid::new_v4()));
-    let _cleanup = TempPath(path.clone());
-    {
-        let mut dest = Connection::open(&path)?;
-        copy_database(live, &mut dest)?;
-    }
-    snapshot_zip_from_file(&path, key, data_dir, include_tofu_state)
 }
 
 fn snapshot_zip_from_file(
@@ -524,12 +527,7 @@ pub(crate) fn own_imported(data_dir: &Path, container_image: bool) {
     let _ = (data_dir, container_image);
 }
 
-fn rollback(snapshot: &Path, live: &mut Connection) -> AppResult<()> {
-    let source = Connection::open(snapshot)?;
-    copy_database(&source, live)
-}
-
-fn busy(c: &Connection) -> AppResult<bool> {
+pub(crate) fn busy(c: &Connection) -> AppResult<bool> {
     let jobs: i64 = c.query_row(
         "SELECT COUNT(*) FROM jobs WHERE status IN ('pending', 'running')",
         [],

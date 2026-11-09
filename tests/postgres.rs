@@ -280,6 +280,172 @@ async fn postgres_guard() -> tokio::sync::MutexGuard<'static, ()> {
         .await
 }
 
+const PORTABLE_TABLES: &[&str] = &[
+    "users",
+    "organizations",
+    "teams",
+    "credentials",
+    "projects",
+    "inventories",
+    "environments",
+    "templates",
+    "memberships",
+    "inventory_sources",
+    "template_credentials",
+    "workflows",
+    "workflow_jobs",
+    "jobs",
+    "job_events",
+    "workflow_nodes",
+    "hooks",
+    "hook_deliveries",
+    "project_teams",
+    "settings",
+    "seed_state",
+    "schedules",
+    "api_tokens",
+    "sessions",
+];
+
+async fn postgres_client(url: &str) -> tokio_postgres::Client {
+    let (client, connection) = tokio_postgres::connect(url, tokio_postgres::NoTls)
+        .await
+        .expect("postgres connection");
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    client
+}
+
+fn postgres_test_url() -> Option<String> {
+    let Ok(url) = std::env::var("KOREOGRAF_TEST_POSTGRES_URL") else {
+        eprintln!("skipping PostgreSQL test: KOREOGRAF_TEST_POSTGRES_URL is not set");
+        return None;
+    };
+    if url.trim().is_empty() {
+        eprintln!("skipping PostgreSQL test: KOREOGRAF_TEST_POSTGRES_URL is empty");
+        return None;
+    }
+    Some(url)
+}
+
+fn database_url(base: &str, name: &str) -> String {
+    let mut url = url::Url::parse(base).expect("postgres url");
+    url.set_path(&format!("/{name}"));
+    url.to_string()
+}
+
+async fn create_database(base: &str, name: &str) -> String {
+    let client = postgres_client(base).await;
+    client
+        .batch_execute(&format!("CREATE DATABASE \"{name}\""))
+        .await
+        .expect("create database");
+    database_url(base, name)
+}
+
+async fn drop_database(base: &str, name: &str) {
+    let client = postgres_client(base).await;
+    let _ = client
+        .batch_execute(&format!("DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)"))
+        .await;
+}
+
+async fn call_raw(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    cookie: Option<&str>,
+    headers: &[(&str, &str)],
+    body: Option<Vec<u8>>,
+) -> (StatusCode, Vec<u8>, Option<String>) {
+    let mut builder = Request::builder().method(method).uri(uri);
+    if let Some(cookie) = cookie {
+        builder = builder.header("cookie", cookie);
+    }
+    for (name, value) in headers {
+        builder = builder.header(*name, *value);
+    }
+    let request = builder
+        .body(Body::from(body.unwrap_or_default()))
+        .expect("request");
+    let response = app.clone().oneshot(request).await.expect("response");
+    let status = response.status();
+    let cookie = response
+        .headers()
+        .get("set-cookie")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .map(str::to_string);
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes()
+        .to_vec();
+    (status, bytes, cookie)
+}
+
+fn zip_entries(bytes: &[u8]) -> Vec<String> {
+    let mut archive =
+        zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).expect("zip archive");
+    (0..archive.len())
+        .map(|index| {
+            archive
+                .by_index(index)
+                .expect("zip entry")
+                .name()
+                .expect("zip name")
+                .to_string()
+        })
+        .collect()
+}
+
+fn migrate_command(data_dir: &Path, target: &str) -> std::process::Output {
+    std::process::Command::new(env!("CARGO_BIN_EXE_koreograf"))
+        .args(["db", "migrate", "--to", target])
+        .env("KOREOGRAF_DATA", data_dir)
+        .env_remove("KOREOGRAF_DATABASE_URL")
+        .env_remove("KOREOGRAF_DATABASE_PASSWORD_FILE")
+        .env_remove("KOREOGRAF_DATABASE_CA_FILE")
+        .output()
+        .expect("run db migrate")
+}
+
+fn sqlite_counts(path: &Path) -> Vec<(&'static str, i64)> {
+    let conn =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .expect("sqlite source");
+    PORTABLE_TABLES
+        .iter()
+        .map(|table| {
+            let count: i64 = conn
+                .query_row(&format!("SELECT COUNT(*) FROM \"{table}\""), [], |row| {
+                    row.get(0)
+                })
+                .expect("source count");
+            (*table, count)
+        })
+        .collect()
+}
+
+fn seed_sqlite_source(dir: &Path) -> std::sync::Arc<koreograf::AppState> {
+    let state = koreograf::boot(config(dir)).expect("sqlite boot");
+    {
+        let conn = state.db().expect("sqlite database");
+        for line in ["first", "second"] {
+            conn.execute(
+                "INSERT INTO job_events (job_id, ts, stream, line)
+                 VALUES ('job-copy', '2026-01-01T00:00:00Z', 'stdout', ?1)",
+                [line],
+            )
+            .expect("job event");
+        }
+    }
+    state
+}
+
 #[tokio::test]
 async fn postgres_serves_workflows_hooks_and_project_sync() {
     let Ok(url) = std::env::var("KOREOGRAF_TEST_POSTGRES_URL") else {
@@ -2993,5 +3159,316 @@ async fn postgres_serves_jobs_and_their_output() {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn postgres_backup_restore_round_trip_keeps_the_previous_archive() {
+    let Some(url) = postgres_test_url() else {
+        return;
+    };
+    let _guard = postgres_guard().await;
+    let database = koreograf::parse_database_config(&url, None, None).expect("postgres url");
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-postgres-backup-{nanos}"));
+    let mut cfg = config(&dir);
+    cfg.admin_user = format!("pgbackupadmin{nanos}");
+    let state = koreograf::boot_with(cfg, database).expect("boot");
+    assert_eq!(state.engine(), "postgresql");
+    let app = koreograf::router(state);
+
+    let (status, _, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        Some(json!({
+            "username": format!("pgbackupadmin{nanos}"),
+            "password": "test-admin-pass"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let cookie = cookie.expect("session cookie");
+
+    let before = format!("Before backup {nanos}");
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/organizations",
+        Some(&cookie),
+        Some(json!({ "name": before, "description": "Portable backup" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+
+    let (status, archive, _) =
+        call_raw(&app, "GET", "/api/admin/backup", Some(&cookie), &[], None).await;
+    assert_eq!(status, StatusCode::OK);
+    let entries = zip_entries(&archive);
+    assert!(
+        entries.iter().any(|name| name == "manifest.json"),
+        "{entries:?}"
+    );
+    assert!(
+        entries.iter().any(|name| name == "koreograf.db"),
+        "{entries:?}"
+    );
+    assert!(
+        entries.iter().any(|name| name == "secret.key"),
+        "{entries:?}"
+    );
+
+    let after = format!("After backup {nanos}");
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/organizations",
+        Some(&cookie),
+        Some(json!({ "name": after, "description": "After the backup" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+
+    let (status, body, _) = call_raw(
+        &app,
+        "POST",
+        "/api/admin/backup",
+        Some(&cookie),
+        &[
+            ("x-restore-confirm", "ERSETZEN"),
+            ("content-type", "application/zip"),
+        ],
+        Some(archive),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let restored: Value = serde_json::from_slice(&body).expect("restore body");
+    assert_eq!(restored["engine"], "postgresql");
+
+    let (status, organizations, _) =
+        call(&app, "GET", "/api/organizations", Some(&cookie), None).await;
+    assert_eq!(status, StatusCode::OK, "{organizations}");
+    let names: Vec<&str> = organizations
+        .as_array()
+        .expect("organizations")
+        .iter()
+        .filter_map(|item| item["name"].as_str())
+        .collect();
+    assert!(names.contains(&before.as_str()), "{names:?}");
+    assert!(!names.contains(&after.as_str()), "{names:?}");
+
+    let previous_path = dir.join("restore-previous.zip");
+    let previous = std::fs::read(&previous_path).expect("previous archive");
+    assert!(zip_entries(&previous)
+        .iter()
+        .any(|name| name == "manifest.json"));
+
+    let (status, body, _) = call_raw(
+        &app,
+        "POST",
+        "/api/admin/backup",
+        Some(&cookie),
+        &[
+            ("x-restore-confirm", "ERSETZEN"),
+            ("content-type", "application/zip"),
+        ],
+        Some(previous),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let (status, organizations, _) =
+        call(&app, "GET", "/api/organizations", Some(&cookie), None).await;
+    assert_eq!(status, StatusCode::OK, "{organizations}");
+    let names: Vec<&str> = organizations
+        .as_array()
+        .expect("organizations")
+        .iter()
+        .filter_map(|item| item["name"].as_str())
+        .collect();
+    assert!(names.contains(&after.as_str()), "{names:?}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn db_migrate_copies_every_table_and_resets_sequences() {
+    let Some(url) = postgres_test_url() else {
+        return;
+    };
+    let _guard = postgres_guard().await;
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let name = format!("koreograf_migrate_{nanos}");
+    let target = create_database(&url, &name).await;
+    let dir = std::env::temp_dir().join(format!("koreograf-migrate-source-{nanos}"));
+    let state = seed_sqlite_source(&dir);
+    drop(state);
+
+    let output = migrate_command(&dir, &target);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("KOREOGRAF_DATABASE_URL='"), "{stdout}");
+    assert!(stdout.contains(&name), "{stdout}");
+    assert!(stdout.contains("sslmode=disable"), "{stdout}");
+
+    let client = postgres_client(&target).await;
+    for (table, expected) in sqlite_counts(&dir.join("koreograf.db")) {
+        let actual: i64 = client
+            .query_one(&format!("SELECT COUNT(*) FROM \"{table}\""), &[])
+            .await
+            .expect("target count")
+            .get(0);
+        assert_eq!(actual, expected, "table {table}");
+    }
+    client
+        .execute(
+            "INSERT INTO job_events (job_id, ts, stream, line)
+             VALUES ('job-copy', '2026-01-01T00:00:00Z', 'stdout', 'third')",
+            &[],
+        )
+        .await
+        .expect("insert after copy");
+    let next: i64 = client
+        .query_one("SELECT MAX(id) FROM job_events", &[])
+        .await
+        .expect("max id")
+        .get(0);
+    assert_eq!(next, 3);
+
+    let again = migrate_command(&dir, &target);
+    assert!(!again.status.success());
+    assert!(
+        String::from_utf8_lossy(&again.stderr).contains("target is not empty"),
+        "{}",
+        String::from_utf8_lossy(&again.stderr)
+    );
+
+    drop(client);
+    drop_database(&url, &name).await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn db_migrate_refuses_while_the_data_directory_is_in_use() {
+    let Some(url) = postgres_test_url() else {
+        return;
+    };
+    let _guard = postgres_guard().await;
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-migrate-locked-{nanos}"));
+    let state = seed_sqlite_source(&dir);
+    drop(state);
+    let before = std::fs::read(dir.join("koreograf.db")).expect("sqlite file");
+    let _lock = koreograf::lock_data_directory(&dir).expect("data directory lock");
+
+    let output = migrate_command(&dir, &url);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("already in use"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let after = std::fs::read(dir.join("koreograf.db")).expect("sqlite file");
+    assert_eq!(before, after);
+
+    drop(_lock);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn db_migrate_failure_leaves_the_target_reusable() {
+    let Some(url) = postgres_test_url() else {
+        return;
+    };
+    let _guard = postgres_guard().await;
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let name = format!("koreograf_migrate_retry_{nanos}");
+    let target = create_database(&url, &name).await;
+    let dir = std::env::temp_dir().join(format!("koreograf-migrate-retry-{nanos}"));
+    let state = seed_sqlite_source(&dir);
+    drop(state);
+
+    let first = migrate_command(&dir, &target);
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+
+    let client = postgres_client(&target).await;
+    let tables = PORTABLE_TABLES
+        .iter()
+        .map(|table| format!("\"{table}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    client
+        .batch_execute(&format!("TRUNCATE TABLE {tables} RESTART IDENTITY CASCADE"))
+        .await
+        .expect("truncate target");
+    client
+        .batch_execute(
+            "CREATE OR REPLACE FUNCTION koreograf_fail_migrate() RETURNS trigger
+             LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'migration blocked'; END $$;
+             CREATE TRIGGER koreograf_fail_migrate BEFORE INSERT ON users
+             FOR EACH ROW EXECUTE FUNCTION koreograf_fail_migrate();",
+        )
+        .await
+        .expect("failure trigger");
+
+    let failed = migrate_command(&dir, &target);
+    assert!(!failed.status.success());
+    assert!(
+        String::from_utf8_lossy(&failed.stderr).contains("rolled back and can be reused"),
+        "{}",
+        String::from_utf8_lossy(&failed.stderr)
+    );
+    for table in PORTABLE_TABLES {
+        let count: i64 = client
+            .query_one(&format!("SELECT COUNT(*) FROM \"{table}\""), &[])
+            .await
+            .expect("target count")
+            .get(0);
+        assert_eq!(count, 0, "table {table} kept rows after a failed run");
+    }
+
+    client
+        .batch_execute(
+            "DROP TRIGGER koreograf_fail_migrate ON users;
+             DROP FUNCTION koreograf_fail_migrate();",
+        )
+        .await
+        .expect("drop failure trigger");
+
+    let retried = migrate_command(&dir, &target);
+    assert!(
+        retried.status.success(),
+        "{}",
+        String::from_utf8_lossy(&retried.stderr)
+    );
+    let users: i64 = client
+        .query_one("SELECT COUNT(*) FROM users", &[])
+        .await
+        .expect("users count")
+        .get(0);
+    assert!(users > 0);
+
+    drop(client);
+    drop_database(&url, &name).await;
     let _ = std::fs::remove_dir_all(&dir);
 }

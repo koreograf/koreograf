@@ -22,6 +22,9 @@ use crate::error::{ApiError, AppResult};
 pub(crate) trait Backend: Send + Sync {
     fn engine(&self) -> &'static str;
     fn sqlite(&self) -> Option<&Mutex<Connection>>;
+    fn export_sqlite(&self, dest: &Path) -> AppResult<()>;
+    fn restore_sqlite(&self, source: &Path) -> AppResult<()>;
+    fn busy(&self) -> AppResult<bool>;
     fn ping(&self) -> AppResult<()>;
     fn settings_rows(&self) -> AppResult<HashMap<String, String>>;
     fn user_by_username(&self, username: &str) -> AppResult<Option<User>>;
@@ -298,6 +301,24 @@ impl Backend for SqliteBackend {
 
     fn sqlite(&self) -> Option<&Mutex<Connection>> {
         Some(&self.conn)
+    }
+
+    fn export_sqlite(&self, dest: &Path) -> AppResult<()> {
+        let live = lock(&self.conn)?;
+        let mut snapshot = Connection::open(dest)?;
+        crate::backup::copy_database(&live, &mut snapshot)
+    }
+
+    fn restore_sqlite(&self, source: &Path) -> AppResult<()> {
+        let mut live = lock(&self.conn)?;
+        let source = Connection::open(source)?;
+        crate::backup::copy_database(&source, &mut live)?;
+        db::ensure_schema(&live)
+    }
+
+    fn busy(&self) -> AppResult<bool> {
+        let live = lock(&self.conn)?;
+        crate::backup::busy(&live)
     }
 
     fn ping(&self) -> AppResult<()> {
@@ -1235,7 +1256,7 @@ fn connect(config: &PostgresConfig) -> anyhow::Result<(Client, tokio::runtime::R
     })?
 }
 
-async fn connect_client(config: &PostgresConfig) -> anyhow::Result<Client> {
+pub(crate) async fn connect_client(config: &PostgresConfig) -> anyhow::Result<Client> {
     let mut pg = tokio_postgres::Config::new();
     pg.host(&config.host)
         .port(config.port)
@@ -1920,6 +1941,51 @@ impl Backend for PostgresBackend {
 
     fn sqlite(&self) -> Option<&Mutex<Connection>> {
         None
+    }
+
+    fn export_sqlite(&self, dest: &Path) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            crate::portable::to_sqlite(&client, dest).await
+        })
+    }
+
+    fn restore_sqlite(&self, source: &Path) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            client.batch_execute("BEGIN").await?;
+            match crate::portable::copy_from_sqlite(&client, source, true).await {
+                Ok(()) => {
+                    client.batch_execute("COMMIT").await?;
+                    Ok(())
+                }
+                Err(err) => {
+                    let _ = client.batch_execute("ROLLBACK").await;
+                    Err(err)
+                }
+            }
+        })
+    }
+
+    fn busy(&self) -> AppResult<bool> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let jobs: i64 = client
+                .query_one(
+                    "SELECT COUNT(*) FROM jobs WHERE status IN ('pending', 'running')",
+                    &[],
+                )
+                .await?
+                .get(0);
+            let flows: i64 = client
+                .query_one(
+                    "SELECT COUNT(*) FROM workflow_jobs WHERE status IN ('pending', 'running')",
+                    &[],
+                )
+                .await?
+                .get(0);
+            Ok(jobs > 0 || flows > 0)
+        })
     }
 
     fn ping(&self) -> AppResult<()> {

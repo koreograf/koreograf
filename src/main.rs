@@ -43,6 +43,10 @@ async fn main() -> anyhow::Result<()> {
         let code = koreograf::doctor().await?;
         std::process::exit(code);
     }
+    if koreograf::db_migrate_requested(&args) {
+        let code = koreograf::db_migrate(&args).await?;
+        std::process::exit(code);
+    }
     if koreograf::mcp::requested(&args) {
         let filter =
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("koreograf=info"));

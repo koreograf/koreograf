@@ -64,7 +64,7 @@ pub async fn restore(
         StatusCode::OK,
         Json(json!({
             "restored": true,
-            "engine": "sqlite",
+            "engine": state.engine(),
             "previous": "restore-previous.zip"
         })),
     )
