@@ -22,6 +22,8 @@ pub struct LaunchOverrides {
     /// Ansible fields merged onto the template spec.
     pub spec: Option<Value>,
     pub launch_with_options: bool,
+    /// True when extra vars came from a launch body rather than a trigger.
+    pub extra_vars_are_overrides: bool,
 }
 
 pub struct LaunchRequest {
@@ -515,9 +517,15 @@ fn parameters_for_launch(
         .spec
         .as_ref()
         .filter(|spec| spec.as_object().is_some_and(|map| !map.is_empty()));
+    let extra_overlay = req.overrides.extra_vars_are_overrides
+        && req
+            .extra_vars
+            .as_object()
+            .is_some_and(|map| !map.is_empty());
     let asked = req.overrides.inventory_id.is_some()
         || req.overrides.credential_ids.is_some()
-        || spec_overlay.is_some();
+        || spec_overlay.is_some()
+        || extra_overlay;
     if !asked {
         return Ok(capture_parameters(
             db,

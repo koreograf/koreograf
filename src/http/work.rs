@@ -255,6 +255,7 @@ pub async fn launch_template(
                 credential_ids: body.credential_ids,
                 spec: body.spec,
                 launch_with_options: body.launch_with_options,
+                extra_vars_are_overrides: true,
             },
         },
     )?;
