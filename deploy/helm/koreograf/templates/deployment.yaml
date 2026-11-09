@@ -73,7 +73,7 @@ spec:
             - name: KOREOGRAF_TRUSTED_PROXY
               value: {{ .Values.trustedProxy | quote }}
             - name: KOREOGRAF_PUBLIC_URL
-              value: {{ .Values.publicUrl | quote }}
+              value: {{ if .Values.publicUrl }}{{ .Values.publicUrl | quote }}{{ else if and .Values.ingress.enabled .Values.ingress.host }}{{ printf "%s://%s" (ternary "https" "http" (default false .Values.ingress.tls)) .Values.ingress.host | quote }}{{ else }}""{{ end }}
             - name: KOREOGRAF_ADMIN_USER
               value: {{ .Values.admin.user | quote }}
             - name: KOREOGRAF_ADMIN_PASSWORD

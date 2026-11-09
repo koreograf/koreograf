@@ -31,7 +31,7 @@ See `.env.example`. Comments in that file are English. Copy it to `.env` before 
 | `KOREOGRAF_HSTS` | false. `true` sends `Strict-Transport-Security` |
 | `KOREOGRAF_COOKIE_SECURE` | `auto`. `true` sets `Secure` on the session cookie |
 | `KOREOGRAF_TRUSTED_PROXY` | false. When true, `auto` reads `X-Forwarded-Proto` |
-| `KOREOGRAF_PUBLIC_URL` | Empty. Public origin(s) for browser writes behind a proxy, for example `https://koreograf.example.com`. Comma- or space-separated. Empty falls back to the request `Host` and port |
+| `KOREOGRAF_PUBLIC_URL` | Empty. Public origin(s) for browser writes behind a proxy, for example `https://koreograf.example.com`. Comma- or space-separated. Empty falls back to the request `Host` and assumes `http`; a TLS-terminating proxy therefore needs this value or `KOREOGRAF_TRUSTED_PROXY=true` with `X-Forwarded-Proto` |
 | `KOREOGRAF_DATABASE_URL` | empty, SQLite in `data/koreograf.db`. `postgres://` or `postgresql://` selects PostgreSQL |
 | `KOREOGRAF_DATABASE_PASSWORD_FILE` | empty. File with the PostgreSQL password; it overrides a password in the URL |
 | `KOREOGRAF_DATABASE_CA_FILE` | empty. PEM file with the CA for PostgreSQL TLS |

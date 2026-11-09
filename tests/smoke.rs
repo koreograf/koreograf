@@ -9983,6 +9983,25 @@ async fn cross_origin_api_writes_are_refused() {
         app.clone(),
         Call {
             method: "POST",
+            host: "koreograf.example.com",
+            origin: Some("https://koreograf.example.com"),
+            referer: None,
+            cookie: &cookie,
+            team: &team,
+            body: &body,
+        },
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "host fallback assumes http until the public url or trusted proxy is set"
+    );
+
+    let status = send(
+        app.clone(),
+        Call {
+            method: "POST",
             host: "koreograf.test:8080",
             origin: Some("null"),
             referer: None,
@@ -10054,6 +10073,53 @@ async fn cross_origin_api_writes_are_refused() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "delete is guarded");
+}
+
+#[tokio::test]
+async fn a_trusted_proxy_uses_the_forwarded_proto() {
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-proxy-origin-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut cfg = config(&dir);
+    cfg.trusted_proxy = true;
+    let app = koreograf::router(koreograf::boot(cfg).unwrap());
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+    let body = json!({"name": "Proxy", "body": "[web]\nhost-1\n"}).to_string();
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/inventories")
+        .header("cookie", &cookie)
+        .header("x-team-id", &team)
+        .header("content-type", "application/json")
+        .header("host", "127.0.0.1:8080")
+        .header("x-forwarded-host", "koreograf.example.com")
+        .header("x-forwarded-proto", "https")
+        .header("origin", "https://koreograf.example.com")
+        .body(Body::from(body))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
