@@ -140,7 +140,8 @@ h2 { font-size: 18px; margin: 0 0 10px; }
 
 .table { width: 100%; border-collapse: collapse; }
 .table th { text-align: left; font-size: 13px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
-.table th, .table td { padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; overflow-wrap: anywhere; }
+.table th, .table td { padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; overflow-wrap: break-word; }
+.table .pill, .table time { white-space: nowrap; }
 .table a { text-decoration: none; }
 .table a:hover { text-decoration: underline; }
 
@@ -759,6 +760,27 @@ code, .mono { font-family: var(--mono); font-size: 13px; word-break: break-all; 
   .schedule-preview { border-left: 0; border-top: 1px solid var(--line); padding-top: 14px; }
   .dialog-footer { display: block; }
   .schedule-pin { display: block; margin: 0; padding: 8px 16px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+}
+
+@media (max-width: 640px) {
+  .table-wrap:not(.schedule-table):not(.inventory-hosts-table) .table,
+  .table-wrap:not(.schedule-table):not(.inventory-hosts-table) .table tbody,
+  .table-wrap:not(.schedule-table):not(.inventory-hosts-table) .table tr,
+  .table-wrap:not(.schedule-table):not(.inventory-hosts-table) .table td { display: block; width: auto; }
+  .table-wrap:not(.schedule-table):not(.inventory-hosts-table) .table thead { display: none; }
+  .table-wrap:not(.schedule-table):not(.inventory-hosts-table) .table tr { padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .table-wrap:not(.schedule-table):not(.inventory-hosts-table) .table tr:last-child { border-bottom: 0; }
+  .table-wrap:not(.schedule-table):not(.inventory-hosts-table) .table td { padding: 2px 0; border: 0; white-space: normal; }
+  .table-wrap:not(.schedule-table):not(.inventory-hosts-table) .table td:empty { display: none; }
+  .table-wrap:not(.schedule-table):not(.inventory-hosts-table) .table td.tight,
+  .table-wrap:not(.schedule-table):not(.inventory-hosts-table) .table td.num { text-align: left; }
+  .table-wrap:not(.schedule-table):not(.inventory-hosts-table) .table td.actions { padding-top: 6px; text-align: left; }
+  .table-wrap:not(.schedule-table):not(.inventory-hosts-table) .table .narrow-hide { display: none; }
+  .table-wrap:not(.schedule-table):not(.inventory-hosts-table) .table td[data-label]::before {
+    content: attr(data-label) ": ";
+    color: var(--muted);
+    font-size: 13px;
+  }
 }
 
 @media (max-width: 600px) {

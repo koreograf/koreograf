@@ -1575,9 +1575,9 @@ async function pageTemplates() {
     const rows = shown.map((item) => `
       <tr>
         <td><a href="#/templates?edit=${esc(item.id)}">${esc(item.name)}</a><div class="small muted">${esc(item.description)}</div></td>
-        <td class="tool">${esc(item.tool)}</td>
-        <td class="mono">${esc(item.entrypoint || "—")}</td>
-        <td class="small">${esc(templateOptionLine(item))}</td>
+        <td class="tool narrow-hide">${esc(item.tool)}</td>
+        <td class="mono narrow-hide">${esc(item.entrypoint || "—")}</td>
+        <td class="small narrow-hide">${esc(templateOptionLine(item))}</td>
         <td>${can("operator") ? `<div class="row"><button class="btn primary" type="button" data-launch="${esc(item.id)}">${h("launch")}</button>${item.tool === "ansible" && !item.prompt_on_launch ? `<button class="btn" type="button" data-launch-options="${esc(item.id)}">${h("launch_with_options")}</button>` : ""}</div>` : ""}</td>
       </tr>`);
     document.querySelector("#template-table").innerHTML = table([t("name"), t("tool"), t("entry"), t("run_2"), ""], rows);
@@ -2709,7 +2709,7 @@ async function pageJobs() {
         : `<p class="small muted">${h("nothing_here")}</p>`;
     } else {
       const rows = current.map((job) =>
-        `<tr><td><a href="#/jobs/${esc(job.id)}">${esc(job.name)}</a></td><td class="tool">${esc(job.tool)}</td><td>${pill(job.status)}</td><td class="small">${esc(job.trigger)}</td><td class="small muted"><time datetime="${esc(job.created_at)}" title="${esc(when(job.created_at))}">${esc(when(job.created_at))}</time><br><span class="small">${esc(relativeTime(job.created_at))}</span></td><td class="small muted">${esc(spanText(job.started_at, job.finished_at, job.status))}</td><td>${jobListActions(job)}</td></tr>`
+        `<tr><td><a href="#/jobs/${esc(job.id)}">${esc(job.name)}</a></td><td class="tool narrow-hide">${esc(job.tool)}</td><td>${pill(job.status)}</td><td class="small narrow-hide">${esc(job.trigger)}</td><td class="small muted" data-label="${h("created")}"><time datetime="${esc(job.created_at)}" title="${esc(when(job.created_at))}">${esc(when(job.created_at))}</time><br><span class="small">${esc(relativeTime(job.created_at))}</span></td><td class="small muted narrow-hide">${esc(spanText(job.started_at, job.finished_at, job.status))}</td><td>${jobListActions(job)}</td></tr>`
       );
       jobTable.innerHTML = table([t("name"), t("tool"), t("status"), t("trigger"), t("created"), t("duration"), ""], rows);
     }
@@ -5237,7 +5237,7 @@ async function pageInventories() {
       const label = kinds.length ? [...new Set(kinds)].join(", ") : sourceKindLabel(item.source_kind);
       const count = item.source_count != null ? item.source_count : kinds.length;
       const insecure = (item.sources || []).some(certificateCheckOff) || certificateCheckOff({ kind: item.source_kind, source: item.source });
-      return `<tr><td><a href="#/inventories/${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(count)}</td><td>${esc(label)}${certificateBadge(insecure)}</td><td>${esc(item.host_count)}</td><td>${can("operator") ? `<a class="btn" href="#/inventories?edit=${esc(item.id)}">${h("edit")}</a>` : ""}</td></tr>`;
+      return `<tr><td><a href="#/inventories/${esc(item.id)}">${esc(item.name)}</a></td><td class="narrow-hide">${esc(count)}</td><td class="narrow-hide">${esc(label)}${certificateBadge(insecure)}</td><td data-label="${h("hosts")}">${esc(item.host_count)}</td><td>${can("operator") ? `<a class="btn" href="#/inventories?edit=${esc(item.id)}">${h("edit")}</a>` : ""}</td></tr>`;
     });
     document.querySelector("#inventory-table").innerHTML = table([t("name"), t("sources"), t("type"), t("hosts"), ""], rows);
   };
