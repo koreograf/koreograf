@@ -1231,6 +1231,42 @@ function templateOptionLine(item) {
   return item.entrypoint || t("script");
 }
 
+function tofuApply(item) {
+  return Boolean(item) && item.tool === "opentofu" && (item.spec || {}).action === "apply";
+}
+
+function workflowTofuApply(graph, templates) {
+  return ((graph && graph.nodes) || []).some((node) => {
+    const template = templates.find((item) => item.id === node.template_id);
+    if (!template || template.tool !== "opentofu") return false;
+    const override = node.overrides && node.overrides.spec;
+    const action = override && override.action !== undefined ? override.action : (template.spec || {}).action;
+    return action === "apply";
+  });
+}
+
+function confirmTofuApply(item) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    openDialog({
+      id: "tofu-apply-confirm",
+      title: t("opentofu_apply_confirmation_title"),
+      body: `<p>${h("opentofu_apply_confirmation_body", { name: item.name })}</p>`,
+      submit: t("apply"),
+      onSubmit: ({ close }) => {
+        finish(true);
+        close();
+      },
+      onClose: () => finish(false),
+    });
+  });
+}
+
 let focusTrigger = null;
 
 document.addEventListener("click", (event) => {
@@ -1558,6 +1594,31 @@ async function openLaunchPrompt(item, launchWithOptions = false, preset = {}) {
     onSubmit: async ({ form, close }) => {
       if (submitting || !flushChips(form)) return;
       submitting = true;
+      if (item.tool === "opentofu" && spec.action === "apply") {
+        const confirmed = await new Promise((resolve) => {
+          let settled = false;
+          const finish = (value) => {
+            if (settled) return;
+            settled = true;
+            resolve(value);
+          };
+          openDialog({
+            id: "tofu-apply-confirm",
+            title: t("opentofu_apply_confirmation_title"),
+            body: `<p>${h("opentofu_apply_confirmation_body", { name: item.name })}</p>`,
+            submit: t("apply"),
+            onSubmit: ({ close: closeConfirm }) => {
+              finish(true);
+              closeConfirm();
+            },
+            onClose: () => finish(false),
+          });
+        });
+        if (!confirmed) {
+          submitting = false;
+          return;
+        }
+      }
       const submitButton = form.querySelector('button[type="submit"]');
       if (submitButton) {
         submitButton.disabled = true;
@@ -1651,6 +1712,7 @@ async function pageTemplates() {
           }
           return;
         }
+        if (item && tofuApply(item) && !(await confirmTofuApply(item))) return;
         button.disabled = true;
         try {
           const job = await api("POST", `/api/templates/${encodeURIComponent(button.dataset.launch)}/launch`, { extra_vars: {} });
@@ -3476,7 +3538,10 @@ async function pageJob(id) {
 
 async function pageWorkflows() {
   if (!needTeam()) return;
-  const items = await api("GET", "/api/workflows");
+  const [items, templates] = await Promise.all([
+    api("GET", "/api/workflows"),
+    api("GET", "/api/templates"),
+  ]);
   shell(t("workflows"), `
     <section class="card">
       <input class="search" id="workflow-search" placeholder="${h("search_workflows")}" autocomplete="off">
@@ -3495,6 +3560,8 @@ async function pageWorkflows() {
     document.querySelector("#workflow-table").innerHTML = table([t("name"), t("nodes"), ""], filtered);
     document.querySelectorAll("[data-launch]").forEach((button) => {
       button.addEventListener("click", async () => {
+        const item = items.find((row) => row.id === button.dataset.launch);
+        if (item && workflowTofuApply(item.graph, templates) && !(await confirmTofuApply(item))) return;
         button.disabled = true;
         try {
           const run = await api("POST", `/api/workflows/${encodeURIComponent(button.dataset.launch)}/launch`, { extra_vars: {} });
@@ -4149,6 +4216,8 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
   if (launch) {
     launch.addEventListener("click", async () => {
       if (!flushNode()) return;
+      const name = document.querySelector("#wf-name").value;
+      if (workflowTofuApply(graph, templates) && !(await confirmTofuApply({ name }))) return;
       try {
         await api("PUT", `/api/workflows/${encodeURIComponent(workflow.id)}`, {
           name: document.querySelector("#wf-name").value,
