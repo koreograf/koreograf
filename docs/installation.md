@@ -268,10 +268,21 @@ It is published for `linux/amd64` and `linux/arm64`. On another architecture, bu
 
 By default the pod runs as uid and gid 10001, with `fsGroup` 10001, `runAsNonRoot`, a read-only root filesystem, a `tmpfs` on `/tmp`, a dropped capability set, no privilege escalation, and the runtime default seccomp profile. `fsGroup` is what makes an existing volume readable. A volume driver that ignores `fsGroup` leaves root-owned files, and this pod cannot change them because it does not start as root. Set `runner.dockerSocket.enabled` and `runner.dockerSocket.group` to the socket's gid (`stat -c '%g' /var/run/docker.sock` on the host). The chart keeps uid 10001 and puts that gid in `supplementalGroups`; it does not switch to root. A wrong group stops the container with a clear line in the pod log. A non-empty `podSecurityContext` or `securityContext` replaces that default completely, so it then has to include the supplemental group, `readOnlyRootFilesystem`, and the `/tmp` mount itself. The chart does not set a container command, so the binary entrypoint prepares the volume for uid 10001. A pod `command` replaces that entrypoint and has to start `koreograf entrypoint` when it should still fix an existing volume.
 
-Set `existingSecret` to a Secret managed outside this chart. The chart then skips its own Secret. The Deployment reads `existingSecretKeys.adminPassword` and `existingSecretKeys.secretKey`. When `ldap.url` is set it also reads `existingSecretKeys.ldapBindPassword`. Those keys have to exist in the Secret. The defaults are `admin-password`, `secret-key`, and `ldap-bind-password`.
+Set `existingSecret` to a Secret managed outside this chart. The chart then skips its own Secret. The Deployment reads `existingSecretKeys.adminPassword` and `existingSecretKeys.secretKey`. When `ldap.url` is set it also reads `existingSecretKeys.ldapBindPassword`. When `metrics.token` is set it reads `existingSecretKeys.metricsToken`. Those keys have to exist in the Secret. The defaults are `admin-password`, `secret-key`, `ldap-bind-password`, and `metrics-token`.
 
 `replicaCount` is 1. A second pod on the same SQLite file loses writes. The Docker socket is off by default (`runner.dockerSocket.enabled`).
 
-Probes run `koreograf healthcheck`, which calls `/healthz`. Prometheus can scrape `GET /metrics` on the same port. The counters belong to this one replica and live only in memory. If `admin.password` is empty, the first password is in the volume at `/var/lib/koreograf/initial-admin-password`. Delete that file after the first sign-in. The chart does not remove it.
+Probes run `koreograf healthcheck`, which calls `/healthz`. Prometheus can scrape `GET /metrics` on the same port. Set `metrics.token` to require `Authorization: Bearer <token>`; the chart stores the value in its Secret. Compose forwards `KOREOGRAF_METRICS_TOKEN` from `.env` the same way. Without a token the endpoint stays open, so an internal-only bind behind a reverse proxy is the alternative on a wider network. For example:
+
+```yaml
+metrics:
+  token: "replace-with-a-long-random-token"
+```
+
+```bash
+curl -H "Authorization: Bearer $KOREOGRAF_METRICS_TOKEN" http://127.0.0.1:8080/metrics
+```
+
+The counters belong to this one replica and live only in memory. If `admin.password` is empty, the first password is in the volume at `/var/lib/koreograf/initial-admin-password`. Delete that file after the first sign-in. The chart does not remove it.
 
 The chart has no extra-volume value. A path project needs a volume and a volume mount added to the deployment, plus `KOREOGRAF_PROJECT_ROOTS` set to that directory. A path outside an allowed root can be saved by an administrator and still does not run. The examples directory in the image is already allowed.

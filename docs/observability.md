@@ -14,7 +14,15 @@ For Ansible, `playbook` is the playbook path. For shell and OpenTofu it is the e
 
 The dashboard reads the stored jobs in SQLite for its daily series; it does not scrape `/metrics`.
 
-`GET /metrics` is open, like `/healthz`, and returns Prometheus text. Counters live in memory and start at zero after a restart. Prometheus treats that jump as a restart. Cache numbers are read from disk on each scrape, even when no job is running. The time of a role is the log line. `koreograf_role_results_total` counts results and has no timestamp.
+`GET /metrics` returns Prometheus text. It is open, like `/healthz`, while `KOREOGRAF_METRICS_TOKEN` is empty or unset. When the variable is set, a scrape must send `Authorization: Bearer <token>` or use an administrator session cookie; otherwise Koreograf answers `401` with a keyed JSON error. A regular administrator API token from the user menu does not satisfy this check; it gets the same `401` unless it matches the metrics token. `/healthz` stays open. The token never appears in the metrics text.
+
+```bash
+curl -H "Authorization: Bearer $KOREOGRAF_METRICS_TOKEN" http://127.0.0.1:8080/metrics
+```
+
+If the UI port is reachable from a wider network, an internal-only `KOREOGRAF_BIND` behind a reverse proxy is the alternative to a token.
+
+Counters live in memory and start at zero after a restart. Prometheus treats that jump as a restart. Cache numbers are read from disk on each scrape, even when no job is running. The time of a role is the log line. `koreograf_role_results_total` counts results and has no timestamp.
 
 | Metric | Type | Labels |
 | --- | --- | --- |
