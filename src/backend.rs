@@ -27,6 +27,10 @@ pub(crate) trait Backend: Send + Sync {
     fn busy(&self) -> AppResult<bool>;
     fn ping(&self) -> AppResult<()>;
     fn settings_rows(&self) -> AppResult<HashMap<String, String>>;
+    fn set_setting(&self, key: &str, value: &str) -> AppResult<()>;
+    fn count_teams(&self) -> AppResult<i64>;
+    fn seed_state(&self, key: &str) -> AppResult<Option<String>>;
+    fn set_seed_state(&self, key: &str, value: &str) -> AppResult<()>;
     fn user_by_username(&self, username: &str) -> AppResult<Option<User>>;
     fn user_by_session(&self, token: &str) -> AppResult<Option<User>>;
     fn user_by_api_token(&self, token_hash: &str) -> AppResult<Option<User>>;
@@ -329,6 +333,26 @@ impl Backend for SqliteBackend {
     fn settings_rows(&self) -> AppResult<HashMap<String, String>> {
         let conn = lock(&self.conn)?;
         crate::settings::read_rows(&conn)
+    }
+
+    fn set_setting(&self, key: &str, value: &str) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::set_setting(&conn, key, value)
+    }
+
+    fn count_teams(&self) -> AppResult<i64> {
+        let conn = lock(&self.conn)?;
+        db::count_teams(&conn)
+    }
+
+    fn seed_state(&self, key: &str) -> AppResult<Option<String>> {
+        let conn = lock(&self.conn)?;
+        db::seed_state(&conn, key)
+    }
+
+    fn set_seed_state(&self, key: &str, value: &str) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::set_seed_state(&conn, key, value)
     }
 
     fn user_by_username(&self, username: &str) -> AppResult<Option<User>> {
@@ -2004,6 +2028,52 @@ impl Backend for PostgresBackend {
                 .into_iter()
                 .map(|row| (row.get(0), row.get(1)))
                 .collect())
+        })
+    }
+
+    fn set_setting(&self, key: &str, value: &str) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            client
+                .execute(
+                    "INSERT INTO settings (key, value) VALUES ($1, $2)
+                     ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                    &[&key, &value],
+                )
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn count_teams(&self) -> AppResult<i64> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let row = client.query_one("SELECT COUNT(*) FROM teams", &[]).await?;
+            Ok(row.get(0))
+        })
+    }
+
+    fn seed_state(&self, key: &str) -> AppResult<Option<String>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let row = client
+                .query_opt("SELECT value FROM seed_state WHERE key = $1", &[&key])
+                .await?;
+            Ok(row.map(|row| row.get(0)))
+        })
+    }
+
+    fn set_seed_state(&self, key: &str, value: &str) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            client
+                .execute(
+                    "INSERT INTO seed_state (key, value) VALUES ($1, $2)
+                     ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                    &[&key, &value],
+                )
+                .await?;
+            Ok(())
         })
     }
 
