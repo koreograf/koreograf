@@ -3,6 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use chrono::{Duration, SecondsFormat, Utc};
 use http_body_util::BodyExt;
 use koreograf::{Config, CookieSecure, LocalJobs, RunnerMode};
 use serde_json::{json, Value};
@@ -82,6 +83,37 @@ async fn call_team(
     (status, parsed, cookie)
 }
 
+async fn call_bearer(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    token: &str,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
+    let builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("authorization", format!("Bearer {token}"));
+    let request = if let Some(body) = body {
+        builder
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    } else {
+        builder.body(Body::empty()).unwrap()
+    };
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let parsed = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes)
+            .unwrap_or(Value::String(String::from_utf8_lossy(&bytes).to_string()))
+    };
+    (status, parsed)
+}
+
 async fn postgres_session(
     url: &str,
     user_id: &str,
@@ -123,6 +155,33 @@ async fn postgres_session(
         )
         .await
         .expect("insert postgres session");
+}
+
+async fn postgres_job(
+    url: &str,
+    id: &str,
+    team_id: &str,
+    name: &str,
+    status: &str,
+    started_at: &str,
+    finished_at: &str,
+) {
+    let (client, connection) = tokio_postgres::connect(url, tokio_postgres::NoTls)
+        .await
+        .expect("postgres connection");
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    client
+        .execute(
+            "INSERT INTO jobs (
+                id, team_id, name, tool, status, extra_vars, launched_by, trigger,
+                started_at, finished_at, created_at, parameters, failed_hosts
+             ) VALUES ($1, $2, $3, 'shell', $4, '{}', 'test', 'manual', $5, $6, $5, '{}', '[]')",
+            &[&id, &team_id, &name, &status, &started_at, &finished_at],
+        )
+        .await
+        .expect("insert postgres job");
 }
 
 fn git(dir: &Path, args: &[&str]) {
@@ -1797,12 +1856,503 @@ async fn postgres_serves_the_auth_and_resource_slice() {
         assert_eq!(status, StatusCode::NO_CONTENT, "{credential_id}");
     }
 
-    let (status, body, _) = call(&app, "GET", "/api/users", Some(&cookie), None).await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(
-        body["error"],
-        "this_feature_is_not_available_with_postgresql_yet"
-    );
+    let (status, users, _) = call(&app, "GET", "/api/users", Some(&cookie), None).await;
+    assert_eq!(status, StatusCode::OK, "{users}");
+    assert!(users.as_array().is_some_and(|items| items
+        .iter()
+        .any(|item| item["username"] == format!("koro{nanos}"))));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn postgres_serves_users_tokens_and_overview() {
+    let Ok(url) = std::env::var("KOREOGRAF_TEST_POSTGRES_URL") else {
+        eprintln!("skipping PostgreSQL test: KOREOGRAF_TEST_POSTGRES_URL is not set");
+        return;
+    };
+    if url.trim().is_empty() {
+        eprintln!("skipping PostgreSQL test: KOREOGRAF_TEST_POSTGRES_URL is empty");
+        return;
+    }
+    let _guard = postgres_guard().await;
+    let database = koreograf::parse_database_config(&url, None, None).expect("postgres url");
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-postgres-users-{nanos}"));
+    let mut cfg = config(&dir);
+    cfg.admin_user = format!("adm{nanos}");
+    let state = koreograf::boot_with(cfg, database).expect("boot");
+    assert_eq!(state.engine(), "postgresql");
+    let app = koreograf::router(state);
+
+    let admin_name = format!("adm{nanos}");
+    let (status, _, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        Some(json!({"username": admin_name, "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let cookie = cookie.expect("session cookie");
+    let (status, admin, _) = call(&app, "GET", "/api/me", Some(&cookie), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let admin_id = admin["id"].as_str().expect("admin id").to_string();
+
+    let (status, org, _) = call(
+        &app,
+        "POST",
+        "/api/organizations",
+        Some(&cookie),
+        Some(json!({
+            "name": format!("Users org {nanos}"),
+            "description": "Postgres users organization"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{org}");
+    let org_id = org["id"].as_str().expect("organization id").to_string();
+
+    let (status, team, _) = call(
+        &app,
+        "POST",
+        "/api/teams",
+        Some(&cookie),
+        Some(json!({
+            "name": format!("Users team {nanos}"),
+            "description": "Postgres users team",
+            "organization_id": org_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{team}");
+    let team_id = team["id"].as_str().expect("team id").to_string();
+
+    let (status, other_team, _) = call(
+        &app,
+        "POST",
+        "/api/teams",
+        Some(&cookie),
+        Some(json!({
+            "name": format!("Other team {nanos}"),
+            "description": "Second Postgres team",
+            "organization_id": org_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{other_team}");
+    let other_team_id = other_team["id"]
+        .as_str()
+        .expect("other team id")
+        .to_string();
+
+    let (status, overview, _) = call_team(
+        &app,
+        "GET",
+        "/api/overview",
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{overview}");
+    assert_eq!(overview["jobs"].as_array().map(Vec::len), Some(0));
+    assert_eq!(overview["deliveries"].as_array().map(Vec::len), Some(0));
+    assert!(overview["workflow_name"].is_null());
+    assert!(overview["hook_name"].is_null());
+    assert!(overview["cache_bytes"].is_u64());
+
+    let (status, empty_dashboard, _) = call_team(
+        &app,
+        "GET",
+        "/api/dashboard?days=5&tz=UTC",
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{empty_dashboard}");
+    assert_eq!(empty_dashboard["range_days"], 5);
+    assert_eq!(empty_dashboard["series"].as_array().map(Vec::len), Some(5));
+    assert!(empty_dashboard["series"]
+        .as_array()
+        .is_some_and(|items| items.iter().all(|item| item["started"] == 0)));
+
+    let now = Utc::now();
+    let today = now.date_naive();
+    let stamp = |value: chrono::DateTime<Utc>| value.to_rfc3339_opts(SecondsFormat::Secs, true);
+    let yesterday = (today - Duration::days(1))
+        .and_hms_opt(12, 0, 0)
+        .expect("yesterday noon")
+        .and_utc();
+    let two_days_ago = (today - Duration::days(2))
+        .and_hms_opt(12, 0, 0)
+        .expect("two days ago noon")
+        .and_utc();
+    let completed = now - Duration::seconds(1);
+    postgres_job(
+        &url,
+        &format!("job-today-{nanos}"),
+        &team_id,
+        "Today",
+        "failed",
+        &stamp(now - Duration::seconds(2)),
+        &stamp(completed),
+    )
+    .await;
+    postgres_job(
+        &url,
+        &format!("job-yesterday-{nanos}"),
+        &team_id,
+        "Yesterday",
+        "successful",
+        &stamp(yesterday),
+        &stamp(yesterday + Duration::hours(1)),
+    )
+    .await;
+    postgres_job(
+        &url,
+        &format!("job-two-days-{nanos}"),
+        &team_id,
+        "Two days ago",
+        "canceled",
+        &stamp(two_days_ago),
+        &stamp(two_days_ago + Duration::hours(1)),
+    )
+    .await;
+
+    let (status, dashboard, _) = call_team(
+        &app,
+        "GET",
+        "/api/dashboard?days=5&tz=UTC",
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{dashboard}");
+    let series = dashboard["series"].as_array().expect("series");
+    assert_eq!(series.len(), 5);
+    let bucket = |date: &str| {
+        series
+            .iter()
+            .position(|item| item["date"] == date)
+            .unwrap_or_else(|| panic!("missing bucket {date} in {series:?}"))
+    };
+    let today_bucket = bucket(&(now - Duration::seconds(2)).date_naive().to_string());
+    assert_eq!(series[today_bucket]["started"], 1);
+    assert_eq!(series[today_bucket]["failed"], 1);
+    let yesterday_bucket = bucket(&(today - Duration::days(1)).to_string());
+    assert_eq!(series[yesterday_bucket]["started"], 1);
+    assert_eq!(series[yesterday_bucket]["successful"], 1);
+    let two_days_bucket = bucket(&(today - Duration::days(2)).to_string());
+    assert_eq!(series[two_days_bucket]["started"], 1);
+    assert_eq!(series[two_days_bucket]["canceled"], 1);
+    assert_eq!(dashboard["cache"]["roles"], 0);
+
+    let (status, scoped_dashboard, _) = call_team(
+        &app,
+        "GET",
+        "/api/dashboard?days=5&tz=UTC",
+        Some(&cookie),
+        Some(&other_team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{scoped_dashboard}");
+    assert!(scoped_dashboard["series"]
+        .as_array()
+        .is_some_and(|items| items.iter().all(|item| item["started"] == 0)));
+
+    let (status, scoped_overview, _) = call_team(
+        &app,
+        "GET",
+        "/api/overview",
+        Some(&cookie),
+        Some(&other_team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{scoped_overview}");
+    assert_eq!(scoped_overview["jobs"].as_array().map(Vec::len), Some(0));
+
+    let (status, listed_overview, _) = call_team(
+        &app,
+        "GET",
+        "/api/overview",
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed_overview}");
+    assert_eq!(listed_overview["jobs"].as_array().map(Vec::len), Some(3));
+
+    let username = format!("user{nanos}");
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        Some(json!({
+            "username": username,
+            "password": "user-password",
+            "display_name": "Ada",
+            "is_admin": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let user_id = created["id"].as_str().expect("user id").to_string();
+    assert_eq!(created["username"], username);
+    assert_eq!(created["team_count"], 0);
+
+    let (status, users, _) = call(&app, "GET", "/api/users", Some(&cookie), None).await;
+    assert_eq!(status, StatusCode::OK, "{users}");
+    assert!(users
+        .as_array()
+        .is_some_and(|items| items.iter().any(|item| item["id"] == user_id)));
+
+    let (status, detail, _) = call(
+        &app,
+        "GET",
+        &format!("/api/users/{user_id}"),
+        Some(&cookie),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["display_name"], "Ada");
+    assert_eq!(detail["memberships"].as_array().map(Vec::len), Some(0));
+
+    let (status, _, user_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        Some(json!({"username": username, "password": "user-password"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let user_cookie = user_cookie.expect("user session cookie");
+
+    let (status, profile, _) = call(
+        &app,
+        "PUT",
+        "/api/me",
+        Some(&user_cookie),
+        Some(json!({
+            "display_name": "Ada Lovelace",
+            "email": "ada@example.com",
+            "password": "new-user-password"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{profile}");
+    assert_eq!(profile["display_name"], "Ada Lovelace");
+    assert_eq!(profile["email"], "ada@example.com");
+
+    let (status, old_password, _) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        Some(json!({"username": username, "password": "user-password"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{old_password}");
+    let (status, _, user_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        Some(json!({"username": username, "password": "new-user-password"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let user_cookie = user_cookie.expect("user session cookie");
+
+    let (status, denied, _) = call(&app, "GET", "/api/users", Some(&user_cookie), None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+    let (status, denied, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&user_cookie),
+        Some(json!({
+            "username": format!("other{nanos}"),
+            "password": "user-password",
+            "display_name": "Other",
+            "is_admin": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+    let (status, denied, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/users/{admin_id}"),
+        Some(&user_cookie),
+        Some(json!({
+            "display_name": "Hijacked",
+            "is_admin": true,
+            "disabled": false,
+            "password": ""
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+    let (status, denied, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/users/{user_id}"),
+        Some(&user_cookie),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+
+    let (status, updated, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/users/{user_id}"),
+        Some(&cookie),
+        Some(json!({
+            "display_name": "Ada Lovelace",
+            "is_admin": false,
+            "disabled": false,
+            "password": ""
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["display_name"], "Ada Lovelace");
+
+    let (status, token, _) = call(
+        &app,
+        "POST",
+        "/api/me/tokens",
+        Some(&user_cookie),
+        Some(json!({"name": "automation"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{token}");
+    let token_id = token["id"].as_str().expect("token id").to_string();
+    let secret = token["secret"].as_str().expect("token secret").to_string();
+    assert!(token.get("token_hash").is_none());
+
+    let (status, tokens, _) = call(&app, "GET", "/api/me/tokens", Some(&user_cookie), None).await;
+    assert_eq!(status, StatusCode::OK, "{tokens}");
+    assert!(tokens
+        .as_array()
+        .is_some_and(|items| items.iter().any(|item| item["id"] == token_id)));
+
+    let (status, via_token) = call_bearer(&app, "GET", "/api/me", &secret, None).await;
+    assert_eq!(status, StatusCode::OK, "{via_token}");
+    assert_eq!(via_token["username"], username);
+
+    let (status, foreign, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/me/tokens/{token_id}"),
+        Some(&cookie),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{foreign}");
+
+    let (status, _, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/me/tokens/{token_id}"),
+        Some(&user_cookie),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, revoked) = call_bearer(&app, "GET", "/api/me", &secret, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{revoked}");
+    assert_eq!(revoked["error"], "sign_in_is_required");
+
+    let (status, disabled, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/users/{user_id}"),
+        Some(&cookie),
+        Some(json!({
+            "display_name": "Ada Lovelace",
+            "is_admin": false,
+            "disabled": true,
+            "password": ""
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{disabled}");
+    assert_eq!(disabled["disabled"], true);
+
+    let (status, _, _) = call(&app, "GET", "/api/me", Some(&user_cookie), None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, disabled_login, _) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        Some(json!({"username": username, "password": "new-user-password"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(disabled_login["error"], "the_account_is_disabled");
+
+    let (status, self_disable, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/users/{admin_id}"),
+        Some(&cookie),
+        Some(json!({
+            "display_name": "Administrator",
+            "is_admin": true,
+            "disabled": true,
+            "password": ""
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{self_disable}");
+    assert_eq!(self_disable["error"], "you_cannot_disable_your_own_account");
+
+    let (status, self_delete, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/users/{admin_id}"),
+        Some(&cookie),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{self_delete}");
+    assert_eq!(self_delete["error"], "you_cannot_delete_your_own_account");
+
+    let (status, _, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/users/{user_id}"),
+        Some(&cookie),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, gone, _) = call(
+        &app,
+        "GET",
+        &format!("/api/users/{user_id}"),
+        Some(&cookie),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{gone}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -16,7 +16,6 @@ use crate::db::{self, Credential, Environment, Inventory, InventorySource, Proje
 use crate::error::{ApiError, ApiJson, AppResult};
 use crate::inventory::{self, InventoryData, InventoryHost};
 use crate::jobs;
-use crate::migration;
 use crate::runner;
 use crate::Shared;
 
@@ -204,21 +203,13 @@ pub async fn overview(
     } else {
         None
     };
-    let db = state.db()?;
-    let (jobs, _) = db::list_jobs(
-        &db,
-        &team,
-        &db::JobQuery {
-            limit: 8,
-            ..Default::default()
-        },
-    )?;
-    let deliveries = db::list_deliveries(&db, &team, 8)?;
-    let workflow = db::first_workflow(&db, &team)?;
-    let hook = db::first_hook(&db, &team)?;
+    let jobs = state.store().recent_jobs(&team, 8)?;
+    let deliveries = state.store().list_deliveries(&team, 8)?;
+    let workflow = state.store().first_workflow(&team)?;
+    let hook = state.store().first_hook(&team)?;
     let cache = cacheinfo::team_cache(&state.cfg.data_dir, &team);
     let import = if user.is_admin {
-        migration::report(&db)?
+        state.store().import_report()?
     } else {
         None
     };
@@ -286,10 +277,7 @@ pub async fn dashboard(
         .unwrap_or(now - ChronoDuration::days(days));
     let from = start.to_rfc3339_opts(SecondsFormat::Secs, true);
     let to = now.to_rfc3339_opts(SecondsFormat::Secs, true);
-    let activity = {
-        let db = state.db()?;
-        db::job_activity(&db, &team, &from, &to)?
-    };
+    let activity = state.store().job_activity(&team, &from, &to)?;
     let cache = cacheinfo::team_cache(&state.cfg.data_dir, &team);
     let mut buckets = vec![DashboardDay::default(); days as usize];
     for item in activity {
