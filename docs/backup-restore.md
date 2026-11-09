@@ -1,6 +1,6 @@
 # Database and backup
 
-Home labs and this prototype stay on SQLite (`data/koreograf.db`, WAL, one writer). An empty `KOREOGRAF_DATABASE_URL`, or a value of `sqlite:`, means that file. A `postgres://` URL stops startup with a clear message until a company database exists. The backup from the UI is the hand-off format for that later move: one SQLite file plus the key, not a raw copy of the data directory.
+SQLite (`data/koreograf.db`, WAL, one writer) stays the default and the only engine with backup and restore in this build. An empty `KOREOGRAF_DATABASE_URL`, or a value of `sqlite:`, means that file. A `postgres://` or `postgresql://` URL selects the experimental PostgreSQL backend, which bootstraps the schema and serves sign-in, `/healthz`, `/api/version`, and `/api/me`; the UI backup stays on SQLite. The backup from the UI is the hand-off format for a later move: one SQLite file plus the key, not a raw copy of the data directory. [Configuration](configuration.md#postgresql) lists the URL, password file, and TLS options.
 
 An administrator opens **Backup** in the sidebar. In the German UI the link is **Sicherung**.
 

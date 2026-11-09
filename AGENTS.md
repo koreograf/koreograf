@@ -45,7 +45,7 @@ node --check web/app.js
 
 ## Product boundaries
 
-- SQLite is the only database. `postgres://` and `postgresql://` are rejected on purpose in `config::database_choice`. Do not add a PostgreSQL driver unless asked.
+- SQLite is the default database. PostgreSQL (`postgres://` and `postgresql://`) is an experimental second backend in `src/backend.rs`; do not drop SQLite support. PostgreSQL-only code stays behind the backend abstraction and keyed errors.
 - Team roles stay `viewer`, `operator`, and `owner`. System admin is `users.is_admin`. Do not add per-object roles unless asked. `/api/users` is admin-only. `/api/me` is the signed-in account, including real memberships. LDAP memberships and the LDAP email stay directory-owned.
 - This is not an AWX drop-in. Do not add surveys, Receptor, or high availability unless asked. Schedules are a local-time list. The menu lists every schedule of the team, and a workflow page lists its own. Editing stays in the overlay. There is no cron field and no replay of missed runs.
 - Credential kinds are the built-in list in `credentials::KINDS`. A template stores one credential of each kind. Ansible Vault is the exception: several vault credentials can be attached when each vault id is unique, and only one of them may omit the id. Do not add external secret plugins or a custom type designer unless asked. An `scm` credential applies to the job and to project sync when a project selects it.

@@ -8,6 +8,7 @@
 
 mod askpass;
 mod auth;
+mod backend;
 mod backup;
 mod cacheinfo;
 mod config;
@@ -40,17 +41,21 @@ use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
 
+use crate::backend::Backend;
 use crate::error::ApiError;
 use crate::runner::RunningProc;
 
 pub use askpass::{askpass, askpass_kind, git_ssh, git_ssh_requested, AskpassKind};
-pub use config::{Config, CookieSecure, LdapConfig, LocalJobs, RunnerMode};
+pub use config::{
+    database_from_env, parse_database_config, Config, CookieSecure, DatabaseConfig, LdapConfig,
+    LocalJobs, PostgresConfig, RunnerMode, SslMode,
+};
 pub use entrypoint::{entrypoint, entrypoint_requested};
 pub use health::{healthcheck, healthcheck_requested};
 
 /// Shared process state. Cheap to clone because it is an `Arc`.
 pub struct AppState {
-    pub(crate) conn: Mutex<Connection>,
+    pub(crate) backend: Box<dyn Backend>,
     pub cfg: Config,
     pub(crate) cipher: Mutex<crypto::Cipher>,
     pub(crate) metrics: metrics::Metrics,
@@ -146,9 +151,17 @@ pub async fn doctor() -> anyhow::Result<i32> {
 
 impl AppState {
     pub fn db(&self) -> Result<std::sync::MutexGuard<'_, Connection>, ApiError> {
-        self.conn
-            .lock()
+        let conn = self.backend.sqlite().ok_or(ApiError::BackendUnavailable)?;
+        conn.lock()
             .map_err(|_| ApiError::Internal("database lock is damaged".into()))
+    }
+
+    pub fn engine(&self) -> &'static str {
+        self.backend.engine()
+    }
+
+    pub(crate) fn store(&self) -> &dyn Backend {
+        self.backend.as_ref()
     }
 
     pub(crate) fn preflight_report(&self) -> Option<preflight::Report> {
@@ -186,18 +199,29 @@ impl AppState {
 }
 
 /// Open the database, load the encryption key, and seed the demo once.
-pub fn boot(mut cfg: Config) -> anyhow::Result<Shared> {
+pub fn boot(cfg: Config) -> anyhow::Result<Shared> {
+    boot_with(cfg, DatabaseConfig::Sqlite)
+}
+
+pub fn boot_with(mut cfg: Config, database: DatabaseConfig) -> anyhow::Result<Shared> {
     std::fs::create_dir_all(&cfg.data_dir)?;
     // A relative data directory would be resolved again from the job work
     // directory. Local runs then miss wrapper.sh and the other job files.
     cfg.data_dir = std::path::absolute(&cfg.data_dir)?;
     runner::scrub_job_dirs(&cfg.data_dir);
-    let conn = db::open(&cfg.data_dir.join("koreograf.db"))?;
+    let backend = backend::open(&database, &cfg.data_dir)?;
     let cipher = crypto::load_cipher(&cfg.data_dir)?;
-    seed::seed(&conn, &cfg)?;
+    if let Some(conn) = backend.sqlite() {
+        let conn = conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("The SQLite database lock is damaged."))?;
+        seed::seed(&conn, &cfg)?;
+    } else {
+        seed::seed_postgres(backend.as_ref(), &cfg)?;
+    }
     cfg.admin_password = None;
     let state = Arc::new(AppState {
-        conn: Mutex::new(conn),
+        backend,
         cfg,
         cipher: Mutex::new(cipher),
         metrics: metrics::Metrics::new(),
@@ -206,20 +230,28 @@ pub fn boot(mut cfg: Config) -> anyhow::Result<Shared> {
         canceled: Mutex::new(HashSet::new()),
         preflight: Mutex::new(None),
     });
-    credentials::backfill_netbox_urls(&state)?;
+    if state.engine() == "sqlite" {
+        credentials::backfill_netbox_urls(&state)?;
+    }
     Ok(state)
 }
 
 /// Bind the HTTP server and serve until it stops.
 pub async fn serve(cfg: Config) -> anyhow::Result<()> {
-    let url = std::env::var("KOREOGRAF_DATABASE_URL").unwrap_or_default();
-    config::database_choice(&url).map_err(anyhow::Error::msg)?;
+    let database = database_from_env().map_err(anyhow::Error::msg)?;
+    tracing::info!(
+        engine = database.engine(),
+        target = %database.target(),
+        "database backend"
+    );
     if let Err(error) = tls::validate_company_cas() {
         tracing::error!(%error, "Company CA directory is invalid");
         return Err(anyhow::Error::msg(error));
     }
-    migration::prepare(&cfg)?;
-    let state = boot(cfg)?;
+    if database.engine() == "sqlite" {
+        migration::prepare(&cfg)?;
+    }
+    let state = boot_with(cfg, database)?;
     let mode = match settings::load(&state) {
         Ok(effective) => {
             tls::warn_directory(&effective.ldap);
@@ -230,7 +262,9 @@ pub async fn serve(cfg: Config) -> anyhow::Result<()> {
     let report = preflight::check(mode, state.cfg.container_image).await;
     tracing::info!("{}", report.log_block());
     state.set_preflight_report(report);
-    schedule::spawn(state.clone());
+    if state.engine() == "sqlite" {
+        schedule::spawn(state.clone());
+    }
     let bind = state.cfg.bind.clone();
     let data_dir = state.cfg.data_dir.display().to_string();
     let app = router(state.clone());
