@@ -9918,10 +9918,7 @@ async fn admin_settings_hide_secrets_and_apply_without_restart() {
     assert_eq!(status, StatusCode::OK, "{current}");
     assert_eq!(current["source"], "env");
     {
-        let mut round_trip = current.clone();
-        if let Some(object) = round_trip.as_object_mut() {
-            object.remove("clear");
-        }
+        let round_trip = current.clone();
         let (status, echoed, _) = call(
             &app,
             "PUT",
@@ -10000,6 +9997,21 @@ async fn admin_settings_hide_secrets_and_apply_without_restart() {
     assert_eq!(saved["job_output_lines"], 4000);
     assert!(saved["ldap"].get("bind_password").is_none());
     assert!(saved["proxy"].get("password").is_none());
+
+    let (status, echoed, _) = call(
+        &app,
+        "PUT",
+        "/api/settings",
+        Some(&cookie),
+        None,
+        Some(saved.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{echoed}");
+    assert_eq!(echoed["ldap"]["bind_password_set"], true);
+    assert_eq!(echoed["proxy"]["password_set"], true);
+    assert!(!echoed.to_string().contains("bind-secret-value"));
+    assert!(!echoed.to_string().contains("proxy-secret-value"));
 
     let (status, partial, _) = call(
         &app,
