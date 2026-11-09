@@ -1393,6 +1393,42 @@ pub fn count_teams(c: &Connection) -> AppResult<i64> {
         .map_err(Into::into)
 }
 
+pub fn seed_state(c: &Connection, key: &str) -> AppResult<Option<String>> {
+    c.query_row(
+        "SELECT value FROM seed_state WHERE key = ?1",
+        [key],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+pub fn set_seed_state(c: &Connection, key: &str, value: &str) -> AppResult<()> {
+    c.execute(
+        "INSERT INTO seed_state (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
+pub fn setting(c: &Connection, key: &str) -> AppResult<Option<String>> {
+    c.query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
+        row.get(0)
+    })
+    .optional()
+    .map_err(Into::into)
+}
+
+pub fn set_setting(c: &Connection, key: &str, value: &str) -> AppResult<()> {
+    c.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
 fn map_team(row: &rusqlite::Row<'_>) -> rusqlite::Result<Team> {
     Ok(Team {
         id: row.get(0)?,
