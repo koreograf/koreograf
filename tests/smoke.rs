@@ -807,13 +807,28 @@ async fn failed_job_shows_parameters_and_can_be_relaunched() {
     assert_eq!(status, StatusCode::CREATED, "{template}");
     let template_id = template["id"].as_str().unwrap();
 
-    let (status, launched, _) = call(
+    let (status, blocked, _) = call(
         &app,
         "POST",
         &format!("/api/templates/{template_id}/launch"),
         Some(&cookie),
         Some(&team),
         Some(json!({"extra_vars": {"from_launch": "yes"}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{blocked}");
+    assert_eq!(blocked["error"], "prompt_on_launch_is_off");
+
+    let (status, launched, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "extra_vars": {"from_launch": "yes"},
+            "launch_with_options": true
+        })),
     )
     .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{launched}");
@@ -17156,12 +17171,14 @@ async fn mcp_tools_call_the_http_api() {
         String::from_utf8_lossy(&bytes)
     );
     let message = sse_message(&bytes);
-    assert_eq!(message["result"]["isError"], false, "{message}");
-    let launched: Value =
-        serde_json::from_str(message["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(launched["template_id"], template_id);
-    assert_eq!(launched["extra_vars"]["from_mcp_http"], "yes");
-    assert!(launched["id"].is_string(), "{launched}");
+    assert_eq!(message["result"]["isError"], true, "{message}");
+    assert!(
+        message["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("prompt_on_launch_is_off"),
+        "{message}"
+    );
 
     let viewer_session = mcp_session(&app, &viewer_secret).await;
     let (status, bytes, _) = mcp_request(
