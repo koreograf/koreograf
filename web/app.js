@@ -1543,6 +1543,7 @@ async function openLaunchPrompt(item, launchWithOptions = false, preset = {}) {
       ${chipBox("skip_tags", "skip_tags", spec.skip_tags)}
     </div>
     <label class="field"><span>${h("limit")}</span><input class="fit" name="limit" value="${esc(limit)}"></label>` : "";
+  let submitting = false;
   const dialog = openDialog({
     id: "launch-prompt",
     formId: "launch-prompt-form",
@@ -1555,29 +1556,44 @@ async function openLaunchPrompt(item, launchWithOptions = false, preset = {}) {
       <label class="field"><span>${h("extra_variables_json")}</span><textarea name="extra_vars">${esc(JSON.stringify(item.extra_vars || {}, null, 2))}</textarea></label>`,
     submit: t("launch"),
     onSubmit: async ({ form, close }) => {
-      if (!flushChips(form)) return;
-      const body = {
-        extra_vars: jsonObject(form.extra_vars.value, "extra_variables"),
-        credential_ids: [
-          ...[...form.querySelectorAll("[data-credential-kind]")].map((select) => select.value).filter(Boolean),
-          ...[...form.querySelectorAll("#vault-pills [data-vault-id]")].map((node) => node.dataset.vaultId),
-        ],
-      };
-      if (launchWithOptions) body.launch_with_options = true;
-      if (ansible) {
-        body.inventory_id = form.inventory_id.value;
-        const level = Number(form.verbosity.value);
-        body.spec = {
-          job_type: form.job_type.value === "check" ? "check" : "run",
-          tags: form.tags.value.trim(),
-          skip_tags: form.skip_tags.value.trim(),
-          limit: form.limit.value.trim(),
-          verbosity: Number.isInteger(level) ? level : 0,
-        };
+      if (submitting || !flushChips(form)) return;
+      submitting = true;
+      const submitButton = form.querySelector('button[type="submit"]');
+      if (submitButton) {
+        submitButton.disabled = true;
+        submitButton.setAttribute("aria-busy", "true");
       }
-      const job = await api("POST", `/api/templates/${encodeURIComponent(item.id)}/launch`, body);
-      close();
-      go(`#/jobs/${job.id}`);
+      try {
+        const body = {
+          extra_vars: jsonObject(form.extra_vars.value, "extra_variables"),
+          credential_ids: [
+            ...[...form.querySelectorAll("[data-credential-kind]")].map((select) => select.value).filter(Boolean),
+            ...[...form.querySelectorAll("#vault-pills [data-vault-id]")].map((node) => node.dataset.vaultId),
+          ],
+        };
+        if (launchWithOptions) body.launch_with_options = true;
+        if (ansible) {
+          body.inventory_id = form.inventory_id.value;
+          const level = Number(form.verbosity.value);
+          body.spec = {
+            job_type: form.job_type.value === "check" ? "check" : "run",
+            tags: form.tags.value.trim(),
+            skip_tags: form.skip_tags.value.trim(),
+            limit: form.limit.value.trim(),
+            verbosity: Number.isInteger(level) ? level : 0,
+          };
+        }
+        const job = await api("POST", `/api/templates/${encodeURIComponent(item.id)}/launch`, body);
+        close();
+        go(`#/jobs/${job.id}`);
+      } catch (error) {
+        submitting = false;
+        if (submitButton) {
+          submitButton.disabled = false;
+          submitButton.removeAttribute("aria-busy");
+        }
+        throw error;
+      }
     },
   });
   const form = dialog.form;
