@@ -6,6 +6,12 @@ An operator cannot move a project to an organization other than the one of the t
 
 Roles are `viewer`, `operator`, and `owner`. The local administrator bypasses the role check so an LDAP outage cannot lock everyone out. Sign-in checks the local password first, then LDAP.
 
+## Sign-in throttling
+
+Five failed sign-ins for the same normalized username and source address within one minute lock that pair for one minute. The next `POST /api/login` answers `429` with a `Retry-After` header and does not contact the directory. The body keeps `invalid_username_or_password`, so the browser still shows the generic sign-in failure. A correct password from another source still signs in, and a successful sign-in clears the counter for its pair. The counters live in memory, are bounded, and reset on restart.
+
+The source is the direct TCP peer, or the first `X-Forwarded-For` address when `KOREOGRAF_TRUSTED_PROXY=true`. A source that cannot be determined is not throttled, because all such clients would share one bucket and an attacker could lock out every account through it. A failure log names the normalized username and the client IP and never contains the password. Directory outages are not counted as failed credentials.
+
 Memberships from LDAP have source `ldap` and role `operator`. A viewer or owner role is a manual membership on a team the directory does not fill for that user. `POST /api/teams/{id}/members` rejects a role change on an existing directory membership with `the_membership_comes_from_ldap_or_active_directory`. One user has one membership per team, so the directory row cannot also be a manual row. When the group disappears, only that membership is removed. A manual membership stays, and the next directory sync does not replace it. Removing the member is still allowed, and the directory can add that membership back as `operator`.
 
 A team stores an LDAP group as a CN or a DN. A value that contains `=` is a DN and matches only a directory DN. Anything else is a CN and matches only that CN. Comparison ignores case and spaces around commas, plus signs, and equals signs. Equivalent escapes match, so `\2C` and `\,` are the same comma, and `\3D` and `\=` are the same equals sign. A comma, plus, or equals inside a value stays inside that value. `Plattform` and `cn=Plattform,ou=groups,dc=example,dc=com` are both valid. The CN comes from the first RDN, and only when that RDN is a single `cn` attribute.
