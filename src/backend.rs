@@ -12,8 +12,8 @@ use rusqlite::params;
 
 use crate::config::{DatabaseConfig, PostgresConfig, SslMode};
 use crate::db::{
-    self, Credential, CredentialUsage, Environment, Inventory, InventorySource, Member,
-    Organization, Project, Team, User, UserMembership,
+    self, Credential, CredentialUsage, Environment, Hook, Inventory, InventorySource, Member,
+    Organization, Project, Schedule, Team, Template, User, UserMembership,
 };
 use crate::error::{ApiError, AppResult};
 
@@ -150,6 +150,48 @@ pub(crate) trait Backend: Send + Sync {
         credential_id: &str,
         team_id: &str,
     ) -> AppResult<Vec<CredentialUsage>>;
+    fn list_environments(&self, team_id: &str) -> AppResult<Vec<Environment>>;
+    fn insert_environment(&self, item: &Environment) -> AppResult<()>;
+    fn update_environment(&self, item: &Environment) -> AppResult<()>;
+    fn delete_environment(&self, id: &str) -> AppResult<()>;
+    fn list_templates(&self, team_id: &str) -> AppResult<Vec<Template>>;
+    fn template(&self, id: &str) -> AppResult<Option<Template>>;
+    fn insert_template(&self, item: &Template, credential_ids: &[String]) -> AppResult<()>;
+    fn update_template(&self, item: &Template, credential_ids: &[String]) -> AppResult<()>;
+    fn delete_template(&self, id: &str, team_id: &str) -> AppResult<()>;
+    fn template_credential_ids(&self, template_id: &str) -> AppResult<Vec<String>>;
+    fn list_template_credential_links(&self, team_id: &str) -> AppResult<Vec<(String, String)>>;
+    fn list_hooks(&self, team_id: &str) -> AppResult<Vec<Hook>>;
+    fn hook(&self, id: &str) -> AppResult<Option<Hook>>;
+    fn insert_hook(&self, item: &Hook) -> AppResult<()>;
+    fn update_hook(&self, item: &Hook) -> AppResult<()>;
+    fn delete_hook(&self, id: &str, team_id: &str) -> AppResult<()>;
+    fn workflow_team(&self, id: &str) -> AppResult<Option<String>>;
+    fn list_team_schedules(&self, team_id: &str) -> AppResult<Vec<(Schedule, String)>>;
+    fn schedule(&self, id: &str) -> AppResult<Option<Schedule>>;
+    fn list_schedules(&self, kind: &str, target_id: &str) -> AppResult<Vec<Schedule>>;
+    fn insert_schedule(&self, item: &Schedule) -> AppResult<()>;
+    fn update_schedule(&self, item: &Schedule) -> AppResult<()>;
+    fn delete_schedule(&self, id: &str, team_id: &str) -> AppResult<()>;
+    fn set_schedule_enabled(
+        &self,
+        id: &str,
+        team_id: &str,
+        enabled: bool,
+        next_run_at: Option<&str>,
+        occurrence_count: i64,
+    ) -> AppResult<()>;
+    fn claim_missed(&self, id: &str, team_id: &str) -> AppResult<Option<String>>;
+    fn restore_missed(&self, id: &str, team_id: &str, missed_at: &str) -> AppResult<()>;
+    fn due_schedules(&self, now: &str) -> AppResult<Vec<Schedule>>;
+    fn advance_schedule(
+        &self,
+        id: &str,
+        next_run_at: Option<&str>,
+        occurrence_count: i64,
+    ) -> AppResult<()>;
+    fn note_miss(&self, id: &str, missed_at: Option<&str>) -> AppResult<()>;
+    fn set_launch_block(&self, id: &str, reason: Option<&str>) -> AppResult<()>;
 }
 
 pub(crate) fn open(database: &DatabaseConfig, data_dir: &Path) -> anyhow::Result<Box<dyn Backend>> {
@@ -628,6 +670,177 @@ impl Backend for SqliteBackend {
         let conn = lock(&self.conn)?;
         db::credential_usages(&conn, credential_id, team_id)
     }
+
+    fn list_environments(&self, team_id: &str) -> AppResult<Vec<Environment>> {
+        let conn = lock(&self.conn)?;
+        let team = db::team_by_id(&conn, team_id)?.ok_or(ApiError::NotFound)?;
+        db::list_environments(&conn, &team)
+    }
+
+    fn insert_environment(&self, item: &Environment) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::insert_environment(&conn, item)
+    }
+
+    fn update_environment(&self, item: &Environment) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::update_environment(&conn, item)
+    }
+
+    fn delete_environment(&self, id: &str) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::delete_environment(&conn, id)
+    }
+
+    fn list_templates(&self, team_id: &str) -> AppResult<Vec<Template>> {
+        let conn = lock(&self.conn)?;
+        db::list_templates(&conn, team_id)
+    }
+
+    fn template(&self, id: &str) -> AppResult<Option<Template>> {
+        let conn = lock(&self.conn)?;
+        db::template(&conn, id)
+    }
+
+    fn insert_template(&self, item: &Template, credential_ids: &[String]) -> AppResult<()> {
+        let mut conn = lock(&self.conn)?;
+        let tx = conn.transaction()?;
+        db::insert_template(&tx, item)?;
+        db::save_template_credentials(&tx, &item.id, credential_ids)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn update_template(&self, item: &Template, credential_ids: &[String]) -> AppResult<()> {
+        let mut conn = lock(&self.conn)?;
+        let tx = conn.transaction()?;
+        db::update_template(&tx, item)?;
+        db::save_template_credentials(&tx, &item.id, credential_ids)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn delete_template(&self, id: &str, team_id: &str) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::delete_template(&conn, id, team_id)
+    }
+
+    fn template_credential_ids(&self, template_id: &str) -> AppResult<Vec<String>> {
+        let conn = lock(&self.conn)?;
+        db::template_credential_ids(&conn, template_id)
+    }
+
+    fn list_template_credential_links(&self, team_id: &str) -> AppResult<Vec<(String, String)>> {
+        let conn = lock(&self.conn)?;
+        db::list_template_credential_links(&conn, team_id)
+    }
+
+    fn list_hooks(&self, team_id: &str) -> AppResult<Vec<Hook>> {
+        let conn = lock(&self.conn)?;
+        db::list_hooks(&conn, team_id)
+    }
+
+    fn hook(&self, id: &str) -> AppResult<Option<Hook>> {
+        let conn = lock(&self.conn)?;
+        db::hook(&conn, id)
+    }
+
+    fn insert_hook(&self, item: &Hook) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::insert_hook(&conn, item)
+    }
+
+    fn update_hook(&self, item: &Hook) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::update_hook(&conn, item)
+    }
+
+    fn delete_hook(&self, id: &str, team_id: &str) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::delete_hook(&conn, id, team_id)
+    }
+
+    fn workflow_team(&self, id: &str) -> AppResult<Option<String>> {
+        let conn = lock(&self.conn)?;
+        Ok(db::workflow(&conn, id)?.map(|item| item.team_id))
+    }
+
+    fn list_team_schedules(&self, team_id: &str) -> AppResult<Vec<(Schedule, String)>> {
+        let conn = lock(&self.conn)?;
+        db::list_team_schedules(&conn, team_id)
+    }
+
+    fn schedule(&self, id: &str) -> AppResult<Option<Schedule>> {
+        let conn = lock(&self.conn)?;
+        db::schedule(&conn, id)
+    }
+
+    fn list_schedules(&self, kind: &str, target_id: &str) -> AppResult<Vec<Schedule>> {
+        let conn = lock(&self.conn)?;
+        db::list_schedules(&conn, kind, target_id)
+    }
+
+    fn insert_schedule(&self, item: &Schedule) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::insert_schedule(&conn, item)
+    }
+
+    fn update_schedule(&self, item: &Schedule) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::update_schedule(&conn, item)
+    }
+
+    fn delete_schedule(&self, id: &str, team_id: &str) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::delete_schedule(&conn, id, team_id)
+    }
+
+    fn set_schedule_enabled(
+        &self,
+        id: &str,
+        team_id: &str,
+        enabled: bool,
+        next_run_at: Option<&str>,
+        occurrence_count: i64,
+    ) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::set_schedule_enabled(&conn, id, team_id, enabled, next_run_at, occurrence_count)
+    }
+
+    fn claim_missed(&self, id: &str, team_id: &str) -> AppResult<Option<String>> {
+        let mut conn = lock(&self.conn)?;
+        db::claim_missed(&mut conn, id, team_id)
+    }
+
+    fn restore_missed(&self, id: &str, team_id: &str, missed_at: &str) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::restore_missed(&conn, id, team_id, missed_at)
+    }
+
+    fn due_schedules(&self, now: &str) -> AppResult<Vec<Schedule>> {
+        let conn = lock(&self.conn)?;
+        db::due_schedules(&conn, now)
+    }
+
+    fn advance_schedule(
+        &self,
+        id: &str,
+        next_run_at: Option<&str>,
+        occurrence_count: i64,
+    ) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::advance_schedule(&conn, id, next_run_at, occurrence_count)
+    }
+
+    fn note_miss(&self, id: &str, missed_at: Option<&str>) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::note_miss(&conn, id, missed_at)
+    }
+
+    fn set_launch_block(&self, id: &str, reason: Option<&str>) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::set_launch_block(&conn, id, reason)
+    }
 }
 
 pub(crate) struct PostgresBackend {
@@ -916,6 +1129,19 @@ const SOURCE_COLUMNS: &str = "id, inventory_id, name, kind, source_json, credent
 
 const CREDENTIAL_COLUMNS: &str = "id, team_id, name, kind, secret_blob, created_at, auto, disabled";
 
+const TEMPLATE_COLUMNS: &str =
+    "id, team_id, name, description, tool, project_id, inventory_id, credential_id, \
+     environment_id, no_environment, entrypoint, extra_vars, spec, created_at, update_on_launch, \
+     admin_saved, prompt_on_launch";
+
+const HOOK_COLUMNS: &str = "id, team_id, name, token, match_alertname, match_status, template_id, \
+     workflow_id, extra_vars, enabled, created_at";
+
+const SCHEDULE_COLUMNS: &str =
+    "id, team_id, name, target_kind, target_id, timezone, start_date, start_time, frequency, \
+     weekdays, end_kind, end_count, end_date, enabled, next_run_at, missed_at, occurrence_count, \
+     created_by, created_at, updated_at, updated_by, launch_block";
+
 fn row_organization(row: &tokio_postgres::Row) -> AppResult<Organization> {
     Ok(Organization {
         id: row.try_get(0)?,
@@ -1012,6 +1238,79 @@ fn row_credential_usage(row: &tokio_postgres::Row) -> AppResult<CredentialUsage>
     })
 }
 
+fn row_template(row: &tokio_postgres::Row) -> AppResult<Template> {
+    let no_environment: i32 = row.try_get(9)?;
+    let update_on_launch: i32 = row.try_get(14)?;
+    let admin_saved: i32 = row.try_get(15)?;
+    let prompt_on_launch: i32 = row.try_get(16)?;
+    Ok(Template {
+        id: row.try_get(0)?,
+        team_id: row.try_get(1)?,
+        name: row.try_get(2)?,
+        description: row.try_get(3)?,
+        tool: row.try_get(4)?,
+        project_id: row.try_get(5)?,
+        inventory_id: row.try_get(6)?,
+        credential_id: row.try_get(7)?,
+        environment_id: row.try_get(8)?,
+        no_environment: no_environment != 0,
+        entrypoint: row.try_get(10)?,
+        extra_vars: row.try_get(11)?,
+        spec: row.try_get(12)?,
+        created_at: row.try_get(13)?,
+        update_on_launch: update_on_launch != 0,
+        admin_saved: admin_saved != 0,
+        prompt_on_launch: prompt_on_launch != 0,
+    })
+}
+
+fn row_hook(row: &tokio_postgres::Row) -> AppResult<Hook> {
+    let enabled: i32 = row.try_get(9)?;
+    Ok(Hook {
+        id: row.try_get(0)?,
+        team_id: row.try_get(1)?,
+        name: row.try_get(2)?,
+        token: row.try_get(3)?,
+        match_alertname: row.try_get(4)?,
+        match_status: row.try_get(5)?,
+        template_id: row.try_get(6)?,
+        workflow_id: row.try_get(7)?,
+        extra_vars: row.try_get(8)?,
+        enabled: enabled != 0,
+        created_at: row.try_get(10)?,
+    })
+}
+
+fn row_schedule(row: &tokio_postgres::Row) -> AppResult<Schedule> {
+    let enabled: i32 = row.try_get(13)?;
+    let occurrence_count: i32 = row.try_get(16)?;
+    let end_count: Option<i32> = row.try_get(11)?;
+    Ok(Schedule {
+        id: row.try_get(0)?,
+        team_id: row.try_get(1)?,
+        name: row.try_get(2)?,
+        target_kind: row.try_get(3)?,
+        target_id: row.try_get(4)?,
+        timezone: row.try_get(5)?,
+        start_date: row.try_get(6)?,
+        start_time: row.try_get(7)?,
+        frequency: row.try_get(8)?,
+        weekdays: row.try_get(9)?,
+        end_kind: row.try_get(10)?,
+        end_count: end_count.map(i64::from),
+        end_date: row.try_get(12)?,
+        enabled: enabled != 0,
+        next_run_at: row.try_get(14)?,
+        missed_at: row.try_get(15)?,
+        occurrence_count: i64::from(occurrence_count),
+        created_by: row.try_get(17)?,
+        created_at: row.try_get(18)?,
+        updated_at: row.try_get(19)?,
+        updated_by: row.try_get(20)?,
+        launch_block: row.try_get(21)?,
+    })
+}
+
 async fn pg_project_team_ids<C>(client: &C, project_id: &str) -> AppResult<Vec<String>>
 where
     C: tokio_postgres::GenericClient + Sync,
@@ -1048,6 +1347,32 @@ where
             .execute(
                 "INSERT INTO project_teams (project_id, team_id) VALUES ($1, $2)",
                 &[&project_id, &team_id],
+            )
+            .await?;
+    }
+    Ok(())
+}
+
+async fn pg_write_template_credentials<C>(
+    client: &C,
+    template_id: &str,
+    credential_ids: &[String],
+) -> AppResult<()>
+where
+    C: tokio_postgres::GenericClient + Sync,
+{
+    client
+        .execute(
+            "DELETE FROM template_credentials WHERE template_id = $1",
+            &[&template_id],
+        )
+        .await?;
+    for (position, credential_id) in credential_ids.iter().enumerate() {
+        client
+            .execute(
+                "INSERT INTO template_credentials (template_id, credential_id, position)
+                 VALUES ($1, $2, $3)",
+                &[&template_id, &credential_id, &(position as i32)],
             )
             .await?;
     }
@@ -2430,6 +2755,701 @@ impl Backend for PostgresBackend {
                 )
                 .await?;
             rows.iter().map(row_credential_usage).collect()
+        })
+    }
+
+    fn list_environments(&self, team_id: &str) -> AppResult<Vec<Environment>> {
+        let team = self.team_by_id(team_id)?.ok_or(ApiError::NotFound)?;
+        block_on(async {
+            let client = self.client.lock().await;
+            let rows = client
+                .query(
+                    "SELECT e.id, e.team_id, e.organization_id, e.name, e.image, e.pull_policy,
+                            e.network, e.description, e.created_at, COALESCE(o.name, ''),
+                            COALESCE(t.name, ''), e.tool
+                     FROM environments e
+                     LEFT JOIN organizations o ON o.id = e.organization_id
+                     LEFT JOIN teams t ON t.id = e.team_id
+                     WHERE (
+                         (e.team_id IS NULL OR e.team_id = '')
+                         AND (e.organization_id IS NULL OR e.organization_id = '')
+                     ) OR (
+                         (e.team_id IS NULL OR e.team_id = '')
+                         AND e.organization_id = $1
+                         AND $1 != ''
+                     ) OR e.team_id = $2
+                     ORDER BY
+                       CASE
+                         WHEN e.team_id IS NOT NULL AND e.team_id != '' THEN 2
+                         WHEN e.organization_id IS NOT NULL AND e.organization_id != '' THEN 1
+                         ELSE 0
+                       END,
+                       e.name",
+                    &[&team.organization_id, &team.id],
+                )
+                .await?;
+            rows.iter().map(row_environment).collect()
+        })
+    }
+
+    fn insert_environment(&self, item: &Environment) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            client
+                .execute(
+                    "INSERT INTO environments (
+                        id, team_id, organization_id, name, tool, image, pull_policy, network,
+                        description, created_at
+                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                    &[
+                        &item.id,
+                        &item.team_id,
+                        &item.organization_id,
+                        &item.name,
+                        &item.tool,
+                        &item.image,
+                        &item.pull_policy,
+                        &item.network,
+                        &item.description,
+                        &item.created_at,
+                    ],
+                )
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn update_environment(&self, item: &Environment) -> AppResult<()> {
+        let global = item.team_id.is_none() && item.organization_id.is_none();
+        block_on(async {
+            let mut client = self.client.lock().await;
+            let transaction = client.transaction().await?;
+            let changed = transaction
+                .execute(
+                    "UPDATE environments
+                     SET team_id = $2, organization_id = $3, name = $4, tool = $5, image = $6,
+                         pull_policy = $7, network = $8, description = $9
+                     WHERE id = $1",
+                    &[
+                        &item.id,
+                        &item.team_id,
+                        &item.organization_id,
+                        &item.name,
+                        &item.tool,
+                        &item.image,
+                        &item.pull_policy,
+                        &item.network,
+                        &item.description,
+                    ],
+                )
+                .await?;
+            if changed == 0 {
+                return Err(ApiError::NotFound);
+            }
+            for key in crate::settings::DEFAULT_ENVIRONMENT_KEYS {
+                let tool = key.trim_start_matches("default_environment_");
+                if global && crate::runner::environment_fits_tool(tool, &item.tool) {
+                    continue;
+                }
+                transaction
+                    .execute(
+                        "DELETE FROM settings WHERE key = $1 AND value = $2",
+                        &[&key, &item.id],
+                    )
+                    .await?;
+            }
+            transaction.commit().await?;
+            Ok(())
+        })
+    }
+
+    fn delete_environment(&self, id: &str) -> AppResult<()> {
+        block_on(async {
+            let mut client = self.client.lock().await;
+            let transaction = client.transaction().await?;
+            let changed = transaction
+                .execute("DELETE FROM environments WHERE id = $1", &[&id])
+                .await?;
+            if changed == 0 {
+                return Err(ApiError::NotFound);
+            }
+            for key in crate::settings::DEFAULT_ENVIRONMENT_KEYS {
+                transaction
+                    .execute(
+                        "DELETE FROM settings WHERE key = $1 AND value = $2",
+                        &[&key, &id],
+                    )
+                    .await?;
+            }
+            transaction.commit().await?;
+            Ok(())
+        })
+    }
+
+    fn list_templates(&self, team_id: &str) -> AppResult<Vec<Template>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let rows = client
+                .query(
+                    &format!(
+                        "SELECT {TEMPLATE_COLUMNS} FROM templates WHERE team_id = $1 ORDER BY name"
+                    ),
+                    &[&team_id],
+                )
+                .await?;
+            rows.iter().map(row_template).collect()
+        })
+    }
+
+    fn template(&self, id: &str) -> AppResult<Option<Template>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let row = client
+                .query_opt(
+                    &format!("SELECT {TEMPLATE_COLUMNS} FROM templates WHERE id = $1"),
+                    &[&id],
+                )
+                .await?;
+            row.as_ref().map(row_template).transpose()
+        })
+    }
+
+    fn insert_template(&self, item: &Template, credential_ids: &[String]) -> AppResult<()> {
+        block_on(async {
+            let mut client = self.client.lock().await;
+            let transaction = client.transaction().await?;
+            transaction
+                .execute(
+                    "INSERT INTO templates (
+                        id, team_id, name, description, tool, project_id, inventory_id,
+                        credential_id, environment_id, no_environment, entrypoint, extra_vars,
+                        spec, created_at, update_on_launch, admin_saved, prompt_on_launch
+                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                        $15, $16, $17)",
+                    &[
+                        &item.id,
+                        &item.team_id,
+                        &item.name,
+                        &item.description,
+                        &item.tool,
+                        &item.project_id,
+                        &item.inventory_id,
+                        &item.credential_id,
+                        &item.environment_id,
+                        &(item.no_environment as i32),
+                        &item.entrypoint,
+                        &item.extra_vars,
+                        &item.spec,
+                        &item.created_at,
+                        &(item.update_on_launch as i32),
+                        &(item.admin_saved as i32),
+                        &(item.prompt_on_launch as i32),
+                    ],
+                )
+                .await?;
+            pg_write_template_credentials(&transaction, &item.id, credential_ids).await?;
+            transaction.commit().await?;
+            Ok(())
+        })
+    }
+
+    fn update_template(&self, item: &Template, credential_ids: &[String]) -> AppResult<()> {
+        block_on(async {
+            let mut client = self.client.lock().await;
+            let transaction = client.transaction().await?;
+            let changed = transaction
+                .execute(
+                    "UPDATE templates SET name = $3, description = $4, tool = $5,
+                        project_id = $6, inventory_id = $7, credential_id = $8,
+                        environment_id = $9, no_environment = $10, entrypoint = $11,
+                        extra_vars = $12, spec = $13, update_on_launch = $14, admin_saved = $15,
+                        prompt_on_launch = $16
+                     WHERE id = $1 AND team_id = $2",
+                    &[
+                        &item.id,
+                        &item.team_id,
+                        &item.name,
+                        &item.description,
+                        &item.tool,
+                        &item.project_id,
+                        &item.inventory_id,
+                        &item.credential_id,
+                        &item.environment_id,
+                        &(item.no_environment as i32),
+                        &item.entrypoint,
+                        &item.extra_vars,
+                        &item.spec,
+                        &(item.update_on_launch as i32),
+                        &(item.admin_saved as i32),
+                        &(item.prompt_on_launch as i32),
+                    ],
+                )
+                .await?;
+            if changed == 0 {
+                return Err(ApiError::NotFound);
+            }
+            pg_write_template_credentials(&transaction, &item.id, credential_ids).await?;
+            transaction.commit().await?;
+            Ok(())
+        })
+    }
+
+    fn delete_template(&self, id: &str, team_id: &str) -> AppResult<()> {
+        block_on(async {
+            let mut client = self.client.lock().await;
+            let transaction = client.transaction().await?;
+            let changed = transaction
+                .execute(
+                    "DELETE FROM templates WHERE id = $1 AND team_id = $2",
+                    &[&id, &team_id],
+                )
+                .await?;
+            if changed == 0 {
+                return Err(ApiError::NotFound);
+            }
+            transaction
+                .execute(
+                    "DELETE FROM schedules WHERE target_kind = 'template' AND target_id = $1",
+                    &[&id],
+                )
+                .await?;
+            transaction.commit().await?;
+            Ok(())
+        })
+    }
+
+    fn template_credential_ids(&self, template_id: &str) -> AppResult<Vec<String>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let rows = client
+                .query(
+                    "SELECT credential_id FROM template_credentials
+                     WHERE template_id = $1 ORDER BY position, credential_id",
+                    &[&template_id],
+                )
+                .await?;
+            Ok(rows.iter().map(|row| row.get(0)).collect())
+        })
+    }
+
+    fn list_template_credential_links(&self, team_id: &str) -> AppResult<Vec<(String, String)>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let rows = client
+                .query(
+                    "SELECT tc.template_id, tc.credential_id
+                     FROM template_credentials tc
+                     JOIN templates t ON t.id = tc.template_id
+                     WHERE t.team_id = $1
+                     ORDER BY tc.template_id, tc.position, tc.credential_id",
+                    &[&team_id],
+                )
+                .await?;
+            Ok(rows.iter().map(|row| (row.get(0), row.get(1))).collect())
+        })
+    }
+
+    fn list_hooks(&self, team_id: &str) -> AppResult<Vec<Hook>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let rows = client
+                .query(
+                    &format!("SELECT {HOOK_COLUMNS} FROM hooks WHERE team_id = $1 ORDER BY name"),
+                    &[&team_id],
+                )
+                .await?;
+            rows.iter().map(row_hook).collect()
+        })
+    }
+
+    fn hook(&self, id: &str) -> AppResult<Option<Hook>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let row = client
+                .query_opt(
+                    &format!("SELECT {HOOK_COLUMNS} FROM hooks WHERE id = $1"),
+                    &[&id],
+                )
+                .await?;
+            row.as_ref().map(row_hook).transpose()
+        })
+    }
+
+    fn insert_hook(&self, item: &Hook) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            client
+                .execute(
+                    "INSERT INTO hooks (
+                        id, team_id, name, token, match_alertname, match_status, template_id,
+                        workflow_id, extra_vars, enabled, created_at
+                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+                    &[
+                        &item.id,
+                        &item.team_id,
+                        &item.name,
+                        &item.token,
+                        &item.match_alertname,
+                        &item.match_status,
+                        &item.template_id,
+                        &item.workflow_id,
+                        &item.extra_vars,
+                        &(item.enabled as i32),
+                        &item.created_at,
+                    ],
+                )
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn update_hook(&self, item: &Hook) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let changed = client
+                .execute(
+                    "UPDATE hooks SET name = $3, match_alertname = $4, match_status = $5,
+                        template_id = $6, workflow_id = $7, extra_vars = $8
+                     WHERE id = $1 AND team_id = $2",
+                    &[
+                        &item.id,
+                        &item.team_id,
+                        &item.name,
+                        &item.match_alertname,
+                        &item.match_status,
+                        &item.template_id,
+                        &item.workflow_id,
+                        &item.extra_vars,
+                    ],
+                )
+                .await?;
+            if changed == 0 {
+                return Err(ApiError::NotFound);
+            }
+            Ok(())
+        })
+    }
+
+    fn delete_hook(&self, id: &str, team_id: &str) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let changed = client
+                .execute(
+                    "DELETE FROM hooks WHERE id = $1 AND team_id = $2",
+                    &[&id, &team_id],
+                )
+                .await?;
+            if changed == 0 {
+                return Err(ApiError::NotFound);
+            }
+            Ok(())
+        })
+    }
+
+    fn workflow_team(&self, id: &str) -> AppResult<Option<String>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let row = client
+                .query_opt("SELECT team_id FROM workflows WHERE id = $1", &[&id])
+                .await?;
+            Ok(row.map(|row| row.get(0)))
+        })
+    }
+
+    fn list_team_schedules(&self, team_id: &str) -> AppResult<Vec<(Schedule, String)>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let rows = client
+                .query(
+                    &format!(
+                        "SELECT {SCHEDULE_COLUMNS},
+                            COALESCE(
+                                CASE target_kind
+                                    WHEN 'template' THEN (
+                                        SELECT name FROM templates WHERE id = schedules.target_id
+                                    )
+                                    WHEN 'workflow' THEN (
+                                        SELECT name FROM workflows WHERE id = schedules.target_id
+                                    )
+                                    ELSE ''
+                                END,
+                                ''
+                            )
+                         FROM schedules
+                         WHERE team_id = $1
+                         ORDER BY name"
+                    ),
+                    &[&team_id],
+                )
+                .await?;
+            rows.iter()
+                .map(|row| Ok((row_schedule(row)?, row.try_get(22)?)))
+                .collect()
+        })
+    }
+
+    fn schedule(&self, id: &str) -> AppResult<Option<Schedule>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let row = client
+                .query_opt(
+                    &format!("SELECT {SCHEDULE_COLUMNS} FROM schedules WHERE id = $1"),
+                    &[&id],
+                )
+                .await?;
+            row.as_ref().map(row_schedule).transpose()
+        })
+    }
+
+    fn list_schedules(&self, kind: &str, target_id: &str) -> AppResult<Vec<Schedule>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let rows = client
+                .query(
+                    &format!(
+                        "SELECT {SCHEDULE_COLUMNS} FROM schedules
+                         WHERE target_kind = $1 AND target_id = $2 ORDER BY name"
+                    ),
+                    &[&kind, &target_id],
+                )
+                .await?;
+            rows.iter().map(row_schedule).collect()
+        })
+    }
+
+    fn insert_schedule(&self, item: &Schedule) -> AppResult<()> {
+        let end_count = item.end_count.map(|count| count as i32);
+        block_on(async {
+            let client = self.client.lock().await;
+            client
+                .execute(
+                    "INSERT INTO schedules (
+                        id, team_id, name, target_kind, target_id, timezone, start_date, start_time,
+                        frequency, weekdays, end_kind, end_count, end_date, enabled, next_run_at,
+                        missed_at, occurrence_count, created_by, created_at, updated_at, updated_by,
+                        launch_block
+                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                        $15, $16, $17, $18, $19, $20, $21, $22)",
+                    &[
+                        &item.id,
+                        &item.team_id,
+                        &item.name,
+                        &item.target_kind,
+                        &item.target_id,
+                        &item.timezone,
+                        &item.start_date,
+                        &item.start_time,
+                        &item.frequency,
+                        &item.weekdays,
+                        &item.end_kind,
+                        &end_count,
+                        &item.end_date,
+                        &(item.enabled as i32),
+                        &item.next_run_at,
+                        &item.missed_at,
+                        &(item.occurrence_count as i32),
+                        &item.created_by,
+                        &item.created_at,
+                        &item.updated_at,
+                        &item.updated_by,
+                        &item.launch_block,
+                    ],
+                )
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn update_schedule(&self, item: &Schedule) -> AppResult<()> {
+        let end_count = item.end_count.map(|count| count as i32);
+        block_on(async {
+            let client = self.client.lock().await;
+            let changed = client
+                .execute(
+                    "UPDATE schedules SET
+                        name = $2, timezone = $3, start_date = $4, start_time = $5, frequency = $6,
+                        weekdays = $7, end_kind = $8, end_count = $9, end_date = $10,
+                        enabled = $11, next_run_at = $12, missed_at = $13, occurrence_count = $14,
+                        updated_at = $15, updated_by = $16, launch_block = $17
+                     WHERE id = $1 AND team_id = $18",
+                    &[
+                        &item.id,
+                        &item.name,
+                        &item.timezone,
+                        &item.start_date,
+                        &item.start_time,
+                        &item.frequency,
+                        &item.weekdays,
+                        &item.end_kind,
+                        &end_count,
+                        &item.end_date,
+                        &(item.enabled as i32),
+                        &item.next_run_at,
+                        &item.missed_at,
+                        &(item.occurrence_count as i32),
+                        &item.updated_at,
+                        &item.updated_by,
+                        &item.launch_block,
+                        &item.team_id,
+                    ],
+                )
+                .await?;
+            if changed == 0 {
+                return Err(ApiError::NotFound);
+            }
+            Ok(())
+        })
+    }
+
+    fn delete_schedule(&self, id: &str, team_id: &str) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let changed = client
+                .execute(
+                    "DELETE FROM schedules WHERE id = $1 AND team_id = $2",
+                    &[&id, &team_id],
+                )
+                .await?;
+            if changed == 0 {
+                return Err(ApiError::NotFound);
+            }
+            Ok(())
+        })
+    }
+
+    fn set_schedule_enabled(
+        &self,
+        id: &str,
+        team_id: &str,
+        enabled: bool,
+        next_run_at: Option<&str>,
+        occurrence_count: i64,
+    ) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let changed = client
+                .execute(
+                    "UPDATE schedules SET enabled = $3, next_run_at = $4,
+                        occurrence_count = $5, updated_at = $6
+                     WHERE id = $1 AND team_id = $2",
+                    &[
+                        &id,
+                        &team_id,
+                        &(enabled as i32),
+                        &next_run_at,
+                        &(occurrence_count as i32),
+                        &db::now(),
+                    ],
+                )
+                .await?;
+            if changed == 0 {
+                return Err(ApiError::NotFound);
+            }
+            Ok(())
+        })
+    }
+
+    fn claim_missed(&self, id: &str, team_id: &str) -> AppResult<Option<String>> {
+        block_on(async {
+            let mut client = self.client.lock().await;
+            let transaction = client.transaction().await?;
+            let row = transaction
+                .query_opt(
+                    "SELECT missed_at FROM schedules
+                     WHERE id = $1 AND team_id = $2 AND missed_at IS NOT NULL
+                     FOR UPDATE",
+                    &[&id, &team_id],
+                )
+                .await?;
+            let Some(row) = row else {
+                return Ok(None);
+            };
+            let missed_at: String = row.get(0);
+            transaction
+                .execute(
+                    "UPDATE schedules SET missed_at = NULL, updated_at = $3
+                     WHERE id = $1 AND team_id = $2 AND missed_at IS NOT NULL",
+                    &[&id, &team_id, &db::now()],
+                )
+                .await?;
+            transaction.commit().await?;
+            Ok(Some(missed_at))
+        })
+    }
+
+    fn restore_missed(&self, id: &str, team_id: &str, missed_at: &str) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            client
+                .execute(
+                    "UPDATE schedules SET missed_at = $3, updated_at = $4
+                     WHERE id = $1 AND team_id = $2 AND missed_at IS NULL",
+                    &[&id, &team_id, &missed_at, &db::now()],
+                )
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn due_schedules(&self, now: &str) -> AppResult<Vec<Schedule>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let rows = client
+                .query(
+                    &format!(
+                        "SELECT {SCHEDULE_COLUMNS} FROM schedules
+                         WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= $1
+                         ORDER BY next_run_at"
+                    ),
+                    &[&now],
+                )
+                .await?;
+            rows.iter().map(row_schedule).collect()
+        })
+    }
+
+    fn advance_schedule(
+        &self,
+        id: &str,
+        next_run_at: Option<&str>,
+        occurrence_count: i64,
+    ) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            client
+                .execute(
+                    "UPDATE schedules SET next_run_at = $2, occurrence_count = $3, updated_at = $4
+                     WHERE id = $1",
+                    &[&id, &next_run_at, &(occurrence_count as i32), &db::now()],
+                )
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn note_miss(&self, id: &str, missed_at: Option<&str>) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            client
+                .execute(
+                    "UPDATE schedules SET missed_at = $2, updated_at = $3 WHERE id = $1",
+                    &[&id, &missed_at, &db::now()],
+                )
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn set_launch_block(&self, id: &str, reason: Option<&str>) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            client
+                .execute(
+                    "UPDATE schedules SET launch_block = $2, updated_at = $3 WHERE id = $1",
+                    &[&id, &reason, &db::now()],
+                )
+                .await?;
+            Ok(())
         })
     }
 }

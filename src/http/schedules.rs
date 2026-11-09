@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, Role};
+use crate::backend::Backend;
 use crate::db::{self, Schedule};
 use crate::error::{ApiError, ApiJson, AppResult};
 use crate::schedule::{self, Input, Rule};
@@ -73,8 +74,8 @@ pub async fn list_for_team(
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
-    let db = state.db()?;
-    let items = db::list_team_schedules(&db, &team)?;
+    let db = state.store();
+    let items = db.list_team_schedules(&team)?;
     let rows = items
         .iter()
         .map(|(item, target_name)| {
@@ -153,8 +154,8 @@ pub async fn update(
     let name = require_name(&body.name)?;
     let rule = rule_from_fields(&body)?;
     {
-        let db = state.db()?;
-        let existing = load(&db, &id, &team)?;
+        let db = state.store();
+        let existing = load(db, &id, &team)?;
         let stored = rule.start_date.format("%Y-%m-%d").to_string();
         if existing.start_date != stored {
             schedule::ensure_start_is_recent(rule.start_date, rule.timezone)
@@ -164,8 +165,8 @@ pub async fn update(
     let (count, next) = schedule::first_from_blocking(rule.clone(), Utc::now())
         .await
         .map_err(ApiError::bad)?;
-    let db = state.db()?;
-    let existing = load(&db, &id, &team)?;
+    let db = state.store();
+    let existing = load(db, &id, &team)?;
     let mut item = stored(&existing, &name, &rule, count, &next);
     item.enabled = existing.enabled;
     item.missed_at = None;
@@ -173,7 +174,7 @@ pub async fn update(
     item.created_at = existing.created_at;
     item.updated_by = user.username.clone();
     item.launch_block = None;
-    db::update_schedule(&db, &item)?;
+    db.update_schedule(&item)?;
     Ok(Json(schedule_json(&item)))
 }
 
@@ -185,8 +186,8 @@ pub async fn remove(
 ) -> AppResult<Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let db = state.db()?;
-    db::delete_schedule(&db, &id, &team)?;
+    let db = state.store();
+    db.delete_schedule(&id, &team)?;
     Ok(no_content())
 }
 
@@ -200,8 +201,8 @@ pub async fn set_enabled(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let mut item = {
-        let db = state.db()?;
-        load(&db, &id, &team)?
+        let db = state.store();
+        load(db, &id, &team)?
     };
     let now = Utc::now();
     if body.enabled {
@@ -219,9 +220,8 @@ pub async fn set_enabled(
     }
     item.enabled = body.enabled;
     item.updated_at = db::now();
-    let db = state.db()?;
-    db::set_schedule_enabled(
-        &db,
+    let db = state.store();
+    db.set_schedule_enabled(
         &item.id,
         &team,
         item.enabled,
@@ -241,17 +241,17 @@ pub async fn answer_missed(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let (item, missed_at) = {
-        let mut db = state.db()?;
-        let item = load(&db, &id, &team)?;
-        let Some(missed_at) = db::claim_missed(&mut db, &id, &team)? else {
+        let db = state.store();
+        let item = load(db, &id, &team)?;
+        let Some(missed_at) = db.claim_missed(&id, &team)? else {
             return Err(ApiError::bad("schedule_has_no_missed_run"));
         };
         (item, missed_at)
     };
     if body.accept {
         if let Err(err) = schedule::start(&state, &item, &user.username) {
-            let db = state.db()?;
-            if let Err(restore) = db::restore_missed(&db, &id, &team, &missed_at) {
+            let db = state.store();
+            if let Err(restore) = db.restore_missed(&id, &team, &missed_at) {
                 tracing::error!(
                     schedule = %id,
                     error = %restore,
@@ -261,8 +261,8 @@ pub async fn answer_missed(
             return Err(err);
         }
     }
-    let db = state.db()?;
-    let item = load(&db, &id, &team)?;
+    let db = state.store();
+    let item = load(db, &id, &team)?;
     Ok(Json(schedule_json(&item)))
 }
 
@@ -275,9 +275,9 @@ fn list(
 ) -> AppResult<Json<Value>> {
     let team = team_header(headers)?;
     gate(state, user, &team, Role::Viewer)?;
-    let db = state.db()?;
-    target_team(&db, kind, id, &team)?;
-    let items = db::list_schedules(&db, kind, id)?;
+    let db = state.store();
+    target_team(db, kind, id, &team)?;
+    let items = db.list_schedules(kind, id)?;
     Ok(Json(json!(items
         .iter()
         .map(schedule_json)
@@ -299,8 +299,8 @@ async fn create(
     let (count, next) = schedule::first_from_blocking(rule.clone(), Utc::now())
         .await
         .map_err(ApiError::bad)?;
-    let db = state.db()?;
-    target_team(&db, kind, id, &team)?;
+    let db = state.store();
+    target_team(db, kind, id, &team)?;
     let now = db::now();
     let item = Schedule {
         id: Uuid::new_v4().to_string(),
@@ -326,7 +326,7 @@ async fn create(
         updated_at: now,
         launch_block: None,
     };
-    db::insert_schedule(&db, &item)?;
+    db.insert_schedule(&item)?;
     Ok(created(schedule_json(&item)))
 }
 
@@ -363,18 +363,18 @@ fn stored(
     }
 }
 
-fn load(db: &rusqlite::Connection, id: &str, team: &str) -> AppResult<Schedule> {
-    let item = db::schedule(db, id)?.ok_or(ApiError::NotFound)?;
+fn load(db: &dyn Backend, id: &str, team: &str) -> AppResult<Schedule> {
+    let item = db.schedule(id)?.ok_or(ApiError::NotFound)?;
     if item.team_id != team {
         return Err(ApiError::NotFound);
     }
     Ok(item)
 }
 
-fn target_team(db: &rusqlite::Connection, kind: &str, id: &str, team: &str) -> AppResult<()> {
+fn target_team(db: &dyn Backend, kind: &str, id: &str, team: &str) -> AppResult<()> {
     let owner = match kind {
-        "template" => db::template(db, id)?.map(|item| item.team_id),
-        "workflow" => db::workflow(db, id)?.map(|item| item.team_id),
+        "template" => db.template(id)?.map(|item| item.team_id),
+        "workflow" => db.workflow_team(id)?,
         _ => None,
     };
     match owner {

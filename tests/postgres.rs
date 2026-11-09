@@ -640,6 +640,575 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
+    let (status, environment, _) = call_team(
+        &app,
+        "POST",
+        "/api/environments",
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({
+            "name": format!("Environment {nanos}"),
+            "image": "quay.io/example/ee:1",
+            "tool": "ansible",
+            "pull_policy": "if_not_present",
+            "network": "",
+            "description": "Postgres environment",
+            "scope": "team"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{environment}");
+    let environment_id = environment["id"]
+        .as_str()
+        .expect("environment id")
+        .to_string();
+
+    let (status, environments, _) = call_team(
+        &app,
+        "GET",
+        "/api/environments",
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(environments
+        .as_array()
+        .is_some_and(|items| items.iter().any(|item| item["id"] == environment_id)));
+
+    let (status, opened_environment, _) = call_team(
+        &app,
+        "GET",
+        &format!("/api/environments/{environment_id}"),
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(opened_environment["tool"], "ansible");
+
+    let (status, updated_environment, _) = call_team(
+        &app,
+        "PUT",
+        &format!("/api/environments/{environment_id}"),
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({
+            "name": format!("Environment {nanos} renamed"),
+            "image": "quay.io/example/ee:2",
+            "tool": "ansible",
+            "pull_policy": "always",
+            "network": "",
+            "description": "Updated environment",
+            "scope": "team"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated_environment}");
+    assert_eq!(updated_environment["pull_policy"], "always");
+
+    let (status, invalid_environment, _) = call_team(
+        &app,
+        "POST",
+        "/api/environments",
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({
+            "name": format!("Invalid environment {nanos}"),
+            "image": "quay.io/example/ee:1",
+            "tool": "docker"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        invalid_environment["error"],
+        "choose_a_tool_for_the_environment"
+    );
+
+    let (status, invalid_network, _) = call_team(
+        &app,
+        "POST",
+        "/api/environments",
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({
+            "name": format!("Invalid network {nanos}"),
+            "image": "quay.io/example/ee:1",
+            "tool": "ansible",
+            "network": "bad network!"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(invalid_network["error"], "the_network_name_is_invalid");
+
+    let mut credential_ids = Vec::new();
+    for (label, kind, secret) in [
+        (
+            "ssh",
+            "ssh",
+            json!({"username": "ansible", "password": "secret"}),
+        ),
+        (
+            "vault-a",
+            "vault",
+            json!({"password": "one", "vault_id": "prod"}),
+        ),
+        (
+            "vault-b",
+            "vault",
+            json!({"password": "two", "vault_id": "dev"}),
+        ),
+        (
+            "vault-duplicate",
+            "vault",
+            json!({"password": "three", "vault_id": "prod"}),
+        ),
+        ("vault-c", "vault", json!({"password": "four"})),
+        ("vault-d", "vault", json!({"password": "five"})),
+        (
+            "scm",
+            "scm",
+            json!({"username": "git", "password": "secret"}),
+        ),
+    ] {
+        let (status, credential, _) = call_team(
+            &app,
+            "POST",
+            "/api/credentials",
+            Some(&cookie),
+            Some(&team_id),
+            Some(json!({
+                "name": format!("{label} {nanos}"),
+                "kind": kind,
+                "secret": secret
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{label}: {credential}");
+        credential_ids.push(
+            credential["id"]
+                .as_str()
+                .expect("credential id")
+                .to_string(),
+        );
+    }
+    let (ssh_id, vault_a, vault_b, vault_duplicate, vault_c, vault_d, scm_id) = (
+        &credential_ids[0],
+        &credential_ids[1],
+        &credential_ids[2],
+        &credential_ids[3],
+        &credential_ids[4],
+        &credential_ids[5],
+        &credential_ids[6],
+    );
+
+    let template_body = |name: &str, ids: Vec<&String>, no_environment: bool| {
+        json!({
+            "name": name,
+            "description": "Postgres template",
+            "tool": "ansible",
+            "credential_ids": ids,
+            "environment_id": environment_id,
+            "no_environment": no_environment,
+            "entrypoint": "site.yml",
+            "prompt_on_launch": true
+        })
+    };
+
+    let (status, duplicate_vault, _) = call_team(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team_id),
+        Some(template_body(
+            &format!("Duplicate vault {nanos}"),
+            vec![ssh_id, vault_a, vault_duplicate],
+            false,
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        duplicate_vault["error"],
+        "this_vault_id_is_already_selected"
+    );
+
+    let (status, duplicate_default, _) = call_team(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team_id),
+        Some(template_body(
+            &format!("Duplicate default vault {nanos}"),
+            vec![vault_c, vault_d],
+            false,
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        duplicate_default["error"],
+        "only_one_vault_credential_may_omit_the_vault"
+    );
+
+    let (status, template, _) = call_team(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team_id),
+        Some(template_body(
+            &format!("Template {nanos}"),
+            vec![ssh_id, vault_a, vault_b],
+            false,
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().expect("template id").to_string();
+    assert_eq!(template["credential_id"], ssh_id.as_str());
+    assert_eq!(template["credential_ids"].as_array().map(Vec::len), Some(3));
+    assert_eq!(template["prompt_on_launch"], true);
+    assert_eq!(template["no_environment"], false);
+
+    let (status, templates, _) = call_team(
+        &app,
+        "GET",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(templates
+        .as_array()
+        .is_some_and(|items| items.iter().any(|item| item["id"] == template_id)));
+
+    let (status, updated_template, _) = call_team(
+        &app,
+        "PUT",
+        &format!("/api/templates/{template_id}"),
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({
+            "name": format!("Template {nanos} renamed"),
+            "description": "Updated template",
+            "tool": "ansible",
+            "credential_ids": [ssh_id],
+            "no_environment": true,
+            "entrypoint": "site.yml",
+            "prompt_on_launch": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated_template}");
+    assert_eq!(updated_template["credential_ids"], json!([ssh_id]));
+    assert_eq!(updated_template["no_environment"], true);
+    assert_eq!(updated_template["prompt_on_launch"], false);
+
+    let (status, wrong_kind, _) = call_team(
+        &app,
+        "PUT",
+        &format!("/api/templates/{template_id}"),
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({
+            "name": format!("Template {nanos} renamed"),
+            "tool": "ansible",
+            "credential_ids": [scm_id],
+            "entrypoint": "site.yml"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        wrong_kind["error"],
+        "this_credential_kind_does_not_fit_the_tool"
+    );
+
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let schedule_body = |name: &str, time: &str| {
+        json!({
+            "name": name,
+            "timezone": "Europe/Berlin",
+            "start_date": today,
+            "start_time": time,
+            "frequency": "daily",
+            "weekdays": [],
+            "end_kind": "never"
+        })
+    };
+
+    let (status, invalid_schedule, _) = call_team(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/schedules"),
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({
+            "name": format!("Invalid schedule {nanos}"),
+            "timezone": "Europe/Berlin",
+            "start_date": today,
+            "start_time": "03:00",
+            "frequency": "yearly",
+            "end_kind": "never"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(invalid_schedule["error"], "schedule_repeat_is_invalid");
+
+    let (status, schedule, _) = call_team(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/schedules"),
+        Some(&cookie),
+        Some(&team_id),
+        Some(schedule_body(&format!("Schedule {nanos}"), "03:00")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{schedule}");
+    let schedule_id = schedule["id"].as_str().expect("schedule id").to_string();
+    assert!(schedule["next_run_at"].is_string());
+
+    let (status, schedules, _) = call_team(
+        &app,
+        "GET",
+        &format!("/api/templates/{template_id}/schedules"),
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(schedules
+        .as_array()
+        .is_some_and(|items| items.iter().any(|item| item["id"] == schedule_id)));
+
+    let (status, team_schedules, _) = call_team(
+        &app,
+        "GET",
+        "/api/schedules",
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(team_schedules
+        .as_array()
+        .is_some_and(|items| items.iter().any(|item| item["id"] == schedule_id
+            && item["target_name"] == format!("Template {nanos} renamed"))));
+
+    let (status, updated_schedule, _) = call_team(
+        &app,
+        "PUT",
+        &format!("/api/schedules/{schedule_id}"),
+        Some(&cookie),
+        Some(&team_id),
+        Some(schedule_body(&format!("Schedule {nanos} renamed"), "04:00")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated_schedule}");
+    assert_eq!(
+        updated_schedule["name"],
+        format!("Schedule {nanos} renamed")
+    );
+
+    let (status, disabled, _) = call_team(
+        &app,
+        "POST",
+        &format!("/api/schedules/{schedule_id}/enabled"),
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({"enabled": false})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{disabled}");
+    assert_eq!(disabled["enabled"], false);
+
+    let (status, hook, _) = call_team(
+        &app,
+        "POST",
+        "/api/hooks",
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({
+            "name": format!("Hook {nanos}"),
+            "match_alertname": "HighCPU",
+            "match_status": "firing",
+            "template_id": template_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{hook}");
+    let hook_id = hook["id"].as_str().expect("hook id").to_string();
+    assert!(hook["token"]
+        .as_str()
+        .is_some_and(|token| !token.is_empty()));
+
+    let (status, hooks, _) = call_team(
+        &app,
+        "GET",
+        "/api/hooks",
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(hooks
+        .as_array()
+        .is_some_and(|items| items.iter().any(|item| item["id"] == hook_id)));
+
+    let (status, updated_hook, _) = call_team(
+        &app,
+        "PUT",
+        &format!("/api/hooks/{hook_id}"),
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({
+            "name": format!("Hook {nanos} renamed"),
+            "match_alertname": "HighCPU",
+            "match_status": "resolved",
+            "template_id": template_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated_hook}");
+    assert_eq!(updated_hook["match_status"], "resolved");
+
+    let (status, invalid_hook, _) = call_team(
+        &app,
+        "PUT",
+        &format!("/api/hooks/{hook_id}"),
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({
+            "name": format!("Hook {nanos} renamed"),
+            "match_alertname": "HighCPU",
+            "match_status": "broken",
+            "template_id": template_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(invalid_hook["error"], "status_is_firing_resolved_or_any");
+
+    for (label, method, uri, body) in [
+        (
+            "environment",
+            "POST",
+            "/api/environments".to_string(),
+            Some(json!({
+                "name": format!("Denied environment {nanos}"),
+                "image": "quay.io/example/ee:1",
+                "tool": "ansible"
+            })),
+        ),
+        (
+            "template",
+            "POST",
+            "/api/templates".to_string(),
+            Some(json!({
+                "name": format!("Denied template {nanos}"),
+                "tool": "ansible",
+                "entrypoint": "site.yml"
+            })),
+        ),
+        (
+            "schedule",
+            "POST",
+            format!("/api/templates/{template_id}/schedules"),
+            Some(schedule_body(&format!("Denied schedule {nanos}"), "05:00")),
+        ),
+        (
+            "hook",
+            "POST",
+            "/api/hooks".to_string(),
+            Some(json!({
+                "name": format!("Denied hook {nanos}"),
+                "match_alertname": "HighCPU",
+                "template_id": template_id
+            })),
+        ),
+    ] {
+        let (status, denied, _) = call_team(
+            &app,
+            method,
+            &uri,
+            Some(&viewer_cookie),
+            Some(&team_id),
+            body,
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{label}: {denied}");
+    }
+
+    let (status, _, _) = call_team(
+        &app,
+        "DELETE",
+        &format!("/api/hooks/{hook_id}"),
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _, _) = call_team(
+        &app,
+        "DELETE",
+        &format!("/api/schedules/{schedule_id}"),
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _, _) = call_team(
+        &app,
+        "DELETE",
+        &format!("/api/templates/{template_id}"),
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _, _) = call_team(
+        &app,
+        "DELETE",
+        &format!("/api/environments/{environment_id}"),
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    for credential_id in &credential_ids {
+        let (status, _, _) = call_team(
+            &app,
+            "DELETE",
+            &format!("/api/credentials/{credential_id}"),
+            Some(&cookie),
+            Some(&team_id),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{credential_id}");
+    }
+
     let (status, body, _) = call(&app, "GET", "/api/users", Some(&cookie), None).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(

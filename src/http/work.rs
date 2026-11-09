@@ -163,9 +163,9 @@ pub async fn list_templates(
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
-    let db = state.db()?;
-    let items = db::list_templates(&db, &team)?;
-    let links = db::list_template_credential_links(&db, &team)?;
+    let db = state.store();
+    let items = db.list_templates(&team)?;
+    let links = db.list_template_credential_links(&team)?;
     let mut by_template: HashMap<String, Vec<String>> = HashMap::new();
     for (template_id, credential_id) in links {
         by_template
@@ -192,11 +192,8 @@ pub async fn create_template(
     gate(&state, &user, &team, Role::Operator)?;
     let (mut template, credential_ids) = build_template(&state, &team, None, body)?;
     template.admin_saved = user.is_admin;
-    let mut db = state.db()?;
-    let tx = db.transaction()?;
-    db::insert_template(&tx, &template)?;
-    db::save_template_credentials(&tx, &template.id, &credential_ids)?;
-    tx.commit()?;
+    let db = state.store();
+    db.insert_template(&template, &credential_ids)?;
     Ok(created(template_json(&template, &credential_ids)))
 }
 
@@ -211,11 +208,8 @@ pub async fn update_template(
     gate(&state, &user, &team, Role::Operator)?;
     let (mut template, credential_ids) = build_template(&state, &team, Some(id), body)?;
     template.admin_saved = user.is_admin;
-    let mut db = state.db()?;
-    let tx = db.transaction()?;
-    db::update_template(&tx, &template)?;
-    db::save_template_credentials(&tx, &template.id, &credential_ids)?;
-    tx.commit()?;
+    let db = state.store();
+    db.update_template(&template, &credential_ids)?;
     Ok(Json(template_json(&template, &credential_ids)))
 }
 
@@ -227,8 +221,8 @@ pub async fn delete_template(
 ) -> AppResult<Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let db = state.db()?;
-    db::delete_template(&db, &id, &team)?;
+    let db = state.store();
+    db.delete_template(&id, &team)?;
     Ok(no_content())
 }
 
@@ -631,8 +625,8 @@ pub async fn list_hooks(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     let reveal = can_operate(&state, &user, &team)?;
-    let db = state.db()?;
-    let hooks = db::list_hooks(&db, &team)?;
+    let db = state.store();
+    let hooks = db.list_hooks(&team)?;
     Ok(Json(json!(hooks
         .iter()
         .map(|hook| hook_json(hook, reveal))
@@ -648,8 +642,8 @@ pub async fn create_hook(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let hook = build_hook(&state, &team, None, body)?;
-    let db = state.db()?;
-    db::insert_hook(&db, &hook)?;
+    let db = state.store();
+    db.insert_hook(&hook)?;
     Ok(created(hook_json(&hook, true)))
 }
 
@@ -663,15 +657,15 @@ pub async fn update_hook(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let current = {
-        let db = state.db()?;
-        db::hook(&db, &id)?.ok_or(ApiError::NotFound)?
+        let db = state.store();
+        db.hook(&id)?.ok_or(ApiError::NotFound)?
     };
     if current.team_id != team {
         return Err(ApiError::NotFound);
     }
     let hook = build_hook(&state, &team, Some(&current), body)?;
-    let db = state.db()?;
-    db::update_hook(&db, &hook)?;
+    let db = state.store();
+    db.update_hook(&hook)?;
     Ok(Json(hook_json(&hook, true)))
 }
 
@@ -683,8 +677,8 @@ pub async fn delete_hook(
 ) -> AppResult<Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let db = state.db()?;
-    db::delete_hook(&db, &id, &team)?;
+    let db = state.store();
+    db.delete_hook(&id, &team)?;
     Ok(no_content())
 }
 
@@ -802,24 +796,27 @@ fn build_template(
     let environment_id = blank(body.environment_id);
     let no_environment = environment_id.is_none() && body.no_environment;
     let (created_at, loaded, previous_ids) = {
-        let db = state.db()?;
+        let db = state.store();
         if let Some(project_id) = &project_id {
-            db::project(&db, project_id)?.ok_or_else(|| ApiError::bad("project_is_missing"))?;
-            if !db::project_visible(&db, project_id, team)? {
+            db.project(project_id)?
+                .ok_or_else(|| ApiError::bad("project_is_missing"))?;
+            if !db.project_visible(project_id, team)? {
                 return Err(ApiError::bad("this_project_is_not_visible_to_this_team"));
             }
         }
         if let Some(inventory_id) = &inventory_id {
-            let inventory = db::inventory(&db, inventory_id)?
+            let inventory = db
+                .inventory(inventory_id)?
                 .ok_or_else(|| ApiError::bad("inventory_is_missing"))?;
             if inventory.team_id != team {
                 return Err(ApiError::bad("the_inventory_belongs_to_another_team"));
             }
         }
         if let Some(environment_id) = &environment_id {
-            let environment = db::environment(&db, environment_id)?
+            let environment = db
+                .environment(environment_id)?
                 .ok_or_else(|| ApiError::bad("execution_environment_is_missing"))?;
-            let owner = db::team_by_id(&db, team)?.ok_or(ApiError::NotFound)?;
+            let owner = db.team_by_id(team)?.ok_or(ApiError::NotFound)?;
             if !db::environment_visible(&environment, &owner) {
                 return Err(ApiError::bad(
                     "the_execution_environment_is_not_visible_to_this",
@@ -832,7 +829,7 @@ fn build_template(
             }
         }
         let created_at = if let Some(id) = &id {
-            db::template(&db, id)?
+            db.template(id)?
                 .map(|item| item.created_at)
                 .unwrap_or_else(db::now)
         } else {
@@ -840,12 +837,13 @@ fn build_template(
         };
         let mut loaded = Vec::with_capacity(requested_ids.len());
         for credential_id in &requested_ids {
-            let credential = db::credential(&db, credential_id)?
+            let credential = db
+                .credential(credential_id)?
                 .ok_or_else(|| ApiError::bad("credential_is_missing"))?;
             loaded.push(credential);
         }
         let previous_ids = match &id {
-            Some(id) => db::template_credential_ids(&db, id)?,
+            Some(id) => db.template_credential_ids(id)?,
             None => Vec::new(),
         };
         (created_at, loaded, previous_ids)
@@ -1007,18 +1005,20 @@ fn build_hook(
     if !extra.is_object() {
         return Err(ApiError::bad("extra_vars_must_be_an_object"));
     }
-    let db = state.db()?;
+    let db = state.store();
     if let Some(template_id) = &template_id {
-        let template =
-            db::template(&db, template_id)?.ok_or_else(|| ApiError::bad("template_is_missing"))?;
+        let template = db
+            .template(template_id)?
+            .ok_or_else(|| ApiError::bad("template_is_missing"))?;
         if template.team_id != team {
             return Err(ApiError::bad("the_template_belongs_to_another_team"));
         }
     }
     if let Some(workflow_id) = &workflow_id {
-        let item =
-            db::workflow(&db, workflow_id)?.ok_or_else(|| ApiError::bad("workflow_is_missing"))?;
-        if item.team_id != team {
+        let owner = db
+            .workflow_team(workflow_id)?
+            .ok_or_else(|| ApiError::bad("workflow_is_missing"))?;
+        if owner != team {
             return Err(ApiError::bad("the_workflow_belongs_to_another_team"));
         }
     }
