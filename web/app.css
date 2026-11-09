@@ -649,6 +649,10 @@ button.run-line:hover { outline: 1px solid var(--line); }
   padding: 24px;
   background: rgba(28, 25, 23, 0.45);
 }
+@media (min-width: 901px) {
+  .overlay[data-edit-overlay],
+  .overlay#schedule-form { left: 232px; }
+}
 .overlay-card {
   width: min(920px, 100%);
   max-height: min(80vh, 760px);
