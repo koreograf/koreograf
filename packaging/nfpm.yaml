@@ -37,14 +37,6 @@ contents:
   - src: packaging/koreograf.env
     dst: /etc/koreograf/koreograf.env
     type: config|noreplace
-    packager: deb
-    file_info:
-      mode: 0600
-      owner: root
-      group: root
-  - dst: /etc/koreograf/koreograf.env
-    type: ghost
-    packager: rpm
     file_info:
       mode: 0600
       owner: root

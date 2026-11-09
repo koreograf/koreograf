@@ -163,7 +163,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag || github.ref_name }}
-        run: gh release upload "$TAG" dist/*.deb dist/*.rpm --clobber
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            exit 0
+          fi
+          gh release upload "$TAG" dist/*.deb dist/*.rpm --clobber
 
   notes:
     name: release notes

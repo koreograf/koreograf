@@ -15,6 +15,9 @@ WorkingDirectory=/var/lib/koreograf
 ExecStart=/usr/bin/koreograf
 Restart=on-failure
 RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=read-only
 StateDirectory=koreograf
 StateDirectoryMode=0750
 

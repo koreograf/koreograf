@@ -46,7 +46,7 @@ Fedora and RHEL:
 sudo dnf install ./koreograf_<version>_amd64.rpm
 ```
 
-Use the `arm64` file on that architecture. The package creates the system user and group `koreograf` with home `/var/lib/koreograf` and no login shell, owns `/var/lib/koreograf` with mode `0750`, and starts `koreograf.service`. The unit reads `/etc/koreograf/koreograf.env` (mode `0600`, owner root) and runs `/usr/bin/koreograf` as `koreograf`, with a restart on failure. The package sets `KOREOGRAF_DATA=/var/lib/koreograf` and `KOREOGRAF_BIND=127.0.0.1:8080`. The service listens on loopback until that file changes; edit it, then `sudo systemctl restart koreograf`.
+Use the `arm64` file on that architecture. The package creates the system user and group `koreograf` with home `/var/lib/koreograf` and no login shell, owns `/var/lib/koreograf` with mode `0750`, and starts `koreograf.service`. The unit reads `/etc/koreograf/koreograf.env` (mode `0600`, owner root) and runs `/usr/bin/koreograf` as `koreograf`, with a restart on failure. The package sets `KOREOGRAF_DATA=/var/lib/koreograf` and `KOREOGRAF_BIND=127.0.0.1:8080`. The service listens on loopback until that file changes; edit it, then `sudo systemctl restart koreograf`. The unit turns on `NoNewPrivileges`, `PrivateTmp`, and a read-only home. For container runner mode, add `koreograf` to the `docker` group once (`sudo usermod -aG docker koreograf`) and restart the service; without it a job fails at start with a line that names the missing socket.
 
 ```bash
 curl -fsS http://127.0.0.1:8080/api/version

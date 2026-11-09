@@ -13799,7 +13799,7 @@ fn the_packages_ship_a_systemd_unit_and_a_pinned_nfpm_config() {
     assert!(nfpm.contains("openssh-clients"));
     assert!(nfpm.contains("ca-certificates"));
     assert!(nfpm.contains("type: config|noreplace"));
-    assert!(nfpm.contains("type: ghost"));
+    assert!(!nfpm.contains("type: ghost"));
     assert!(nfpm.contains("/lib/systemd/system/koreograf.service"));
     assert!(nfpm.contains("/etc/koreograf/koreograf.env"));
     let unit =
@@ -13819,6 +13819,7 @@ fn the_packages_ship_a_systemd_unit_and_a_pinned_nfpm_config() {
     assert!(release.contains("dist/koreograf_${version}_${PACKAGE_ARCH}.deb"));
     assert!(release.contains("dist/koreograf_${version}_${PACKAGE_ARCH}.rpm"));
     assert!(release.contains("gh release upload \"$TAG\" dist/*.deb dist/*.rpm"));
+    assert!(release.contains("gh release view \"$TAG\" >/dev/null"));
     let ci = std::fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("ci.yml");
     assert!(ci.contains("--packager deb"));
     assert!(!ci.contains("--packager rpm"));
