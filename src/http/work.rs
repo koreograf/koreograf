@@ -522,8 +522,8 @@ pub async fn list_workflows(
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
-    let db = state.db()?;
-    let items = db::list_workflows(&db, &team)?;
+    let db = state.store();
+    let items = db.list_workflows(&team)?;
     Ok(Json(json!(items
         .iter()
         .map(workflow_json)
@@ -535,9 +535,9 @@ pub async fn get_workflow(
     user: AuthUser,
     Path(id): Path<String>,
 ) -> AppResult<Json<Value>> {
-    let db = state.db()?;
-    let item = db::workflow(&db, &id)?.ok_or(ApiError::NotFound)?;
-    crate::auth::authorize_connection(&db, &user, &item.team_id, Role::Viewer)?;
+    let db = state.store();
+    let item = db.workflow(&id)?.ok_or(ApiError::NotFound)?;
+    crate::auth::authorize(db, &user, &item.team_id, Role::Viewer)?;
     Ok(Json(workflow_json(&item)))
 }
 
@@ -551,8 +551,8 @@ pub async fn create_workflow(
     gate(&state, &user, &team, Role::Operator)?;
     let mut item = build_workflow(&state, &team, None, body)?;
     item.admin_saved = user.is_admin;
-    let db = state.db()?;
-    db::insert_workflow(&db, &item)?;
+    let db = state.store();
+    db.insert_workflow(&item)?;
     Ok(created(workflow_json(&item)))
 }
 
@@ -567,8 +567,8 @@ pub async fn update_workflow(
     gate(&state, &user, &team, Role::Operator)?;
     let mut item = build_workflow(&state, &team, Some(id), body)?;
     item.admin_saved = user.is_admin;
-    let db = state.db()?;
-    db::update_workflow(&db, &item)?;
+    let db = state.store();
+    db.update_workflow(&item)?;
     Ok(Json(workflow_json(&item)))
 }
 
@@ -580,8 +580,8 @@ pub async fn delete_workflow(
 ) -> AppResult<Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let db = state.db()?;
-    db::delete_workflow(&db, &id, &team)?;
+    let db = state.store();
+    db.delete_workflow(&id, &team)?;
     Ok(no_content())
 }
 
@@ -689,8 +689,8 @@ pub async fn list_deliveries(
 ) -> AppResult<Json<Value>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
-    let db = state.db()?;
-    Ok(Json(json!(db::list_deliveries(&db, &team, 30)?)))
+    let db = state.store();
+    Ok(Json(json!(db.list_deliveries(&team, 30)?)))
 }
 
 pub async fn test_hook(
@@ -699,9 +699,9 @@ pub async fn test_hook(
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let hook = {
-        let db = state.db()?;
-        let hook = db::hook(&db, &id)?.ok_or(ApiError::NotFound)?;
-        crate::auth::authorize_connection(&db, &user, &hook.team_id, Role::Operator)?;
+        let db = state.store();
+        let hook = db.hook(&id)?.ok_or(ApiError::NotFound)?;
+        crate::auth::authorize(db, &user, &hook.team_id, Role::Operator)?;
         hook
     };
     let payload = json!({
@@ -726,8 +726,8 @@ pub async fn ingest(
     ApiJsonValue(payload): ApiJsonValue,
 ) -> AppResult<Json<Value>> {
     let hook = {
-        let db = state.db()?;
-        db::hook(&db, &id)?.ok_or(ApiError::NotFound)?
+        let db = state.store();
+        db.hook(&id)?.ok_or(ApiError::NotFound)?
     };
     if !crypto::tokens_equal(&hook.token, &token) {
         return Err(ApiError::Unauthorized);
@@ -749,8 +749,8 @@ fn can_operate(state: &Shared, user: &AuthUser, team: &str) -> AppResult<bool> {
     if user.is_admin {
         return Ok(true);
     }
-    let db = state.db()?;
-    let Some(role) = db::role_of(&db, team, &user.id)? else {
+    let db = state.store();
+    let Some(role) = db.role_of(team, &user.id)? else {
         return Ok(false);
     };
     Ok(Role::parse(&role).is_some_and(|role| role >= Role::Operator))
@@ -890,22 +890,24 @@ fn requested_credential_ids(body: &TemplateBody) -> Vec<String> {
 }
 
 fn check_node_overrides(
-    db: &rusqlite::Connection,
+    store: &dyn crate::backend::Backend,
     team: &str,
     template: &Template,
     node: &workflow::GraphNode,
 ) -> AppResult<()> {
     let over = &node.overrides;
     if let Some(id) = over.inventory_id.as_deref().filter(|id| !id.is_empty()) {
-        let inventory =
-            db::inventory(db, id)?.ok_or_else(|| ApiError::bad("inventory_is_missing"))?;
+        let inventory = store
+            .inventory(id)?
+            .ok_or_else(|| ApiError::bad("inventory_is_missing"))?;
         if inventory.team_id != team {
             return Err(ApiError::bad("the_inventory_belongs_to_another_team"));
         }
     }
     if let Some(id) = over.credential_id.as_deref().filter(|id| !id.is_empty()) {
-        let credential =
-            db::credential(db, id)?.ok_or_else(|| ApiError::bad("credential_is_missing"))?;
+        let credential = store
+            .credential(id)?
+            .ok_or_else(|| ApiError::bad("credential_is_missing"))?;
         if credential.team_id != team {
             return Err(ApiError::bad("the_credential_belongs_to_another_team"));
         }
@@ -952,18 +954,18 @@ fn build_workflow(
     body: WorkflowBody,
 ) -> AppResult<Workflow> {
     workflow::validate(&body.graph).map_err(ApiError::bad)?;
-    let db = state.db()?;
+    let db = state.store();
     for node in &body.graph.nodes {
-        let template = db::template(&db, &node.template_id)?.ok_or_else(|| {
+        let template = db.template(&node.template_id)?.ok_or_else(|| {
             ApiError::bad_vars("template.missing_named", [("name", node.name.as_str())])
         })?;
         if template.team_id != team {
             return Err(ApiError::bad("a_template_belongs_to_another_team"));
         }
-        check_node_overrides(&db, team, &template, node)?;
+        check_node_overrides(db, team, &template, node)?;
     }
     let created_at = if let Some(id) = &id {
-        db::workflow(&db, id)?
+        db.workflow(id)?
             .map(|item| item.created_at)
             .unwrap_or_else(db::now)
     } else {

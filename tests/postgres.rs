@@ -125,6 +125,593 @@ async fn postgres_session(
         .expect("insert postgres session");
 }
 
+fn git(dir: &Path, args: &[&str]) {
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .status()
+        .expect("git is not installed");
+    assert!(status.success(), "git {args:?} in {}", dir.display());
+}
+
+static POSTGRES_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+
+async fn postgres_guard() -> tokio::sync::MutexGuard<'static, ()> {
+    POSTGRES_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await
+}
+
+#[tokio::test]
+async fn postgres_serves_workflows_hooks_and_project_sync() {
+    let Ok(url) = std::env::var("KOREOGRAF_TEST_POSTGRES_URL") else {
+        eprintln!("skipping PostgreSQL test: KOREOGRAF_TEST_POSTGRES_URL is not set");
+        return;
+    };
+    if url.trim().is_empty() {
+        eprintln!("skipping PostgreSQL test: KOREOGRAF_TEST_POSTGRES_URL is empty");
+        return;
+    }
+    let _guard = postgres_guard().await;
+    let database = koreograf::parse_database_config(&url, None, None).expect("postgres url");
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-postgres-workflows-{nanos}"));
+    let origin = std::env::temp_dir().join(format!("koreograf-postgres-origin-{nanos}"));
+    std::fs::create_dir_all(&origin).expect("origin");
+    let mut cfg = config(&dir);
+    cfg.admin_user = format!("wfadmin{nanos}");
+    cfg.project_roots.push(origin.clone());
+    let state = koreograf::boot_with(cfg, database).expect("boot");
+    assert_eq!(state.engine(), "postgresql");
+    let app = koreograf::router(state);
+
+    let (status, _, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        Some(json!({
+            "username": format!("wfadmin{nanos}"),
+            "password": "test-admin-pass"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let cookie = cookie.expect("session cookie");
+
+    let (status, org, _) = call(
+        &app,
+        "POST",
+        "/api/organizations",
+        Some(&cookie),
+        Some(json!({
+            "name": format!("Workflow org {nanos}"),
+            "description": "Postgres workflow organization"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{org}");
+    let org_id = org["id"].as_str().expect("organization id").to_string();
+
+    let (status, team, _) = call(
+        &app,
+        "POST",
+        "/api/teams",
+        Some(&cookie),
+        Some(json!({
+            "name": format!("Workflow team {nanos}"),
+            "description": "Postgres workflow team",
+            "organization_id": org_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{team}");
+    let team_id = team["id"].as_str().expect("team id").to_string();
+
+    let (status, template, _) = call_team(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({
+            "name": format!("Workflow template {nanos}"),
+            "description": "Postgres workflow template",
+            "tool": "ansible",
+            "entrypoint": "site.yml",
+            "no_environment": true
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().expect("template id").to_string();
+
+    let workflow_body = |name: &str, graph: Value| {
+        json!({
+            "name": name,
+            "description": "Postgres workflow",
+            "graph": graph
+        })
+    };
+
+    let (status, workflow, _) = call_team(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(&cookie),
+        Some(&team_id),
+        Some(workflow_body(
+            &format!("Workflow {nanos}"),
+            json!({
+                "nodes": [{
+                    "id": "start",
+                    "template_id": template_id,
+                    "name": "Start"
+                }],
+                "edges": []
+            }),
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{workflow}");
+    let workflow_id = workflow["id"].as_str().expect("workflow id").to_string();
+    assert_eq!(workflow["graph"]["nodes"].as_array().map(Vec::len), Some(1));
+
+    let (status, workflows, _) = call_team(
+        &app,
+        "GET",
+        "/api/workflows",
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(workflows
+        .as_array()
+        .is_some_and(|items| items.iter().any(|item| item["id"] == workflow_id)));
+
+    let (status, fetched, _) = call_team(
+        &app,
+        "GET",
+        &format!("/api/workflows/{workflow_id}"),
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(fetched["name"], format!("Workflow {nanos}"));
+
+    let (status, updated, _) = call_team(
+        &app,
+        "PUT",
+        &format!("/api/workflows/{workflow_id}"),
+        Some(&cookie),
+        Some(&team_id),
+        Some(workflow_body(
+            &format!("Workflow {nanos} renamed"),
+            json!({
+                "nodes": [
+                    {"id": "start", "template_id": template_id, "name": "Start"},
+                    {"id": "finish", "template_id": template_id, "name": "Finish"}
+                ],
+                "edges": [{"from": "start", "to": "finish", "when": "success"}]
+            }),
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["graph"]["edges"].as_array().map(Vec::len), Some(1));
+
+    let (status, cycle, _) = call_team(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(&cookie),
+        Some(&team_id),
+        Some(workflow_body(
+            &format!("Cycle {nanos}"),
+            json!({
+                "nodes": [
+                    {"id": "a", "template_id": template_id, "name": "A"},
+                    {"id": "b", "template_id": template_id, "name": "B"}
+                ],
+                "edges": [
+                    {"from": "a", "to": "b", "when": "success"},
+                    {"from": "b", "to": "a", "when": "success"}
+                ]
+            }),
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(cycle["error"], "the_workflow_contains_a_cycle");
+
+    let (status, missing, _) = call_team(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(&cookie),
+        Some(&team_id),
+        Some(workflow_body(
+            &format!("Missing template {nanos}"),
+            json!({
+                "nodes": [{
+                    "id": "start",
+                    "template_id": format!("missing-{nanos}"),
+                    "name": "Missing"
+                }],
+                "edges": []
+            }),
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(missing["error"], "template.missing_named");
+
+    let (status, hook, _) = call_team(
+        &app,
+        "POST",
+        "/api/hooks",
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({
+            "name": format!("Workflow hook {nanos}"),
+            "match_alertname": "HighCPU",
+            "match_status": "firing",
+            "template_id": template_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{hook}");
+    let hook_id = hook["id"].as_str().expect("hook id").to_string();
+    let token = hook["token"].as_str().expect("hook token").to_string();
+
+    let (status, wrong_token, _) = call(
+        &app,
+        "POST",
+        &format!("/hooks/{hook_id}/wrong-token"),
+        None,
+        Some(json!({
+            "status": "firing",
+            "alerts": [{"status": "firing", "labels": {"alertname": "HighCPU"}}]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(wrong_token["error"], "sign_in_is_required");
+
+    let (status, ignored, _) = call(
+        &app,
+        "POST",
+        &format!("/hooks/{hook_id}/{token}"),
+        None,
+        Some(json!({
+            "status": "firing",
+            "alerts": [{"status": "firing", "labels": {"alertname": "Other"}}]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ignored}");
+    assert_eq!(ignored["status"], "ignored");
+
+    let (status, test_hook, _) = call_team(
+        &app,
+        "POST",
+        "/api/hooks",
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({
+            "name": format!("Resolved hook {nanos}"),
+            "match_alertname": "HighCPU",
+            "match_status": "resolved",
+            "template_id": template_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{test_hook}");
+    let test_hook_id = test_hook["id"].as_str().expect("test hook id").to_string();
+
+    let (status, tested, _) = call(
+        &app,
+        "POST",
+        &format!("/api/hooks/{test_hook_id}/test"),
+        Some(&cookie),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{tested}");
+    assert_eq!(tested["status"], "ignored");
+
+    let (status, deliveries, _) = call_team(
+        &app,
+        "GET",
+        &format!("/api/hooks/{hook_id}/deliveries"),
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(deliveries.as_array().is_some_and(|items| items
+        .iter()
+        .any(|item| item["hook_id"] == hook_id && item["status"] == "ignored")));
+
+    let nonmember_username = format!("wfnonmember{nanos}");
+    let viewer_username = format!("wfviewer{nanos}");
+    let nonmember_token = format!("wfnonmember-session-{nanos}");
+    let viewer_token = format!("wfviewer-session-{nanos}");
+    postgres_session(
+        &url,
+        &format!("user-{nanos}-wf-nonmember"),
+        &nonmember_username,
+        &[],
+        &nonmember_token,
+    )
+    .await;
+    postgres_session(
+        &url,
+        &format!("user-{nanos}-wf-viewer"),
+        &viewer_username,
+        &[(&team_id, "viewer")],
+        &viewer_token,
+    )
+    .await;
+    let nonmember_cookie = format!("koreograf_session={nonmember_token}");
+    let viewer_cookie = format!("koreograf_session={viewer_token}");
+
+    let (status, denied, _) = call_team(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(&viewer_cookie),
+        Some(&team_id),
+        Some(workflow_body(
+            &format!("Denied workflow {nanos}"),
+            json!({"nodes": [], "edges": []}),
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+
+    let (status, denied, _) = call(
+        &app,
+        "GET",
+        &format!("/api/workflows/{workflow_id}"),
+        Some(&nonmember_cookie),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+
+    let (status, denied, _) = call(
+        &app,
+        "POST",
+        &format!("/api/hooks/{test_hook_id}/test"),
+        Some(&viewer_cookie),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+
+    let (status, hooks, _) = call_team(
+        &app,
+        "GET",
+        "/api/hooks",
+        Some(&viewer_cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{hooks}");
+    assert!(hooks
+        .as_array()
+        .is_some_and(|items| items.iter().all(|item| item["token"] == "")));
+
+    git(&origin, &["init", "-b", "main"]);
+    git(&origin, &["config", "user.email", "test@example.com"]);
+    git(&origin, &["config", "user.name", "Koreograf Test"]);
+    std::fs::write(origin.join("marker.txt"), "one\n").expect("marker");
+    git(&origin, &["add", "marker.txt"]);
+    git(&origin, &["commit", "-m", "one"]);
+    let source = format!("file://{}", origin.display());
+
+    let (status, project, _) = call_team(
+        &app,
+        "POST",
+        "/api/projects",
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({
+            "name": format!("Sync project {nanos}"),
+            "source_type": "git",
+            "source": source
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{project}");
+    let project_id = project["id"].as_str().expect("project id").to_string();
+
+    let (status, synced, _) = call_team(
+        &app,
+        "POST",
+        &format!("/api/projects/{project_id}/sync"),
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{synced}");
+
+    let (status, stored, _) = call_team(
+        &app,
+        "GET",
+        &format!("/api/projects/{project_id}"),
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["last_sync_status"], "success");
+    assert!(stored["last_sync_at"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+    assert!(stored["last_sync_commit"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+
+    let (status, broken, _) = call_team(
+        &app,
+        "POST",
+        "/api/projects",
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({
+            "name": format!("Broken sync {nanos}"),
+            "source_type": "git",
+            "source": format!("file:///tmp/koreograf-missing-{nanos}")
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{broken}");
+    let broken_id = broken["id"]
+        .as_str()
+        .expect("broken project id")
+        .to_string();
+
+    let (status, failed, _) = call_team(
+        &app,
+        "POST",
+        &format!("/api/projects/{broken_id}/sync"),
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{failed}");
+
+    let (status, broken_stored, _) = call_team(
+        &app,
+        "GET",
+        &format!("/api/projects/{broken_id}"),
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(broken_stored["last_sync_status"], "failed");
+
+    let (status, _, _) = call_team(
+        &app,
+        "GET",
+        &format!("/api/projects/{project_id}"),
+        Some(&viewer_cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, denied, _) = call_team(
+        &app,
+        "POST",
+        &format!("/api/projects/{project_id}/sync"),
+        Some(&viewer_cookie),
+        Some(&team_id),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+
+    let (status, _, _) = call_team(
+        &app,
+        "DELETE",
+        &format!("/api/workflows/{workflow_id}"),
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _, _) = call_team(
+        &app,
+        "GET",
+        &format!("/api/workflows/{workflow_id}"),
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, _, _) = call_team(
+        &app,
+        "DELETE",
+        &format!("/api/hooks/{hook_id}"),
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _, _) = call_team(
+        &app,
+        "DELETE",
+        &format!("/api/hooks/{test_hook_id}"),
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _, _) = call_team(
+        &app,
+        "DELETE",
+        &format!("/api/projects/{project_id}"),
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _, _) = call_team(
+        &app,
+        "DELETE",
+        &format!("/api/projects/{broken_id}"),
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _, _) = call_team(
+        &app,
+        "DELETE",
+        &format!("/api/templates/{template_id}"),
+        Some(&cookie),
+        Some(&team_id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let _ = std::fs::remove_dir_all(&origin);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[tokio::test]
 async fn postgres_serves_the_auth_and_resource_slice() {
     let Ok(url) = std::env::var("KOREOGRAF_TEST_POSTGRES_URL") else {
@@ -135,6 +722,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
         eprintln!("skipping PostgreSQL test: KOREOGRAF_TEST_POSTGRES_URL is empty");
         return;
     }
+    let _guard = postgres_guard().await;
     let database = koreograf::parse_database_config(&url, None, None).expect("postgres url");
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

@@ -12,8 +12,9 @@ use rusqlite::params;
 
 use crate::config::{DatabaseConfig, PostgresConfig, SslMode};
 use crate::db::{
-    self, Credential, CredentialUsage, Environment, Hook, Inventory, InventorySource, Member,
-    Organization, Project, Schedule, Team, Template, User, UserMembership,
+    self, Credential, CredentialUsage, Delivery, Environment, Hook, Inventory, InventorySource,
+    Member, NewDelivery, Organization, Project, Schedule, Team, Template, User, UserMembership,
+    Workflow,
 };
 use crate::error::{ApiError, AppResult};
 
@@ -166,6 +167,13 @@ pub(crate) trait Backend: Send + Sync {
     fn insert_hook(&self, item: &Hook) -> AppResult<()>;
     fn update_hook(&self, item: &Hook) -> AppResult<()>;
     fn delete_hook(&self, id: &str, team_id: &str) -> AppResult<()>;
+    fn list_deliveries(&self, team_id: &str, limit: i64) -> AppResult<Vec<Delivery>>;
+    fn insert_delivery(&self, item: &NewDelivery<'_>) -> AppResult<()>;
+    fn list_workflows(&self, team_id: &str) -> AppResult<Vec<Workflow>>;
+    fn workflow(&self, id: &str) -> AppResult<Option<Workflow>>;
+    fn insert_workflow(&self, item: &Workflow) -> AppResult<()>;
+    fn update_workflow(&self, item: &Workflow) -> AppResult<()>;
+    fn delete_workflow(&self, id: &str, team_id: &str) -> AppResult<()>;
     fn workflow_team(&self, id: &str) -> AppResult<Option<String>>;
     fn list_team_schedules(&self, team_id: &str) -> AppResult<Vec<(Schedule, String)>>;
     fn schedule(&self, id: &str) -> AppResult<Option<Schedule>>;
@@ -760,6 +768,41 @@ impl Backend for SqliteBackend {
         db::delete_hook(&conn, id, team_id)
     }
 
+    fn list_deliveries(&self, team_id: &str, limit: i64) -> AppResult<Vec<Delivery>> {
+        let conn = lock(&self.conn)?;
+        db::list_deliveries(&conn, team_id, limit)
+    }
+
+    fn insert_delivery(&self, item: &NewDelivery<'_>) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::insert_delivery(&conn, *item)
+    }
+
+    fn list_workflows(&self, team_id: &str) -> AppResult<Vec<Workflow>> {
+        let conn = lock(&self.conn)?;
+        db::list_workflows(&conn, team_id)
+    }
+
+    fn workflow(&self, id: &str) -> AppResult<Option<Workflow>> {
+        let conn = lock(&self.conn)?;
+        db::workflow(&conn, id)
+    }
+
+    fn insert_workflow(&self, item: &Workflow) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::insert_workflow(&conn, item)
+    }
+
+    fn update_workflow(&self, item: &Workflow) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::update_workflow(&conn, item)
+    }
+
+    fn delete_workflow(&self, id: &str, team_id: &str) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        db::delete_workflow(&conn, id, team_id)
+    }
+
     fn workflow_team(&self, id: &str) -> AppResult<Option<String>> {
         let conn = lock(&self.conn)?;
         Ok(db::workflow(&conn, id)?.map(|item| item.team_id))
@@ -1137,6 +1180,11 @@ const TEMPLATE_COLUMNS: &str =
 const HOOK_COLUMNS: &str = "id, team_id, name, token, match_alertname, match_status, template_id, \
      workflow_id, extra_vars, enabled, created_at";
 
+const WORKFLOW_COLUMNS: &str = "id, team_id, name, description, graph, created_at, admin_saved";
+
+const DELIVERY_COLUMNS: &str =
+    "d.id, d.hook_id, h.name, d.status, d.summary, d.job_id, d.workflow_job_id, d.created_at";
+
 const SCHEDULE_COLUMNS: &str =
     "id, team_id, name, target_kind, target_id, timezone, start_date, start_time, frequency, \
      weekdays, end_kind, end_count, end_date, enabled, next_run_at, missed_at, occurrence_count, \
@@ -1278,6 +1326,32 @@ fn row_hook(row: &tokio_postgres::Row) -> AppResult<Hook> {
         extra_vars: row.try_get(8)?,
         enabled: enabled != 0,
         created_at: row.try_get(10)?,
+    })
+}
+
+fn row_workflow(row: &tokio_postgres::Row) -> AppResult<Workflow> {
+    let admin_saved: i32 = row.try_get(6)?;
+    Ok(Workflow {
+        id: row.try_get(0)?,
+        team_id: row.try_get(1)?,
+        name: row.try_get(2)?,
+        description: row.try_get(3)?,
+        graph: row.try_get(4)?,
+        created_at: row.try_get(5)?,
+        admin_saved: admin_saved != 0,
+    })
+}
+
+fn row_delivery(row: &tokio_postgres::Row) -> AppResult<Delivery> {
+    Ok(Delivery {
+        id: row.try_get(0)?,
+        hook_id: row.try_get(1)?,
+        hook_name: row.try_get(2)?,
+        status: row.try_get(3)?,
+        summary: row.try_get(4)?,
+        job_id: row.try_get(5)?,
+        workflow_job_id: row.try_get(6)?,
+        created_at: row.try_get(7)?,
     })
 }
 
@@ -3142,6 +3216,148 @@ impl Backend for PostgresBackend {
             if changed == 0 {
                 return Err(ApiError::NotFound);
             }
+            Ok(())
+        })
+    }
+
+    fn list_deliveries(&self, team_id: &str, limit: i64) -> AppResult<Vec<Delivery>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let rows = client
+                .query(
+                    &format!(
+                        "SELECT {DELIVERY_COLUMNS}
+                         FROM hook_deliveries d JOIN hooks h ON h.id = d.hook_id
+                         WHERE h.team_id = $1 ORDER BY d.created_at DESC LIMIT $2"
+                    ),
+                    &[&team_id, &limit],
+                )
+                .await?;
+            rows.iter().map(row_delivery).collect()
+        })
+    }
+
+    fn insert_delivery(&self, item: &NewDelivery<'_>) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            client
+                .execute(
+                    "INSERT INTO hook_deliveries (
+                        id, hook_id, status, summary, payload, job_id, workflow_job_id, created_at
+                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                    &[
+                        &item.id,
+                        &item.hook_id,
+                        &item.status,
+                        &item.summary,
+                        &item.payload,
+                        &item.job_id,
+                        &item.workflow_job_id,
+                        &db::now(),
+                    ],
+                )
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn list_workflows(&self, team_id: &str) -> AppResult<Vec<Workflow>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let rows = client
+                .query(
+                    &format!(
+                        "SELECT {WORKFLOW_COLUMNS} FROM workflows
+                         WHERE team_id = $1 ORDER BY name"
+                    ),
+                    &[&team_id],
+                )
+                .await?;
+            rows.iter().map(row_workflow).collect()
+        })
+    }
+
+    fn workflow(&self, id: &str) -> AppResult<Option<Workflow>> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let row = client
+                .query_opt(
+                    &format!("SELECT {WORKFLOW_COLUMNS} FROM workflows WHERE id = $1"),
+                    &[&id],
+                )
+                .await?;
+            row.as_ref().map(row_workflow).transpose()
+        })
+    }
+
+    fn insert_workflow(&self, item: &Workflow) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            client
+                .execute(
+                    "INSERT INTO workflows (
+                        id, team_id, name, description, graph, created_at, admin_saved
+                     ) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                    &[
+                        &item.id,
+                        &item.team_id,
+                        &item.name,
+                        &item.description,
+                        &item.graph,
+                        &item.created_at,
+                        &(item.admin_saved as i32),
+                    ],
+                )
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn update_workflow(&self, item: &Workflow) -> AppResult<()> {
+        block_on(async {
+            let client = self.client.lock().await;
+            let changed = client
+                .execute(
+                    "UPDATE workflows
+                     SET name = $3, description = $4, graph = $5, admin_saved = $6
+                     WHERE id = $1 AND team_id = $2",
+                    &[
+                        &item.id,
+                        &item.team_id,
+                        &item.name,
+                        &item.description,
+                        &item.graph,
+                        &(item.admin_saved as i32),
+                    ],
+                )
+                .await?;
+            if changed == 0 {
+                return Err(ApiError::NotFound);
+            }
+            Ok(())
+        })
+    }
+
+    fn delete_workflow(&self, id: &str, team_id: &str) -> AppResult<()> {
+        block_on(async {
+            let mut client = self.client.lock().await;
+            let transaction = client.transaction().await?;
+            let changed = transaction
+                .execute(
+                    "DELETE FROM workflows WHERE id = $1 AND team_id = $2",
+                    &[&id, &team_id],
+                )
+                .await?;
+            if changed == 0 {
+                return Err(ApiError::NotFound);
+            }
+            transaction
+                .execute(
+                    "DELETE FROM schedules WHERE target_kind = 'workflow' AND target_id = $1",
+                    &[&id],
+                )
+                .await?;
+            transaction.commit().await?;
             Ok(())
         })
     }
