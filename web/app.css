@@ -45,6 +45,7 @@ a { color: var(--accent); }
 .login-stack { width: min(440px, 100%); display: flex; flex-direction: column; gap: 12px; }
 .login-card {
   width: min(440px, 100%);
+  position: relative;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 18px;
@@ -142,7 +143,7 @@ h2 { font-size: 18px; margin: 0 0 10px; }
 .table th { text-align: left; font-size: 13px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
 .table th, .table td { padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; overflow-wrap: break-word; }
 .table .pill, .table time { white-space: nowrap; }
-.table a { text-decoration: none; }
+.table a { display: inline-flex; align-items: center; min-height: 24px; min-width: 24px; text-decoration: none; }
 .table a:hover { text-decoration: underline; }
 
 .pill {
@@ -165,6 +166,8 @@ h2 { font-size: 18px; margin: 0 0 10px; }
   color: var(--ink);
   border-radius: 9px;
   padding: 7px 12px;
+  min-width: 24px;
+  min-height: 24px;
   cursor: pointer;
 }
 a.btn { display: inline-block; text-decoration: none; }
@@ -259,6 +262,7 @@ a.btn { display: inline-block; text-decoration: none; }
 .side .version-line a:hover { color: white; }
 .login-card .spread { align-items: center; margin-bottom: 18px; }
 .login-card .brand-lockup { margin-bottom: 0; }
+.login-card > .lang-switch { position: absolute; top: 28px; right: 28px; }
 .btn:disabled { opacity: 0.55; cursor: not-allowed; }
 .search {
   width: min(420px, 100%);
@@ -466,7 +470,7 @@ textarea.secret-mask { -webkit-text-security: disc; }
 .table th.actions, .table td.actions { width: 1%; white-space: nowrap; text-align: right; }
 .table td.actions .btn + .btn { margin-left: 6px; }
 .table td.danger { border-left: 1px solid var(--line); padding-left: 18px; }
-.btn.compact { padding: 4px 8px; }
+.btn.compact { padding: 4px 8px; min-height: 24px; min-width: 24px; }
 .pill.warn { background: var(--warn-bg); color: var(--warn); }
 .switch { position: relative; display: inline-flex; width: 42px; height: 24px; flex: 0 0 auto; }
 .switch input {
@@ -791,4 +795,8 @@ code, .mono { font-family: var(--mono); font-size: 13px; word-break: break-all; 
   .overlay, .overlay.tabbed { padding: 0; align-items: stretch; }
   .overlay-card, .overlay-card.dialog, .overlay-card.dialog.tabbed { width: 100%; max-width: none; max-height: none; height: 100%; border-radius: 0; }
   .overlay-card .log { min-height: 0; }
+}
+
+@media (pointer: coarse) {
+  .btn, .table a, .lang-button, .dialog-close { min-height: 44px; min-width: 44px; }
 }

@@ -734,7 +734,6 @@ function renderLogin(message, tone, vars, username) {
         <form class="login-card" id="login-form">
           <div class="spread">
             <div class="brand-lockup"><span class="mark" aria-hidden="true"></span><h1 class="word">Koreograf</h1></div>
-            ${langSwitch()}
           </div>
           <p class="lede">${h("jobs_workflows_and_alerts_for_several_teams_local")}</p>
           ${message ? `<div class="banner ${kind}">${h(message, vars)}</div>` : ""}
@@ -743,6 +742,7 @@ function renderLogin(message, tone, vars, username) {
             <label class="field"><span>${h("password")}</span><input name="password" type="password" autocomplete="current-password" required></label>
             <button class="btn primary" type="submit">${h("sign_in")}</button>
           </div>
+          ${langSwitch()}
         </form>
         ${versionSlot()}
       </div>
@@ -1216,11 +1216,39 @@ function templateOptionLine(item) {
   return item.entrypoint || t("script");
 }
 
+let focusTrigger = null;
+
+document.addEventListener("click", (event) => {
+  const target = event.target instanceof Element ? event.target.closest("a[href], button") : null;
+  if (target) focusTrigger = target;
+}, true);
+
+function focusOpener() {
+  const active = document.activeElement;
+  if (active && active !== document.body && active !== document.documentElement && !active.classList.contains("skip-link")) return active;
+  return focusTrigger || document.getElementById("main");
+}
+
+function focusReturn(node) {
+  if (!node) return;
+  if (document.contains(node)) {
+    node.focus();
+  } else if (node.getAttribute && node.getAttribute("href")) {
+    const href = node.getAttribute("href");
+    const match = [...document.querySelectorAll("a[href]")].find((item) => item.getAttribute("href") === href);
+    if (match) match.focus();
+  } else if (node.id) {
+    const match = document.getElementById(node.id);
+    if (match) match.focus();
+  }
+}
+
 function makeModal(overlay, close) {
-  const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const opener = focusOpener();
   const dismiss = () => {
     if (close() === false) return;
-    if (opener && document.contains(opener)) opener.focus();
+    focusReturn(opener);
+    focusTrigger = null;
   };
   const card = overlay.querySelector(".overlay-card");
   const focusables = () => [...card.querySelectorAll("input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], button:not([disabled])")].filter((node) => node.offsetParent !== null);
