@@ -156,6 +156,8 @@ h2 { font-size: 18px; margin: 0 0 10px; }
   .skeleton-line { animation: skeleton-pulse 1.2s ease-in-out infinite; }
   @keyframes skeleton-pulse { 50% { opacity: 0.45; } }
 }
+.empty-state { display: grid; gap: 8px; justify-items: start; padding: 16px 8px; }
+.empty-state p { margin: 0; }
 
 .table { width: 100%; border-collapse: collapse; }
 .table th { text-align: left; font-size: 13px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
