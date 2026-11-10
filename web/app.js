@@ -7986,6 +7986,21 @@ function bindStoredMasks(form) {
   });
 }
 
+function settingsTab() {
+  const params = new URLSearchParams((location.hash || "").split("?")[1] || "");
+  const tab = params.get("tab");
+  return ["directory", "proxy", "jobs"].includes(tab) ? tab : "directory";
+}
+
+function settingsTabAddress(tab) {
+  return tab === "directory" ? "#/settings" : `#/settings?tab=${tab}`;
+}
+
+function settingsTabBar(active) {
+  const item = (id) => `<button class="btn pill${active === id ? " primary" : ""}" type="button" role="tab" id="settings-tab-${id}" aria-selected="${active === id}" aria-controls="settings-panel-${id}" tabindex="${active === id ? "0" : "-1"}" data-settings-tab="${id}">${h(id)}</button>`;
+  return `<div class="spread tab-bar"><div class="tabs" role="tablist" aria-label="${h("settings")}">${["directory", "proxy", "jobs"].map(item).join("")}</div></div>`;
+}
+
 async function pageSettings(notice) {
   if (!me.is_admin) {
     deny("settings", "admin");
@@ -8006,11 +8021,14 @@ async function pageSettings(notice) {
     ? `<p class="banner warn">${h("the_environment_uses_a_proxy_that_is_neither")}</p>`
     : "";
   const saved = notice ? `<p class="banner good">${h(notice)}</p>` : "";
+  const activeTab = settingsTab();
+  const panelHidden = (id) => activeTab === id ? "" : " hidden";
   shell(t("settings"), `<form class="card form" id="settings-form">
     ${saved}
     <p class="small muted">${h(source)}</p>
     <p class="small muted">${h("the_bind_address_data_directory_and_first_admin")}</p>
-    <section class="form-section">
+    ${settingsTabBar(activeTab)}
+    <section class="form-section settings-panel" id="settings-panel-directory" role="tabpanel" aria-labelledby="settings-tab-directory"${panelHidden("directory")}>
       <h2>${h("directory")}</h2>
       <p class="small muted">${h("ldap_or_active_directory_an_empty_address_turns")}</p>
       <div class="field-row">
@@ -8034,7 +8052,7 @@ async function pageSettings(notice) {
       <label class="row"><input name="ldap_starttls" type="checkbox"${ldap.starttls ? " checked" : ""}> ${h("starttls")}</label>
       <label class="row"><input name="ldap_tls_insecure" type="checkbox"${ldap.tls_insecure ? " checked" : ""}> ${h("skip_certificate_checks_only_on_a_network_you")}</label>
     </section>
-    <section class="form-section">
+    <section class="form-section settings-panel" id="settings-panel-proxy" role="tabpanel" aria-labelledby="settings-tab-proxy"${panelHidden("proxy")}>
       <h2>${h("proxy")}</h2>
       <p class="small muted">${h("one_address_is_used_for_http_and_https")}</p>
       <p class="small muted">${h("an_empty_address_turns_the_proxy_off")}</p>
@@ -8046,7 +8064,7 @@ async function pageSettings(notice) {
       </div>
       <label class="field"><span>${h("exceptions")}</span><input name="proxy_no_proxy" value="${esc(proxy.no_proxy || "")}" placeholder="localhost,127.0.0.1,.internal" autocomplete="off" spellcheck="false"></label>
     </section>
-    <section class="form-section">
+    <section class="form-section settings-panel" id="settings-panel-jobs" role="tabpanel" aria-labelledby="settings-tab-jobs"${panelHidden("jobs")}>
       <div class="spread"><h2>${h("jobs")}</h2><button class="btn pill" id="preflight-check" type="button">${h("check_again")}</button></div>
       <div id="preflight-result"></div>
       <p class="small muted">${h("the_mode_and_the_time_limit_apply_to")}</p>
@@ -8078,6 +8096,50 @@ async function pageSettings(notice) {
   </form>`);
   const form = document.querySelector("#settings-form");
   bindStoredMasks(form);
+  const tabButtons = [...document.querySelectorAll("[data-settings-tab]")];
+  const tabPanels = {
+    directory: document.querySelector("#settings-panel-directory"),
+    proxy: document.querySelector("#settings-panel-proxy"),
+    jobs: document.querySelector("#settings-panel-jobs"),
+  };
+  let currentTab = activeTab;
+  const chooseTab = (next, focus) => {
+    currentTab = ["directory", "proxy", "jobs"].includes(next) ? next : "directory";
+    tabButtons.forEach((button) => {
+      const active = button.dataset.settingsTab === currentTab;
+      button.classList.toggle("primary", active);
+      button.setAttribute("aria-selected", String(active));
+      button.tabIndex = active ? 0 : -1;
+    });
+    Object.entries(tabPanels).forEach(([id, panel]) => {
+      if (panel) panel.hidden = id !== currentTab;
+    });
+    const address = settingsTabAddress(currentTab);
+    if ((location.hash || "#/") !== address) {
+      history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", address);
+      shownHash = address;
+    }
+    if (focus) {
+      const active = tabButtons.find((button) => button.dataset.settingsTab === currentTab);
+      if (active) active.focus();
+    }
+  };
+  tabButtons.forEach((button, index) => {
+    button.addEventListener("click", () => {
+      if (button.dataset.settingsTab !== currentTab) chooseTab(button.dataset.settingsTab, false);
+    });
+    button.addEventListener("keydown", (event) => {
+      let target = null;
+      if (event.key === "ArrowRight") target = tabButtons[(index + 1) % tabButtons.length];
+      else if (event.key === "ArrowLeft") target = tabButtons[(index - 1 + tabButtons.length) % tabButtons.length];
+      else if (event.key === "Home") target = tabButtons[0];
+      else if (event.key === "End") target = tabButtons[tabButtons.length - 1];
+      if (!target) return;
+      event.preventDefault();
+      chooseTab(target.dataset.settingsTab, true);
+    });
+  });
+  chooseTab(activeTab, false);
   form.ldap_mode.addEventListener("change", () => {
     const ad = form.ldap_mode.value === "ad";
     const next = ad
