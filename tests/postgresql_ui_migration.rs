@@ -88,6 +88,16 @@ fn body_text(value: &Value) -> String {
     serde_json::to_string(value).unwrap_or_default()
 }
 
+fn assert_no_password(value: &Value, password: &str) {
+    if password.is_empty() {
+        return;
+    }
+    assert!(
+        !body_text(value).contains(password),
+        "the response contains the database password: {value}"
+    );
+}
+
 fn target_body(host: &str, port: u16, password: &str) -> Value {
     json!({
         "host": host,
@@ -374,7 +384,7 @@ async fn the_ui_migration_copies_rows_enters_maintenance_and_returns_a_password_
     .await;
     assert_eq!(status, StatusCode::OK, "{checked}");
     assert_eq!(checked["all_passed"], true, "{checked}");
-    assert!(!body_text(&checked).contains(&target_password), "{checked}");
+    assert_no_password(&checked, &target_password);
     let id = checked["id"].as_str().expect("check id").to_string();
 
     let (status, started, _) = call(
@@ -411,21 +421,18 @@ async fn the_ui_migration_copies_rows_enters_maintenance_and_returns_a_password_
         "{last}"
     );
     assert_eq!(last["maintenance"]["active"], true, "{last}");
-    assert!(!body_text(&last).contains(&target_password), "{last}");
+    assert_no_password(&last, &target_password);
     assert!(
-        last["migration"]["url"]
-            .as_str()
-            .is_some_and(|url| url.contains(&name) && !url.contains(&target_password)),
+        last["migration"]["url"].as_str().is_some_and(|url| {
+            url.contains(&name) && (target_password.is_empty() || !url.contains(&target_password))
+        }),
         "{last}"
     );
     assert!(
         last["migration"]["audit"]["user"] == "admin",
         "the audit entry names the user: {last}"
     );
-    assert!(
-        !body_text(&last).contains(&target_password),
-        "the audit entry leaked the password: {last}"
-    );
+    assert_no_password(&last, &target_password);
 
     let (status, public, _) = call(&app, "GET", "/api/maintenance", None, None).await;
     assert_eq!(status, StatusCode::OK, "{public}");
