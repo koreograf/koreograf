@@ -62,6 +62,24 @@ sudo apt remove koreograf
 sudo dnf remove koreograf
 ```
 
+## Assistant
+
+The assistant is optional and off by default. Turn it on under **Settings → Assistant** and choose the provider, base URL, model, and optional API key. An environment-only install can use `KOREOGRAF_LLM=1`, `KOREOGRAF_LLM_PROVIDER=ollama` or `openai`, `KOREOGRAF_LLM_URL`, `KOREOGRAF_LLM_MODEL`, and either `KOREOGRAF_LLM_API_KEY` or `KOREOGRAF_LLM_API_KEY_FILE`. The key file wins when both are set. The saved settings replace those variables after an administrator saves; **Use environment variables** clears them again.
+
+Both provider kinds speak the OpenAI-compatible `/chat/completions` API. `ollama` adds `/v1` to a bare address such as `http://127.0.0.1:11434`; `openai` treats the address as a base URL. A local Ollama usually needs no key:
+
+```bash
+KOREOGRAF_LLM=1 \
+KOREOGRAF_LLM_PROVIDER=ollama \
+KOREOGRAF_LLM_URL=http://127.0.0.1:11434 \
+KOREOGRAF_LLM_MODEL=llama3.1 \
+cargo run
+```
+
+The assistant calls the same API and MCP tool set as the signed-in user. Read tools answer questions about projects, inventories, templates, workflows, schedules, jobs, and job output. The write tools `launch_template`, `launch_workflow`, `cancel_job`, `relaunch_job`, `sync_project`, and `sync_inventory` only create an in-app confirmation card; the user confirms before the call runs, and cancelling changes nothing. A viewer never gets a launch card. On a failed job page, **Explain this failure** opens the chat with the job metadata and redacted output already attached.
+
+A cloud provider receives every prompt, tool result, and explained job in that endpoint's network. Use a local Ollama, or an OpenAI-compatible gateway inside your network, when job data must not leave the installation. The redaction rules and the full trust model are in [Security](security.md).
+
 ## Editor MCP client
 
 `koreograf mcp` speaks the Model Context Protocol over stdin and stdout and calls the running server over HTTP. Create a personal API token under **My account** and put it in the editor configuration. `KOREOGRAF_TEAM_ID` is optional; a tool argument `team_id` overrides it for that call. The process refuses to start with an empty token and writes its logs to stderr.

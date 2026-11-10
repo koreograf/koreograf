@@ -229,6 +229,15 @@ a.btn { display: inline-block; text-decoration: none; }
 .assistant-message p { margin: 0; }
 .assistant-message p + p { margin-top: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .assistant-message.from-user { background: var(--accent-soft); border-color: #fed7aa; }
+.assistant-confirm {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--warn-bg);
+}
+.assistant-confirm p { margin: 0; }
 .assistant-compose { display: grid; gap: 10px; }
 .assistant-compose textarea { min-height: 5rem; resize: vertical; }
 .btn.ghost { background: transparent; }

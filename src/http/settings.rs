@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use crate::auth::AuthUser;
 use crate::error::{ApiError, ApiJson, AppResult};
-use crate::settings::{self, SettingsWrite};
+use crate::settings::{self, LlmWrite, SettingsWrite};
 use crate::Shared;
 
 #[derive(Deserialize)]
@@ -29,6 +29,24 @@ pub(super) struct SettingsBody {
     default_environment_shell: String,
     #[serde(default)]
     clear: Vec<String>,
+    llm: Option<LlmBody>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub(super) struct LlmBody {
+    #[serde(default, rename = "api_key_set")]
+    _api_key_set: Option<Value>,
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    provider: String,
+    #[serde(default)]
+    base_url: String,
+    #[serde(default)]
+    model: String,
+    #[serde(default)]
+    api_key: String,
 }
 
 #[derive(Deserialize, Default)]
@@ -95,6 +113,15 @@ pub async fn put_settings(
     let proxy = body.proxy.unwrap_or_default();
     let clear_ldap_password = body.clear.iter().any(|item| item == "ldap_bind_password");
     let clear_proxy_password = body.clear.iter().any(|item| item == "proxy_password");
+    let clear_api_key = body.clear.iter().any(|item| item == "llm_api_key");
+    let llm = body.llm.map(|llm| LlmWrite {
+        enabled: llm.enabled,
+        provider: llm.provider,
+        base_url: llm.base_url,
+        model: llm.model,
+        api_key: llm.api_key,
+        clear_api_key,
+    });
     let write = SettingsWrite {
         ldap_url: ldap.url,
         ldap_mode: ldap.mode,
@@ -119,6 +146,7 @@ pub async fn put_settings(
         default_environment_shell: body.default_environment_shell,
         clear_ldap_password,
         clear_proxy_password,
+        llm,
         reset: body.reset,
     };
     Ok(Json(settings::save(&state, &write)?))

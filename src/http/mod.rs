@@ -158,6 +158,8 @@ fn api_routes() -> Router<Shared> {
         )
         .route("/assistant", get(llm::status))
         .route("/assistant/chat", post(llm::chat))
+        .route("/assistant/confirm", post(llm::confirm))
+        .route("/assistant/cancel", post(llm::cancel))
         .route("/overview", get(catalog::overview))
         .route("/dashboard", get(catalog::dashboard))
         .route("/runner", get(catalog::runner_status))
