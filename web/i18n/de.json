@@ -611,6 +611,7 @@
   "save_team": "Team speichern",
   "saved": "Gespeichert.",
   "saving_replaces_the_environment_variables_an_empty_password": "Speichern ersetzt die Umgebungsvariablen. Ein leeres Passwort bleibt erhalten.",
+  "schedule": "Zeitplan",
   "schedule.after_count": "Nach {count}",
   "schedule.by": "zuletzt geändert von {name}",
   "schedule.daily": "Täglich um {time} ({zone})",

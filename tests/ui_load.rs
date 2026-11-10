@@ -20,9 +20,15 @@ function extractFunction(name) {
   }
   check(false, `${name} has no closing brace`);
 }
-check(!js.includes('addEventListener("popstate"'), "popstate still navigates next to hashchange");
 const listeners = js.match(/addEventListener\("hashchange"/g) || [];
 check(listeners.length === 1, "the router is not bound to exactly one hashchange listener");
+const backStart = js.indexOf('addEventListener("popstate"');
+const hashStart = js.indexOf('addEventListener("hashchange"');
+check(backStart >= 0 && backStart < hashStart, "popstate is not read before hashchange");
+const back = js.slice(backStart, hashStart);
+check(back.includes("{ back: true }"), "popstate does not mark a backward navigation");
+check(back.includes("shownHash"), "popstate marks the current page as backward");
+check(!back.includes("route("), "popstate still navigates next to hashchange");
 const route = extractFunction("route");
 const loading = route.indexOf("showLoading(");
 const firstAwait = route.indexOf("await ");

@@ -172,13 +172,15 @@ h2 { font-size: 18px; margin: 0 0 10px; }
   padding: 2px 8px;
   font-size: 13px;
   background: var(--line);
+  white-space: nowrap;
 }
 .pill.pending { background: var(--warn-bg); color: var(--warn); }
 .pill.running { background: var(--info-bg); color: var(--info); }
 .pill.successful { background: var(--good-bg); color: var(--good); }
 .pill.failed, .pill.canceled { background: var(--bad-bg); color: var(--bad); }
 .pill.skipped { background: #f5f5f4; color: var(--muted); }
-.tool { font-family: var(--mono); font-size: 13px; }
+.tool { font-family: var(--mono); font-size: 13px; white-space: nowrap; }
+.table .pill { min-width: 5rem; text-align: center; }
 
 .btn {
   border: 1px solid var(--line);
@@ -276,8 +278,15 @@ a.btn { display: inline-block; text-decoration: none; }
 .side .btn.ghost { color: var(--side-text); }
 .account-link { color: var(--side-text); text-decoration: none; font-size: 13px; }
 .account-link:hover { color: white; text-decoration: underline; }
-.version-line { margin: 0; }
-.version-line a { color: var(--muted); text-decoration: none; }
+.version-line { margin: 0; min-width: 0; }
+.version-line a {
+  color: var(--muted);
+  text-decoration: none;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .version-line a:hover { text-decoration: underline; }
 .side .version-line a { color: var(--side-text); }
 .side .version-line a:hover { color: white; }
