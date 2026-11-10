@@ -5136,6 +5136,8 @@ function mountSourceDraft(container, projects, kind, preset, options = {}) {
       <p class="small muted" data-source-error aria-live="polite"></p>` : ""}
     </div>`;
   container.appendChild(card);
+  card.addEventListener("input", () => { card.dataset.dirty = "1"; });
+  card.addEventListener("change", () => { card.dataset.dirty = "1"; });
   if (kind === "netbox") {
     let addressToken = 0;
     const refreshCredential = async () => {
@@ -5159,8 +5161,6 @@ function mountSourceDraft(container, projects, kind, preset, options = {}) {
         address.textContent = t(error.message || "error.generic", error.vars);
       }
     };
-    card.addEventListener("input", () => { card.dataset.dirty = "1"; });
-    card.addEventListener("change", () => { card.dataset.dirty = "1"; });
     card.querySelector("[name=credential_id]").addEventListener("change", refreshCredential);
     const create = card.querySelector("[data-new-netbox-credential]");
     if (create) {
