@@ -105,10 +105,18 @@ fn assert_no_password(value: &Value, password: &str) {
         );
     }
     if let Some(audit) = value["migration"]["audit"].as_object() {
-        let text = serde_json::to_string(audit).unwrap_or_default();
+        assert_eq!(
+            audit.len(),
+            3,
+            "the audit entry has more than user, time, and host: {value}"
+        );
         assert!(
-            !text.contains(password),
-            "the audit entry contains the password: {value}"
+            audit["at"].is_string(),
+            "the audit entry has no time: {value}"
+        );
+        assert_eq!(
+            audit["host"], value["migration"]["target_host"],
+            "the audit host is not the target host: {value}"
         );
     }
 }
