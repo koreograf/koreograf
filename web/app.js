@@ -7968,7 +7968,7 @@ function renderAssistantThread() {
 
 async function pageAssistant() {
   if (!assistantEnabled) {
-    deny("assistant", "operator");
+    shell(t("assistant"), `<div class="card">${h("assistant_is_not_enabled")}</div>`);
     return;
   }
   const model = assistantModel ? `<span class="small muted">${h("assistant_model", { model: assistantModel })}</span>` : "";

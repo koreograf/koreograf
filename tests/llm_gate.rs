@@ -178,5 +178,27 @@ async fn the_assistant_route_is_off_until_the_environment_enables_it() {
     assert_eq!(body["error"], "assistant_upstream_unreachable");
     assert!(!body.to_string().contains("sk-test-secret"));
 
+    for _ in 0..8 {
+        let (status, _, _) = call(
+            &app,
+            "POST",
+            "/api/assistant/chat",
+            Some(&cookie),
+            Some(json!({"message": "hello", "history": [{"role": "system", "content": "x"}]})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+    let (status, body, _) = call(
+        &app,
+        "POST",
+        "/api/assistant/chat",
+        Some(&cookie),
+        Some(json!({"message": "hello"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(body["error"], "assistant_rate_limited");
+
     let _ = std::fs::remove_dir_all(&dir);
 }

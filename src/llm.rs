@@ -1,5 +1,7 @@
+use std::collections::HashMap;
 use std::path::Path;
-use std::time::Duration;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -19,6 +21,11 @@ const MAX_MESSAGE_CHARS: usize = 8_000;
 const MAX_TURN_CHARS: usize = 8_000;
 const MAX_HISTORY_TURNS: usize = 20;
 const MAX_HISTORY_CHARS: usize = 32_000;
+const RATE_LIMIT_REQUESTS: usize = 10;
+const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
+const RATE_LIMIT_KEYS: usize = 1_024;
+
+static CHAT_ATTEMPTS: OnceLock<Mutex<HashMap<String, Vec<Instant>>>> = OnceLock::new();
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct LlmConfig {
@@ -305,6 +312,9 @@ pub async fn chat(
             );
         }
     };
+    if !within_rate_limit(&user.id) {
+        return failure(StatusCode::TOO_MANY_REQUESTS, "assistant_rate_limited");
+    }
     let teams = match state.store().list_teams_for_user(&user.id, user.is_admin) {
         Ok(teams) => teams,
         Err(error) => return error.into_response(),
@@ -394,6 +404,30 @@ fn system_prompt(user: &AuthUser, teams: &[(Team, String)]) -> String {
         lines.push(format!("- {}: {}", team.name, role));
     }
     lines.join("\n")
+}
+
+fn within_rate_limit(user_id: &str) -> bool {
+    let now = Instant::now();
+    let Ok(mut attempts) = CHAT_ATTEMPTS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+    else {
+        return true;
+    };
+    if attempts.len() > RATE_LIMIT_KEYS {
+        attempts.retain(|_, times| {
+            times
+                .iter()
+                .any(|instant| now.saturating_duration_since(*instant) < RATE_LIMIT_WINDOW)
+        });
+    }
+    let times = attempts.entry(user_id.to_string()).or_default();
+    times.retain(|instant| now.saturating_duration_since(*instant) < RATE_LIMIT_WINDOW);
+    if times.len() >= RATE_LIMIT_REQUESTS {
+        return false;
+    }
+    times.push(now);
+    true
 }
 
 fn failure(status: StatusCode, key: &str) -> Response {
