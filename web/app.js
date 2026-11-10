@@ -1893,6 +1893,11 @@ async function openTemplateDialog(existing, initialTab = "") {
       <label class="field"><span>${h("script_when_no_entry_path_is_set")}</span><textarea name="script">${esc(spec.script || "")}</textarea></label>
     </div>`;
   const variables = `<label class="field"><span>${h("extra_variables_json")}</span><textarea name="extra_vars">${esc(JSON.stringify(item.extra_vars || {}, null, 2))}</textarea></label>`;
+  const templateSchedules = `
+    <p class="small muted">${h("template_schedules_hint")}</p>
+    <p class="small muted" id="template-schedules-status" role="status">${h("loading")}</p>
+    <div class="table-wrap schedule-table" id="template-schedules"></div>
+    ${can("operator") ? `<div class="row"><button class="btn pill primary" type="button" id="template-schedule-add">${h("schedule_add")}</button></div>` : ""}`;
   let vaultPicker = null;
   const dialog = openEditDialog({
     id: "template-dialog",
@@ -1903,6 +1908,7 @@ async function openTemplateDialog(existing, initialTab = "") {
       { id: "target", label: t("target"), body: target },
       { id: "options", label: t("options"), body: options },
       { id: "variables", label: t("variables"), body: variables },
+      ...(editing ? [{ id: "schedules", label: t("schedules"), body: templateSchedules }] : []),
     ],
     initialTab,
     wide: true,
@@ -2166,6 +2172,40 @@ async function openTemplateDialog(existing, initialTab = "") {
     if (form.tool.value === "shell") clearEntrypointError();
   });
   loadPlaybooks();
+  if (editing) {
+    const scheduleHost = dialog.overlay.querySelector("#template-schedules");
+    const scheduleStatus = dialog.overlay.querySelector("#template-schedules-status");
+    let scheduleRows = [];
+    let scheduleLoaded = false;
+    const drawSchedules = () => {
+      scheduleHost.innerHTML = scheduleTable(scheduleRows, false, h("schedule_empty_template"));
+      bindScheduleActions(scheduleHost, scheduleRows, "template", item.id, loadSchedules, { hash: false });
+    };
+    const loadSchedules = async () => {
+      scheduleLoaded = true;
+      try {
+        scheduleRows = await api("GET", `/api/templates/${encodeURIComponent(item.id)}/schedules`);
+        scheduleStatus.hidden = true;
+        drawSchedules();
+      } catch (error) {
+        scheduleStatus.hidden = false;
+        scheduleStatus.textContent = t(error.message || "error.generic", error.vars);
+      }
+    };
+    const schedulesTab = dialog.overlay.querySelector('[data-dialog-tab="schedules"]');
+    if (schedulesTab) {
+      schedulesTab.addEventListener("click", () => {
+        if (!scheduleLoaded) loadSchedules();
+      });
+    }
+    if (initialTab === "schedules") loadSchedules();
+    const addSchedule = dialog.overlay.querySelector("#template-schedule-add");
+    if (addSchedule) {
+      addSchedule.addEventListener("click", () => {
+        openScheduleForm("template", item.id, null, loadSchedules, { hash: false });
+      });
+    }
+  }
   const remove = dialog.overlay.querySelector("#delete-template");
   if (remove) {
     remove.addEventListener("click", () => deleteTemplate(item, dialog));
@@ -2336,6 +2376,10 @@ function mountSchedules(card) {
     const chosen = scheduleNewTarget(request);
     let openKind = chosen?.kind || (all ? "" : kind);
     const openTarget = chosen?.target || (all ? "" : target);
+    if (all && !openKind && !openTarget) {
+      await openNewScheduleDialog(draw);
+      return;
+    }
     if (all && !openKind && openTarget) {
       const [templates, workflows] = await Promise.all([
         api("GET", "/api/templates"),
@@ -2354,20 +2398,35 @@ function mountSchedules(card) {
       .filter((item) => !needle || scheduleHaystack(item).includes(needle))
       .sort(compareSchedules);
     const host = card.querySelector(".schedule-table");
-    const message = items.length ? h("nothing_here") : empty;
-    host.innerHTML = scheduleTable(shown, all, message);
-    bindScheduleActions(card, items, kind, target, draw);
+    if (all && !items.length) {
+      host.innerHTML = `<div class="empty-state">
+        <p>${empty}</p>
+        <p class="small muted">${h("schedule_empty_hint")}</p>
+        ${can("operator") ? `<button class="btn pill primary" type="button" data-schedule-new>${h("schedule_add")}</button>` : ""}
+      </div>`;
+    } else {
+      const message = items.length ? h("nothing_here") : empty;
+      host.innerHTML = scheduleTable(shown, all, message);
+      bindScheduleActions(card, items, kind, target, draw);
+    }
+    host.querySelectorAll("[data-schedule-new]").forEach((button) => {
+      button.addEventListener("click", openNew);
+    });
   };
   const draw = async () => {
     items = await api("GET", path);
     render();
     await openRequested();
   };
+  const openNew = () => {
+    rememberScheduleHash({ new: "1" });
+    openNewScheduleDialog(draw).catch(handle);
+  };
   const search = all
     ? `<input class="search" id="schedule-search" placeholder="${h("search_schedules")}" autocomplete="off">`
     : "";
-  const add = !all && can("operator") ? `<button class="btn" type="button" id="schedule-add">${h("schedule_add")}</button>` : "";
-  const heading = all ? `<div class="spread">${search}</div>` : `<div class="row"><h2>${h("schedules")}</h2>${add}</div>`;
+  const add = can("operator") ? `<button class="btn pill primary" type="button" id="schedule-add">${h("schedule_add")}</button>` : "";
+  const heading = all ? `<div class="spread">${search}${add}</div>` : `<div class="row"><h2>${h("schedules")}</h2>${add}</div>`;
   card.innerHTML = `${heading}<div class="table-wrap schedule-table"></div>`;
   const searchBox = card.querySelector("#schedule-search");
   if (searchBox) {
@@ -2378,19 +2437,48 @@ function mountSchedules(card) {
   }
   const addButton = card.querySelector("#schedule-add");
   if (addButton) addButton.addEventListener("click", () => {
+    if (all) {
+      openNew();
+      return;
+    }
     rememberScheduleHash({ new: "1" });
     openScheduleForm(kind, target, null, draw);
   });
   draw().catch(handle);
 }
 
-function bindScheduleActions(card, items, kind, target, draw) {
+async function openNewScheduleDialog(redraw) {
+  const [templates, workflows] = await Promise.all([
+    api("GET", "/api/templates"),
+    api("GET", "/api/workflows"),
+  ]);
+  const choices = [
+    ...templates.map((item) => `<option value="template:${esc(item.id)}">${esc(item.name)} · ${h("template")}</option>`),
+    ...workflows.map((item) => `<option value="workflow:${esc(item.id)}">${esc(item.name)} · ${h("workflow")}</option>`),
+  ].join("");
+  if (!choices) {
+    clearScheduleHash();
+    const card = document.querySelector("#schedule-card");
+    if (card) {
+      card.querySelectorAll(":scope > .banner.warn").forEach((node) => node.remove());
+      card.insertAdjacentHTML("afterbegin", `<div class="banner warn">${h("schedule_needs_target")}</div>`);
+    }
+    return;
+  }
+  openScheduleForm("", "", null, redraw, { targets: choices });
+}
+
+function bindScheduleActions(card, items, kind, target, draw, options = {}) {
   card.querySelectorAll("[data-schedule-edit]").forEach((button) => {
     button.addEventListener("click", () => {
       const item = items.find((row) => row.id === button.dataset.scheduleEdit);
       if (item) {
-        rememberScheduleHash({ edit: item.id });
-        openScheduleForm(item.target_kind || kind, item.target_id || target, item, draw);
+        if (options.hash === false) {
+          openScheduleForm(item.target_kind || kind, item.target_id || target, item, draw, { hash: false });
+        } else {
+          rememberScheduleHash({ edit: item.id });
+          openScheduleForm(item.target_kind || kind, item.target_id || target, item, draw);
+        }
       }
     });
   });
@@ -2557,8 +2645,10 @@ function scheduleTarget(item) {
   return `<a href="${href}">${esc(name)}</a><div class="small muted">${esc(label)}</div>`;
 }
 
-function openScheduleForm(kind, target, existing, redraw) {
+function openScheduleForm(kind, target, existing, redraw, options) {
+  options = options || {};
   document.querySelector("#schedule-form")?.remove();
+  const outerGuard = leaveGuard;
   const zone = existing?.timezone || browserZone();
   const local = localParts(zone);
   const item = existing || {
@@ -2586,6 +2676,13 @@ function openScheduleForm(kind, target, existing, redraw) {
       <div class="schedule-layout">
         <div class="schedule-fields">
           <p class="small muted">${h("fields_marked_with_a_star_are_required")}</p>
+          ${options.targets ? `<div class="form-section">
+            <h2>${h("schedule_target")}</h2>
+            <label class="field required"><span>${h("template_or_workflow")}</span>
+              <select name="target_ref" required><option value="">${h("choose_a_target")}</option>${options.targets}</select>
+            </label>
+            <p class="small muted">${h("schedule_target_hint")}</p>
+          </div>` : ""}
           <div class="form-section">
             <h2>${h("general")}</h2>
             <label class="field required"><span>${h("name")}</span><input name="name" required value="${esc(item.name)}"></label>
@@ -2643,7 +2740,10 @@ function openScheduleForm(kind, target, existing, redraw) {
       }
       const body = { ...payload(), name: form.name.value };
       if (existing) await api("PUT", `/api/schedules/${encodeURIComponent(existing.id)}`, body);
-      else await api("POST", `/api/${kind}s/${encodeURIComponent(target)}/schedules`, body);
+      else {
+        const [postKind, postTarget] = form.target_ref ? form.target_ref.value.split(":") : [kind, target];
+        await api("POST", `/api/${postKind}s/${encodeURIComponent(postTarget)}/schedules`, body);
+      }
       leaveGuard = null;
       close();
       await redraw();
@@ -2655,7 +2755,8 @@ function openScheduleForm(kind, target, existing, redraw) {
     },
     onClose: () => {
       leaveGuard = null;
-      clearScheduleHash();
+      if (outerGuard) leaveGuard = outerGuard;
+      if (options.hash !== false) clearScheduleHash();
     },
   });
   leaveGuard = () => dialog.dirty();
