@@ -7545,6 +7545,49 @@ async function pageBackup() {
   });
 }
 
+const ROUTE_TITLES = {
+  "": "overview",
+  templates: "templates",
+  jobs: "jobs",
+  schedules: "schedules",
+  workflows: "workflows",
+  hooks: "webhooks",
+  environments: "execution_environments",
+  runtime: "execution_environments",
+  projects: "projects",
+  inventories: "inventories",
+  credentials: "credentials",
+  organizations: "organizations",
+  account: "account",
+  users: "users",
+  settings: "settings",
+  backup: "backup",
+  team: "team",
+};
+
+function routeTitle(parts) {
+  const key = parts.length ? ROUTE_TITLES[parts[0]] : "overview";
+  return key ? t(key) : t("loading");
+}
+
+function skeletonBody() {
+  return `<div class="loading-skeleton" role="status" aria-live="polite">
+    <span class="small muted">${h("loading")}</span>
+    <div class="skeleton-card"><span class="skeleton-line short"></span><span class="skeleton-line"></span><span class="skeleton-line medium"></span></div>
+    <div class="skeleton-card"><span class="skeleton-line short"></span><span class="skeleton-line"></span><span class="skeleton-line medium"></span></div>
+  </div>`;
+}
+
+function showLoading(title) {
+  const main = document.querySelector(".main");
+  if (!main) {
+    shell(title, skeletonBody());
+    return;
+  }
+  main.setAttribute("aria-busy", "true");
+  main.innerHTML = `<div class="top"><div><h1 tabindex="-1">${esc(title)}</h1></div><div class="row"></div></div>${skeletonBody()}`;
+}
+
 async function route() {
   const nextHash = location.hash || "#/";
   if (leaveGuard && shownHash !== null && nextHash !== shownHash && leaveGuard() && !confirm(t("discard_unsaved_changes"))) {
@@ -7569,6 +7612,7 @@ async function route() {
     return;
   }
   const parts = hashPath.slice(1).split("/").filter(Boolean);
+  showLoading(routeTitle(parts));
   try {
     if (parts.length === 0) await pageDashboard();
     else if (parts[0] === "templates" && parts[1] === "new") { location.replace("#/templates?new=1"); return; }
@@ -7640,9 +7684,6 @@ async function boot() {
     me = null;
   }
   window.addEventListener("hashchange", route);
-  window.addEventListener("popstate", () => {
-    if ((location.hash || "#/") !== shownHash) route();
-  });
   route();
 }
 
