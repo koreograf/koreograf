@@ -25,6 +25,7 @@ const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; img-src 'self' data:;
 use crate::auth::{self, AuthUser, Role};
 use crate::db::{self, Job, JobEvent};
 use crate::error::{ApiError, AppResult};
+use crate::llm;
 use crate::runner;
 use crate::Shared;
 
@@ -155,6 +156,8 @@ fn api_routes() -> Router<Shared> {
                 .put(session::update_user)
                 .delete(session::delete_user),
         )
+        .route("/assistant", get(llm::status))
+        .route("/assistant/chat", post(llm::chat))
         .route("/overview", get(catalog::overview))
         .route("/dashboard", get(catalog::dashboard))
         .route("/runner", get(catalog::runner_status))

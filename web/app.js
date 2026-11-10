@@ -33,6 +33,10 @@ let historyIndex = 0;
 let buildVersion = "";
 let buildCommit = "";
 let versionRequested = false;
+let assistantEnabled = false;
+let assistantModel = "";
+let assistantTranscript = [];
+let assistantPending = false;
 
 window.addEventListener("beforeunload", (event) => {
   if (!leaveGuard || !leaveGuard()) return;
@@ -604,6 +608,10 @@ function go(hash) {
   else location.hash = hash;
 }
 
+function assistantNavItem(enabled) {
+  return enabled ? [["#/assistant", t("assistant")]] : [];
+}
+
 function navActive(here, href) {
   if (href === "#/") return here === "#/" || here === "";
   if (href === "#/runtime" && here.startsWith("#/environments")) return true;
@@ -654,6 +662,7 @@ function shell(title, body, actions) {
       ["#/", t("overview")],
       ["#/jobs", t("jobs")],
       ["#/schedules", t("schedules")],
+      ...assistantNavItem(assistantEnabled),
     ]],
     [t("automation"), [
       ["#/templates", t("templates")],
@@ -7938,6 +7947,70 @@ function optionSelected(current, value) {
   return current === value ? " selected" : "";
 }
 
+function assistantTurnHtml(turn) {
+  const fromUser = turn.role === "user";
+  return `<div class="assistant-message ${fromUser ? "from-user" : "from-assistant"}">
+    <p class="small muted">${h(fromUser ? "assistant_you" : "assistant")}</p>
+    <p>${esc(turn.content)}</p>
+  </div>`;
+}
+
+function renderAssistantThread() {
+  const thread = document.querySelector("#assistant-thread");
+  if (!thread) return;
+  const turns = assistantTranscript.map(assistantTurnHtml).join("");
+  const pending = assistantPending
+    ? `<div class="assistant-message from-assistant"><p class="small muted">${h("assistant")}</p><p>${h("assistant_thinking")}</p></div>`
+    : "";
+  thread.innerHTML = turns || pending ? `${turns}${pending}` : `<p class="small muted">${h("assistant_empty")}</p>`;
+  thread.scrollTop = thread.scrollHeight;
+}
+
+async function pageAssistant() {
+  if (!assistantEnabled) {
+    deny("assistant", "operator");
+    return;
+  }
+  const model = assistantModel ? `<span class="small muted">${h("assistant_model", { model: assistantModel })}</span>` : "";
+  shell(t("assistant"), `<div class="card assistant">
+    <p class="small muted">${h("assistant_hint")}</p>
+    <div class="assistant-thread" id="assistant-thread" aria-live="polite"></div>
+    <form class="assistant-compose" id="assistant-form">
+      <label class="field"><span>${h("assistant_message")}</span><textarea name="message" rows="3" maxlength="8000" required placeholder="${h("assistant_placeholder")}"></textarea></label>
+      <div class="spread"><button class="btn pill primary" id="assistant-send" type="submit">${h("assistant_send")}</button>${model}</div>
+    </form>
+  </div>`);
+  const form = document.querySelector("#assistant-form");
+  const button = document.querySelector("#assistant-send");
+  renderAssistantThread();
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const text = form.message.value.trim();
+    if (!text || assistantPending) return;
+    assistantTranscript.push({ role: "user", content: text });
+    form.message.value = "";
+    assistantPending = true;
+    button.disabled = true;
+    renderAssistantThread();
+    try {
+      const result = await api("POST", "/api/assistant/chat", {
+        message: text,
+        history: assistantTranscript.slice(0, -1).slice(-20),
+      });
+      if (result && result.answer) {
+        assistantTranscript.push({ role: "assistant", content: String(result.answer) });
+      }
+    } catch (error) {
+      handle(error);
+    } finally {
+      assistantPending = false;
+      button.disabled = false;
+      renderAssistantThread();
+      form.message.focus();
+    }
+  });
+}
+
 function settingsBody(form) {
   const secret = (name) => {
     const field = form.elements[name];
@@ -8294,6 +8367,7 @@ const ROUTE_TITLES = {
   users: "users",
   settings: "settings",
   backup: "backup",
+  assistant: "assistant",
   team: "team",
 };
 
@@ -8423,6 +8497,7 @@ async function route() {
       else if (parts[0] === "users" && parts[1]) { location.replace(`#/users?edit=${encodeURIComponent(parts[1])}`); return; }
       else if (parts[0] === "users") await pageUsers();
       else if (parts[0] === "settings") await pageSettings();
+      else if (parts[0] === "assistant") await pageAssistant();
       else if (parts[0] === "backup") await pageBackup();
       else if (parts[0] === "team") await pageTeam();
       else shell(t("page"), `<div class="card">${h("this_page_does_not_exist")}</div>`);
@@ -8452,6 +8527,14 @@ async function boot() {
     if (!known) {
       teamId = preferredTeam();
       localStorage.setItem("koreograf.team", teamId);
+    }
+    try {
+      const assistant = await api("GET", "/api/assistant");
+      assistantEnabled = Boolean(assistant && assistant.enabled);
+      assistantModel = assistant && assistant.model ? String(assistant.model) : "";
+    } catch {
+      assistantEnabled = false;
+      assistantModel = "";
     }
   } catch {
     me = null;
