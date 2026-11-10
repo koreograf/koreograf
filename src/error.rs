@@ -39,6 +39,8 @@ pub enum ApiError {
     BadRequest(UserMessage),
     #[error("{0}")]
     Conflict(UserMessage),
+    #[error("{0}")]
+    Unavailable(UserMessage),
     /// The body is larger than the route limit. The key is still a catalog key.
     #[error("{0}")]
     PayloadTooLarge(UserMessage),
@@ -92,6 +94,13 @@ impl ApiError {
                 .into_iter()
                 .map(|(name, value)| (name.into(), value.into()))
                 .collect(),
+        })
+    }
+
+    pub fn unavailable(key: impl Into<String>) -> Self {
+        Self::Unavailable(UserMessage {
+            key: key.into(),
+            vars: BTreeMap::new(),
         })
     }
 
@@ -172,6 +181,9 @@ impl IntoResponse for ApiError {
             ),
             Self::BadRequest(message) => (StatusCode::BAD_REQUEST, message.key, message.vars),
             Self::Conflict(message) => (StatusCode::CONFLICT, message.key, message.vars),
+            Self::Unavailable(message) => {
+                (StatusCode::SERVICE_UNAVAILABLE, message.key, message.vars)
+            }
             Self::PayloadTooLarge(message) => {
                 (StatusCode::PAYLOAD_TOO_LARGE, message.key, message.vars)
             }

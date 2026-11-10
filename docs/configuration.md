@@ -48,7 +48,7 @@ See `.env.example`. Comments in that file are English. Copy it to `.env` before 
 
 ## PostgreSQL
 
-SQLite stays the default. A `postgres://` or `postgresql://` URL selects the experimental PostgreSQL backend. This slice bootstraps the schema and serves sign-in, sessions, `/healthz`, `/api/version`, `/api/me` with API tokens, users, credentials, organizations, teams, projects, inventories with their sources, templates, execution environments, schedules, hooks, workflows, hook delivery records, project sync status, job execution with template and workflow launch, scheduled runs and matching hook dispatch, the job list with events and output, and the overview and dashboard. Backup and restore through the UI and the API work on both engines; the archive stays one SQLite file plus the key, so an archive from either engine restores into either engine.
+SQLite stays the default. A `postgres://` or `postgresql://` URL selects PostgreSQL instead. Both engines use the same schema and serve the same API, browser UI, scheduled runs, hooks, job output, and backup and restore. The archive stays one SQLite file plus the key, so an archive from either engine restores into either engine. [PostgreSQL](postgresql.md) covers requirements, creating the database and user, URL and TLS options, per-install examples, and the move from SQLite.
 
 ```bash
 KOREOGRAF_DATABASE_URL='postgresql://koreograf@db.example:5432/koreograf?sslmode=require'
@@ -66,7 +66,7 @@ The URL carries the host, port, database, and user. An empty database path uses 
 
 Keep the password out of the URL with `KOREOGRAF_DATABASE_PASSWORD_FILE`, for example a Docker or Kubernetes secret. The file is read once at startup and a trailing newline is ignored. The password is never written to logs, API responses, `koreograf doctor` output, or error messages. When both are present, the file wins.
 
-The data directory still holds `secret.key`, the cache, git checkouts, and job directories. To move an existing SQLite installation into this backend, stop the server and run `koreograf db migrate --to 'postgresql://koreograf@db.example:5432/koreograf?sslmode=require'`. The command needs an empty target, keeps IDs, resets sequences, and checks every row count; it prints the URL to set and never prints the password. It refuses while a server still holds the data directory. Backups stay portable, so the same archive restores into SQLite or PostgreSQL. See [Database and backup](backup-restore.md#copy-sqlite-data-to-postgresql).
+The data directory still holds `secret.key`, the cache, git checkouts, and job directories. To move an existing SQLite installation, take a backup and use **Settings → Database** or stop the server and run `koreograf db migrate --to 'postgresql://koreograf@db.example:5432/koreograf?sslmode=require'`. Both need an empty target, keep IDs, reset sequences, and check every row count; neither prints or stores the password. The CLI refuses while a server still holds the data directory, and the UI uses maintenance mode. Backups stay portable, so the same archive restores into SQLite or PostgreSQL. See [PostgreSQL](postgresql.md#move-an-existing-sqlite-installation).
 
 Directory sign-in is described in [Organizations, teams, LDAP, and Active Directory](authentication.md). Company CAs are mounted at `/etc/koreograf/ca`; see [Installation](installation.md#company-certificate-authorities).
 

@@ -71,6 +71,16 @@ fn same_origin(expected: &(String, String, u16), actual: &(String, String, u16))
     expected == actual
 }
 
+async fn maintenance_guard(State(state): State<Shared>, req: Request, next: Next) -> Response {
+    if !state.in_maintenance()
+        || matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS)
+        || matches!(req.uri().path(), "/api/login" | "/api/logout")
+    {
+        return next.run(req).await;
+    }
+    ApiError::unavailable("maintenance_mode_is_active").into_response()
+}
+
 async fn origin_guard(State(state): State<Shared>, req: Request, next: Next) -> Response {
     let method = req.method();
     if matches!(
@@ -135,6 +145,7 @@ async fn origin_guard(State(state): State<Shared>, req: Request, next: Next) -> 
 fn api_routes() -> Router<Shared> {
     Router::new()
         .route("/version", get(version))
+        .route("/maintenance", get(admin::maintenance_status))
         .route("/login", post(session::login))
         .route("/logout", post(session::logout))
         .route("/me", get(session::me).put(session::update_me))
@@ -318,6 +329,9 @@ fn api_routes() -> Router<Shared> {
         .merge(
             Router::new()
                 .route("/admin/backup", get(admin::download).post(admin::restore))
+                .route("/admin/database/status", get(admin::database_status))
+                .route("/admin/database/check", post(admin::database_check))
+                .route("/admin/database/migrate", post(admin::database_migrate))
                 .layer(DefaultBodyLimit::max(256 * 1024 * 1024)),
         )
         .fallback(not_found)
@@ -379,6 +393,10 @@ pub fn router(state: Shared) -> Router {
     if state.cfg.mcp {
         app = app.merge(mcp_router(state.clone()));
     }
+    app = app.layer(axum::middleware::from_fn_with_state(
+        state.clone(),
+        maintenance_guard,
+    ));
     app.layer(TraceLayer::new_for_http())
         .layer(response_headers(state.cfg.hsts))
         .with_state(state)
