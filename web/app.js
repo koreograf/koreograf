@@ -3768,6 +3768,19 @@ function edgePoint(node, when) {
   return { x: node.x + 200, y: node.y + y };
 }
 
+function workflowTab() {
+  const params = new URLSearchParams((location.hash || "").split("?")[1] || "");
+  const tab = params.get("tab");
+  return tab === "schedules" || tab === "danger" ? tab : "editor";
+}
+
+function workflowAddress(tab, id) {
+  const params = new URLSearchParams();
+  if (tab !== "editor") params.set("tab", tab);
+  const query = params.toString();
+  return `#/workflows/${encodeURIComponent(id)}${query ? `?${query}` : ""}`;
+}
+
 async function pageWorkflow(id) {
   if (!needTeam()) return;
   const [workflow, templates, inventories, credentials] = await Promise.all([
@@ -3795,26 +3808,44 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
   const back = readonly && workflow.workflow_id
     ? `<a class="btn" href="#/workflows/${esc(workflow.workflow_id)}">${h("back_to_the_workflow")}</a>`
     : "";
+  const tabbed = !readonly;
+  const canDelete = can("operator");
+  const tabItems = tabbed
+    ? [["editor", "editor"], ["schedules", "schedules"], ...(canDelete ? [["danger", "danger_zone"]] : [])]
+    : [];
+  let activeTab = tabbed ? workflowTab() : "editor";
+  if (activeTab === "danger" && !canDelete) activeTab = "editor";
+  const tabBar = tabbed
+    ? `<div class="spread tab-bar"><div class="tabs" role="tablist" aria-label="${h("workflow")}">${tabItems.map(([id, label]) => `<button class="btn pill${id === activeTab ? " primary" : ""}" type="button" role="tab" id="wf-tab-${id}" aria-selected="${id === activeTab}" aria-controls="wf-panel-${id}" tabindex="${id === activeTab ? "0" : "-1"}" data-workflow-tab="${id}">${h(label)}</button>`).join("")}</div></div>`
+    : "";
   shell(readonly ? workflow.name : t("workflow"), `
     <div class="editor-stack">
-    <div class="editor-body">
-      <div>
-        ${readonly ? "" : `
-          <div class="row" style="margin-bottom:10px">
-            <input id="wf-name" value="${esc(workflow.name)}" ${can("operator") ? "" : "disabled"}>
-            <input id="wf-description" maxlength="1000" value="${esc(workflow.description)}" placeholder="${h("description")}" ${can("operator") ? "" : "disabled"}>
-          </div>`}
-        <p class="small muted" id="wf-hint">${readonly ? h("colors_show_the_run_a_click_shows_the") : h("drag_nodes_add_more_nodes_on_the_right")}</p>
-        <div class="canvas" id="canvas"><div id="board" style="position:relative;min-width:100%;min-height:560px"><svg class="edges" id="edges"></svg><div id="nodes"></div></div></div>
+    ${tabBar}
+    <div id="wf-panel-editor"${tabbed ? ` role="tabpanel" aria-labelledby="wf-tab-editor"${activeTab === "editor" ? "" : " hidden"}` : ""}>
+      <div class="editor-body">
+        <div>
+          ${readonly ? "" : `
+            <div class="row" style="margin-bottom:10px">
+              <input id="wf-name" value="${esc(workflow.name)}" ${can("operator") ? "" : "disabled"}>
+              <input id="wf-description" maxlength="1000" value="${esc(workflow.description)}" placeholder="${h("description")}" ${can("operator") ? "" : "disabled"}>
+            </div>`}
+          <p class="small muted" id="wf-hint">${readonly ? h("colors_show_the_run_a_click_shows_the") : h("drag_nodes_add_more_nodes_on_the_right")}</p>
+          <div class="canvas" id="canvas"><div id="board" style="position:relative;min-width:100%;min-height:560px"><svg class="edges" id="edges"></svg><div id="nodes"></div></div></div>
+        </div>
+        <aside class="card inspector" id="inspector"></aside>
       </div>
-      <aside class="card inspector" id="inspector"></aside>
+      ${readonly ? `<section class="card run-log" id="run-log" aria-live="polite"></section>` : ""}
     </div>
-    ${readonly ? `<section class="card run-log" id="run-log" aria-live="polite"></section>` : `<section class="card" id="schedule-card" data-kind="workflow" data-target="${esc(workflow.id)}"></section>`}
-    ${readonly || !can("operator") ? "" : `<section class="card danger-zone">
-      <h2>${h("danger_zone")}</h2>
-      <p class="small muted">${h("deleting_cannot_be_undone")}</p>
-      <button class="btn danger" id="wf-delete" type="button">${h("delete")}</button>
-    </section>`}
+    ${readonly ? "" : `<div id="wf-panel-schedules" role="tabpanel" aria-labelledby="wf-tab-schedules"${activeTab === "schedules" ? "" : " hidden"}>
+      <section class="card" id="schedule-card" data-kind="workflow" data-target="${esc(workflow.id)}"></section>
+    </div>`}
+    ${!tabbed || !canDelete ? "" : `<div id="wf-panel-danger" role="tabpanel" aria-labelledby="wf-tab-danger"${activeTab === "danger" ? "" : " hidden"}>
+      <section class="card danger-zone">
+        <h2>${h("danger_zone")}</h2>
+        <p class="small muted">${h("deleting_cannot_be_undone")}</p>
+        <button class="btn danger" id="wf-delete" type="button">${h("delete")}</button>
+      </section>
+    </div>`}
     </div>`, readonly ? back : `
       ${can("operator") ? `<button class="btn" id="wf-save" type="button">${h("save")}</button><button class="btn primary" id="wf-launch" type="button">${h("launch")}</button>` : ""}`);
 
@@ -4352,8 +4383,56 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
     renderInspector();
   });
 
+  function bindWorkflowTabs() {
+    const buttons = [...document.querySelectorAll("[data-workflow-tab]")];
+    if (!buttons.length) return;
+    const panels = {
+      editor: document.querySelector("#wf-panel-editor"),
+      schedules: document.querySelector("#wf-panel-schedules"),
+      danger: document.querySelector("#wf-panel-danger"),
+    };
+    const choose = (next, focus) => {
+      buttons.forEach((button) => {
+        const active = button.dataset.workflowTab === next;
+        button.classList.toggle("primary", active);
+        button.setAttribute("aria-selected", String(active));
+        button.tabIndex = active ? 0 : -1;
+      });
+      Object.entries(panels).forEach(([id, panel]) => {
+        if (panel) panel.hidden = id !== next;
+      });
+      history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", workflowAddress(next, workflow.id));
+      shownHash = location.hash;
+      if (next === "editor") drawEdges();
+      if (focus) {
+        const active = buttons.find((button) => button.dataset.workflowTab === next);
+        if (active) active.focus();
+      }
+    };
+    buttons.forEach((button, index) => {
+      button.addEventListener("click", () => {
+        if (button.dataset.workflowTab !== activeTab) {
+          activeTab = button.dataset.workflowTab;
+          choose(activeTab, false);
+        }
+      });
+      button.addEventListener("keydown", (event) => {
+        let target = null;
+        if (event.key === "ArrowRight") target = buttons[(index + 1) % buttons.length];
+        else if (event.key === "ArrowLeft") target = buttons[(index - 1 + buttons.length) % buttons.length];
+        else if (event.key === "Home") target = buttons[0];
+        else if (event.key === "End") target = buttons[buttons.length - 1];
+        if (!target) return;
+        event.preventDefault();
+        activeTab = target.dataset.workflowTab;
+        choose(activeTab, true);
+      });
+    });
+  }
+
   renderNodes();
   renderInspector();
+  bindWorkflowTabs();
   mountSchedules(document.querySelector("#schedule-card"));
 
   const save = document.querySelector("#wf-save");
