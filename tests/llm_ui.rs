@@ -35,6 +35,10 @@ check(page.includes("if (!assistantEnabled)"), "the chat page does not check the
 check(page.includes('api("POST", "/api/assistant/chat"'), "the chat page does not call the assistant route");
 const turn = extractFunction("assistantTurnHtml");
 check(turn.includes("esc(turn.content)"), "the chat page does not escape answers");
+check(js.includes("data-assistant-confirm"), "a write has no confirmation card");
+check(js.includes("data-assistant-cancel"), "a confirmation card cannot be canceled");
+check(js.includes('/api/assistant/confirm'), "the confirmation card does not call the confirm route");
+check(js.includes('href="#/assistant?explain='), "a failed job has no explain entry");
 "##;
 
 fn run_node_probe(name: &str, probe: &str) {

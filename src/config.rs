@@ -74,6 +74,67 @@ impl RunnerMode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LlmProvider {
+    Openai,
+    Ollama,
+}
+
+impl LlmProvider {
+    pub fn parse(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "ollama" => Self::Ollama,
+            _ => Self::Openai,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Openai => "openai",
+            Self::Ollama => "ollama",
+        }
+    }
+
+    pub fn default_base_url(self) -> &'static str {
+        match self {
+            Self::Openai => "",
+            Self::Ollama => "http://127.0.0.1:11434/v1",
+        }
+    }
+}
+
+pub struct LlmEnvironment {
+    pub enabled: bool,
+    pub provider: LlmProvider,
+    pub base_url: String,
+    pub model: String,
+    pub api_key: String,
+    pub api_key_file: Option<PathBuf>,
+}
+
+/// `KOREOGRAF_LLM*`. The saved settings replace these values after an
+/// administrator saves.
+pub fn llm_environment() -> LlmEnvironment {
+    let provider = LlmProvider::parse(&env_string("KOREOGRAF_LLM_PROVIDER"));
+    let base_url = env_string("KOREOGRAF_LLM_URL");
+    let key_file = env_string("KOREOGRAF_LLM_API_KEY_FILE");
+    LlmEnvironment {
+        enabled: matches!(
+            env_string("KOREOGRAF_LLM").to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "ja"
+        ),
+        provider,
+        base_url: if base_url.is_empty() {
+            provider.default_base_url().to_string()
+        } else {
+            base_url
+        },
+        model: env_string("KOREOGRAF_LLM_MODEL"),
+        api_key: env_string("KOREOGRAF_LLM_API_KEY"),
+        api_key_file: (!key_file.is_empty()).then(|| PathBuf::from(key_file)),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SslMode {
     Disable,
     Prefer,

@@ -3475,6 +3475,11 @@ fn mask_pull_credentials(line: &str) -> String {
     mask_secret_assignments(&mask_git_credentials(line))
 }
 
+/// The shared redaction used for job output sent to the assistant.
+pub(crate) fn redact_secrets(text: &str) -> String {
+    mask_secret_assignments(&mask_git_credentials(text))
+}
+
 fn mask_git_credentials(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
     let mut rest = line;

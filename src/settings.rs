@@ -7,7 +7,7 @@ use rusqlite::Connection;
 use serde_json::{json, Value};
 
 use crate::backend::Backend;
-use crate::config::{LdapConfig, RunnerMode, OUTPUT_LINES_MAX, OUTPUT_LINES_MIN};
+use crate::config::{LdapConfig, LlmProvider, RunnerMode, OUTPUT_LINES_MAX, OUTPUT_LINES_MIN};
 use crate::error::{ApiError, AppResult};
 use crate::Shared;
 
@@ -15,6 +15,7 @@ const SAVED: &str = "saved";
 const SECRET_MARK: &str = "********";
 const LDAP_PASSWORD: &str = "ldap_bind_password";
 const PROXY_PASSWORD: &str = "proxy_password";
+const LLM_API_KEY: &str = "llm_api_key";
 const PROXY_ENV: &[&str] = &[
     "http_proxy",
     "https_proxy",
@@ -144,6 +145,11 @@ pub struct Effective {
     pub default_environment_ansible: String,
     pub default_environment_opentofu: String,
     pub default_environment_shell: String,
+    pub llm_enabled: bool,
+    pub llm_provider: LlmProvider,
+    pub llm_url: String,
+    pub llm_model: String,
+    pub llm_api_key: String,
     pub saved: bool,
     pub unsupported_proxy: bool,
 }
@@ -193,7 +199,18 @@ pub struct SettingsWrite {
     pub default_environment_shell: String,
     pub clear_ldap_password: bool,
     pub clear_proxy_password: bool,
+    pub llm: Option<LlmWrite>,
     pub reset: bool,
+}
+
+#[derive(Clone)]
+pub struct LlmWrite {
+    pub enabled: bool,
+    pub provider: String,
+    pub base_url: String,
+    pub model: String,
+    pub api_key: String,
+    pub clear_api_key: bool,
 }
 
 struct Draft {
@@ -218,6 +235,11 @@ struct Draft {
     default_environment_ansible: String,
     default_environment_opentofu: String,
     default_environment_shell: String,
+    llm_enabled: bool,
+    llm_provider: LlmProvider,
+    llm_url: String,
+    llm_model: String,
+    llm_api_key: String,
 }
 
 /// Runner mode for `koreograf doctor`. Reads the saved value when the
@@ -284,6 +306,7 @@ pub fn save(state: &Shared, input: &SettingsWrite) -> AppResult<Value> {
     }
     let ldap_secret = encrypt_secret(state, &draft.ldap_bind_password)?;
     let proxy_secret = encrypt_secret(state, &draft.proxy_password)?;
+    let llm_secret = encrypt_secret(state, &draft.llm_api_key)?;
     let mut pairs = vec![
         (SAVED, "1".to_string()),
         ("ldap_url", draft.ldap_url.clone()),
@@ -314,12 +337,19 @@ pub fn save(state: &Shared, input: &SettingsWrite) -> AppResult<Value> {
             DEFAULT_ENVIRONMENT_KEYS[2],
             draft.default_environment_shell.clone(),
         ),
+        ("llm_enabled", flag(draft.llm_enabled)),
+        ("llm_provider", draft.llm_provider.as_str().to_string()),
+        ("llm_url", draft.llm_url.clone()),
+        ("llm_model", draft.llm_model.clone()),
     ];
     if let Some(secret) = ldap_secret {
         pairs.push((LDAP_PASSWORD, secret));
     }
     if let Some(secret) = proxy_secret {
         pairs.push((PROXY_PASSWORD, secret));
+    }
+    if let Some(secret) = llm_secret {
+        pairs.push((LLM_API_KEY, secret));
     }
     let pairs: Vec<(String, String)> = pairs
         .into_iter()
@@ -343,6 +373,11 @@ pub fn save(state: &Shared, input: &SettingsWrite) -> AppResult<Value> {
     effective.default_environment_ansible = draft.default_environment_ansible;
     effective.default_environment_opentofu = draft.default_environment_opentofu;
     effective.default_environment_shell = draft.default_environment_shell;
+    effective.llm_enabled = draft.llm_enabled;
+    effective.llm_provider = draft.llm_provider;
+    effective.llm_url = draft.llm_url;
+    effective.llm_model = draft.llm_model;
+    effective.llm_api_key = draft.llm_api_key;
     crate::tls::warn_directory(&effective.ldap);
     Ok(public_json(&effective))
 }
@@ -377,12 +412,26 @@ fn public_json(effective: &Effective) -> Value {
         "default_environment_ansible": effective.default_environment_ansible,
         "default_environment_opentofu": effective.default_environment_opentofu,
         "default_environment_shell": effective.default_environment_shell,
+        "llm": {
+            "enabled": effective.llm_enabled,
+            "provider": effective.llm_provider.as_str(),
+            "base_url": effective.llm_url,
+            "model": effective.llm_model,
+            "api_key_set": !effective.llm_api_key.is_empty(),
+        },
     })
 }
 
 fn from_env(state: &Shared) -> Effective {
     let (proxy, unsupported_proxy) = proxy_from_env();
     let ldap = state.cfg.ldap.clone().unwrap_or_else(empty_ldap);
+    let llm = crate::config::llm_environment();
+    let llm_api_key = match &llm.api_key_file {
+        Some(path) => std::fs::read_to_string(path)
+            .map(|value| value.trim().to_string())
+            .unwrap_or_default(),
+        None => llm.api_key,
+    };
     Effective {
         ldap,
         proxy,
@@ -392,6 +441,11 @@ fn from_env(state: &Shared) -> Effective {
         default_environment_ansible: String::new(),
         default_environment_opentofu: String::new(),
         default_environment_shell: String::new(),
+        llm_enabled: llm.enabled,
+        llm_provider: llm.provider,
+        llm_url: llm.base_url,
+        llm_model: llm.model,
+        llm_api_key,
         saved: false,
         unsupported_proxy,
     }
@@ -400,6 +454,7 @@ fn from_env(state: &Shared) -> Effective {
 fn from_saved(state: &Shared, rows: &HashMap<String, String>) -> AppResult<Effective> {
     let ldap_password = decrypt_secret(state, rows.get(LDAP_PASSWORD))?;
     let proxy_password = decrypt_secret(state, rows.get(PROXY_PASSWORD))?;
+    let llm_api_key = decrypt_secret(state, rows.get(LLM_API_KEY))?;
     let mode = rows.get("ldap_mode").map(String::as_str).unwrap_or("ldap");
     let ad = mode.eq_ignore_ascii_case("ad");
     let ldap_mode = if ad { "ad" } else { "ldap" };
@@ -474,6 +529,15 @@ fn from_saved(state: &Shared, rows: &HashMap<String, String>) -> AppResult<Effec
             .get(DEFAULT_ENVIRONMENT_KEYS[2])
             .cloned()
             .unwrap_or_default(),
+        llm_enabled: flag_on(rows.get("llm_enabled").map(String::as_str).unwrap_or("")),
+        llm_provider: LlmProvider::parse(
+            rows.get("llm_provider")
+                .map(String::as_str)
+                .unwrap_or("openai"),
+        ),
+        llm_url: rows.get("llm_url").cloned().unwrap_or_default(),
+        llm_model: rows.get("llm_model").cloned().unwrap_or_default(),
+        llm_api_key,
         saved: true,
         unsupported_proxy: false,
     })
@@ -600,6 +664,8 @@ fn validate(input: &SettingsWrite, current: &Effective, store: &dyn Backend) -> 
         validate_default_environment(store, "opentofu", &input.default_environment_opentofu)?;
     let default_environment_shell =
         validate_default_environment(store, "shell", &input.default_environment_shell)?;
+    let (llm_enabled, llm_provider, llm_url, llm_model, llm_api_key) =
+        validate_llm(input.llm.as_ref(), current)?;
     Ok(Draft {
         ldap_url,
         ldap_mode: ldap_mode.to_string(),
@@ -622,7 +688,55 @@ fn validate(input: &SettingsWrite, current: &Effective, store: &dyn Backend) -> 
         default_environment_ansible,
         default_environment_opentofu,
         default_environment_shell,
+        llm_enabled,
+        llm_provider,
+        llm_url,
+        llm_model,
+        llm_api_key,
     })
+}
+
+fn validate_llm(
+    input: Option<&LlmWrite>,
+    current: &Effective,
+) -> AppResult<(bool, LlmProvider, String, String, String)> {
+    let Some(input) = input else {
+        return Ok((
+            current.llm_enabled,
+            current.llm_provider,
+            current.llm_url.clone(),
+            current.llm_model.clone(),
+            current.llm_api_key.clone(),
+        ));
+    };
+    let provider = LlmProvider::parse(&input.provider);
+    let base_url = plain(&input.base_url, 400)?;
+    if !valid_llm_url(&base_url) {
+        return Err(ApiError::bad("the_assistant_address_must_be_http_or_https"));
+    }
+    let model = plain(&input.model, 200)?;
+    if input.enabled && base_url.is_empty() {
+        return Err(ApiError::bad("the_assistant_address_is_missing"));
+    }
+    if input.enabled && model.is_empty() {
+        return Err(ApiError::bad("the_assistant_model_is_missing"));
+    }
+    let api_key = resolve_secret(&input.api_key, input.clear_api_key, &current.llm_api_key)?;
+    Ok((input.enabled, provider, base_url, model, api_key))
+}
+
+fn valid_llm_url(url: &str) -> bool {
+    if url.is_empty() {
+        return true;
+    }
+    let Ok(parsed) = url::Url::parse(url) else {
+        return false;
+    };
+    matches!(parsed.scheme(), "http" | "https")
+        && parsed.host_str().is_some()
+        && parsed.username().is_empty()
+        && parsed.password().is_none()
+        && !url.chars().any(char::is_control)
 }
 
 fn validate_default_environment(store: &dyn Backend, tool: &str, raw: &str) -> AppResult<String> {
@@ -979,6 +1093,7 @@ mod tests {
             default_environment_shell: String::new(),
             clear_ldap_password: false,
             clear_proxy_password: false,
+            llm: None,
             reset: false,
         }
     }
@@ -1160,6 +1275,66 @@ mod tests {
             crate::db::delete_environment(&db, "ansible-ee").unwrap();
         }
         assert_eq!(load(&state).unwrap().default_environment_ansible, "");
+    }
+
+    #[test]
+    fn the_assistant_key_is_saved_masked_and_kept_until_cleared() {
+        let state = state();
+        let mut write = sample("bind-secret");
+        write.llm = Some(LlmWrite {
+            enabled: true,
+            provider: "ollama".into(),
+            base_url: "http://127.0.0.1:11434/v1".into(),
+            model: "llama3".into(),
+            api_key: "llm-secret-value".into(),
+            clear_api_key: false,
+        });
+        let saved = save(&state, &write).unwrap();
+        assert!(!saved.to_string().contains("llm-secret-value"));
+        assert_eq!(saved["llm"]["enabled"], true);
+        assert_eq!(saved["llm"]["provider"], "ollama");
+        assert_eq!(saved["llm"]["api_key_set"], true);
+        let loaded = load(&state).unwrap();
+        assert!(loaded.llm_enabled);
+        assert_eq!(loaded.llm_provider, LlmProvider::Ollama);
+        assert_eq!(loaded.llm_api_key, "llm-secret-value");
+        let raw: String = {
+            let db = state.db().unwrap();
+            db.query_row(
+                "SELECT value FROM settings WHERE key = 'llm_api_key'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        assert!(!raw.contains("llm-secret"));
+
+        let mut kept = write.clone();
+        kept.llm = Some(LlmWrite {
+            api_key: String::new(),
+            ..write.llm.clone().unwrap()
+        });
+        assert_eq!(save(&state, &kept).unwrap()["llm"]["api_key_set"], true);
+        assert_eq!(load(&state).unwrap().llm_api_key, "llm-secret-value");
+
+        let mut cleared = write.clone();
+        cleared.llm = Some(LlmWrite {
+            clear_api_key: true,
+            api_key: String::new(),
+            ..write.llm.clone().unwrap()
+        });
+        assert_eq!(save(&state, &cleared).unwrap()["llm"]["api_key_set"], false);
+        assert_eq!(load(&state).unwrap().llm_api_key, "");
+
+        let mut invalid = write;
+        invalid.llm = Some(LlmWrite {
+            base_url: "ftp://example.com".into(),
+            ..invalid.llm.clone().unwrap()
+        });
+        assert_eq!(
+            save(&state, &invalid).unwrap_err().to_string(),
+            "the_assistant_address_must_be_http_or_https"
+        );
     }
 
     #[test]

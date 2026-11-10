@@ -37,6 +37,7 @@ let assistantEnabled = false;
 let assistantModel = "";
 let assistantTranscript = [];
 let assistantPending = false;
+let assistantPendingAction = null;
 
 window.addEventListener("beforeunload", (event) => {
   if (!leaveGuard || !leaveGuard()) return;
@@ -3584,6 +3585,7 @@ async function pageJob(id) {
         </div>
         <div class="row">
           ${actions}
+          ${assistantEnabled && job.status === "failed" ? `<a class="btn" href="#/assistant?explain=${encodeURIComponent(job.id)}">${h("assistant_explain_failure")}</a>` : ""}
           <button class="btn" type="button" id="download-output">${h("download_output")}</button>
           ${job.output_capped ? `<span class="small muted" id="output-capped">${h("output_download_is_incomplete")}</span>` : ""}
         </div>
@@ -7955,6 +7957,68 @@ function assistantTurnHtml(turn) {
   </div>`;
 }
 
+function assistantActionKey(tool) {
+  return {
+    launch_template: "assistant_confirm_launch_template",
+    launch_workflow: "assistant_confirm_launch_workflow",
+    cancel_job: "assistant_confirm_cancel_job",
+    relaunch_job: "assistant_confirm_relaunch_job",
+    sync_project: "assistant_confirm_sync_project",
+    sync_inventory: "assistant_confirm_sync_inventory",
+  }[tool] || "assistant_confirmation";
+}
+
+function assistantConfirmHtml(action) {
+  return `<div class="assistant-confirm" role="group" aria-label="${h("assistant_confirmation")}">
+    <p class="small muted">${h("assistant_confirmation")}</p>
+    <p><strong>${h(assistantActionKey(action.tool), { name: action.target })}</strong></p>
+    <div class="choice-row">
+      <button class="btn pill primary" type="button" data-assistant-confirm>${h("confirm")}</button>
+      <button class="btn pill" type="button" data-assistant-cancel>${h("cancel")}</button>
+    </div>
+  </div>`;
+}
+
+function bindAssistantAction() {
+  const confirm = document.querySelector("[data-assistant-confirm]");
+  const cancel = document.querySelector("[data-assistant-cancel]");
+  const finish = (text) => {
+    assistantPendingAction = null;
+    assistantTranscript.push({ role: "assistant", content: text });
+    renderAssistantThread();
+  };
+  if (confirm) {
+    confirm.addEventListener("click", async () => {
+      const action = assistantPendingAction;
+      if (!action) return;
+      confirm.disabled = true;
+      if (cancel) cancel.disabled = true;
+      try {
+        await api("POST", "/api/assistant/confirm", { id: action.id });
+        finish(t("assistant_action_done"));
+      } catch (error) {
+        if (cancel) cancel.disabled = false;
+        confirm.disabled = false;
+        handle(error);
+      }
+    });
+  }
+  if (cancel) {
+    cancel.addEventListener("click", async () => {
+      const action = assistantPendingAction;
+      if (!action) return;
+      confirm.disabled = true;
+      cancel.disabled = true;
+      try {
+        await api("POST", "/api/assistant/cancel", { id: action.id });
+      } catch (error) {
+        handle(error);
+      }
+      finish(t("assistant_action_canceled"));
+    });
+  }
+}
+
 function renderAssistantThread() {
   const thread = document.querySelector("#assistant-thread");
   if (!thread) return;
@@ -7962,7 +8026,9 @@ function renderAssistantThread() {
   const pending = assistantPending
     ? `<div class="assistant-message from-assistant"><p class="small muted">${h("assistant")}</p><p>${h("assistant_thinking")}</p></div>`
     : "";
-  thread.innerHTML = turns || pending ? `${turns}${pending}` : `<p class="small muted">${h("assistant_empty")}</p>`;
+  const action = assistantPendingAction ? assistantConfirmHtml(assistantPendingAction) : "";
+  thread.innerHTML = turns || pending || action ? `${turns}${pending}${action}` : `<p class="small muted">${h("assistant_empty")}</p>`;
+  bindAssistantAction();
   thread.scrollTop = thread.scrollHeight;
 }
 
@@ -7971,6 +8037,8 @@ async function pageAssistant() {
     shell(t("assistant"), `<div class="card">${h("assistant_is_not_enabled")}</div>`);
     return;
   }
+  const params = new URLSearchParams((location.hash || "").split("?")[1] || "");
+  const explainJob = params.get("explain") || "";
   const model = assistantModel ? `<span class="small muted">${h("assistant_model", { model: assistantModel })}</span>` : "";
   shell(t("assistant"), `<div class="card assistant">
     <p class="small muted">${h("assistant_hint")}</p>
@@ -7983,23 +8051,21 @@ async function pageAssistant() {
   const form = document.querySelector("#assistant-form");
   const button = document.querySelector("#assistant-send");
   renderAssistantThread();
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const text = form.message.value.trim();
-    if (!text || assistantPending) return;
+  const send = async (text, jobId) => {
+    if (!text || assistantPending || assistantPendingAction) return;
     assistantTranscript.push({ role: "user", content: text });
     form.message.value = "";
     assistantPending = true;
     button.disabled = true;
     renderAssistantThread();
     try {
-      const result = await api("POST", "/api/assistant/chat", {
-        message: text,
-        history: assistantTranscript.slice(0, -1).slice(-20),
-      });
+      const body = { message: text, history: assistantTranscript.slice(0, -1).slice(-20) };
+      if (jobId) body.job_id = jobId;
+      const result = await api("POST", "/api/assistant/chat", body);
       if (result && result.answer) {
         assistantTranscript.push({ role: "assistant", content: String(result.answer) });
       }
+      if (result && result.pending_action) assistantPendingAction = result.pending_action;
     } catch (error) {
       handle(error);
     } finally {
@@ -8008,7 +8074,16 @@ async function pageAssistant() {
       renderAssistantThread();
       form.message.focus();
     }
+  };
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    send(form.message.value.trim(), "");
   });
+  if (explainJob) {
+    history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", "#/assistant");
+    shownHash = "#/assistant";
+    send(t("assistant_explain_prompt"), explainJob);
+  }
 }
 
 function settingsBody(form) {
@@ -8044,6 +8119,13 @@ function settingsBody(form) {
     default_environment_ansible: form.default_environment_ansible.value,
     default_environment_opentofu: form.default_environment_opentofu.value,
     default_environment_shell: form.default_environment_shell.value,
+    llm: {
+      enabled: form.llm_enabled.checked,
+      provider: form.llm_provider.value,
+      base_url: form.llm_base_url.value.trim(),
+      model: form.llm_model.value.trim(),
+      api_key: secret("llm_api_key"),
+    },
     clear,
   };
 }
@@ -8062,7 +8144,7 @@ function bindStoredMasks(form) {
 function settingsTab() {
   const params = new URLSearchParams((location.hash || "").split("?")[1] || "");
   const tab = params.get("tab");
-  return ["directory", "proxy", "jobs"].includes(tab) ? tab : "directory";
+  return ["directory", "proxy", "jobs", "assistant"].includes(tab) ? tab : "directory";
 }
 
 function settingsTabAddress(tab) {
@@ -8071,7 +8153,7 @@ function settingsTabAddress(tab) {
 
 function settingsTabBar(active) {
   const item = (id) => `<button class="btn pill${active === id ? " primary" : ""}" type="button" role="tab" id="settings-tab-${id}" aria-selected="${active === id}" aria-controls="settings-panel-${id}" tabindex="${active === id ? "0" : "-1"}" data-settings-tab="${id}">${h(id)}</button>`;
-  return `<div class="spread tab-bar"><div class="tabs" role="tablist" aria-label="${h("settings")}">${["directory", "proxy", "jobs"].map(item).join("")}</div></div>`;
+  return `<div class="spread tab-bar"><div class="tabs" role="tablist" aria-label="${h("settings")}">${["directory", "proxy", "jobs", "assistant"].map(item).join("")}</div></div>`;
 }
 
 async function pageSettings(notice) {
@@ -8083,6 +8165,8 @@ async function pageSettings(notice) {
   const environments = teamId ? await api("GET", "/api/environments") : [];
   const ldap = item.ldap || {};
   const proxy = item.proxy || {};
+  const llm = item.llm || {};
+  const llmProvider = ["openai", "ollama"].includes(llm.provider) ? llm.provider : "openai";
   const mode = ldap.mode === "ad" ? "ad" : "ldap";
   const runner = ["auto", "docker", "local"].includes(item.runner) ? item.runner : "auto";
   const defaultsFor = (tool) => environments.filter((row) => row.scope === "global" && (!row.tool || row.tool === "any" || row.tool === tool));
@@ -8161,6 +8245,23 @@ async function pageSettings(notice) {
         <label class="field"><span>${h("default_environment_shell")}</span><select name="default_environment_shell">${defaultOptions("shell", item.default_environment_shell)}</select></label>
       </div>
     </section>
+    <section class="form-section settings-panel" id="settings-panel-assistant" role="tabpanel" aria-labelledby="settings-tab-assistant"${panelHidden("assistant")}>
+      <h2>${h("assistant")}</h2>
+      <p class="small muted">${h("assistant_settings_hint")}</p>
+      <label class="row"><input name="llm_enabled" type="checkbox"${llm.enabled ? " checked" : ""}> ${h("assistant_enable")}</label>
+      <div class="field-row">
+        <label class="field"><span>${h("assistant_provider")}</span>
+          <select class="fit" name="llm_provider">
+            <option value="openai"${optionSelected(llmProvider, "openai")}>${h("assistant_provider_openai")}</option>
+            <option value="ollama"${optionSelected(llmProvider, "ollama")}>${h("assistant_provider_ollama")}</option>
+          </select>
+        </label>
+      </div>
+      <label class="field"><span>${h("assistant_base_url")}</span><input name="llm_base_url" value="${esc(llm.base_url || "")}" placeholder="http://127.0.0.1:11434/v1" autocomplete="off" spellcheck="false"></label>
+      <label class="field"><span>${h("assistant_model_name")}</span><input name="llm_model" value="${esc(llm.model || "")}" placeholder="llama3" autocomplete="off" spellcheck="false"></label>
+      ${secretInput("llm_api_key", "assistant_api_key", "password", Boolean(llm.api_key_set))}
+      <p class="small muted">${h("assistant_key_hint")}</p>
+    </section>
     <p class="small muted">${h("saving_replaces_the_environment_variables_an_empty_password")}</p>
     <div class="choice-row">
       <button class="btn pill primary" type="submit">${h("save")}</button>
@@ -8174,10 +8275,11 @@ async function pageSettings(notice) {
     directory: document.querySelector("#settings-panel-directory"),
     proxy: document.querySelector("#settings-panel-proxy"),
     jobs: document.querySelector("#settings-panel-jobs"),
+    assistant: document.querySelector("#settings-panel-assistant"),
   };
   let currentTab = activeTab;
   const chooseTab = (next, focus) => {
-    currentTab = ["directory", "proxy", "jobs"].includes(next) ? next : "directory";
+    currentTab = ["directory", "proxy", "jobs", "assistant"].includes(next) ? next : "directory";
     tabButtons.forEach((button) => {
       const active = button.dataset.settingsTab === currentTab;
       button.classList.toggle("primary", active);
