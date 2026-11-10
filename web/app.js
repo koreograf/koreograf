@@ -358,6 +358,7 @@ function closeLive() {
   generation += 1;
   document.querySelector("#schedule-form")?.remove();
   document.querySelectorAll("[data-edit-overlay]").forEach((node) => node.remove());
+  document.querySelectorAll(".node-menu-pop").forEach((node) => node.remove());
   if (source) {
     source.close();
     source = null;
@@ -3768,6 +3769,10 @@ function edgePoint(node, when) {
   return { x: node.x + 200, y: node.y + y };
 }
 
+function edgeWhenLabel(when) {
+  return when === "failure" ? "error.generic" : when;
+}
+
 function workflowTab() {
   const params = new URLSearchParams((location.hash || "").split("?")[1] || "");
   const tab = params.get("tab");
@@ -3802,7 +3807,9 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
   };
   let selected = null;
   let selectedEdge = null;
-  let link = null;
+  let connecting = null;
+  let connectDrag = null;
+  let nodeMenu = null;
   let drag = null;
   let flushNode = () => true;
   const back = readonly && workflow.workflow_id
@@ -3962,20 +3969,173 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
     }).join("");
   }
 
+  function edgeExists(fromId, toId, when) {
+    return graph.edges.some((edge) => edge.from === fromId && edge.to === toId && edge.when === when);
+  }
+
+  function setHint(key, vars) {
+    const hint = document.querySelector("#wf-hint");
+    if (hint) hint.textContent = t(key, vars);
+  }
+
+  function clearConnectPreview() {
+    const preview = svg.querySelector("#connect-preview");
+    if (preview) preview.remove();
+  }
+
+  function drawConnectPreview(from, point) {
+    let preview = svg.querySelector("#connect-preview");
+    if (!preview) {
+      preview = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      preview.id = "connect-preview";
+      preview.setAttribute("class", "connecting");
+      svg.appendChild(preview);
+    }
+    const start = edgePoint(from, "always");
+    const dx = Math.max(48, Math.abs(point.x - start.x) / 2);
+    preview.setAttribute("d", `M ${start.x} ${start.y} C ${start.x + dx} ${start.y}, ${point.x - dx} ${point.y}, ${point.x} ${point.y}`);
+  }
+
+  function closeNodeMenu(restoreFocus) {
+    if (!nodeMenu) return;
+    const opener = nodeMenu.opener;
+    nodeMenu.element.remove();
+    document.removeEventListener("pointerdown", nodeMenu.outside, true);
+    document.removeEventListener("keydown", nodeMenu.keys, true);
+    nodeMenu = null;
+    if (opener && opener.matches && opener.matches("[data-node-menu]")) opener.setAttribute("aria-expanded", "false");
+    if (restoreFocus && opener && opener.isConnected) opener.focus();
+  }
+
+  function openNodeMenu(node, x, y, opener) {
+    closeNodeMenu();
+    const element = document.createElement("div");
+    element.className = "node-menu-pop";
+    element.setAttribute("role", "menu");
+    element.innerHTML = `<button class="btn" type="button" role="menuitem" data-connect-node="${esc(node.id)}">${h("connect")}</button>`;
+    document.body.appendChild(element);
+    const rect = element.getBoundingClientRect();
+    element.style.left = `${Math.max(8, Math.min(x, window.innerWidth - rect.width - 8))}px`;
+    element.style.top = `${Math.max(8, Math.min(y, window.innerHeight - rect.height - 8))}px`;
+    const outside = (event) => {
+      if (!element.contains(event.target)) closeNodeMenu();
+    };
+    const keys = (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closeNodeMenu(true);
+    };
+    document.addEventListener("pointerdown", outside, true);
+    document.addEventListener("keydown", keys, true);
+    nodeMenu = { element, opener, outside, keys };
+    if (opener && opener.matches && opener.matches("[data-node-menu]")) opener.setAttribute("aria-expanded", "true");
+    const item = element.querySelector("[data-connect-node]");
+    item.addEventListener("click", () => {
+      closeNodeMenu(true);
+      startConnect(node);
+    });
+    item.focus();
+  }
+
+  function startConnect(node) {
+    if (!editable || !flushNode()) return;
+    connecting = { from: node.id };
+    connectDrag = null;
+    selected = node.id;
+    selectedEdge = null;
+    setHint("connect_click_or_drag_target", { name: node.name });
+    renderNodes();
+    renderInspector();
+    const source = nodes.querySelector(`[data-id="${CSS.escape(node.id)}"]`);
+    if (source) source.focus();
+  }
+
+  function cancelConnect() {
+    if (!connecting) return;
+    connecting = null;
+    connectDrag = null;
+    clearConnectPreview();
+    setHint("drag_nodes_add_more_nodes_on_the_right");
+    renderNodes();
+    renderInspector();
+  }
+
+  function chooseEdgeType(fromNode, toNode) {
+    return new Promise((resolve) => {
+      let decided = false;
+      const decide = (value) => {
+        if (decided) return;
+        decided = true;
+        resolve(value);
+      };
+      const dialog = openDialog({
+        id: "edge-type-dialog",
+        title: t("connect_nodes", { from: fromNode.name, to: toNode.name }),
+        body: `<p class="small muted">${h("choose_edge_type")}</p><div class="choice-row">${["success", "failure", "always"].map((when) => `<button class="btn pill${when === "success" ? " primary" : ""}" type="button" data-edge-when="${when}">${h(edgeWhenLabel(when))}</button>`).join("")}<button class="btn" type="button" data-edge-cancel>${h("cancel")}</button></div>`,
+        form: false,
+        actions: false,
+        onClose: () => decide(null),
+      });
+      dialog.overlay.querySelectorAll("[data-edge-when]").forEach((button) => {
+        button.addEventListener("click", () => {
+          decide(button.dataset.edgeWhen);
+          dialog.close();
+        });
+      });
+      dialog.overlay.querySelector("[data-edge-cancel]").addEventListener("click", () => dialog.close());
+    });
+  }
+
+  async function finishConnect(toId) {
+    if (!connecting) return;
+    const fromNode = graph.nodes.find((node) => node.id === connecting.from);
+    const toNode = graph.nodes.find((node) => node.id === toId);
+    connecting = null;
+    connectDrag = null;
+    clearConnectPreview();
+    if (!fromNode || !toNode) return;
+    if (fromNode.id === toNode.id) {
+      setHint("an_edge_cannot_point_at_the_same_node");
+      renderNodes();
+      renderInspector();
+      return;
+    }
+    const when = await chooseEdgeType(fromNode, toNode);
+    if (!when) {
+      setHint("connect_cancelled");
+      renderNodes();
+      renderInspector();
+      return;
+    }
+    if (edgeExists(fromNode.id, toNode.id, when)) {
+      setHint("the_same_edge_is_present_twice");
+      renderNodes();
+      renderInspector();
+      return;
+    }
+    graph.edges.push({ from: fromNode.id, to: toNode.id, when });
+    selected = fromNode.id;
+    selectedEdge = null;
+    setHint("edge_added");
+    renderNodes();
+    renderInspector();
+  }
+
   function renderNodes() {
     nodes.innerHTML = graph.nodes.map((node) => {
       const phase = phases[node.id];
       const phaseClass = phase ? ` phase-${esc(phase.phase)}` : "";
       const selectedClass = selected === node.id ? " selected" : "";
       const runClass = readonly ? " run-node" : "";
-      const armed = link && link.from === node.id ? link.when : "";
-      const ports = editable ? `<div class="ports"><button type="button" class="port success${armed === "success" ? " armed" : ""}" data-port="success" aria-label="${h("connect_on_success", { name: node.name })}">${h("success")}</button><button type="button" class="port failure${armed === "failure" ? " armed" : ""}" data-port="failure" aria-label="${h("connect_on_failure", { name: node.name })}">${h("error.generic")}</button><button type="button" class="port always${armed === "always" ? " armed" : ""}" data-port="always" aria-label="${h("connect_on_always", { name: node.name })}">${h("always")}</button></div>` : "";
-      return `<div class="wf-node${selectedClass}${phaseClass}${runClass}" data-id="${esc(node.id)}" style="left:${Number(node.x) || 0}px;top:${Number(node.y) || 0}px" tabindex="0" role="group" aria-label="${esc(node.name)}"><strong>${esc(node.name)}</strong><span class="small muted">${esc(nodeCaption(node))}</span>${ports}</div>`;
+      const connectClass = connecting && connecting.from === node.id ? " connecting" : "";
+      const menu = editable ? `<button class="btn ghost compact node-menu-button" type="button" data-node-menu aria-haspopup="menu" aria-expanded="false" aria-label="${h("node_actions", { name: node.name })}">⋯</button>` : "";
+      return `<div class="wf-node${selectedClass}${connectClass}${phaseClass}${runClass}" data-id="${esc(node.id)}" style="left:${Number(node.x) || 0}px;top:${Number(node.y) || 0}px" tabindex="0" role="group" aria-label="${esc(node.name)}">${menu}<strong>${esc(node.name)}</strong><span class="small muted">${esc(nodeCaption(node))}</span></div>`;
     }).join("");
     nodes.querySelectorAll(".wf-node").forEach((element) => {
       const node = graph.nodes.find((item) => item.id === element.dataset.id);
+      const menuButton = element.querySelector("[data-node-menu]");
       element.addEventListener("pointerdown", (event) => {
-        if (event.target.closest(".port")) return;
+        if (event.target.closest(".node-menu-button")) return;
         if (readonly) {
           if (onNode) onNode(node, phases[node.id] || null);
           return;
@@ -3987,17 +4147,18 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
           nodes.querySelectorAll(".wf-node").forEach((item) => item.classList.toggle("selected", item.dataset.id === selected));
           return;
         }
-        if (link && link.from !== node.id) {
-          if (!flushNode()) return;
-          const fromId = link.from;
-          const exists = graph.edges.some((edge) => edge.from === fromId && edge.to === node.id && edge.when === link.when);
-          if (!exists) graph.edges.push({ from: fromId, to: node.id, when: link.when });
-          link = null;
-          selected = fromId;
-          selectedEdge = null;
-          document.querySelector("#wf-hint").textContent = t("edge_added");
-          renderNodes();
-          renderInspector();
+        if (connecting) {
+          if (node.id === connecting.from) {
+            event.preventDefault();
+            if (!flushNode()) return;
+            connectDrag = { id: node.id, pointerId: event.pointerId };
+            element.setPointerCapture(event.pointerId);
+            drawConnectPreview(node, localPoint(event));
+            return;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          finishConnect(node.id);
           return;
         }
         if (!flushNode()) return;
@@ -4010,6 +4171,10 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
         nodes.querySelectorAll(".wf-node").forEach((item) => item.classList.toggle("selected", item.dataset.id === selected));
       });
       element.addEventListener("pointermove", (event) => {
+        if (connectDrag && connectDrag.id === node.id) {
+          drawConnectPreview(node, localPoint(event));
+          return;
+        }
         if (!drag || drag.id !== node.id) return;
         const point = localPoint(event);
         node.x = Math.max(0, Math.round(point.x - drag.ox));
@@ -4018,9 +4183,38 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
         element.style.top = `${node.y}px`;
         drawEdges();
       });
-      element.addEventListener("pointerup", () => { drag = null; });
+      element.addEventListener("pointerup", (event) => {
+        if (connectDrag && connectDrag.id === node.id) {
+          connectDrag = null;
+          clearConnectPreview();
+          const target = document.elementFromPoint(event.clientX, event.clientY);
+          const hit = target && target.closest(".wf-node");
+          if (hit && hit.dataset.id !== node.id) finishConnect(hit.dataset.id);
+          else setHint("connect_click_or_drag_target", { name: node.name });
+          return;
+        }
+        drag = null;
+      });
+      element.addEventListener("contextmenu", (event) => {
+        if (!editable || !flushNode()) return;
+        event.preventDefault();
+        openNodeMenu(node, event.clientX, event.clientY, element);
+      });
+      if (menuButton) {
+        menuButton.addEventListener("pointerdown", (event) => event.stopPropagation());
+        menuButton.addEventListener("click", (event) => {
+          event.stopPropagation();
+          const rect = menuButton.getBoundingClientRect();
+          openNodeMenu(node, rect.left, rect.bottom + 4, menuButton);
+        });
+      }
       element.addEventListener("keydown", (event) => {
         if (event.target !== element) return;
+        if (event.key === "Escape" && connecting) {
+          event.preventDefault();
+          cancelConnect();
+          return;
+        }
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           if (readonly) {
@@ -4050,19 +4244,6 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
         element.style.top = `${node.y}px`;
         drawEdges();
       });
-      element.querySelectorAll(".port").forEach((port) => {
-        port.addEventListener("pointerdown", (event) => event.stopPropagation());
-        port.addEventListener("click", (event) => {
-          event.stopPropagation();
-          link = { from: node.id, when: port.dataset.port };
-          nodes.querySelectorAll(".port").forEach((item) => item.classList.toggle("armed", item === port));
-          document.querySelector("#wf-hint").textContent = t({
-            success: "success_edge_click_the_target_node",
-            failure: "failure_edge_click_the_target_node",
-            always: "always_edge_click_the_target_node",
-          }[port.dataset.port]);
-        });
-      });
     });
     drawEdges();
   }
@@ -4077,7 +4258,9 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
     if (toId && toId !== fromId && graph.nodes.some((item) => item.id === toId)) {
       graph.edges.push({ from: fromId, to: toId, when });
     }
-    link = null;
+    connecting = null;
+    connectDrag = null;
+    clearConnectPreview();
     drawEdges();
   }
 
@@ -4151,7 +4334,9 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
       });
       selected = id;
       selectedEdge = null;
-      link = null;
+      connecting = null;
+      connectDrag = null;
+      clearConnectPreview();
       renderNodes();
       renderInspector();
       const created = nodes.querySelector(`[data-id="${CSS.escape(id)}"]`);
@@ -4274,7 +4459,13 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
         </div>`;
       bindAddNode(host);
       host.querySelector("#edge-when").addEventListener("change", (event) => {
-        edge.when = event.target.value;
+        const next = event.target.value;
+        if (next !== edge.when && graph.edges.some((item, index) => index !== selectedEdge && item.from === edge.from && item.to === edge.to && item.when === next)) {
+          setHint("the_same_edge_is_present_twice");
+          event.target.value = edge.when;
+          return;
+        }
+        edge.when = next;
         drawEdges();
       });
       host.querySelector("#edge-delete").addEventListener("click", () => {
@@ -4305,6 +4496,8 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
         </label>
         ${nodeParams(node, templates.find((item) => item.id === node.template_id))}
         <h2>${h("connect")}</h2>
+        <button class="btn pill primary" id="node-connect" type="button">${h("connect")}</button>
+        <p class="small muted">${h("connect_help")}</p>
         <label class="field"><span>${h("on_success_go_to")}</span><select class="fit" id="link-success">${targetOptions(node.id, "success")}</select></label>
         <label class="field"><span>${h("on_failure_go_to")}</span><select class="fit" id="link-failure">${targetOptions(node.id, "failure")}</select></label>
         <label class="field"><span>${h("always_go_to")}</span><select class="fit" id="link-always">${targetOptions(node.id, "always")}</select></label>
@@ -4312,6 +4505,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
         <button class="btn danger" id="node-delete" type="button">${h("delete_node")}</button>
       </div>`;
     bindAddNode(host);
+    host.querySelector("#node-connect").addEventListener("click", () => startConnect(node));
     host.querySelector("#node-name").addEventListener("input", (event) => {
       node.name = event.target.value;
       const label = nodes.querySelector(`[data-id="${CSS.escape(node.id)}"] strong`);
@@ -4356,7 +4550,9 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
       graph.nodes = graph.nodes.filter((item) => item.id !== node.id);
       graph.edges = graph.edges.filter((edge) => edge.from !== node.id && edge.to !== node.id);
       selected = null;
-      link = null;
+      connecting = null;
+      connectDrag = null;
+      clearConnectPreview();
       renderNodes();
       renderInspector();
     });
@@ -4368,17 +4564,22 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
     if (!flushNode()) return;
     selectedEdge = Number(path.dataset.edge);
     selected = null;
-    link = null;
+    connecting = null;
+    connectDrag = null;
+    clearConnectPreview();
     drawEdges();
     renderInspector();
   });
   board.addEventListener("pointerdown", (event) => {
     if (readonly || !editable) return;
     if (event.target.closest(".wf-node, path")) return;
+    if (connecting) {
+      cancelConnect();
+      return;
+    }
     if (!flushNode()) return;
     selected = null;
     selectedEdge = null;
-    link = null;
     renderNodes();
     renderInspector();
   });
