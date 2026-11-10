@@ -777,6 +777,7 @@ button.run-line:hover { outline: 1px solid var(--line); }
   border-radius: 10px;
   box-shadow: var(--shadow);
 }
+.node-menu-pop .btn { justify-content: flex-start; }
 .edges path.connecting { stroke: var(--accent); stroke-dasharray: 6 4; pointer-events: none; }
 .inspector { display: flex; flex-direction: column; gap: 12px; }
 .inspector-block { display: flex; flex-direction: column; gap: 10px; }
