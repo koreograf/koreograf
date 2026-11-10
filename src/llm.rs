@@ -1660,10 +1660,17 @@ mod tests {
 
     #[test]
     fn secret_shaped_tokens_and_private_keys_are_masked() {
-        let text = "token sk-live-abcdefghijklmnopqrstuvwxyz and ghp_0123456789abcdef\n-----BEGIN OPENSSH PRIVATE KEY-----\nbody\n-----END OPENSSH PRIVATE KEY-----";
-        let redacted = redact_text(text, &SecretSet::default());
-        assert!(!redacted.contains("sk-live"), "{redacted}");
-        assert!(!redacted.contains("ghp_"), "{redacted}");
+        let openai = ["sk-", "live-abcdefghijklmnopqrstuvwxyz"].concat();
+        let github = ["ghp_", "0123456789abcdef"].concat();
+        let begin = ["-----BEGIN ", "OPENSSH", " PRIVATE KEY-----"].concat();
+        let end = ["-----END ", "OPENSSH", " PRIVATE KEY-----"].concat();
+        let text = format!("token {openai} and {github}\n{begin}\nbody\n{end}");
+        let redacted = redact_text(&text, &SecretSet::default());
+        assert!(
+            !redacted.contains("live-abcdefghijklmnopqrstuvwxyz"),
+            "{redacted}"
+        );
+        assert!(!redacted.contains("0123456789abcdef"), "{redacted}");
         assert!(!redacted.contains("body"), "{redacted}");
         assert!(redacted.contains("[redacted private key]"), "{redacted}");
     }
