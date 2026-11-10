@@ -121,6 +121,7 @@
   "collections_roles_and_opentofu_providers_stay_between_runs": "Collections, Rollen und OpenTofu-Provider bleiben zwischen den Läufen liegen.",
   "colors_show_the_run_a_click_shows_the": "Farben zeigen den Lauf. Ein Klick zeigt die Ausgabe.",
   "comes_from_the_directory": "Kommt aus dem Verzeichnis.",
+  "confirm": "Bestätigen",
   "confirm_the_replacement_with_ersetzen": "Bestätige das Ersetzen mit ERSETZEN.",
   "connect": "Verbinden",
   "connect_cancelled": "Verbindung abgebrochen.",

@@ -14323,7 +14323,7 @@ fn edit_overlays_share_one_dialog_helper() {
     assert!(helper.contains("leaveGuard = () => dialog.dirty();"));
     assert!(helper.contains("clearEditHash();"));
     let dialog = extract_function_with_destructured_params(&script, "function openDialog");
-    assert!(dialog.contains("if (dirty && !confirm(t(\"discard_unsaved_changes\"))) return false;"));
+    assert!(dialog.contains("if (dirty && !(await confirmDialog({ title: t(\"discard_unsaved_changes\"), confirmLabel: t(\"ok\") }))) return false;"));
     assert!(dialog.contains("handle(error);"));
     assert!(dialog.contains("if (onError) onError(error);"));
     let handle = extract_braced_function(&script, "function handle");
@@ -14448,7 +14448,7 @@ fn credentials_and_admin_objects_use_the_edit_overlay() {
     assert!(credentials.contains("#/credentials?new=1"));
     assert!(credentials.contains("aria-label=\"${h(\"search_credentials\")}\""));
     assert!(credentials.contains(
-        "confirm(t(\"delete_this_credential\", { name: button.dataset.credentialName }))"
+        "confirmDialog({ title: t(\"delete\"), body: t(\"delete_this_credential\", { name: button.dataset.credentialName }), confirmLabel: t(\"delete\"), danger: true })"
     ));
     let credential = extract_braced_function(&script, "function openCredentialDialog");
     assert!(credential.contains("openEditDialog({"));
@@ -14458,7 +14458,7 @@ fn credentials_and_admin_objects_use_the_edit_overlay() {
     assert!(credential.contains("data-credential-delete"));
     assert!(credential.contains("hint: \"fields_marked_with_a_star_are_required\""));
     assert!(credential.contains("hint: \"\","));
-    assert!(credential.contains("confirm(t(\"delete_this_credential\", { name: item.name }))"));
+    assert!(credential.contains("confirmDialog({ title: t(\"delete\"), body: t(\"delete_this_credential\", { name: item.name }), confirmLabel: t(\"delete\"), danger: true })"));
     assert!(credential.contains("markSaved();"));
     assert!(credential.contains("close();"));
     assert!(credential.contains("await route();"));
@@ -15263,7 +15263,7 @@ const history = {{ replaceState(_state, _title, url) {{ replaced += 1; location.
 let prompts = 0;
 let promptedKey = "";
 let confirmAnswer = true;
-function confirm() {{ prompts += 1; return confirmAnswer; }}
+async function confirmDialog({{ title }}) {{ prompts += 1; promptedKey = title; return confirmAnswer; }}
 function t(key) {{ promptedKey = key; return key; }}
 function closeLive() {{}}
 let rendered = 0;

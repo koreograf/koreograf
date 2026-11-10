@@ -81,7 +81,7 @@ function h(text, vars) {
 }
 
 async function setLang(next) {
-  if (leaveGuard && leaveGuard() && !confirm(t("discard_unsaved_changes"))) return;
+  if (leaveGuard && leaveGuard() && !(await confirmDialog({ title: t("discard_unsaved_changes"), confirmLabel: t("ok") }))) return;
   leaveGuard = null;
   lang = languageId(next);
   localStorage.setItem("koreograf.lang", lang);
@@ -708,8 +708,8 @@ function shell(title, body, actions) {
       </main>
     </div>`;
   const select = document.querySelector("#team-select");
-  select.addEventListener("change", () => {
-    if (leaveGuard && leaveGuard() && !confirm(t("discard_unsaved_changes"))) {
+  select.addEventListener("change", async () => {
+    if (leaveGuard && leaveGuard() && !(await confirmDialog({ title: t("discard_unsaved_changes"), confirmLabel: t("ok") }))) {
       select.value = teamId;
       return;
     }
@@ -1330,8 +1330,8 @@ function focusReturn(node) {
 
 function makeModal(overlay, close) {
   const opener = focusOpener();
-  const dismiss = () => {
-    if (close() === false) return;
+  const dismiss = async () => {
+    if (await close() === false) return;
     focusReturn(opener);
     focusTrigger = null;
   };
@@ -1401,8 +1401,8 @@ function openDialog({ id, formId, title, body, submit, onSubmit, danger, form = 
     overlay.remove();
     return true;
   };
-  const requestClose = () => {
-    if (dirty && !confirm(t("discard_unsaved_changes"))) return false;
+  const requestClose = async () => {
+    if (dirty && !(await confirmDialog({ title: t("discard_unsaved_changes"), confirmLabel: t("ok") }))) return false;
     return remove();
   };
   const dismiss = makeModal(overlay, requestClose);
@@ -1424,6 +1424,34 @@ function openDialog({ id, formId, title, body, submit, onSubmit, danger, form = 
     });
   }
   return { overlay, card, form: shell, close: () => { dirty = false; dismiss(); }, clean: () => { dirty = false; }, dirty: () => dirty };
+}
+
+function confirmDialog({ title = t("confirm"), body = "", confirmLabel = t("ok"), danger = false } = {}) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const dialog = openDialog({
+      id: "confirm-dialog",
+      title,
+      body: body ? `<p>${esc(body)}</p>` : "",
+      submit: confirmLabel,
+      onSubmit: ({ close }) => {
+        finish(true);
+        close();
+      },
+      onClose: () => finish(false),
+    });
+    const button = dialog.form.querySelector('button[type="submit"]');
+    if (danger) {
+      button.classList.remove("primary");
+      button.classList.add("danger");
+    }
+    button.focus();
+  });
 }
 
 function editQuery(hash = location.hash || "#/") {
@@ -2254,7 +2282,7 @@ async function openTemplateDialog(existing, initialTab = "") {
 }
 
 async function deleteTemplate(item, dialog) {
-  if (!confirm(t("delete_this_template", { name: item.name }))) return;
+  if (!(await confirmDialog({ title: t("delete"), body: t("delete_this_template", { name: item.name }), confirmLabel: t("delete"), danger: true }))) return;
   try {
     await api("DELETE", `/api/templates/${encodeURIComponent(item.id)}`);
     markSaved();
@@ -2533,7 +2561,7 @@ function bindScheduleActions(card, items, kind, target, draw, options = {}) {
   card.querySelectorAll("[data-schedule-delete]").forEach((button) => {
     button.addEventListener("click", async () => {
       const item = items.find((row) => row.id === button.dataset.scheduleDelete);
-      if (!confirm(t("delete_this_schedule", { name: item ? item.name : "" }))) return;
+      if (!(await confirmDialog({ title: t("delete"), body: t("delete_this_schedule", { name: item ? item.name : "" }), confirmLabel: t("delete"), danger: true }))) return;
       try {
         await api("DELETE", `/api/schedules/${encodeURIComponent(button.dataset.scheduleDelete)}`);
         await draw();
@@ -3067,7 +3095,7 @@ async function pageJobs() {
     if (!button) return;
     const job = current.find((item) => item.id === button.dataset.relaunch);
     if (!job) return;
-    if (!confirm(relaunchPrompt(job, button.dataset.failed === "1"))) return;
+    if (!(await confirmDialog({ title: t("relaunch"), body: relaunchPrompt(job, button.dataset.failed === "1"), confirmLabel: t("relaunch") }))) return;
     button.disabled = true;
     try {
       const copy = await api("POST", `/api/jobs/${encodeURIComponent(button.dataset.relaunch)}/relaunch`, {
@@ -3572,7 +3600,7 @@ async function pageJob(id) {
   (job.events || []).forEach(appendLog);
   const relaunchButtons = () => document.querySelectorAll("[data-action=relaunch], [data-action=relaunch-failed]");
   const startAgain = async (onlyFailed) => {
-    if (!confirm(relaunchPrompt(job, onlyFailed))) return;
+    if (!(await confirmDialog({ title: t("relaunch"), body: relaunchPrompt(job, onlyFailed), confirmLabel: t("relaunch") }))) return;
     relaunchButtons().forEach((button) => {
       button.disabled = true;
     });
@@ -4146,8 +4174,8 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
     if (created) created.focus();
   }
 
-  function removeNode(node) {
-    if (!confirm(t("delete_this_node", { name: node.name }))) return;
+  async function removeNode(node) {
+    if (!(await confirmDialog({ title: t("delete_node"), body: t("delete_this_node", { name: node.name }), confirmLabel: t("delete"), danger: true }))) return;
     flushNode = () => true;
     graph.nodes = graph.nodes.filter((item) => item.id !== node.id);
     graph.edges = graph.edges.filter((edge) => edge.from !== node.id && edge.to !== node.id);
@@ -4853,7 +4881,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
   const remove = document.querySelector("#wf-delete");
   if (remove) {
     remove.addEventListener("click", async () => {
-      if (!confirm(t("delete_this_workflow", { name: workflow.name }))) return;
+      if (!(await confirmDialog({ title: t("delete"), body: t("delete_this_workflow", { name: workflow.name }), confirmLabel: t("delete"), danger: true }))) return;
       try {
         await api("DELETE", `/api/workflows/${encodeURIComponent(workflow.id)}`);
         go("#/workflows");
@@ -5133,7 +5161,7 @@ async function pageHooks() {
     document.querySelectorAll("[data-delete]").forEach((button) => {
       button.addEventListener("click", async () => {
         const hook = hooks.find((row) => row.id === button.dataset.delete);
-        if (!confirm(t("delete_this_webhook", { name: hook ? hook.name : "" }))) return;
+        if (!(await confirmDialog({ title: t("delete"), body: t("delete_this_webhook", { name: hook ? hook.name : "" }), confirmLabel: t("delete"), danger: true }))) return;
         try {
           await api("DELETE", `/api/hooks/${encodeURIComponent(button.dataset.delete)}`);
           route();
@@ -5607,7 +5635,7 @@ async function pageProject(id) {
   const remove = document.querySelector("#delete-project");
   if (remove) {
     remove.addEventListener("click", async () => {
-      if (!confirm(t("delete_this_project", { name: project.name }))) return;
+      if (!(await confirmDialog({ title: t("delete"), body: t("delete_this_project", { name: project.name }), confirmLabel: t("delete"), danger: true }))) return;
       try {
         await api("DELETE", `/api/projects/${encodeURIComponent(id)}`);
         leaveGuard = null;
@@ -6452,7 +6480,7 @@ async function pageInventory(id) {
   document.querySelectorAll("[data-drop-source]").forEach((button) => {
     button.addEventListener("click", async () => {
       const source = (item.sources || []).find((row) => row.id === button.dataset.dropSource);
-      if (!confirm(t("remove_this_source", { name: source ? sourceTitle(source) : "" }))) return;
+      if (!(await confirmDialog({ title: t("remove"), body: t("remove_this_source", { name: source ? sourceTitle(source) : "" }), confirmLabel: t("remove"), danger: true }))) return;
       try {
         await api("DELETE", `/api/inventories/${encodeURIComponent(id)}/sources/${encodeURIComponent(button.dataset.dropSource)}`);
         route();
@@ -6473,7 +6501,7 @@ async function pageInventory(id) {
       } catch (error) { handle(error); }
     });
     document.querySelector("#delete-inventory").addEventListener("click", async () => {
-      if (!confirm(t("delete_this_inventory", { name: item.name }))) return;
+      if (!(await confirmDialog({ title: t("delete_inventory"), body: t("delete_this_inventory", { name: item.name }), confirmLabel: t("delete"), danger: true }))) return;
       try {
         await api("DELETE", `/api/inventories/${encodeURIComponent(id)}`);
         go("#/inventories");
@@ -7208,7 +7236,7 @@ async function pageCredentials() {
     host.innerHTML = table([t("name"), t("type"), t("used_by"), ""], rows);
     document.querySelectorAll("[data-credential]").forEach((button) => {
       button.addEventListener("click", async () => {
-        if (!confirm(t("delete_this_credential", { name: button.dataset.credentialName }))) return;
+        if (!(await confirmDialog({ title: t("delete"), body: t("delete_this_credential", { name: button.dataset.credentialName }), confirmLabel: t("delete"), danger: true }))) return;
         try {
           await api("DELETE", `/api/credentials/${encodeURIComponent(button.dataset.credential)}`);
           route();
@@ -7363,7 +7391,7 @@ function openCredentialDialog(item, readOnly = false, initialTab = "") {
     });
     const remove = dialog.overlay.querySelector("[data-credential-delete]");
     remove.addEventListener("click", async () => {
-      if (!confirm(t("delete_this_credential", { name: item.name }))) return;
+      if (!(await confirmDialog({ title: t("delete"), body: t("delete_this_credential", { name: item.name }), confirmLabel: t("delete"), danger: true }))) return;
       try {
         await api("DELETE", `/api/credentials/${encodeURIComponent(item.id)}`);
         markSaved();
@@ -7681,7 +7709,7 @@ async function pageAccount() {
   });
   document.querySelectorAll("[data-revoke]").forEach((button) => {
     button.addEventListener("click", async () => {
-      if (!window.confirm(t("delete_this_token", { name: button.dataset.name }))) return;
+      if (!(await confirmDialog({ title: t("revoke"), body: t("delete_this_token", { name: button.dataset.name }), confirmLabel: t("revoke"), danger: true }))) return;
       try {
         await api("DELETE", `/api/me/tokens/${encodeURIComponent(button.dataset.revoke)}`);
         await route();
@@ -7841,7 +7869,7 @@ function openUserDialog(item, teams, initialTab = "") {
   const remove = dialog.overlay.querySelector("[data-user-delete]");
   if (remove) {
     remove.addEventListener("click", async () => {
-      if (!window.confirm(t("delete_this_account", { name: item.display_name }))) return;
+      if (!(await confirmDialog({ title: t("delete"), body: t("delete_this_account", { name: item.display_name }), confirmLabel: t("delete"), danger: true }))) return;
       try {
         await api("DELETE", `/api/users/${encodeURIComponent(item.id)}`);
         markSaved();
@@ -7855,7 +7883,7 @@ function openUserDialog(item, teams, initialTab = "") {
     select.addEventListener("change", async (event) => {
       event.stopPropagation();
       const next = select.value;
-      if (dialog.dirty() && !confirm(t("discard_unsaved_changes"))) {
+      if (dialog.dirty() && !(await confirmDialog({ title: t("discard_unsaved_changes"), confirmLabel: t("ok") }))) {
         select.value = select.dataset.current;
         return;
       }
@@ -7875,7 +7903,7 @@ function openUserDialog(item, teams, initialTab = "") {
   });
   dialog.overlay.querySelectorAll("[data-leave]").forEach((button) => {
     button.addEventListener("click", async () => {
-      if (dialog.dirty() && !confirm(t("discard_unsaved_changes"))) return;
+      if (dialog.dirty() && !(await confirmDialog({ title: t("discard_unsaved_changes"), confirmLabel: t("ok") }))) return;
       try {
         await api("DELETE", `/api/teams/${encodeURIComponent(button.dataset.leave)}/members/${encodeURIComponent(item.id)}`);
         dialog.clean();
@@ -7892,7 +7920,7 @@ function openUserDialog(item, teams, initialTab = "") {
     grant.addEventListener("click", async () => {
       const team = dialog.overlay.querySelector("[name=grant_team]");
       const role = dialog.overlay.querySelector("[name=grant_role]");
-      if (dialog.dirty() && !confirm(t("discard_unsaved_changes"))) return;
+      if (dialog.dirty() && !(await confirmDialog({ title: t("discard_unsaved_changes"), confirmLabel: t("ok") }))) return;
       try {
         await api("POST", `/api/teams/${encodeURIComponent(team.value)}/members`, {
           username: item.username,
@@ -8087,7 +8115,7 @@ async function pageSettings(notice) {
     }
   });
   document.querySelector("#settings-reset").addEventListener("click", async () => {
-    if (!window.confirm(t("discard_the_saved_settings_and_use_the_environment"))) return;
+    if (!(await confirmDialog({ title: t("discard_the_saved_settings_and_use_the_environment"), confirmLabel: t("ok") }))) return;
     try {
       await api("PUT", "/api/settings", { reset: true });
       await pageSettings();
@@ -8257,85 +8285,93 @@ function routeDirection(state) {
 
 async function route() {
   const nextHash = location.hash || "#/";
-  if (leaveGuard && shownHash !== null && nextHash !== shownHash && leaveGuard() && !confirm(t("discard_unsaved_changes"))) {
-    history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", shownHash);
-    return;
+  if (leaveGuard && shownHash !== null && nextHash !== shownHash && leaveGuard()) {
+    return confirmDialog({ title: t("discard_unsaved_changes"), confirmLabel: t("ok") }).then((leave) => {
+      if (!leave) {
+        history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", shownHash);
+        return;
+      }
+      return load();
+    });
   }
-  leaveGuard = null;
-  const previousHash = shownHash;
-  shownHash = nextHash;
-  closeLive();
-  if (navToken) navToken.abort();
-  const hash = location.hash || "#/";
-  const hashPath = hash.split("?")[0];
-  const token = new AbortController();
-  navToken = token;
-  if (!me) {
-    if (hashPath !== "#/login") location.hash = "#/login";
-    renderLogin("");
-    return;
+  async function load() {
+    leaveGuard = null;
+    const previousHash = shownHash;
+    shownHash = nextHash;
+    closeLive();
+    if (navToken) navToken.abort();
+    const hash = location.hash || "#/";
+    const hashPath = hash.split("?")[0];
+    const token = new AbortController();
+    navToken = token;
+    if (!me) {
+      if (hashPath !== "#/login") location.hash = "#/login";
+      renderLogin("");
+      return;
+    }
+    if (hashPath === "#/login") {
+      location.hash = "#/";
+      return;
+    }
+    const parts = hashPath.slice(1).split("/").filter(Boolean);
+    const historyState = history.state;
+    const back = routeDirection(historyState);
+    if (!hasHistoryIndex(historyState)) history.replaceState({ idx: historyIndex }, "", location.hash || "#/");
+    if (previousHash !== null && previousHash !== nextHash) routeScroll.set(previousHash, window.scrollY);
+    showLoading(routeTitle(parts));
+    if (!back) window.scrollTo(0, 0);
+    try {
+      if (parts.length === 0) await pageDashboard();
+      else if (parts[0] === "templates" && parts[1] === "new") { location.replace("#/templates?new=1"); return; }
+      else if (parts[0] === "templates" && parts[1]) { location.replace(`#/templates?edit=${encodeURIComponent(parts[1])}`); return; }
+      else if (parts[0] === "templates") await pageTemplates();
+      else if (parts[0] === "jobs" && parts[1]) await pageJob(parts[1]);
+      else if (parts[0] === "jobs") await pageJobs();
+      else if (parts[0] === "workflows" && parts[1] === "new") { location.replace("#/workflows?new=1"); return; }
+      else if (parts[0] === "workflows" && parts[1]) await pageWorkflow(parts[1]);
+      else if (parts[0] === "workflows") await pageWorkflows();
+      else if (parts[0] === "schedules") await pageSchedules();
+      else if (parts[0] === "runs" && parts[1]) await pageRun(parts[1]);
+      else if (parts[0] === "hooks" && parts[1] === "new") { location.replace("#/hooks?new=1"); return; }
+      else if (parts[0] === "hooks" && parts[1]) { location.replace(`#/hooks?edit=${encodeURIComponent(parts[1])}`); return; }
+      else if (parts[0] === "hooks") await pageHooks();
+      else if (parts[0] === "environments" && parts[1] === "new") { location.replace("#/runtime?new=1"); return; }
+      else if (parts[0] === "environments" && parts[1]) await pageEnvironment(parts[1]);
+      else if (parts[0] === "runtime") await pageRuntime();
+      else if (parts[0] === "projects" && parts[1] === "new") { location.replace("#/projects?new=1"); return; }
+      else if (parts[0] === "projects" && parts[1]) await pageProject(parts[1]);
+      else if (parts[0] === "projects") await pageProjects();
+      else if (parts[0] === "inventories" && parts[1] === "new") { location.replace("#/inventories?new=1"); return; }
+      else if (parts[0] === "inventories" && parts[1] && parts[2] === "hosts" && parts[3]) await pageInventoryHost(parts[1], decodeURIComponent(parts[3]));
+      else if (parts[0] === "inventories" && parts[1] && parts[2] === "groups" && parts[3]) await pageInventoryGroup(parts[1], decodeURIComponent(parts[3]));
+      else if (parts[0] === "inventories" && parts[1]) await pageInventory(parts[1]);
+      else if (parts[0] === "inventories") await pageInventories();
+      else if (parts[0] === "credentials" && parts[1] === "new") { location.replace("#/credentials?new=1"); return; }
+      else if (parts[0] === "credentials" && parts[1]) { location.replace(`#/credentials?edit=${encodeURIComponent(parts[1])}`); return; }
+      else if (parts[0] === "credentials") await pageCredentials();
+      else if (parts[0] === "organizations" && parts[1] === "new") { location.replace("#/organizations?new=1"); return; }
+      else if (parts[0] === "organizations" && parts[1]) { location.replace(`#/organizations?edit=${encodeURIComponent(parts[1])}`); return; }
+      else if (parts[0] === "organizations") await pageOrganizations();
+      else if (parts[0] === "catalog") location.hash = "#/projects";
+      else if (parts[0] === "team" && parts[1] === "members" && parts[2] === "new") { location.replace("#/team?new=member"); return; }
+      else if (parts[0] === "team" && parts[1] === "new") { location.replace("#/team?new=1"); return; }
+      else if (parts[0] === "team" && parts[1]) { location.replace(`#/team?edit=${encodeURIComponent(parts[1])}`); return; }
+      else if (parts[0] === "account") await pageAccount();
+      else if (parts[0] === "users" && parts[1] === "new") { location.replace("#/users?new=1"); return; }
+      else if (parts[0] === "users" && parts[1]) { location.replace(`#/users?edit=${encodeURIComponent(parts[1])}`); return; }
+      else if (parts[0] === "users") await pageUsers();
+      else if (parts[0] === "settings") await pageSettings();
+      else if (parts[0] === "backup") await pageBackup();
+      else if (parts[0] === "team") await pageTeam();
+      else shell(t("page"), `<div class="card">${h("this_page_does_not_exist")}</div>`);
+      settleRoute(back);
+    } catch (error) {
+      if (token !== navToken) return;
+      renderRouteError(error);
+      settleRoute(false);
+    }
   }
-  if (hashPath === "#/login") {
-    location.hash = "#/";
-    return;
-  }
-  const parts = hashPath.slice(1).split("/").filter(Boolean);
-  const historyState = history.state;
-  const back = routeDirection(historyState);
-  if (!hasHistoryIndex(historyState)) history.replaceState({ idx: historyIndex }, "", location.hash || "#/");
-  if (previousHash !== null && previousHash !== nextHash) routeScroll.set(previousHash, window.scrollY);
-  showLoading(routeTitle(parts));
-  if (!back) window.scrollTo(0, 0);
-  try {
-    if (parts.length === 0) await pageDashboard();
-    else if (parts[0] === "templates" && parts[1] === "new") { location.replace("#/templates?new=1"); return; }
-    else if (parts[0] === "templates" && parts[1]) { location.replace(`#/templates?edit=${encodeURIComponent(parts[1])}`); return; }
-    else if (parts[0] === "templates") await pageTemplates();
-    else if (parts[0] === "jobs" && parts[1]) await pageJob(parts[1]);
-    else if (parts[0] === "jobs") await pageJobs();
-    else if (parts[0] === "workflows" && parts[1] === "new") { location.replace("#/workflows?new=1"); return; }
-    else if (parts[0] === "workflows" && parts[1]) await pageWorkflow(parts[1]);
-    else if (parts[0] === "workflows") await pageWorkflows();
-    else if (parts[0] === "schedules") await pageSchedules();
-    else if (parts[0] === "runs" && parts[1]) await pageRun(parts[1]);
-    else if (parts[0] === "hooks" && parts[1] === "new") { location.replace("#/hooks?new=1"); return; }
-    else if (parts[0] === "hooks" && parts[1]) { location.replace(`#/hooks?edit=${encodeURIComponent(parts[1])}`); return; }
-    else if (parts[0] === "hooks") await pageHooks();
-    else if (parts[0] === "environments" && parts[1] === "new") { location.replace("#/runtime?new=1"); return; }
-    else if (parts[0] === "environments" && parts[1]) await pageEnvironment(parts[1]);
-    else if (parts[0] === "runtime") await pageRuntime();
-    else if (parts[0] === "projects" && parts[1] === "new") { location.replace("#/projects?new=1"); return; }
-    else if (parts[0] === "projects" && parts[1]) await pageProject(parts[1]);
-    else if (parts[0] === "projects") await pageProjects();
-    else if (parts[0] === "inventories" && parts[1] === "new") { location.replace("#/inventories?new=1"); return; }
-    else if (parts[0] === "inventories" && parts[1] && parts[2] === "hosts" && parts[3]) await pageInventoryHost(parts[1], decodeURIComponent(parts[3]));
-    else if (parts[0] === "inventories" && parts[1] && parts[2] === "groups" && parts[3]) await pageInventoryGroup(parts[1], decodeURIComponent(parts[3]));
-    else if (parts[0] === "inventories" && parts[1]) await pageInventory(parts[1]);
-    else if (parts[0] === "inventories") await pageInventories();
-    else if (parts[0] === "credentials" && parts[1] === "new") { location.replace("#/credentials?new=1"); return; }
-    else if (parts[0] === "credentials" && parts[1]) { location.replace(`#/credentials?edit=${encodeURIComponent(parts[1])}`); return; }
-    else if (parts[0] === "credentials") await pageCredentials();
-    else if (parts[0] === "organizations" && parts[1] === "new") { location.replace("#/organizations?new=1"); return; }
-    else if (parts[0] === "organizations" && parts[1]) { location.replace(`#/organizations?edit=${encodeURIComponent(parts[1])}`); return; }
-    else if (parts[0] === "organizations") await pageOrganizations();
-    else if (parts[0] === "catalog") location.hash = "#/projects";
-    else if (parts[0] === "team" && parts[1] === "members" && parts[2] === "new") { location.replace("#/team?new=member"); return; }
-    else if (parts[0] === "team" && parts[1] === "new") { location.replace("#/team?new=1"); return; }
-    else if (parts[0] === "team" && parts[1]) { location.replace(`#/team?edit=${encodeURIComponent(parts[1])}`); return; }
-    else if (parts[0] === "account") await pageAccount();
-    else if (parts[0] === "users" && parts[1] === "new") { location.replace("#/users?new=1"); return; }
-    else if (parts[0] === "users" && parts[1]) { location.replace(`#/users?edit=${encodeURIComponent(parts[1])}`); return; }
-    else if (parts[0] === "users") await pageUsers();
-    else if (parts[0] === "settings") await pageSettings();
-    else if (parts[0] === "backup") await pageBackup();
-    else if (parts[0] === "team") await pageTeam();
-    else shell(t("page"), `<div class="card">${h("this_page_does_not_exist")}</div>`);
-    settleRoute(back);
-  } catch (error) {
-    if (token !== navToken) return;
-    renderRouteError(error);
-    settleRoute(false);
-  }
+  return load();
 }
 
 async function boot() {
