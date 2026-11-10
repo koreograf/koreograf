@@ -40,6 +40,9 @@ pub struct LaunchRequest {
 }
 
 pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
+    if state.in_maintenance() {
+        return Err(ApiError::bad("maintenance_mode_is_active"));
+    }
     let settings = crate::settings::load(state)?;
     let id = Uuid::new_v4().to_string();
     {

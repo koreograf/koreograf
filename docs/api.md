@@ -258,7 +258,14 @@ Shell: `entrypoint` or `spec.script`. The script is written as `inline.sh`.
 | POST | `/hooks/{id}/{token}` |
 | GET | `/healthz`, `/metrics` |
 | GET, POST | `/api/admin/backup` |
+| GET | `/api/maintenance` |
+| GET | `/api/admin/database/status` |
+| POST | `/api/admin/database/check`, `/api/admin/database/migrate` |
 | GET, PUT | `/api/settings` |
+
+`GET /api/maintenance` needs no session and returns `active` and `since`. While a database migration runs, every other mutating request answers 503 `maintenance_mode_is_active`; `GET`, `HEAD`, `OPTIONS`, `/api/login`, and `/api/logout` stay available.
+
+`GET /api/admin/database/status` is administrator-only. It returns `engine`, `supported` (true while the process runs on SQLite), `maintenance`, and `migration` with `running`, `done`, `failed`, `started_at`, `finished_at`, `target_host`, `url`, `rows`, `error`, `tables` (`table`, `rows`, `done`), and `audit` (`user`, `at`, `host`). `url` never carries the password. `POST /api/admin/database/check` takes `host`, `port`, `database`, `user`, `password`, `sslmode`, and an optional `ca_file`, runs the same checks as `koreograf db migrate`, and returns `all_passed`, `id`, and `checks` (`id`, `ok`, `key`). It stores the target only in memory. `POST /api/admin/database/migrate` takes that `id`, refuses while a check failed or a job runs, enters maintenance mode, copies in the background, and answers 202 `{"started": true}`; progress comes from the status route. The password is never in a response, a log line, or the audit entry.
 
 `GET /api/admin/backup?tofu_state=true` adds `cache/<team>/tofu-state/` to the zip. Without the query parameter the state stays out. `POST /api/admin/backup` still needs `X-Restore-Confirm: ERSETZEN`. `GET /api/overview` includes `import` with `source`, `path_map`, `missing_paths`, and the copied state count for an administrator after an import, and `null` otherwise.
 

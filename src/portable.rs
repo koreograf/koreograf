@@ -99,6 +99,18 @@ pub(crate) async fn copy_from_sqlite(
     source: &Path,
     replace: bool,
 ) -> AppResult<()> {
+    copy_from_sqlite_with(client, source, replace, |_, _| {}).await
+}
+
+pub(crate) async fn copy_from_sqlite_with<F>(
+    client: &Client,
+    source: &Path,
+    replace: bool,
+    mut progress: F,
+) -> AppResult<()>
+where
+    F: FnMut(&'static str, i64),
+{
     let sqlite = Connection::open_with_flags(source, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     if replace {
         for table in TABLES.iter().rev() {
@@ -131,6 +143,7 @@ pub(crate) async fn copy_from_sqlite(
             quote(table)
         );
         let rows = read_sqlite_rows(&sqlite, table, &columns)?;
+        let copied = rows.len() as i64;
         for values in rows {
             let params = values
                 .iter()
@@ -147,6 +160,7 @@ pub(crate) async fn copy_from_sqlite(
                 )));
             }
         }
+        progress(table, copied);
     }
     reset_sequences(client).await
 }
@@ -276,8 +290,8 @@ fn row_values(row: &Row, columns: &[&Column]) -> AppResult<Vec<Value>> {
     Ok(values)
 }
 
-fn sqlite_param(value: &Value, kind: Kind) -> AppResult<Box<dyn ToSql + Sync>> {
-    let value: Box<dyn ToSql + Sync> = match kind {
+fn sqlite_param(value: &Value, kind: Kind) -> AppResult<Box<dyn ToSql + Sync + Send>> {
+    let value: Box<dyn ToSql + Sync + Send> = match kind {
         Kind::Text => Box::new(sqlite_text(value)),
         Kind::Small => Box::new(sqlite_integer(value)?.map(|value| value as i16)),
         Kind::Integer => Box::new(sqlite_integer(value)?.map(|value| value as i32)),
