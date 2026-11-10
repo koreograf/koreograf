@@ -25,6 +25,7 @@ mod http;
 mod inventory;
 mod jobs;
 mod ldap;
+pub mod llm;
 pub mod mcp;
 mod metrics;
 mod migration;

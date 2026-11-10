@@ -210,6 +210,27 @@ a.btn { display: inline-block; text-decoration: none; }
 .btn.danger { background: white; color: var(--bad); border-color: #fecdd3; }
 .row > .btn.danger { margin-left: auto; }
 .card.danger-zone { border-color: #fecdd3; }
+
+.assistant { display: grid; gap: 14px; max-width: 52rem; }
+.assistant-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 28rem;
+  overflow-y: auto;
+  padding: 2px;
+}
+.assistant-message {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: white;
+}
+.assistant-message p { margin: 0; }
+.assistant-message p + p { margin-top: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.assistant-message.from-user { background: var(--accent-soft); border-color: #fed7aa; }
+.assistant-compose { display: grid; gap: 10px; }
+.assistant-compose textarea { min-height: 5rem; resize: vertical; }
 .btn.ghost { background: transparent; }
 .btn.pill { border-radius: 999px; padding: 7px 14px; font-weight: 600; }
 .lang-switch { position: relative; }
