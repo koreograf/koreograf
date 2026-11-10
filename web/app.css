@@ -317,6 +317,7 @@ a.btn { display: inline-block; text-decoration: none; }
 .choice-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .form-section { display: grid; gap: 10px; padding-top: 4px; }
 .form-section + .form-section { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 14px; }
+.settings-panel[hidden] { display: none; }
 
 .form { display: grid; gap: 10px; max-width: 46rem; }
 .field { display: grid; gap: 4px; }
