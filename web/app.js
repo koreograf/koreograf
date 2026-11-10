@@ -38,6 +38,10 @@ let assistantModel = "";
 let assistantTranscript = [];
 let assistantPending = false;
 let assistantPendingAction = null;
+let maintenanceActive = false;
+let maintenanceSince = "";
+let maintenanceTimer = null;
+let databaseCheckId = null;
 
 window.addEventListener("beforeunload", (event) => {
   if (!leaveGuard || !leaveGuard()) return;
@@ -656,6 +660,32 @@ async function loadVersion() {
   fillVersion();
 }
 
+function maintenanceBanner() {
+  return `<div class="banner warn" id="maintenance-banner"${maintenanceActive ? "" : " hidden"}><p>${h("maintenance_mode_banner")}</p><p class="small">${h("no_new_jobs_during_maintenance")}${maintenanceSince ? ` <span class="mono">${esc(maintenanceSince)}</span>` : ""}</p></div>`;
+}
+
+async function loadMaintenance() {
+  try {
+    const response = await fetch("/api/maintenance", { credentials: "same-origin" });
+    if (response.ok) {
+      const data = await response.json();
+      maintenanceActive = Boolean(data && data.active);
+      maintenanceSince = data && data.since ? String(data.since) : "";
+    }
+  } catch {
+    return;
+  }
+  const node = document.querySelector("#maintenance-banner");
+  if (node) {
+    node.hidden = !maintenanceActive;
+    const detail = node.querySelector(".small");
+    if (detail) detail.innerHTML = `${h("no_new_jobs_during_maintenance")}${maintenanceSince ? ` <span class="mono">${esc(maintenanceSince)}</span>` : ""}`;
+  }
+  if (!maintenanceTimer) {
+    maintenanceTimer = window.setInterval(() => { loadMaintenance(); }, 15000);
+  }
+}
+
 function shell(title, body, actions) {
   const here = (location.hash || "#/").split("?")[0];
   const groups = [
@@ -714,6 +744,7 @@ function shell(title, body, actions) {
       <main class="main" id="main" tabindex="-1">
         <div class="top"><div><button class="btn ghost nav-toggle" id="nav-toggle" type="button" aria-label="${h("menu")}" aria-expanded="false"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M3 5.5h14M3 10h14M3 14.5h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button><h1 tabindex="-1">${esc(title)}</h1></div><div class="row">${actions || ""}</div></div>
         ${savedBanner()}
+        ${maintenanceBanner()}
         ${body}
       </main>
     </div>`;
@@ -752,6 +783,7 @@ function shell(title, body, actions) {
   navKey = (event) => { if (event.key === "Escape") setNavOpen(false); };
   document.addEventListener("keydown", navKey);
   loadVersion();
+  loadMaintenance();
 }
 
 function needTeam() {
@@ -795,6 +827,7 @@ function renderLogin(message, tone, vars, username) {
           </div>
           <p class="lede">${h("jobs_workflows_and_alerts_for_several_teams_local")}</p>
           ${message ? `<div class="banner ${kind}">${h(message, vars)}</div>` : ""}
+          ${maintenanceBanner()}
           <div class="form">
             <label class="field"><span>${h("username")}</span><input name="username" autocomplete="username" required value="${esc(username || "")}"></label>
             <label class="field"><span>${h("password")}</span><input name="password" type="password" autocomplete="current-password" required></label>
@@ -807,6 +840,7 @@ function renderLogin(message, tone, vars, username) {
     </div>`;
   bindLangSwitch();
   loadVersion();
+  loadMaintenance();
   const initial = username
     ? document.querySelector("#login-form [name=password]")
     : document.querySelector("#login-form [name=username]");
@@ -8144,7 +8178,7 @@ function bindStoredMasks(form) {
 function settingsTab() {
   const params = new URLSearchParams((location.hash || "").split("?")[1] || "");
   const tab = params.get("tab");
-  return ["directory", "proxy", "jobs", "assistant"].includes(tab) ? tab : "directory";
+  return ["directory", "proxy", "jobs", "assistant", "database"].includes(tab) ? tab : "directory";
 }
 
 function settingsTabAddress(tab) {
@@ -8153,7 +8187,66 @@ function settingsTabAddress(tab) {
 
 function settingsTabBar(active) {
   const item = (id) => `<button class="btn pill${active === id ? " primary" : ""}" type="button" role="tab" id="settings-tab-${id}" aria-selected="${active === id}" aria-controls="settings-panel-${id}" tabindex="${active === id ? "0" : "-1"}" data-settings-tab="${id}">${h(id)}</button>`;
-  return `<div class="spread tab-bar"><div class="tabs" role="tablist" aria-label="${h("settings")}">${["directory", "proxy", "jobs", "assistant"].map(item).join("")}</div></div>`;
+  return `<div class="spread tab-bar"><div class="tabs" role="tablist" aria-label="${h("settings")}">${["directory", "proxy", "jobs", "assistant", "database"].map(item).join("")}</div></div>`;
+}
+
+function databaseTargetBody(form) {
+  return {
+    host: form.db_host.value.trim(),
+    port: Number(form.db_port.value || 5432),
+    database: form.db_database.value.trim(),
+    user: form.db_user.value.trim(),
+    password: form.db_password.value,
+    sslmode: form.db_sslmode.value,
+    ca_file: form.db_ca_file.value.trim() || null,
+  };
+}
+
+function databaseChecksHtml(result) {
+  const checks = (result && result.checks) || [];
+  const label = (id) => {
+    if (id === "source_schema") return "check_source_schema";
+    if (id === "empty") return "check_empty_target";
+    return `check_${id}`;
+  };
+  const rows = checks.map((check) => `<tr><td>${h(label(check.id))}</td><td><span class="pill ${check.ok ? "good" : "bad"}">${check.ok ? h("check_passed") : h("check_failed")}</span></td><td>${h(check.key)}</td></tr>`);
+  const summary = result && result.all_passed
+    ? `<p class="banner good">${h("all_checks_passed")}</p>`
+    : `<p class="banner bad">${h("fix_the_failed_checks_and_run_them_again")}</p>`;
+  return `${summary}${table([t("check"), t("result"), t("reason")], rows)}`;
+}
+
+function databaseProgressHtml(status) {
+  if (!status || (!status.running && !status.done && !status.failed)) return "";
+  const rows = (status.tables || []).map((item) => `<tr><td><code>${esc(item.table)}</code></td><td>${esc(String(item.rows))}</td><td>${item.done ? `<span class="pill good">${h("check_passed")}</span>` : `<span class="pill warn">${h("pending")}</span>`}</td></tr>`);
+  const heading = status.failed
+    ? `<p class="banner bad">${h("database_migration_failed")}</p>`
+    : status.done
+      ? `<p class="banner good">${h("database_migration_done")}</p>`
+      : `<p class="banner warn">${h("database_migration_running")}</p>`;
+  const total = status.done ? `<p class="small muted">${h("database_migration_verified", { rows: String(status.rows || 0) })}</p>` : "";
+  return `${heading}${total}${table([t("table"), t("rows"), t("result")], rows)}`;
+}
+
+function databaseSwitchHtml(status) {
+  if (!status || !status.done || !status.url) return "";
+  const url = String(status.url);
+  return `<div class="form-section">
+    <h3>${h("step_4_switch")}</h3>
+    <p>${h("koreograf_does_not_change_its_own_configuration")}</p>
+    <h4>${h("docker_env_file")}</h4>
+    <pre class="tool">KOREOGRAF_DATABASE_URL='${esc(url)}'
+KOREOGRAF_DATABASE_PASSWORD_FILE=/run/secrets/koreograf_database_password</pre>
+    <h4>${h("package_env_file")}</h4>
+    <pre class="tool">KOREOGRAF_DATABASE_URL='${esc(url)}'</pre>
+    <p>${h("restart_koreograf_after_the_change")}</p>
+    <p class="small muted">${h("rollback_switches_the_url_back")}</p>
+  </div>`;
+}
+
+function databaseAuditHtml(status) {
+  if (!status || !status.audit) return "";
+  return `<p class="small muted">${h("database_migration_audit", { user: status.audit.user, time: status.audit.at, host: status.audit.host })}</p>`;
 }
 
 async function pageSettings(notice) {
@@ -8161,6 +8254,7 @@ async function pageSettings(notice) {
     deny("settings", "admin");
     return;
   }
+  databaseCheckId = null;
   const item = await api("GET", "/api/settings");
   const environments = teamId ? await api("GET", "/api/environments") : [];
   const ldap = item.ldap || {};
@@ -8262,6 +8356,47 @@ async function pageSettings(notice) {
       ${secretInput("llm_api_key", "assistant_api_key", "password", Boolean(llm.api_key_set))}
       <p class="small muted">${h("assistant_key_hint")}</p>
     </section>
+    <section class="form-section settings-panel" id="settings-panel-database" role="tabpanel" aria-labelledby="settings-tab-database"${panelHidden("database")}>
+      <h2>${h("move_database_to_postgresql")}</h2>
+      <p class="small muted">${h("move_database_to_postgresql_hint")}</p>
+      <div id="database-status"></div>
+      <h3>${h("step_1_target")}</h3>
+      <div class="field-row">
+        <label class="field required"><span>${h("database_host")}</span><input name="db_host" autocomplete="off" spellcheck="false" placeholder="db.example.com"></label>
+        <label class="field"><span>${h("database_port")}</span><input class="tiny" name="db_port" type="number" min="1" max="65535" value="5432"></label>
+      </div>
+      <div class="field-grid">
+        <label class="field required"><span>${h("database_name")}</span><input name="db_database" autocomplete="off" spellcheck="false" placeholder="koreograf"></label>
+        <label class="field required"><span>${h("database_user")}</span><input name="db_user" autocomplete="off" spellcheck="false" placeholder="koreograf"></label>
+      </div>
+      <label class="field required"><span>${h("database_password")}</span><input name="db_password" type="password" autocomplete="new-password"></label>
+      <p class="small muted">${h("migration_password_not_stored")}</p>
+      <div class="field-row">
+        <label class="field"><span>${h("tls_mode")}</span>
+          <select class="fit" name="db_sslmode">
+            <option value="require">require</option>
+            <option value="verify-ca">verify-ca</option>
+            <option value="verify-full">verify-full</option>
+            <option value="prefer">prefer</option>
+            <option value="disable">disable</option>
+          </select>
+        </label>
+        <label class="field"><span>${h("ca_file_optional")}</span><input name="db_ca_file" autocomplete="off" spellcheck="false" placeholder="/etc/koreograf/postgres-ca.pem"></label>
+      </div>
+      <h3>${h("step_2_checks")}</h3>
+      <div class="choice-row">
+        <button class="btn pill" id="database-check" type="button">${h("run_checks")}</button>
+      </div>
+      <div id="database-checks"></div>
+      <h3>${h("step_3_migration")}</h3>
+      <p class="small muted">${h("migration_starts_maintenance")}</p>
+      <div class="choice-row">
+        <button class="btn pill primary" id="database-start" type="button" disabled>${h("start_migration")}</button>
+      </div>
+      <div id="database-progress"></div>
+      <div id="database-switch"></div>
+      <div id="database-audit"></div>
+    </section>
     <p class="small muted">${h("saving_replaces_the_environment_variables_an_empty_password")}</p>
     <div class="choice-row">
       <button class="btn pill primary" type="submit">${h("save")}</button>
@@ -8276,10 +8411,11 @@ async function pageSettings(notice) {
     proxy: document.querySelector("#settings-panel-proxy"),
     jobs: document.querySelector("#settings-panel-jobs"),
     assistant: document.querySelector("#settings-panel-assistant"),
+    database: document.querySelector("#settings-panel-database"),
   };
   let currentTab = activeTab;
   const chooseTab = (next, focus) => {
-    currentTab = ["directory", "proxy", "jobs", "assistant"].includes(next) ? next : "directory";
+    currentTab = ["directory", "proxy", "jobs", "assistant", "database"].includes(next) ? next : "directory";
     tabButtons.forEach((button) => {
       const active = button.dataset.settingsTab === currentTab;
       button.classList.toggle("primary", active);
@@ -8360,6 +8496,64 @@ async function pageSettings(notice) {
       handle(error);
     }
   });
+  const databaseCheck = document.querySelector("#database-check");
+  const databaseStart = document.querySelector("#database-start");
+  const renderDatabaseStatus = (data) => {
+    if (!data) return;
+    const status = data.migration || {};
+    const supported = data.supported !== false;
+    document.querySelector("#database-status").innerHTML = supported
+      ? ""
+      : `<p class="banner warn">${h("database_already_on_postgresql")}</p>`;
+    document.querySelector("#database-progress").innerHTML = databaseProgressHtml(status);
+    document.querySelector("#database-switch").innerHTML = databaseSwitchHtml(status);
+    document.querySelector("#database-audit").innerHTML = databaseAuditHtml(status);
+    databaseCheck.disabled = !supported || Boolean(status.running) || Boolean(status.done);
+    databaseStart.disabled = !supported || !databaseCheckId || Boolean(status.running) || Boolean(status.done);
+    if (Boolean(status.running) && document.querySelector("#database-progress")) {
+      window.setTimeout(() => refreshDatabaseStatus(renderDatabaseStatus), 1000);
+    }
+  };
+  const refreshDatabaseStatus = async (render) => {
+    if (!document.querySelector("#database-progress")) return null;
+    try {
+      const data = await api("GET", "/api/admin/database/status");
+      render(data);
+      return data;
+    } catch (error) {
+      if (error.status !== 401) handle(error);
+      return null;
+    }
+  };
+  databaseCheck.addEventListener("click", async () => {
+    databaseCheck.disabled = true;
+    databaseCheckId = null;
+    databaseStart.disabled = true;
+    try {
+      const result = await api("POST", "/api/admin/database/check", databaseTargetBody(form));
+      databaseCheckId = result && result.id ? String(result.id) : null;
+      document.querySelector("#database-checks").innerHTML = databaseChecksHtml(result);
+      databaseStart.disabled = !databaseCheckId;
+    } catch (error) {
+      handle(error);
+    } finally {
+      databaseCheck.disabled = false;
+    }
+  });
+  databaseStart.addEventListener("click", async () => {
+    if (!databaseCheckId) return;
+    if (!(await confirmDialog({ title: t("start_migration"), body: t("migration_starts_maintenance"), confirmLabel: t("start_migration"), danger: true }))) return;
+    databaseStart.disabled = true;
+    try {
+      await api("POST", "/api/admin/database/migrate", { id: databaseCheckId });
+      databaseCheckId = null;
+      await loadMaintenance();
+      await refreshDatabaseStatus(renderDatabaseStatus);
+    } catch (error) {
+      handle(error);
+    }
+  });
+  refreshDatabaseStatus(renderDatabaseStatus);
 }
 
 function backupDownloadUrl(includeTofuState) {
@@ -8374,7 +8568,7 @@ async function pageBackup() {
   shell(t("backup"), `<div class="stack">
     <div class="card">
       <p>${h("koreograf_stores_data_in_sqlite_the_backup_contains")}</p>
-      <p class="muted">${h("postgresql_is_planned_for_a_later_company_install")}</p>
+      <p class="muted">${h("move_database_to_postgresql_hint")}</p>
       <label class="check-row"><input id="backup-tofu-state" type="checkbox"><span>${h("include_opentofu_state")}</span></label>
       <p class="small muted">${h("opentofu_state_can_contain_secrets")}</p>
       <div><button class="btn pill primary" id="backup-download" type="button">${h("download_backup")}</button></div>
