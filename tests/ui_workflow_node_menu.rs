@@ -23,8 +23,13 @@ fn workflow_nodes_use_canvas_and_node_context_menus() {
         "the inspector still has a template select"
     );
     assert!(
-        !add.contains("id=\"add-node\""),
-        "the inspector still has an add button"
+        add.contains("id=\"add-node\""),
+        "the inspector has no keyboard-reachable Add node button"
+    );
+    let bind_add = function(&script, "bindAddNode");
+    assert!(
+        bind_add.contains("openAddNodeDialog(null)"),
+        "the Add node button does not open the overlay"
     );
 
     let canvas = function(&script, "openCanvasMenu");

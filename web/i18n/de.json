@@ -195,7 +195,7 @@
   "domain": "Domain",
   "download_backup": "Sicherung herunterladen",
   "download_output": "Ausgabe herunterladen",
-  "drag_nodes_add_more_nodes_on_the_right": "Ziehe Knoten oder verschiebe sie mit den Pfeiltasten. Rechtsklick auf die freie Fläche fügt einen Knoten hinzu. Rechtsklick auf einen Knoten oder sein Menü bearbeitet, löscht oder verbindet ihn; Enter öffnet Bearbeiten.",
+  "drag_nodes_and_use_the_canvas_menus": "Ziehe Knoten oder verschiebe sie mit den Pfeiltasten. Rechtsklick auf die freie Fläche fügt einen Knoten hinzu. Rechtsklick auf einen Knoten oder sein Menü bearbeitet, löscht oder verbindet ihn; Enter öffnet Bearbeiten.",
   "duration": "Dauer",
   "edge": "Kante",
   "edge_added": "Kante gesetzt.",

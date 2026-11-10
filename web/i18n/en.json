@@ -195,7 +195,7 @@
   "domain": "Domain",
   "download_backup": "Download backup",
   "download_output": "Download output",
-  "drag_nodes_add_more_nodes_on_the_right": "Drag nodes or move them with the arrow keys. Right-click empty canvas to add a node. Right-click a node or use its menu to edit, delete, or connect it; Enter opens Edit.",
+  "drag_nodes_and_use_the_canvas_menus": "Drag nodes or move them with the arrow keys. Right-click empty canvas to add a node. Right-click a node or use its menu to edit, delete, or connect it; Enter opens Edit.",
   "duration": "Duration",
   "edge": "Edge",
   "edge_added": "Edge added.",

@@ -3836,7 +3836,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
               <input id="wf-name" value="${esc(workflow.name)}" ${can("operator") ? "" : "disabled"}>
               <input id="wf-description" maxlength="1000" value="${esc(workflow.description)}" placeholder="${h("description")}" ${can("operator") ? "" : "disabled"}>
             </div>`}
-          <p class="small muted" id="wf-hint">${readonly ? h("colors_show_the_run_a_click_shows_the") : h("drag_nodes_add_more_nodes_on_the_right")}</p>
+          <p class="small muted" id="wf-hint">${readonly ? h("colors_show_the_run_a_click_shows_the") : h("drag_nodes_and_use_the_canvas_menus")}</p>
           <div class="canvas" id="canvas"><div id="board" style="position:relative;min-width:100%;min-height:560px"><svg class="edges" id="edges"></svg><div id="nodes"></div></div></div>
         </div>
         <aside class="card inspector" id="inspector"></aside>
@@ -4072,9 +4072,21 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
       if (!element.contains(event.target)) closeNodeMenu();
     };
     const keys = (event) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      closeNodeMenu();
+      const items = [...element.querySelectorAll('[role="menuitem"]')];
+      const index = items.indexOf(document.activeElement);
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeNodeMenu();
+        return;
+      }
+      if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+        event.preventDefault();
+        let next = 0;
+        if (event.key === "ArrowDown") next = (index + 1) % items.length;
+        else if (event.key === "ArrowUp") next = (index - 1 + items.length) % items.length;
+        else if (event.key === "End") next = items.length - 1;
+        items[next].focus();
+      }
     };
     document.addEventListener("pointerdown", outside, true);
     document.addEventListener("keydown", keys, true);
@@ -4203,8 +4215,20 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
         if (!next) return;
         const name = dialog.form.querySelector("#node-name").value;
         const convergence = dialog.form.querySelector("#node-join").value;
+        const values = {};
+        dialog.form.querySelectorAll("input[id], select[id], textarea[id]").forEach((control) => {
+          values[control.id] = control.type === "checkbox" ? control.checked : control.value;
+        });
         const draft = draftFor(next.id, name, convergence);
         dialog.form.querySelector(".dialog-body").innerHTML = nodeEditorFields(draft);
+        Object.entries(values).forEach(([id, value]) => {
+          if (id === "node-template") return;
+          const control = dialog.form.querySelector(`#${CSS.escape(id)}`);
+          if (!control) return;
+          if (control.type === "checkbox") control.checked = Boolean(value);
+          else if (control.tagName === "SELECT" && [...control.options].some((option) => option.value === value)) control.value = value;
+          else if (control.tagName !== "SELECT") control.value = value;
+        });
         bindTemplate();
       });
     };
@@ -4229,7 +4253,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
     connecting = null;
     connectDrag = null;
     clearConnectPreview();
-    setHint("drag_nodes_add_more_nodes_on_the_right");
+    setHint("drag_nodes_and_use_the_canvas_menus");
     renderNodes();
     renderInspector();
   }
@@ -4454,7 +4478,17 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
   }
 
   function addNodeControls() {
-    return `<p class="small muted">${h("right_click_empty_canvas_to_add_a_node")}</p>`;
+    return `<button class="btn" id="add-node" type="button">${h("add_node")}</button>
+      <p class="small muted">${h("right_click_empty_canvas_to_add_a_node")}</p>`;
+  }
+
+  function bindAddNode(host) {
+    const button = host.querySelector("#add-node");
+    if (!button) return;
+    button.addEventListener("click", () => {
+      if (!flushNode()) return;
+      openAddNodeDialog(null);
+    });
   }
 
   function freeNodePosition() {
@@ -4607,6 +4641,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
           </label>
           <button class="btn danger" id="edge-delete" type="button">${h("delete_edge")}</button>
         </div>`;
+      bindAddNode(host);
       host.querySelector("#edge-when").addEventListener("change", (event) => {
         const next = event.target.value;
         if (next !== edge.when && graph.edges.some((item, index) => index !== selectedEdge && item.from === edge.from && item.to === edge.to && item.when === next)) {
@@ -4629,6 +4664,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
       host.innerHTML = `${addNodeControls()}
         <p class="small muted">${h("an_empty_graph_can_be_saved_but_not")}</p>
         <p class="small muted">${h("select_a_node_to_connect_it")}</p>`;
+      bindAddNode(host);
       return;
     }
     host.innerHTML = `${addNodeControls()}
@@ -4652,6 +4688,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
         <p class="small muted">${h("the_edge_starts_at_this_node")}</p>
         <button class="btn danger" id="node-delete" type="button">${h("delete_node")}</button>
       </div>`;
+    bindAddNode(host);
     host.querySelector("#node-connect").addEventListener("click", () => startConnect(node));
     host.querySelector("#node-name").addEventListener("input", (event) => {
       node.name = event.target.value;
