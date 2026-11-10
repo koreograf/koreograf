@@ -158,6 +158,18 @@ h2 { font-size: 18px; margin: 0 0 10px; }
 }
 .empty-state { display: grid; gap: 8px; justify-items: start; padding: 16px 8px; }
 .empty-state p { margin: 0; }
+.onboarding-steps { display: grid; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; }
+.onboarding-steps li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.onboarding-steps li:first-child { padding-top: 0; border-top: 0; }
+.onboarding-steps p { margin: 0; }
 
 .table { width: 100%; border-collapse: collapse; }
 .table th { text-align: left; font-size: 13px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
@@ -573,8 +585,9 @@ textarea { min-height: 88px; resize: vertical; }
   padding: 14px 16px;
   border-radius: 12px;
   min-height: 240px;
-  max-height: 640px;
+  max-height: 70vh;
   overflow: auto;
+  overscroll-behavior: contain;
 }
 .log div { white-space: pre; }
 .log.wrap div { white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -616,6 +629,15 @@ textarea { min-height: 88px; resize: vertical; }
 }
 .tabs { display: flex; gap: 8px; margin: 0; }
 .tab-bar { flex-wrap: wrap; margin: 0 0 12px; }
+.job-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--paper);
+  margin: 0 -4px 8px;
+  padding: 4px 4px 0;
+}
+.job-sticky .log-tools { margin-bottom: 8px; }
 .charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .chart { display: flex; align-items: flex-end; gap: 6px; height: 180px; padding-top: 8px; border-bottom: 1px solid var(--line); }
 .chart-day { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; gap: 6px; }

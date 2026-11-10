@@ -186,6 +186,29 @@ function addLink(href, label) {
   return `<a class="btn pill primary" href="${href}">${h(label)}</a>`;
 }
 
+function emptyState(message, href, label) {
+  const action = href && label ? `<a class="btn primary" href="${href}">${h(label)}</a>` : "";
+  return `<div class="empty-state"><p>${h(message)}</p>${action}</div>`;
+}
+
+function onboardingCard() {
+  const steps = [
+    ["empty_projects", "#/projects?new=1", "new_project"],
+    ["empty_inventories", "#/inventories?new=1", "new_inventory"],
+    ["empty_templates", "#/templates?new=1", "new_template"],
+    ["empty_jobs", "#/templates", "launch_a_template"],
+  ];
+  const items = steps.map(([text, href, label]) => `<li>
+    <div><p>${h(text)}</p></div>
+    ${can("operator") ? `<a class="btn" href="${href}">${h(label)}</a>` : ""}
+  </li>`).join("");
+  return `<section class="card onboarding" aria-labelledby="onboarding-title">
+    <h2 id="onboarding-title">${h("get_started")}</h2>
+    <p class="muted">${h("get_started_help")}</p>
+    <ol class="onboarding-steps">${items}</ol>
+  </section>`;
+}
+
 function deny(title, min) {
   const text = min === "admin"
     ? "you_need_an_administrator_account"
@@ -1005,7 +1028,8 @@ async function pageDashboard() {
     <div id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
       ${data.preflight ? preflightNoticeHtml(data.preflight) : ""}
       ${me.is_admin && data.import ? importNoticeHtml(data.import) : ""}
-      <div class="grid-3">
+      ${jobs.length ? "" : onboardingCard()}
+      <div class="grid-3" style="margin-top:${jobs.length ? "0" : "14px"}">
         <article class="card stat"><span class="small muted">${h("dependency_cache")}</span><strong>${esc(bytes(data.cache_bytes))}</strong><p class="small muted">${h("collections_roles_and_opentofu_providers_stay_between_runs")}</p></article>
         <article class="card stat"><span class="small muted">${h("workflow")}</span><strong>${data.workflow_id ? `<a href="#/workflows/${esc(data.workflow_id)}">${esc(data.workflow_name)}</a>` : "—"}</strong><p class="small muted">${h("success_edges_and_failure_edges_start_the_next")}</p></article>
         <article class="card stat"><span class="small muted">${h("webhook")}</span><strong>${data.hook_id ? esc(data.hook_name) : "—"}</strong><p class="small muted">${data.ldap ? h("ldap_is_configured") : h("local_accounts")} ${h("runner")}: ${esc(data.runner_mode)}, ${data.runtime ? esc(data.runtime) : h("no_container_runtime")}.</p></article>
@@ -1709,7 +1733,14 @@ async function pageTemplates() {
         <td class="small narrow-hide">${esc(templateOptionLine(item))}</td>
         <td>${can("operator") ? `<div class="row"><button class="btn primary" type="button" data-launch="${esc(item.id)}">${h("launch")}</button>${item.tool === "ansible" && !item.prompt_on_launch ? `<button class="btn" type="button" data-launch-options="${esc(item.id)}">${h("launch_with_options")}</button>` : ""}</div>` : ""}</td>
       </tr>`);
-    document.querySelector("#template-table").innerHTML = table([t("name"), t("tool"), t("entry"), t("run_2"), ""], rows);
+    const host = document.querySelector("#template-table");
+    if (!shown.length) {
+      host.innerHTML = items.length
+        ? `<p class="small muted">${h("nothing_here")}</p>`
+        : emptyState("empty_templates", can("operator") ? "#/templates?new=1" : "", "new_template");
+      return;
+    }
+    host.innerHTML = table([t("name"), t("tool"), t("entry"), t("run_2"), ""], rows);
     document.querySelectorAll("[data-launch]").forEach((button) => {
       button.addEventListener("click", async () => {
         const item = items.find((row) => row.id === button.dataset.launch);
@@ -2944,7 +2975,7 @@ async function pageJobs() {
     if (!current.length) {
       jobTable.innerHTML = filters
         ? `<p class="small muted">${h("no_jobs_match")}</p><button class="btn" id="clear-job-filter" type="button">${h("clear_filter")}</button>`
-        : `<p class="small muted">${h("nothing_here")}</p>`;
+        : emptyState("empty_jobs", can("operator") ? "#/templates" : "", "launch_a_template");
     } else {
       const rows = current.map((job) =>
         `<tr><td><a href="#/jobs/${esc(job.id)}">${esc(job.name)}</a></td><td class="tool narrow-hide">${esc(job.tool)}</td><td>${pill(job.status)}</td><td class="small narrow-hide">${esc(job.trigger)}</td><td class="small muted" data-label="${h("created")}"><time datetime="${esc(job.created_at)}" title="${esc(when(job.created_at))}">${esc(when(job.created_at))}</time><br><span class="small">${esc(relativeTime(job.created_at))}</span></td><td class="small muted narrow-hide">${esc(spanText(job.started_at, job.finished_at, job.status))}</td><td>${jobListActions(job)}</td></tr>`
@@ -3507,19 +3538,19 @@ async function pageJob(id) {
     <div class="spread" style="margin-bottom:12px">
       <div class="row">${pill(job.status)} <span class="tool">${esc(job.tool)}</span> <span class="small muted">${esc(job.trigger)} · ${esc(job.launched_by)} · ${esc(when(job.started_at || job.created_at))} · <span id="job-duration">${esc(spanText(job.started_at, job.finished_at, job.status))}</span></span></div>
     </div>
-    <div class="spread tab-bar">
-      <div class="tabs">
-        <button class="btn pill primary" type="button" data-job-tab="output">${h("output")}</button>
-        <button class="btn pill" type="button" data-job-tab="parameters">${h("parameters")}</button>
+    <div class="job-sticky">
+      <div class="spread tab-bar">
+        <div class="tabs">
+          <button class="btn pill primary" type="button" data-job-tab="output">${h("output")}</button>
+          <button class="btn pill" type="button" data-job-tab="parameters">${h("parameters")}</button>
+        </div>
+        <div class="row">
+          ${actions}
+          <button class="btn" type="button" id="download-output">${h("download_output")}</button>
+          ${job.output_capped ? `<span class="small muted" id="output-capped">${h("output_download_is_incomplete")}</span>` : ""}
+        </div>
       </div>
-      <div class="row">
-        ${actions}
-        <button class="btn" type="button" id="download-output">${h("download_output")}</button>
-        ${job.output_capped ? `<span class="small muted" id="output-capped">${h("output_download_is_incomplete")}</span>` : ""}
-      </div>
-    </div>
-    <div id="panel-output">
-      <div class="log-tools">
+      <div class="log-tools" id="output-tools">
         <input class="search" id="log-search" placeholder="${h("search_log")}" aria-label="${h("search_log")}" autocomplete="off">
         <span class="small muted" id="log-search-count"></span>
         <div class="row">
@@ -3528,9 +3559,11 @@ async function pageJob(id) {
           <button class="btn" type="button" id="log-jump-end" hidden>${h("jump_to_end")}</button>
         </div>
       </div>
-      <div class="result-summary" id="log-result" hidden></div>
+    </div>
+    <div id="panel-output">
+      <div class="result-summary" id="log-result" tabindex="0" hidden></div>
       <div class="log-summary" id="log-summary" hidden></div>
-      <div class="log" id="log"></div>
+      <div class="log" id="log" tabindex="0"></div>
     </div>
     <div id="panel-parameters" hidden>${jobParameters(job)}</div>`);
   const badge = document.querySelector(".pill");
@@ -3580,6 +3613,7 @@ async function pageJob(id) {
       });
       document.querySelector("#panel-output").hidden = tab !== "output";
       document.querySelector("#panel-parameters").hidden = tab !== "parameters";
+      document.querySelector("#output-tools").hidden = tab !== "output";
     });
   });
   document.querySelector("#download-output").addEventListener("click", async () => {
@@ -3670,13 +3704,20 @@ async function pageWorkflows() {
   const drawWorkflows = () => {
     const needle = document.querySelector("#workflow-search").value.trim().toLowerCase();
     const shown = items.filter((item) => !needle || `${item.name} ${item.description}`.toLowerCase().includes(needle));
+    const host = document.querySelector("#workflow-table");
+    if (!shown.length) {
+      host.innerHTML = items.length
+        ? `<p class="small muted">${h("nothing_here")}</p>`
+        : emptyState("empty_workflows", can("operator") ? "#/workflows?new=1" : "", "new_workflow");
+      return;
+    }
     const filtered = shown.map((item) => `
       <tr>
         <td><a href="#/workflows/${esc(item.id)}">${esc(item.name)}</a><div class="small muted">${esc(item.description)}</div></td>
         <td>${h("count_nodes", { count: (item.graph.nodes || []).length })}</td>
         <td>${can("operator") ? `<button class="btn primary" type="button" data-launch="${esc(item.id)}">${h("launch")}</button>` : ""}</td>
       </tr>`);
-    document.querySelector("#workflow-table").innerHTML = table([t("name"), t("nodes"), ""], filtered);
+    host.innerHTML = table([t("name"), t("nodes"), ""], filtered);
     document.querySelectorAll("[data-launch]").forEach((button) => {
       button.addEventListener("click", async () => {
         const item = items.find((row) => row.id === button.dataset.launch);
@@ -4947,10 +4988,18 @@ async function pageProjects() {
     can("operator") ? addLink("#/projects?new=1", "project_2") : "");
   const drawProjects = () => {
     const needle = document.querySelector("#project-search").value.trim().toLowerCase();
-    const rows = projects.filter((item) => !needle || `${item.name} ${item.organization_name || ""} ${item.source_type} ${grantLabel(item)}`.toLowerCase().includes(needle)).map((item) =>
+    const shown = projects.filter((item) => !needle || `${item.name} ${item.organization_name || ""} ${item.source_type} ${grantLabel(item)}`.toLowerCase().includes(needle));
+    const host = document.querySelector("#project-table");
+    if (!shown.length) {
+      host.innerHTML = projects.length
+        ? `<p class="small muted">${h("nothing_here")}</p>`
+        : emptyState("empty_projects", can("operator") ? "#/projects?new=1" : "", "new_project");
+      return;
+    }
+    const rows = shown.map((item) =>
       `<tr><td><a href="#/projects/${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(item.organization_name || "")}</td><td>${esc(item.source_type)}</td><td class="small muted">${esc(grantLabel(item))}</td><td>${can("operator") ? `<a class="btn" href="#/projects?edit=${esc(item.id)}">${h("edit")}</a>` : ""}</td></tr>`
     );
-    document.querySelector("#project-table").innerHTML = table([t("name"), t("organization"), t("type"), t("visibility"), ""], rows);
+    host.innerHTML = table([t("name"), t("organization"), t("type"), t("visibility"), ""], rows);
   };
   document.querySelector("#project-search").addEventListener("input", drawProjects);
   drawProjects();
@@ -5486,7 +5535,14 @@ async function pageInventories() {
       const insecure = (item.sources || []).some(certificateCheckOff) || certificateCheckOff({ kind: item.source_kind, source: item.source });
       return `<tr><td><a href="#/inventories/${esc(item.id)}">${esc(item.name)}</a></td><td class="narrow-hide">${esc(count)}</td><td class="narrow-hide">${esc(label)}${certificateBadge(insecure)}</td><td data-label="${h("hosts")}">${esc(item.host_count)}</td><td>${can("operator") ? `<a class="btn" href="#/inventories?edit=${esc(item.id)}">${h("edit")}</a>` : ""}</td></tr>`;
     });
-    document.querySelector("#inventory-table").innerHTML = table([t("name"), t("sources"), t("type"), t("hosts"), ""], rows);
+    const host = document.querySelector("#inventory-table");
+    if (!shown.length) {
+      host.innerHTML = items.length
+        ? `<p class="small muted">${h("nothing_here")}</p>`
+        : emptyState("empty_inventories", can("operator") ? "#/inventories?new=1" : "", "new_inventory");
+      return;
+    }
+    host.innerHTML = table([t("name"), t("sources"), t("type"), t("hosts"), ""], rows);
   };
   document.querySelector("#inventory-search").addEventListener("input", draw);
   draw();
@@ -6679,10 +6735,18 @@ async function pageCredentials() {
     can("owner") ? addLink("#/credentials?new=1", "credential") : "");
   const drawCredentials = () => {
     const needle = document.querySelector("#credential-search").value.trim().toLowerCase();
-    const rows = credentials.filter((item) => !needle || `${item.name} ${item.kind} ${credentialKindLabel(item.kind)} ${credentialUsageNames(item)}`.toLowerCase().includes(needle)).map((item) =>
+    const shown = credentials.filter((item) => !needle || `${item.name} ${item.kind} ${credentialKindLabel(item.kind)} ${credentialUsageNames(item)}`.toLowerCase().includes(needle));
+    const host = document.querySelector("#credential-table");
+    if (!shown.length) {
+      host.innerHTML = credentials.length
+        ? `<p class="small muted">${h("nothing_here")}</p>`
+        : emptyState("empty_credentials", can("owner") ? "#/credentials?new=1" : "", "new_credential");
+      return;
+    }
+    const rows = shown.map((item) =>
       `<tr><td><a href="#/credentials?edit=${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(credentialKindLabel(item.kind))}</td><td>${esc(credentialUsageNames(item) || t("not_used"))}</td><td>${can("owner") ? `<button class="btn danger" type="button" data-credential="${esc(item.id)}" data-credential-name="${esc(item.name)}">${h("delete")}</button>` : ""}</td></tr>`
     );
-    document.querySelector("#credential-table").innerHTML = table([t("name"), t("type"), t("used_by"), ""], rows);
+    host.innerHTML = table([t("name"), t("type"), t("used_by"), ""], rows);
     document.querySelectorAll("[data-credential]").forEach((button) => {
       button.addEventListener("click", async () => {
         if (!confirm(t("delete_this_credential", { name: button.dataset.credentialName }))) return;
