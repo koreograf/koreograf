@@ -121,6 +121,7 @@
   "collections_roles_and_opentofu_providers_stay_between_runs": "Collections, roles, and OpenTofu providers stay between runs.",
   "colors_show_the_run_a_click_shows_the": "Colors show the run. A click shows the output.",
   "comes_from_the_directory": "Comes from the directory.",
+  "confirm": "Confirm",
   "confirm_the_replacement_with_ersetzen": "Confirm the replacement with ERSETZEN.",
   "connect": "Connect",
   "connect_cancelled": "Connection cancelled.",

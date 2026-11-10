@@ -64,7 +64,7 @@ Use `.btn` for a normal action, `.btn.primary` for the one main action on a page
 
 Use a link with `.btn` when it navigates (`<a class="btn" ...>`). Use a `button` with `type="button"` when it runs code, and `type="submit"` only inside a form.
 
-A destructive action asks first. Existing dialogs use `confirm(t("delete_this_...", { name: item.name }))`; an edit dialog can also put the delete button in `.dialog-danger`. Do not delete a named object on a single click.
+A destructive action asks first. Existing dialogs call `confirmDialog({ title, body: t("delete_this_...", { name: item.name }), confirmLabel: t("delete"), danger: true })`; an edit dialog can also put the delete button in `.dialog-danger`. Do not delete a named object on a single click.
 
 ### Fields
 
