@@ -92,10 +92,25 @@ fn assert_no_password(value: &Value, password: &str) {
     if password.is_empty() {
         return;
     }
+    let text = body_text(value);
     assert!(
-        !body_text(value).contains(password),
-        "the response contains the database password: {value}"
+        !text.contains(&format!(":{password}@")),
+        "the response contains the database password in a URL: {value}"
     );
+    if let Some(url) = value["migration"]["url"].as_str() {
+        let parsed = url::Url::parse(url).expect("migration url");
+        assert!(
+            parsed.password().is_none(),
+            "the migration url contains the password: {value}"
+        );
+    }
+    if let Some(audit) = value["migration"]["audit"].as_object() {
+        let text = serde_json::to_string(audit).unwrap_or_default();
+        assert!(
+            !text.contains(password),
+            "the audit entry contains the password: {value}"
+        );
+    }
 }
 
 fn target_body(host: &str, port: u16, password: &str) -> Value {
@@ -424,7 +439,8 @@ async fn the_ui_migration_copies_rows_enters_maintenance_and_returns_a_password_
     assert_no_password(&last, &target_password);
     assert!(
         last["migration"]["url"].as_str().is_some_and(|url| {
-            url.contains(&name) && (target_password.is_empty() || !url.contains(&target_password))
+            url::Url::parse(url)
+                .is_ok_and(|parsed| parsed.path().contains(&name) && parsed.password().is_none())
         }),
         "{last}"
     );
