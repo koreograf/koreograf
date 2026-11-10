@@ -28,7 +28,10 @@ let leaveGuard = null;
 let sourceNotice = null;
 let revealToken = null;
 let shownHash = null;
+const routeScroll = new Map();
+let historyIndex = 0;
 let buildVersion = "";
+let buildCommit = "";
 let versionRequested = false;
 
 window.addEventListener("beforeunload", (event) => {
@@ -589,9 +592,13 @@ function versionSlot() {
 
 function fillVersion() {
   if (!buildVersion) return;
+  const version = [buildVersion, buildCommit.slice(0, 7)].filter(Boolean).join(" ");
   document.querySelectorAll("[data-version]").forEach((line) => {
     const link = line.querySelector("a");
-    if (link) link.textContent = t("build_version", { version: buildVersion });
+    if (link) {
+      link.textContent = t("build_version", { version });
+      link.title = buildCommit;
+    }
     line.hidden = false;
   });
 }
@@ -604,11 +611,13 @@ async function loadVersion() {
       if (response.ok) {
         const data = await response.json();
         const version = String(data.version || "");
-        const commit = data.commit && data.commit !== "unknown" ? ` ${data.commit}` : "";
-        if (version) buildVersion = `${version}${commit}`;
+        const commit = data.commit && data.commit !== "unknown" ? String(data.commit) : "";
+        if (version) buildVersion = version;
+        buildCommit = commit;
       }
     } catch {
       buildVersion = "";
+      buildCommit = "";
     }
   }
   fillVersion();
@@ -669,7 +678,7 @@ function shell(title, body, actions) {
         </div>
       </aside>
       <main class="main" id="main" tabindex="-1">
-        <div class="top"><div><button class="btn ghost nav-toggle" id="nav-toggle" type="button" aria-label="${h("menu")}" aria-expanded="false"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M3 5.5h14M3 10h14M3 14.5h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button><h1>${esc(title)}</h1></div><div class="row">${actions || ""}</div></div>
+        <div class="top"><div><button class="btn ghost nav-toggle" id="nav-toggle" type="button" aria-label="${h("menu")}" aria-expanded="false"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M3 5.5h14M3 10h14M3 14.5h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button><h1 tabindex="-1">${esc(title)}</h1></div><div class="row">${actions || ""}</div></div>
         ${savedBanner()}
         ${body}
       </main>
@@ -937,7 +946,7 @@ function dashboardBody(data, range) {
 function bindDashboard(tab, range) {
   const tabs = [...document.querySelectorAll("[data-page-tab]")];
   const selectTab = async (next) => {
-    history.replaceState(null, "", dashboardAddress(next, range));
+    history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", dashboardAddress(next, range));
     await route();
     const active = document.querySelector(`[data-page-tab="${next}"]`);
     if (active) active.focus();
@@ -961,7 +970,7 @@ function bindDashboard(tab, range) {
     button.addEventListener("click", async () => {
       const next = button.dataset.dashboardRange;
       if (next === range) return;
-      history.replaceState(null, "", dashboardAddress("dashboard", next));
+      history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", dashboardAddress("dashboard", next));
       await route();
       const active = document.querySelector(`[data-dashboard-range="${next}"]`);
       if (active) active.focus();
@@ -1415,15 +1424,15 @@ function editAddress(params, hash = location.hash || "#/") {
 
 function rememberEditHash(params, push = true) {
   const next = editAddress(params);
-  if (push) history.pushState(null, "", next);
-  else history.replaceState(null, "", next);
+  if (push) history.pushState({ idx: ((history.state && history.state.idx) || 0) + 1 }, "", next);
+  else history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", next);
   shownHash = next;
 }
 
 function clearEditHash() {
   const next = editAddress({});
   if ((location.hash || "#/") === next) return;
-  history.replaceState(null, "", next);
+  history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", next);
   shownHash = next;
 }
 
@@ -2267,15 +2276,15 @@ function scheduleNewTarget(request) {
 
 function rememberScheduleHash(params, push = true) {
   const next = scheduleAddress(params);
-  if (push) history.pushState(null, "", next);
-  else history.replaceState(null, "", next);
+  if (push) history.pushState({ idx: ((history.state && history.state.idx) || 0) + 1 }, "", next);
+  else history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", next);
   shownHash = next;
 }
 
 function clearScheduleHash() {
   const next = scheduleAddress();
   if ((location.hash || "#/") === next) return;
-  history.replaceState(null, "", next);
+  history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", next);
   shownHash = next;
 }
 
@@ -2315,6 +2324,13 @@ function localParts(zone) {
     time: `${hour.padStart(2, "0")}:${get("minute").padStart(2, "0")}`,
     weekday,
   };
+}
+
+function latestStartDate(date) {
+  const value = String(date);
+  const year = Number(value.slice(0, 4)) + 10;
+  if (value.slice(5, 10) === "02-29") return `${year}-02-28`;
+  return `${year}${value.slice(4)}`;
 }
 
 function formatLocalDate(isoDate) {
@@ -2691,7 +2707,7 @@ function openScheduleForm(kind, target, existing, redraw, options) {
           <div class="form-section">
             <h2>${h("start")}</h2>
             <div class="field-row">
-              <label class="field required"><span>${h("start_date")}</span><input name="start_date" type="date" required value="${esc(item.start_date)}"></label>
+              <label class="field required"><span>${h("start_date")}</span><input name="start_date" type="date" required max="${esc(latestStartDate(local.date))}" value="${esc(item.start_date)}"></label>
               <label class="field required"><span>${h("start_time")}</span><input name="start_time" type="time" required value="${esc(item.start_time)}"></label>
             </div>
           </div>
@@ -2899,8 +2915,8 @@ async function pageJobs() {
   let current = [];
   const rememberHash = (push = false) => {
     const next = jobsHash(view);
-    if (push) history.pushState(null, "", next);
-    else history.replaceState(null, "", next);
+    if (push) history.pushState({ idx: ((history.state && history.state.idx) || 0) + 1 }, "", next);
+    else history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", next);
     shownHash = next;
   };
   const load = async (focus) => {
@@ -3042,7 +3058,9 @@ async function pageJobs() {
 }
 
 function plainLogLine(text) {
-  return String(text || "").replace(/\u001b\[[0-9;]*m/g, "");
+  return String(text || "")
+    .replace(/\u001b\][^\u001b\u0007]*(?:\u0007|\u001b\\)/g, "")
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
 }
 
 // ansible-galaxy prints ERROR! and the playbook still runs from the cache.
@@ -3353,8 +3371,8 @@ function appendLog(row) {
   const kind = classifyLogLine(log, row);
   if (tagFilterNote(row)) showTagFilterBanner();
   if (kind) line.className = kind;
-  line.textContent = row.line;
-  line.koreografRaw = row.line;
+  line.textContent = plainLogLine(row.line);
+  line.koreografRaw = line.textContent;
   log.appendChild(line);
   if (kind === "fail") {
     markRecap(line);
@@ -5601,7 +5619,7 @@ async function pageInventory(id) {
   if (view.page > pages()) {
     view.page = pages();
     shownHash = inventoryHostHash(id, view);
-    history.replaceState(null, "", shownHash);
+    history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", shownHash);
     page = await api("GET", inventoryHostUrl(id, view));
   }
   const notice = sourceNotice && sourceNotice.inventoryId === id ? sourceNotice : null;
@@ -5693,8 +5711,8 @@ async function pageInventory(id) {
   };
   const rememberHash = (push = false) => {
     const next = inventoryHostHash(id, view);
-    if (push) history.pushState(null, "", next);
-    else history.replaceState(null, "", next);
+    if (push) history.pushState({ idx: ((history.state && history.state.idx) || 0) + 1 }, "", next);
+    else history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", next);
     shownHash = next;
   };
   const drawHosts = (data) => {
@@ -7689,13 +7707,39 @@ function showLoading(title) {
   main.innerHTML = `<div class="top"><div><h1 tabindex="-1">${esc(title)}</h1></div><div class="row"></div></div>${skeletonBody()}`;
 }
 
+function settleRoute(back) {
+  const hash = location.hash || "#/";
+  if (back && routeScroll.has(hash)) window.scrollTo(0, routeScroll.get(hash));
+  else window.scrollTo(0, 0);
+  if (back) return;
+  const main = document.querySelector(".main");
+  const heading = main && main.querySelector("h1");
+  if (!main || !heading || main.contains(document.activeElement)) return;
+  heading.focus({ preventScroll: true });
+}
+
+function hasHistoryIndex(state) {
+  return Boolean(state && Number.isInteger(state.idx));
+}
+
+function routeDirection(state) {
+  if (hasHistoryIndex(state)) {
+    const back = state.idx <= historyIndex;
+    historyIndex = state.idx;
+    return back;
+  }
+  historyIndex += 1;
+  return false;
+}
+
 async function route() {
   const nextHash = location.hash || "#/";
   if (leaveGuard && shownHash !== null && nextHash !== shownHash && leaveGuard() && !confirm(t("discard_unsaved_changes"))) {
-    history.replaceState(null, "", shownHash);
+    history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", shownHash);
     return;
   }
   leaveGuard = null;
+  const previousHash = shownHash;
   shownHash = nextHash;
   closeLive();
   if (navToken) navToken.abort();
@@ -7713,7 +7757,12 @@ async function route() {
     return;
   }
   const parts = hashPath.slice(1).split("/").filter(Boolean);
+  const historyState = history.state;
+  const back = routeDirection(historyState);
+  if (!hasHistoryIndex(historyState)) history.replaceState({ idx: historyIndex }, "", location.hash || "#/");
+  if (previousHash !== null && previousHash !== nextHash) routeScroll.set(previousHash, window.scrollY);
   showLoading(routeTitle(parts));
+  if (!back) window.scrollTo(0, 0);
   try {
     if (parts.length === 0) await pageDashboard();
     else if (parts[0] === "templates" && parts[1] === "new") { location.replace("#/templates?new=1"); return; }
@@ -7758,9 +7807,11 @@ async function route() {
     else if (parts[0] === "backup") await pageBackup();
     else if (parts[0] === "team") await pageTeam();
     else shell(t("page"), `<div class="card">${h("this_page_does_not_exist")}</div>`);
+    settleRoute(back);
   } catch (error) {
     if (token !== navToken) return;
     renderRouteError(error);
+    settleRoute(false);
   }
 }
 

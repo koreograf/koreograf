@@ -611,6 +611,7 @@
   "save_team": "Save team",
   "saved": "Saved.",
   "saving_replaces_the_environment_variables_an_empty_password": "Saving replaces the environment variables. An empty password keeps the stored value.",
+  "schedule": "Schedule",
   "schedule.after_count": "After {count}",
   "schedule.by": "last edited by {name}",
   "schedule.daily": "Daily at {time} ({zone})",
