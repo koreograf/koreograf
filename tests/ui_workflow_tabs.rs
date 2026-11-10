@@ -72,6 +72,30 @@ fn workflow_editor_groups_sections_in_page_tabs() {
 }
 
 #[test]
+fn the_docs_place_schedules_and_the_danger_zone_in_tabs() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workflows =
+        std::fs::read_to_string(root.join("docs/workflows-webhooks.md")).expect("workflows docs");
+    let jobs = std::fs::read_to_string(root.join("docs/jobs.md")).expect("jobs docs");
+    assert!(
+        workflows.contains("?tab=schedules"),
+        "workflows docs have no tab link"
+    );
+    assert!(
+        workflows.contains("Danger Zone"),
+        "workflows docs hide the danger tab"
+    );
+    assert!(
+        jobs.contains("**Schedules** tab"),
+        "jobs docs still point below the canvas"
+    );
+    assert!(
+        jobs.contains("?tab=schedules&edit=<id>"),
+        "jobs docs do not keep the schedule form on its tab"
+    );
+}
+
+#[test]
 fn the_tab_label_is_in_both_catalogs() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for language in ["de", "en"] {
