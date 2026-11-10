@@ -171,6 +171,19 @@ async fn a_start_more_than_ten_years_ahead_is_rejected() {
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{accepted}");
+    let schedule_id = accepted["id"].as_str().unwrap().to_string();
+
+    let (status, moved, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/schedules/{schedule_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(schedule("9999-12-31")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{moved}");
+    assert_eq!(moved["error"], "schedule_date_is_too_far_in_the_future");
 
     let mut preview = schedule("9999-12-31");
     preview.as_object_mut().unwrap().remove("name");

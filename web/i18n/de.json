@@ -661,6 +661,7 @@
   "schedule_add": "+ Zeitplan",
   "schedule_count_is_invalid": "Die Anzahl ist ungültig.",
   "schedule_date_is_invalid": "Das Datum ist ungültig.",
+  "schedule_date_is_too_far_in_the_future": "Das Startdatum liegt mehr als zehn Jahre in der Zukunft.",
   "schedule_date_is_too_far_in_the_past": "Das Startdatum liegt mehr als ein Jahr zurück.",
   "schedule_edit": "Bearbeiten",
   "schedule_empty_all": "In diesem Team gibt es noch keinen Zeitplan.",
