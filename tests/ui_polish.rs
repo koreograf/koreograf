@@ -51,11 +51,24 @@ check(tool && /white-space:\s*nowrap/.test(tool[1]), "tool names may wrap inside
 const route = extractFunction("route");
 check(route.includes("routeScroll.set"), "the router does not remember the scroll position");
 check(route.includes("settleRoute(back)"), "the router does not settle the scroll position");
+check(route.includes("routeDirection(historyState)"), "the router does not read the history direction");
+check(!route.includes("popstate"), "the router still depends on popstate for direction");
 const settle = extractFunction("settleRoute");
 check(settle.includes("window.scrollTo(0, 0)"), "a new page does not open at the top");
 check(settle.includes("heading.focus"), "a new page does not focus the heading");
 check(settle.includes("routeScroll.get"), "back does not restore the scroll position");
 check(js.includes('<h1 tabindex="-1">'), "the page heading cannot take focus");
+const direction = new Function(
+  `let historyIndex = 0;\n${extractFunction("hasHistoryIndex")}\n${extractFunction("routeDirection")}\nreturn { routeDirection, index: () => historyIndex };`,
+)();
+check(direction.routeDirection(null) === false, "a new entry is treated as back");
+check(direction.index() === 1, "a new entry gets no history index");
+check(direction.routeDirection({ idx: 2 }) === false, "a forward entry is treated as back");
+check(direction.routeDirection({ idx: 1 }) === true, "back was not detected");
+check(direction.routeDirection({ idx: 2 }) === false, "forward after back was treated as back");
+const limit = new Function(`${extractFunction("latestStartDate")}\nreturn latestStartDate;`)();
+check(limit("2026-11-10") === "2036-11-10", "the start bound is not ten years ahead");
+check(limit("2028-02-29") === "2038-02-28", "the start bound keeps an impossible February day");
 const form = extractFunction("openScheduleForm");
 check(form.includes("latestStartDate(local.date)"), "the schedule start has no upper bound");
 check(/type="date" required max=/.test(form), "the start field does not carry the bound");

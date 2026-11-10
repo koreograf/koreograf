@@ -29,6 +29,7 @@ let sourceNotice = null;
 let revealToken = null;
 let shownHash = null;
 const routeScroll = new Map();
+let historyIndex = 0;
 let buildVersion = "";
 let buildCommit = "";
 let versionRequested = false;
@@ -945,7 +946,7 @@ function dashboardBody(data, range) {
 function bindDashboard(tab, range) {
   const tabs = [...document.querySelectorAll("[data-page-tab]")];
   const selectTab = async (next) => {
-    history.replaceState(null, "", dashboardAddress(next, range));
+    history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", dashboardAddress(next, range));
     await route();
     const active = document.querySelector(`[data-page-tab="${next}"]`);
     if (active) active.focus();
@@ -969,7 +970,7 @@ function bindDashboard(tab, range) {
     button.addEventListener("click", async () => {
       const next = button.dataset.dashboardRange;
       if (next === range) return;
-      history.replaceState(null, "", dashboardAddress("dashboard", next));
+      history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", dashboardAddress("dashboard", next));
       await route();
       const active = document.querySelector(`[data-dashboard-range="${next}"]`);
       if (active) active.focus();
@@ -1423,15 +1424,15 @@ function editAddress(params, hash = location.hash || "#/") {
 
 function rememberEditHash(params, push = true) {
   const next = editAddress(params);
-  if (push) history.pushState(null, "", next);
-  else history.replaceState(null, "", next);
+  if (push) history.pushState({ idx: ((history.state && history.state.idx) || 0) + 1 }, "", next);
+  else history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", next);
   shownHash = next;
 }
 
 function clearEditHash() {
   const next = editAddress({});
   if ((location.hash || "#/") === next) return;
-  history.replaceState(null, "", next);
+  history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", next);
   shownHash = next;
 }
 
@@ -2275,15 +2276,15 @@ function scheduleNewTarget(request) {
 
 function rememberScheduleHash(params, push = true) {
   const next = scheduleAddress(params);
-  if (push) history.pushState(null, "", next);
-  else history.replaceState(null, "", next);
+  if (push) history.pushState({ idx: ((history.state && history.state.idx) || 0) + 1 }, "", next);
+  else history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", next);
   shownHash = next;
 }
 
 function clearScheduleHash() {
   const next = scheduleAddress();
   if ((location.hash || "#/") === next) return;
-  history.replaceState(null, "", next);
+  history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", next);
   shownHash = next;
 }
 
@@ -2326,7 +2327,10 @@ function localParts(zone) {
 }
 
 function latestStartDate(date) {
-  return `${Number(String(date).slice(0, 4)) + 10}${String(date).slice(4)}`;
+  const value = String(date);
+  const year = Number(value.slice(0, 4)) + 10;
+  if (value.slice(5, 10) === "02-29") return `${year}-02-28`;
+  return `${year}${value.slice(4)}`;
 }
 
 function formatLocalDate(isoDate) {
@@ -2911,8 +2915,8 @@ async function pageJobs() {
   let current = [];
   const rememberHash = (push = false) => {
     const next = jobsHash(view);
-    if (push) history.pushState(null, "", next);
-    else history.replaceState(null, "", next);
+    if (push) history.pushState({ idx: ((history.state && history.state.idx) || 0) + 1 }, "", next);
+    else history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", next);
     shownHash = next;
   };
   const load = async (focus) => {
@@ -5615,7 +5619,7 @@ async function pageInventory(id) {
   if (view.page > pages()) {
     view.page = pages();
     shownHash = inventoryHostHash(id, view);
-    history.replaceState(null, "", shownHash);
+    history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", shownHash);
     page = await api("GET", inventoryHostUrl(id, view));
   }
   const notice = sourceNotice && sourceNotice.inventoryId === id ? sourceNotice : null;
@@ -5707,8 +5711,8 @@ async function pageInventory(id) {
   };
   const rememberHash = (push = false) => {
     const next = inventoryHostHash(id, view);
-    if (push) history.pushState(null, "", next);
-    else history.replaceState(null, "", next);
+    if (push) history.pushState({ idx: ((history.state && history.state.idx) || 0) + 1 }, "", next);
+    else history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", next);
     shownHash = next;
   };
   const drawHosts = (data) => {
@@ -7714,12 +7718,24 @@ function settleRoute(back) {
   heading.focus({ preventScroll: true });
 }
 
+function hasHistoryIndex(state) {
+  return Boolean(state && Number.isInteger(state.idx));
+}
+
+function routeDirection(state) {
+  if (hasHistoryIndex(state)) {
+    const back = state.idx <= historyIndex;
+    historyIndex = state.idx;
+    return back;
+  }
+  historyIndex += 1;
+  return false;
+}
+
 async function route() {
-  const back = Boolean(history.state && history.state.back);
-  if (back) history.replaceState(null, "", location.hash || "#/");
   const nextHash = location.hash || "#/";
   if (leaveGuard && shownHash !== null && nextHash !== shownHash && leaveGuard() && !confirm(t("discard_unsaved_changes"))) {
-    history.replaceState(null, "", shownHash);
+    history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", shownHash);
     return;
   }
   leaveGuard = null;
@@ -7741,6 +7757,9 @@ async function route() {
     return;
   }
   const parts = hashPath.slice(1).split("/").filter(Boolean);
+  const historyState = history.state;
+  const back = routeDirection(historyState);
+  if (!hasHistoryIndex(historyState)) history.replaceState({ idx: historyIndex }, "", location.hash || "#/");
   if (previousHash !== null && previousHash !== nextHash) routeScroll.set(previousHash, window.scrollY);
   showLoading(routeTitle(parts));
   if (!back) window.scrollTo(0, 0);
@@ -7816,10 +7835,6 @@ async function boot() {
   } catch {
     me = null;
   }
-  window.addEventListener("popstate", () => {
-    const hash = location.hash || "#/";
-    if (hash !== shownHash) history.replaceState({ back: true }, "", hash);
-  });
   window.addEventListener("hashchange", route);
   route();
 }
