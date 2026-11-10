@@ -3836,7 +3836,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
               <input id="wf-name" value="${esc(workflow.name)}" ${can("operator") ? "" : "disabled"}>
               <input id="wf-description" maxlength="1000" value="${esc(workflow.description)}" placeholder="${h("description")}" ${can("operator") ? "" : "disabled"}>
             </div>`}
-          <p class="small muted" id="wf-hint">${readonly ? h("colors_show_the_run_a_click_shows_the") : h("drag_nodes_add_more_nodes_on_the_right")}</p>
+          <p class="small muted" id="wf-hint">${readonly ? h("colors_show_the_run_a_click_shows_the") : h("drag_nodes_and_use_the_canvas_menus")}</p>
           <div class="canvas" id="canvas"><div id="board" style="position:relative;min-width:100%;min-height:560px"><svg class="edges" id="edges"></svg><div id="nodes"></div></div></div>
         </div>
         <aside class="card inspector" id="inspector"></aside>
@@ -4012,7 +4012,9 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
     const element = document.createElement("div");
     element.className = "node-menu-pop";
     element.setAttribute("role", "menu");
-    element.innerHTML = `<button class="btn" type="button" role="menuitem" data-connect-node="${esc(node.id)}">${h("connect")}</button>`;
+    element.innerHTML = `<button class="btn" type="button" role="menuitem" data-edit-node>${h("edit")}</button>
+      <button class="btn danger" type="button" role="menuitem" data-delete-node>${h("delete")}</button>
+      <button class="btn" type="button" role="menuitem" data-connect-node="${esc(node.id)}">${h("connect")}</button>`;
     document.body.appendChild(element);
     const rect = element.getBoundingClientRect();
     element.style.left = `${Math.max(8, Math.min(x, window.innerWidth - rect.width - 8))}px`;
@@ -4021,20 +4023,216 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
       if (!element.contains(event.target)) closeNodeMenu();
     };
     const keys = (event) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      closeNodeMenu(true);
+      const items = [...element.querySelectorAll('[role="menuitem"]')];
+      const index = items.indexOf(document.activeElement);
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeNodeMenu(true);
+        return;
+      }
+      if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+        event.preventDefault();
+        let next = 0;
+        if (event.key === "ArrowDown") next = (index + 1) % items.length;
+        else if (event.key === "ArrowUp") next = (index - 1 + items.length) % items.length;
+        else if (event.key === "End") next = items.length - 1;
+        items[next].focus();
+      }
     };
     document.addEventListener("pointerdown", outside, true);
     document.addEventListener("keydown", keys, true);
     nodeMenu = { element, opener, outside, keys };
     if (opener && opener.matches && opener.matches("[data-node-menu]")) opener.setAttribute("aria-expanded", "true");
-    const item = element.querySelector("[data-connect-node]");
-    item.addEventListener("click", () => {
+    element.querySelector("[data-edit-node]").addEventListener("click", () => {
+      closeNodeMenu(true);
+      openNodeEditor(node);
+    });
+    element.querySelector("[data-delete-node]").addEventListener("click", () => {
+      closeNodeMenu(true);
+      removeNode(node);
+    });
+    element.querySelector("[data-connect-node]").addEventListener("click", () => {
       closeNodeMenu(true);
       startConnect(node);
     });
+    element.querySelector('[role="menuitem"]').focus();
+  }
+
+  function openCanvasMenu(point, x, y) {
+    closeNodeMenu();
+    const element = document.createElement("div");
+    element.className = "node-menu-pop";
+    element.setAttribute("role", "menu");
+    element.innerHTML = `<button class="btn" type="button" role="menuitem" data-add-node>${h("add_node")}</button>`;
+    document.body.appendChild(element);
+    const rect = element.getBoundingClientRect();
+    element.style.left = `${Math.max(8, Math.min(x, window.innerWidth - rect.width - 8))}px`;
+    element.style.top = `${Math.max(8, Math.min(y, window.innerHeight - rect.height - 8))}px`;
+    const outside = (event) => {
+      if (!element.contains(event.target)) closeNodeMenu();
+    };
+    const keys = (event) => {
+      const items = [...element.querySelectorAll('[role="menuitem"]')];
+      const index = items.indexOf(document.activeElement);
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeNodeMenu();
+        return;
+      }
+      if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+        event.preventDefault();
+        let next = 0;
+        if (event.key === "ArrowDown") next = (index + 1) % items.length;
+        else if (event.key === "ArrowUp") next = (index - 1 + items.length) % items.length;
+        else if (event.key === "End") next = items.length - 1;
+        items[next].focus();
+      }
+    };
+    document.addEventListener("pointerdown", outside, true);
+    document.addEventListener("keydown", keys, true);
+    nodeMenu = { element, opener: null, outside, keys };
+    const item = element.querySelector("[data-add-node]");
+    item.addEventListener("click", () => {
+      closeNodeMenu();
+      openAddNodeDialog(point);
+    });
     item.focus();
+  }
+
+  function openAddNodeDialog(point) {
+    if (!editable) return;
+    if (!templates.length) {
+      setHint("create_a_template_or_a_workflow_first");
+      return;
+    }
+    openDialog({
+      id: "add-node-dialog",
+      title: t("add_node"),
+      submit: t("create"),
+      body: `<label class="field required"><span>${h("template")}</span><select class="fit" id="add-template" required>${selectOptions(templates, "", false, (row) => `${row.name} · ${row.tool}`)}</select></label>
+        <label class="field"><span>${h("name_optional")}</span><input id="add-name" placeholder="${h("name")}"></label>`,
+      onSubmit: ({ form, close }) => {
+        const templateId = form.querySelector("#add-template").value;
+        const template = templates.find((item) => item.id === templateId);
+        if (!template) throw new Error("create_a_template_or_a_workflow_first");
+        const name = form.querySelector("#add-name").value.trim() || template.name;
+        addNode(template, name, point);
+        close();
+      },
+    });
+  }
+
+  function addNode(template, name, point) {
+    const id = `n${Math.random().toString(16).slice(2, 10)}`;
+    const spot = point
+      ? { x: Math.max(0, Math.round(point.x - 20)), y: Math.max(0, Math.round(point.y - 20)) }
+      : freeNodePosition();
+    graph.nodes.push({
+      id,
+      template_id: template.id,
+      name,
+      x: spot.x,
+      y: spot.y,
+      convergence: "any",
+    });
+    selected = id;
+    selectedEdge = null;
+    connecting = null;
+    connectDrag = null;
+    clearConnectPreview();
+    renderNodes();
+    renderInspector();
+    const created = nodes.querySelector(`[data-id="${CSS.escape(id)}"]`);
+    if (created) created.focus();
+  }
+
+  function removeNode(node) {
+    if (!confirm(t("delete_this_node", { name: node.name }))) return;
+    flushNode = () => true;
+    graph.nodes = graph.nodes.filter((item) => item.id !== node.id);
+    graph.edges = graph.edges.filter((edge) => edge.from !== node.id && edge.to !== node.id);
+    selected = null;
+    selectedEdge = null;
+    connecting = null;
+    connectDrag = null;
+    clearConnectPreview();
+    renderNodes();
+    renderInspector();
+  }
+
+  function nodeEditorFields(node) {
+    const template = templates.find((item) => item.id === node.template_id);
+    return `<label class="field required"><span>${h("name")}</span><input id="node-name" value="${esc(node.name)}" required></label>
+      <label class="field"><span>${h("template")}</span><select class="fit" id="node-template">${selectOptions(templates, node.template_id, false, (row) => row.name)}</select></label>
+      <label class="field"><span>${h("convergence")}</span>
+        <select class="fit" id="node-join">
+          <option value="any"${node.convergence !== "all" ? " selected" : ""}>${h("any_predecessor")}</option>
+          <option value="all"${node.convergence === "all" ? " selected" : ""}>${h("all_predecessors")}</option>
+        </select>
+      </label>
+      ${nodeParams(node, template)}`;
+  }
+
+  function openNodeEditor(node) {
+    if (!editable || !flushNode()) return;
+    const draftFor = (templateId, name, convergence) => {
+      const draft = { ...node, name, convergence, template_id: templateId };
+      if (!node.overrides) return draft;
+      draft.overrides = JSON.parse(JSON.stringify(node.overrides));
+      if (templateId !== node.template_id) {
+        delete draft.overrides.spec;
+        if (draft.overrides.inventory_id === undefined && draft.overrides.credential_id === undefined && draft.overrides.extra_vars === undefined) {
+          delete draft.overrides;
+        }
+      }
+      return draft;
+    };
+    const dialog = openDialog({
+      id: "node-edit-dialog",
+      title: t("edit_node"),
+      submit: t("save"),
+      body: nodeEditorFields(node),
+      onSubmit: ({ form, close }) => {
+        const name = form.querySelector("#node-name").value.trim();
+        if (!name) throw new Error("name_is_missing_or_too_long");
+        const templateId = form.querySelector("#node-template").value;
+        if (!templates.some((item) => item.id === templateId)) throw new Error("create_a_template_or_a_workflow_first");
+        const convergence = form.querySelector("#node-join").value === "all" ? "all" : "any";
+        const draft = draftFor(templateId, name, convergence);
+        if (!readOverrides(draft, form)) return;
+        Object.assign(node, draft);
+        flushNode = () => true;
+        renderNodes();
+        renderInspector();
+        close();
+      },
+    });
+    const bindTemplate = () => {
+      const select = dialog.form.querySelector("#node-template");
+      if (!select) return;
+      select.addEventListener("change", (event) => {
+        const next = templates.find((item) => item.id === event.target.value);
+        if (!next) return;
+        const name = dialog.form.querySelector("#node-name").value;
+        const convergence = dialog.form.querySelector("#node-join").value;
+        const values = {};
+        dialog.form.querySelectorAll("input[id], select[id], textarea[id]").forEach((control) => {
+          values[control.id] = control.type === "checkbox" ? control.checked : control.value;
+        });
+        const draft = draftFor(next.id, name, convergence);
+        dialog.form.querySelector(".dialog-body").innerHTML = nodeEditorFields(draft);
+        Object.entries(values).forEach(([id, value]) => {
+          if (id === "node-template") return;
+          const control = dialog.form.querySelector(`#${CSS.escape(id)}`);
+          if (!control) return;
+          if (control.type === "checkbox") control.checked = Boolean(value);
+          else if (control.tagName === "SELECT" && [...control.options].some((option) => option.value === value)) control.value = value;
+          else if (control.tagName !== "SELECT") control.value = value;
+        });
+        bindTemplate();
+      });
+    };
+    bindTemplate();
   }
 
   function startConnect(node) {
@@ -4055,7 +4253,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
     connecting = null;
     connectDrag = null;
     clearConnectPreview();
-    setHint("drag_nodes_add_more_nodes_on_the_right");
+    setHint("drag_nodes_and_use_the_canvas_menus");
     renderNodes();
     renderInspector();
   }
@@ -4198,6 +4396,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
       element.addEventListener("contextmenu", (event) => {
         if (!editable || !flushNode()) return;
         event.preventDefault();
+        event.stopPropagation();
         openNodeMenu(node, event.clientX, event.clientY, element);
       });
       if (menuButton) {
@@ -4224,6 +4423,10 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
           if (!flushNode()) return;
           selected = node.id;
           selectedEdge = null;
+          if (event.key === "Enter") {
+            openNodeEditor(node);
+            return;
+          }
           renderInspector();
           nodes.querySelectorAll(".wf-node").forEach((item) => item.classList.toggle("selected", item.dataset.id === selected));
           return;
@@ -4275,11 +4478,17 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
   }
 
   function addNodeControls() {
-    return `<div class="inspector-block">
-      <h2>${h("nodes")}</h2>
-      <label class="field"><span>${h("template_for_new_node")}</span><select class="fit" id="add-template">${selectOptions(templates, "", false, (row) => `${row.name} · ${row.tool}`)}</select></label>
-      <button class="btn pill" id="add-node" type="button">${h("add_node")}</button>
-    </div>`;
+    return `<button class="btn" id="add-node" type="button">${h("add_node")}</button>
+      <p class="small muted">${h("right_click_empty_canvas_to_add_a_node")}</p>`;
+  }
+
+  function bindAddNode(host) {
+    const button = host.querySelector("#add-node");
+    if (!button) return;
+    button.addEventListener("click", () => {
+      if (!flushNode()) return;
+      openAddNodeDialog(null);
+    });
   }
 
   function freeNodePosition() {
@@ -4312,40 +4521,8 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
     return { x, y };
   }
 
-  function bindAddNode(host) {
-    host.querySelector("#add-node").addEventListener("click", () => {
-      if (!flushNode()) return;
-      const templateId = host.querySelector("#add-template").value;
-      const template = templates.find((item) => item.id === templateId);
-      if (!template) {
-        const hint = document.querySelector("#wf-hint");
-        if (hint) hint.textContent = t("create_a_template_or_a_workflow_first");
-        return;
-      }
-      const id = `n${Math.random().toString(16).slice(2, 10)}`;
-      const spot = freeNodePosition();
-      graph.nodes.push({
-        id,
-        template_id: template.id,
-        name: template.name,
-        x: spot.x,
-        y: spot.y,
-        convergence: "any",
-      });
-      selected = id;
-      selectedEdge = null;
-      connecting = null;
-      connectDrag = null;
-      clearConnectPreview();
-      renderNodes();
-      renderInspector();
-      const created = nodes.querySelector(`[data-id="${CSS.escape(id)}"]`);
-      if (created) created.focus();
-    });
-  }
-
-  function fieldValue(id) {
-    const element = document.querySelector(id);
+  function fieldValue(root, id) {
+    const element = root.querySelector(id);
     if (!element) return "";
     if (element.tagName === "SELECT") {
       const index = element.selectedIndex;
@@ -4363,59 +4540,64 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
     if (hint) hint.textContent = message;
   }
 
-  function readOverrides(node) {
+  function readOverrides(node, root = document) {
     const template = templates.find((item) => item.id === node.template_id);
-    const extraField = document.querySelector("#node-extra");
+    const extraField = root.querySelector("#node-extra");
     if (!template || !extraField) return true;
+    const fromDialog = root !== document;
+    const fail = (key, vars) => {
+      if (fromDialog) {
+        const error = new Error(key);
+        if (vars) error.vars = vars;
+        throw error;
+      }
+      note(t(key, vars));
+      return false;
+    };
     const over = {};
     const templateSpec = template.spec || {};
     if (template.tool === "ansible") {
-      const inventoryId = fieldValue("#node-inventory");
+      const inventoryId = fieldValue(root, "#node-inventory");
       if (inventoryId !== (template.inventory_id || "")) over.inventory_id = inventoryId;
       const spec = {};
-      const jobType = fieldValue("#node-job-type") === "check" ? "check" : "run";
+      const jobType = fieldValue(root, "#node-job-type") === "check" ? "check" : "run";
       const templateJob = templateSpec.job_type === "check" ? "check" : "run";
       if (jobType !== templateJob) spec.job_type = jobType;
-      const verbosity = Number(fieldValue("#node-verbosity")) || 0;
+      const verbosity = Number(fieldValue(root, "#node-verbosity")) || 0;
       const templateVerbosity = Number(templateSpec.verbosity) || 0;
       if (verbosity !== templateVerbosity) spec.verbosity = verbosity;
-      const forksRaw = fieldValue("#node-forks").trim();
+      const forksRaw = fieldValue(root, "#node-forks").trim();
       const templateForks = templateSpec.forks;
       const templateHasForks = templateForks !== undefined && templateForks !== null && templateForks !== "";
       if (forksRaw === "") {
         if (templateHasForks) spec.forks = null;
       } else {
         const forks = Number(forksRaw);
-        if (!Number.isInteger(forks)) {
-          note(t("forks_is_a_whole_number"));
-          return false;
-        }
-        if (forks < 1 || forks > 50) {
-          note(t("forks_is_a_number_from_1_to_50"));
-          return false;
-        }
+        if (!Number.isInteger(forks)) return fail("forks_is_a_whole_number");
+        if (forks < 1 || forks > 50) return fail("forks_is_a_number_from_1_to_50");
         if (forks !== templateForks) spec.forks = forks;
       }
-      const diff = Boolean(document.querySelector("#node-diff") && document.querySelector("#node-diff").checked);
+      const diff = Boolean(root.querySelector("#node-diff") && root.querySelector("#node-diff").checked);
       if (diff !== Boolean(templateSpec.diff)) spec.diff = diff;
-      const tags = fieldValue("#node-tags");
+      const tags = fieldValue(root, "#node-tags");
       if (tags !== (templateSpec.tags || "")) spec.tags = tags;
-      const skip = fieldValue("#node-skip-tags");
+      const skip = fieldValue(root, "#node-skip-tags");
       if (skip !== (templateSpec.skip_tags || "")) spec.skip_tags = skip;
-      const limit = fieldValue("#node-limit");
+      const limit = fieldValue(root, "#node-limit");
       if (limit !== (templateSpec.limit || "")) spec.limit = limit;
       if (Object.keys(spec).length) over.spec = spec;
     } else if (template.tool === "opentofu") {
-      const action = fieldValue("#node-action") === "apply" ? "apply" : "plan";
+      const action = fieldValue(root, "#node-action") === "apply" ? "apply" : "plan";
       const templateAction = templateSpec.action === "apply" ? "apply" : "plan";
       if (action !== templateAction) over.spec = { action };
     }
-    const credentialId = fieldValue("#node-credential");
+    const credentialId = fieldValue(root, "#node-credential");
     if (credentialId !== (template.credential_id || "")) over.credential_id = credentialId;
     let extra;
     try {
       extra = jsonObject(extraField.value, "extra_variables");
     } catch (error) {
+      if (fromDialog) throw error;
       note(t(error.message, error.vars));
       return false;
     }
@@ -4423,9 +4605,11 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
     if (Object.keys(over).length) node.overrides = over;
     else delete node.overrides;
     paintCaption(node);
-    const hint = document.querySelector("#wf-hint");
-    if (hint && (hint.textContent === t("forks_is_a_whole_number") || hint.textContent === t("forks_is_a_number_from_1_to_50") || hint.textContent === t("extra_variables_are_not_valid_json") || hint.textContent === t("extra_variables_must_be_a_json_object"))) {
-      hint.textContent = "";
+    if (!fromDialog) {
+      const hint = document.querySelector("#wf-hint");
+      if (hint && (hint.textContent === t("forks_is_a_whole_number") || hint.textContent === t("forks_is_a_number_from_1_to_50") || hint.textContent === t("extra_variables_are_not_valid_json") || hint.textContent === t("extra_variables_must_be_a_json_object"))) {
+        hint.textContent = "";
+      }
     }
     return true;
   }
@@ -4544,18 +4728,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
         renderNodes();
       });
     });
-    host.querySelector("#node-delete").addEventListener("click", () => {
-      if (!confirm(t("delete_this_node", { name: node.name }))) return;
-      flushNode = () => true;
-      graph.nodes = graph.nodes.filter((item) => item.id !== node.id);
-      graph.edges = graph.edges.filter((edge) => edge.from !== node.id && edge.to !== node.id);
-      selected = null;
-      connecting = null;
-      connectDrag = null;
-      clearConnectPreview();
-      renderNodes();
-      renderInspector();
-    });
+    host.querySelector("#node-delete").addEventListener("click", () => removeNode(node));
   }
 
   svg.addEventListener("click", (event) => {
@@ -4582,6 +4755,12 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
     selectedEdge = null;
     renderNodes();
     renderInspector();
+  });
+  board.addEventListener("contextmenu", (event) => {
+    if (!editable || !flushNode()) return;
+    if (event.target.closest(".wf-node")) return;
+    event.preventDefault();
+    openCanvasMenu(localPoint(event), event.clientX, event.clientY);
   });
 
   function bindWorkflowTabs() {
