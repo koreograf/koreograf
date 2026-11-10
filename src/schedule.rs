@@ -145,8 +145,9 @@ pub(crate) fn parse(input: &Input<'_>) -> Result<Rule, &'static str> {
     Ok(rule)
 }
 
-/// A start more than one calendar year before today in `timezone` is rejected.
-/// Stored schedules keep their original start and are not checked again.
+/// A start more than one calendar year before today, or more than ten years
+/// after today, in `timezone` is rejected. Stored schedules keep their
+/// original start and are not checked again.
 pub(crate) fn ensure_start_is_recent(
     start_date: NaiveDate,
     timezone: Tz,
@@ -157,6 +158,12 @@ pub(crate) fn ensure_start_is_recent(
     };
     if start_date < limit {
         return Err("schedule_date_is_too_far_in_the_past");
+    }
+    let Some(limit) = today.checked_add_months(Months::new(120)) else {
+        return Ok(());
+    };
+    if start_date > limit {
+        return Err("schedule_date_is_too_far_in_the_future");
     }
     Ok(())
 }
