@@ -1,5 +1,57 @@
 # Changelog
 
+## [0.1.0-alpha.10](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.9...v0.1.0-alpha.10) (2026-11-10)
+
+
+### Features
+
+* add a postgresql backend foundation ([#301](https://github.com/koreograf/koreograf/issues/301)) ([12eaa16](https://github.com/koreograf/koreograf/commit/12eaa16e6b49887c93c44afe8ae518c607107718))
+* add optional read-only llm assistant chat ([#309](https://github.com/koreograf/koreograf/issues/309)) ([#369](https://github.com/koreograf/koreograf/issues/369)) ([053ee6f](https://github.com/koreograf/koreograf/commit/053ee6f879eff05e4241d8662e83de53583bac0e))
+* add optional token auth for metrics ([#347](https://github.com/koreograf/koreograf/issues/347)) ([2b1b496](https://github.com/koreograf/koreograf/commit/2b1b4960d44d5dad1c00f61a3bcd5a08a622de51))
+* add the postgresql migration wizard ([#300](https://github.com/koreograf/koreograf/issues/300)) ([#372](https://github.com/koreograf/koreograf/issues/372)) ([6977645](https://github.com/koreograf/koreograf/commit/697764592929c9026e6e4fe75883abe2bfe03f92))
+* add workflow nodes from a context menu ([#365](https://github.com/koreograf/koreograf/issues/365)) ([2705ea2](https://github.com/koreograf/koreograf/commit/2705ea2899f47d71bce945facc7b4ba52f266830))
+* back up and migrate databases on the postgres backend ([#313](https://github.com/koreograf/koreograf/issues/313)) ([893ea0a](https://github.com/koreograf/koreograf/commit/893ea0a09790fc1f3ebaafe08f6f478fb396127b))
+* confirm opentofu apply launches ([#356](https://github.com/koreograf/koreograf/issues/356)) ([2aad266](https://github.com/koreograf/koreograf/commit/2aad2664c0595bc038d6698361fa6f413dc50fd4))
+* connect workflow edges from a node menu ([#364](https://github.com/koreograf/koreograf/issues/364)) ([0c18c5b](https://github.com/koreograf/koreograf/commit/0c18c5b3c48210f2ea51ff8351d913c84a03b0de))
+* create schedules from the schedules page and a template ([#325](https://github.com/koreograf/koreograf/issues/325)) ([#359](https://github.com/koreograf/koreograf/issues/359)) ([3e5a22c](https://github.com/koreograf/koreograf/commit/3e5a22cf40dbf6f83c6697f23eb0392f5df5386e))
+* finish the llm assistant settings, tools, and writes ([#309](https://github.com/koreograf/koreograf/issues/309)) ([#370](https://github.com/koreograf/koreograf/issues/370)) ([1107136](https://github.com/koreograf/koreograf/commit/1107136274535078d1c5f6e61ab61bed4fcdcf8f))
+* give job containers the controller CA bundle ([5cf6232](https://github.com/koreograf/koreograf/commit/5cf623293c417bdfc258125da658501bf618fe5d))
+* port credentials and projects to the postgres backend ([#302](https://github.com/koreograf/koreograf/issues/302)) ([28b9762](https://github.com/koreograf/koreograf/commit/28b9762502efb243a49b76c7c443dcd07aff992b))
+* port jobs and their output to the postgres backend ([#312](https://github.com/koreograf/koreograf/issues/312)) ([1c12f8a](https://github.com/koreograf/koreograf/commit/1c12f8adae2b9596ce91f81616791c088b1e6999))
+* port templates and schedules to the postgres backend ([#303](https://github.com/koreograf/koreograf/issues/303)) ([59de955](https://github.com/koreograf/koreograf/commit/59de955a6cdbcb4324a8ee35ad74f893b8ecc52a))
+* port users and the overview to the postgres backend ([#311](https://github.com/koreograf/koreograf/issues/311)) ([032059e](https://github.com/koreograf/koreograf/commit/032059ecca80cf43ab4dd4d54eb353fb342de743))
+* port workflows and hook delivery to the postgres backend ([#310](https://github.com/koreograf/koreograf/issues/310)) ([b086887](https://github.com/koreograf/koreograf/commit/b08688703186b595133171d6a971ea989e738127))
+* publish deb and rpm packages ([#299](https://github.com/koreograf/koreograf/issues/299)) ([e447024](https://github.com/koreograf/koreograf/commit/e4470244d17366a789bfcfd4f14b05b6147245f2))
+* put settings into tab groups ([#367](https://github.com/koreograf/koreograf/issues/367)) ([f011f87](https://github.com/koreograf/koreograf/commit/f011f87ef62b77b6df27eca48ef2db1fff2cdda0))
+* put workflow schedules and danger zone in tabs ([#363](https://github.com/koreograf/koreograf/issues/363)) ([5c1fc7b](https://github.com/koreograf/koreograf/commit/5c1fc7bf735c1f842c379dc131e8d02d62002de2))
+* throttle repeated failed sign-ins ([#349](https://github.com/koreograf/koreograf/issues/349)) ([4aa106d](https://github.com/koreograf/koreograf/commit/4aa106d9e2fc32231098f268fee3cb61e99da3e3))
+
+
+### Bug Fixes
+
+* **deps:** update debian:bookworm-slim docker digest to 734a72b ([#295](https://github.com/koreograf/koreograf/issues/295)) ([8570279](https://github.com/koreograf/koreograf/commit/8570279e48d07221129b785d8e118f83e5cdf4fe))
+* **deps:** update rust:1.99.1-alpine docker digest to 44819b2 ([#296](https://github.com/koreograf/koreograf/issues/296)) ([e6ba2ae](https://github.com/koreograf/koreograf/commit/e6ba2ae44d7c7056e65dc421214b468a56a817a4))
+* **deps:** update the docker cli to 29.9.3 ([#298](https://github.com/koreograf/koreograf/issues/298)) ([d4f50f6](https://github.com/koreograf/koreograf/commit/d4f50f60d8851ff2f266d9515f2fdd43e4135190))
+* gate launch extra vars on prompt or options ([#348](https://github.com/koreograf/koreograf/issues/348)) ([3345c4b](https://github.com/koreograf/koreograf/commit/3345c4bf7caa647a57cd024b84dd297cb8d557a1))
+* guide empty states and contain long job logs ([#362](https://github.com/koreograf/koreograf/issues/362)) ([d440de7](https://github.com/koreograf/koreograf/commit/d440de7364177202b8f1763d4a4a83a9242ce3e3))
+* harden names and hide disabled sign-in state ([#338](https://github.com/koreograf/koreograf/issues/338)) ([#353](https://github.com/koreograf/koreograf/issues/353)) ([6b239c1](https://github.com/koreograf/koreograf/commit/6b239c17a716947368814a0f2788be2212c29c77))
+* ignore the read-only fields on settings updates ([#342](https://github.com/koreograf/koreograf/issues/342)) ([9f8a2e2](https://github.com/koreograf/koreograf/commit/9f8a2e2c399d02b211f6424830ac2fd5ea6a8ecf))
+* keep dirty guard on inventory source edits ([#323](https://github.com/koreograf/koreograf/issues/323)) ([#357](https://github.com/koreograf/koreograf/issues/357)) ([9416edb](https://github.com/koreograf/koreograf/commit/9416edb3dcb0ff54e0dcf1f7c0efd96dc26b4b55))
+* load each page once with a loading skeleton ([#324](https://github.com/koreograf/koreograf/issues/324)) ([#358](https://github.com/koreograf/koreograf/issues/358)) ([7da0ea6](https://github.com/koreograf/koreograf/commit/7da0ea62ed86c3fc92f1af73e3ee1abe7188c1b6))
+* navigate on first menu click with overlay open ([#350](https://github.com/koreograf/koreograf/issues/350)) ([5c63b67](https://github.com/koreograf/koreograf/commit/5c63b67049e4a34cff3552c4f5692a6cef04153e))
+* polish ui details from the audit ([#329](https://github.com/koreograf/koreograf/issues/329)) ([#360](https://github.com/koreograf/koreograf/issues/360)) ([dbc3183](https://github.com/koreograf/koreograf/commit/dbc3183f9d8e7704c439051774dc04ebf3961741))
+* prevent a double job from the launch dialog ([#321](https://github.com/koreograf/koreograf/issues/321)) ([#354](https://github.com/koreograf/koreograf/issues/354)) ([df43835](https://github.com/koreograf/koreograf/commit/df438358a560d6573c3536a81579cfac14b2a99f))
+* raise muted text contrast to wcag aa ([#328](https://github.com/koreograf/koreograf/issues/328)) ([#355](https://github.com/koreograf/koreograf/issues/355)) ([561428b](https://github.com/koreograf/koreograf/commit/561428b078f0a53ac0b4e4c3066363f079a8ef44))
+* reject cross-origin api writes ([#343](https://github.com/koreograf/koreograf/issues/343)) ([1108f08](https://github.com/koreograf/koreograf/commit/1108f081646353b103944547ff38d553163d78ba))
+* reject far-future schedule starts ([#361](https://github.com/koreograf/koreograf/issues/361)) ([#368](https://github.com/koreograf/koreograf/issues/368)) ([43ef822](https://github.com/koreograf/koreograf/commit/43ef82272ec2c7cc25d22cbd29daf091c140fec9))
+* restore overlay focus and raise click targets ([#330](https://github.com/koreograf/koreograf/issues/330)) ([#351](https://github.com/koreograf/koreograf/issues/351)) ([6b46894](https://github.com/koreograf/koreograf/commit/6b46894507ffdca54330b03bb4947e8626b75561))
+* seed demo and curated environments on postgres ([#332](https://github.com/koreograf/koreograf/issues/332)) ([68c7e8b](https://github.com/koreograf/koreograf/commit/68c7e8b4214ed5de794ac08e9911cd7c6497c379))
+* ship a minimal shell for file git in the image ([#318](https://github.com/koreograf/koreograf/issues/318)) ([#345](https://github.com/koreograf/koreograf/issues/345)) ([066eb07](https://github.com/koreograf/koreograf/commit/066eb07dbe4ca1c7c9037253ebe4e4f7a26bb281))
+* show an error page when a route fails ([#352](https://github.com/koreograf/koreograf/issues/352)) ([de87579](https://github.com/koreograf/koreograf/commit/de875796df189087da2658ded5fd6ffa890f6fac))
+* sign in through ldap on postgresql ([#339](https://github.com/koreograf/koreograf/issues/339)) ([8b8eecf](https://github.com/koreograf/koreograf/commit/8b8eecf6f37070c0dd909258f3e50093146606d8))
+* stack tables into cards on narrow windows ([#327](https://github.com/koreograf/koreograf/issues/327)) ([#344](https://github.com/koreograf/koreograf/issues/344)) ([cd96ecc](https://github.com/koreograf/koreograf/commit/cd96ecc12c2fe5bab7e6a59c37d1aff73f771456))
+* unify project path and foreign id errors ([#336](https://github.com/koreograf/koreograf/issues/336)) ([#346](https://github.com/koreograf/koreograf/issues/346)) ([77045e2](https://github.com/koreograf/koreograf/commit/77045e2b5331d4dc8c069eb3390343a56bb4b8a9))
+
 ## [0.1.0-alpha.9](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.8...v0.1.0-alpha.9) (2026-11-06)
 
 
