@@ -36,6 +36,7 @@ See `.env.example`. Comments in that file are English. Copy it to `.env` before 
 | `KOREOGRAF_DATABASE_URL` | empty, SQLite in `data/koreograf.db`. `postgres://` or `postgresql://` selects PostgreSQL |
 | `KOREOGRAF_DATABASE_PASSWORD_FILE` | empty. File with the PostgreSQL password; it overrides a password in the URL |
 | `KOREOGRAF_DATABASE_CA_FILE` | empty. PEM file with the CA for PostgreSQL TLS |
+| `KOREOGRAF_DATABASE_POOL_SIZE` | `8`. PostgreSQL connection pool size |
 | `KOREOGRAF_RESTORE_FROM` | empty. A mounted zip restored before the port opens when the data directory is empty |
 | `KOREOGRAF_IMPORT_FROM` | empty. An old data directory copied on first start when the data directory is empty |
 | `KOREOGRAF_PATH_MAP` | empty. Comma-separated `OLD=NEW` absolute prefixes applied once during an import |
@@ -65,6 +66,8 @@ KOREOGRAF_DATABASE_URL='postgresql://koreograf@127.0.0.1:5432/koreograf?sslmode=
 The URL carries the host, port, database, and user. An empty database path uses the user name. `sslmode` is `disable`, `prefer`, `require` (the default), `verify-ca`, or `verify-full`. `require` and `verify-ca` behave like `verify-full`, which verifies the certificate chain and the host name; that is stricter than libpq. For an internal CA, add `sslrootcert=/etc/koreograf/postgres-ca.pem` or set `KOREOGRAF_DATABASE_CA_FILE`. The CA file must be PEM. Without a CA file, Koreograf uses the system roots.
 
 Keep the password out of the URL with `KOREOGRAF_DATABASE_PASSWORD_FILE`, for example a Docker or Kubernetes secret. The file is read once at startup and a trailing newline is ignored. The password is never written to logs, API responses, `koreograf doctor` output, or error messages. When both are present, the file wins.
+
+`KOREOGRAF_DATABASE_POOL_SIZE` sets how many PostgreSQL connections the process keeps in its pool. The default is 8; a positive number is required. Raise it when many requests wait on the database, but keep the total across all Koreograf processes below the server's connection limit. PostgreSQL opens connections lazily, so a quiet process uses fewer.
 
 The data directory still holds `secret.key`, the cache, git checkouts, and job directories. To move an existing SQLite installation, take a backup and use **Settings → Database** or stop the server and run `koreograf db migrate --to 'postgresql://koreograf@db.example:5432/koreograf?sslmode=require'`. Both need an empty target, keep IDs, reset sequences, and check every row count; neither prints or stores the password. The CLI refuses while a server still holds the data directory, and the UI uses maintenance mode. Backups stay portable, so the same archive restores into SQLite or PostgreSQL. See [PostgreSQL](postgresql.md#move-an-existing-sqlite-installation).
 

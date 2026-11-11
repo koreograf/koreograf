@@ -175,12 +175,17 @@ pub struct PostgresConfig {
     pub sslmode: SslMode,
     pub ca_file: Option<PathBuf>,
     pub connect_timeout_secs: u64,
+    pool_size: usize,
     password: String,
 }
 
 impl PostgresConfig {
     pub(crate) fn password(&self) -> &str {
         &self.password
+    }
+
+    pub(crate) fn pool_size(&self) -> usize {
+        self.pool_size
     }
 
     pub fn target(&self) -> String {
@@ -199,6 +204,7 @@ impl std::fmt::Debug for PostgresConfig {
             .field("sslmode", &self.sslmode)
             .field("ca_file", &self.ca_file)
             .field("connect_timeout_secs", &self.connect_timeout_secs)
+            .field("pool_size", &self.pool_size)
             .field("password", &"<redacted>")
             .finish()
     }
@@ -230,11 +236,32 @@ pub fn database_from_env() -> Result<DatabaseConfig, String> {
     let url = env_string("KOREOGRAF_DATABASE_URL");
     let password_file = env_string("KOREOGRAF_DATABASE_PASSWORD_FILE");
     let ca_file = env_string("KOREOGRAF_DATABASE_CA_FILE");
-    parse_database_config(
+    let database = parse_database_config(
         &url,
         non_empty_path(&password_file),
         non_empty_path(&ca_file),
-    )
+    )?;
+    Ok(match database {
+        DatabaseConfig::Postgres(mut config) => {
+            config.pool_size = postgres_pool_size();
+            DatabaseConfig::Postgres(config)
+        }
+        database => database,
+    })
+}
+
+fn postgres_pool_size() -> usize {
+    let raw = env_string("KOREOGRAF_DATABASE_POOL_SIZE");
+    if raw.is_empty() {
+        return 8;
+    }
+    match raw.parse::<usize>() {
+        Ok(size) if size > 0 => size,
+        _ => {
+            tracing::warn!("KOREOGRAF_DATABASE_POOL_SIZE must be a positive number; using 8");
+            8
+        }
+    }
 }
 
 pub fn parse_database_config(
@@ -321,6 +348,7 @@ pub fn parse_database_config(
         sslmode,
         ca_file: root_cert,
         connect_timeout_secs,
+        pool_size: 8,
         password,
     }))
 }
@@ -701,6 +729,7 @@ mod tests {
         assert_eq!(config.password(), "pa$s");
         assert_eq!(config.sslmode, SslMode::VerifyFull);
         assert_eq!(config.connect_timeout_secs, 7);
+        assert_eq!(config.pool_size(), 8);
         let debug = format!("{database:?}");
         assert!(!debug.contains("pa$s"), "{debug}");
         assert!(!debug.contains("pa%24s"), "{debug}");

@@ -58,6 +58,12 @@ KOREOGRAF_DATABASE_PASSWORD_FILE=/run/secrets/koreograf_database_password
 
 A password that stays in the URL is supported. Quote the URL, and percent-encode characters that are special in a URL. A secret store that injects the URL is then the only place the password lives.
 
+## Connection pool
+
+Koreograf keeps a pool of PostgreSQL connections and serves requests in parallel. `KOREOGRAF_DATABASE_POOL_SIZE` sets the maximum number of open connections; the default is 8. The value must be a positive number. Connections open on demand and return to the pool after each query or transaction, so an idle process holds fewer than the maximum.
+
+Raise the pool size when many requests wait on the database. Keep the total across every Koreograf process below the PostgreSQL connection limit, including maintenance and backup clients. A restore or database migration uses one connection for its whole transaction.
+
 ## Install types
 
 ### Docker Compose
