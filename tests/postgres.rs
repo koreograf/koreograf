@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -448,7 +448,7 @@ fn seed_sqlite_source(dir: &Path) -> std::sync::Arc<koreograf::AppState> {
     state
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn postgres_serves_workflows_hooks_and_project_sync() {
     let Ok(url) = std::env::var("KOREOGRAF_TEST_POSTGRES_URL") else {
         eprintln!("skipping PostgreSQL test: KOREOGRAF_TEST_POSTGRES_URL is not set");
@@ -1016,7 +1016,7 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn postgres_first_run_seeds_the_demo_and_curated_environments() {
     let Some(url) = postgres_test_url() else {
         return;
@@ -1141,7 +1141,7 @@ async fn postgres_first_run_seeds_the_demo_and_curated_environments() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn postgres_serves_the_auth_and_resource_slice() {
     let Ok(url) = std::env::var("KOREOGRAF_TEST_POSTGRES_URL") else {
         eprintln!("skipping PostgreSQL test: KOREOGRAF_TEST_POSTGRES_URL is not set");
@@ -2235,7 +2235,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn postgres_serves_users_tokens_and_overview() {
     let Ok(url) = std::env::var("KOREOGRAF_TEST_POSTGRES_URL") else {
         eprintln!("skipping PostgreSQL test: KOREOGRAF_TEST_POSTGRES_URL is not set");
@@ -2727,7 +2727,7 @@ async fn postgres_serves_users_tokens_and_overview() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn postgres_serves_jobs_and_their_output() {
     let Ok(url) = std::env::var("KOREOGRAF_TEST_POSTGRES_URL") else {
         eprintln!("skipping PostgreSQL test: KOREOGRAF_TEST_POSTGRES_URL is not set");
@@ -3292,7 +3292,7 @@ async fn postgres_serves_jobs_and_their_output() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn postgres_backup_restore_round_trip_keeps_the_previous_archive() {
     let Some(url) = postgres_test_url() else {
         return;
@@ -3424,7 +3424,7 @@ async fn postgres_backup_restore_round_trip_keeps_the_previous_archive() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn db_migrate_copies_every_table_and_resets_sequences() {
     let Some(url) = postgres_test_url() else {
         return;
@@ -3488,7 +3488,7 @@ async fn db_migrate_copies_every_table_and_resets_sequences() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn db_migrate_refuses_while_the_data_directory_is_in_use() {
     let Some(url) = postgres_test_url() else {
         return;
@@ -3518,7 +3518,7 @@ async fn db_migrate_refuses_while_the_data_directory_is_in_use() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn db_migrate_failure_leaves_the_target_reusable() {
     let Some(url) = postgres_test_url() else {
         return;
@@ -3603,7 +3603,86 @@ async fn db_migrate_failure_leaves_the_target_reusable() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
+async fn postgres_answers_teams_while_another_request_holds_a_connection() {
+    let Some(url) = postgres_test_url() else {
+        return;
+    };
+    let _guard = postgres_guard().await;
+    let database = koreograf::parse_database_config(&url, None, None).expect("postgres url");
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-postgres-pool-{nanos}"));
+    let mut cfg = config(&dir);
+    let admin = format!("pgpooladmin{nanos}");
+    cfg.admin_user = admin.clone();
+    let state = koreograf::boot_with(cfg, database).expect("boot");
+    let app = koreograf::router(state);
+
+    let (status, _, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        Some(json!({"username": admin, "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let cookie = cookie.expect("session cookie");
+    let (status, teams, _) = call(&app, "GET", "/api/teams", Some(&cookie), None).await;
+    assert_eq!(status, StatusCode::OK, "{teams}");
+    let team_id = teams
+        .as_array()
+        .and_then(|items| items.first())
+        .and_then(|item| item["id"].as_str())
+        .expect("team id")
+        .to_string();
+
+    let holder = postgres_client(&url).await;
+    holder.batch_execute("BEGIN").await.expect("begin");
+    holder
+        .execute("SELECT 1 FROM teams WHERE id = $1 FOR UPDATE", &[&team_id])
+        .await
+        .expect("lock team");
+
+    let put_app = app.clone();
+    let put_cookie = cookie.clone();
+    let put_team = team_id.clone();
+    let put = tokio::spawn(async move {
+        call(
+            &put_app,
+            "PUT",
+            &format!("/api/teams/{put_team}"),
+            Some(&put_cookie),
+            Some(json!({"name": format!("Locked {nanos}"), "description": "pool test"})),
+        )
+        .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+
+    let started = Instant::now();
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        call(&app, "GET", "/api/teams", Some(&cookie), None),
+    )
+    .await;
+    let elapsed = started.elapsed();
+    holder.batch_execute("ROLLBACK").await.expect("rollback");
+    let update = put.await.expect("update task");
+    assert_eq!(update.0, StatusCode::OK, "{}", update.1);
+    let (status, teams, _) = response.expect("GET /api/teams waited for the blocked request");
+    assert_eq!(status, StatusCode::OK, "{teams}");
+    assert!(
+        elapsed < std::time::Duration::from_secs(1),
+        "GET /api/teams took {elapsed:?} while another request held a connection"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn postgres_ldap_sign_in_provisions_the_user_and_syncs_teams() {
     let Some(url) = postgres_test_url() else {
         return;

@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use futures::executor::block_on;
+use deadpool_postgres::{Manager, ManagerConfig, Pool};
 use rusqlite::Connection;
 use rustls::pki_types::pem::PemObject;
 use tokio_postgres::Client;
@@ -1211,32 +1211,36 @@ impl Backend for SqliteBackend {
 }
 
 pub(crate) struct PostgresBackend {
-    client: futures::lock::Mutex<Client>,
-    runtime: Option<tokio::runtime::Runtime>,
-}
-
-impl Drop for PostgresBackend {
-    fn drop(&mut self) {
-        if let Some(runtime) = self.runtime.take() {
-            runtime.shutdown_background();
-        }
-    }
+    pool: Pool,
 }
 
 impl PostgresBackend {
     pub(crate) fn open(config: &PostgresConfig) -> anyhow::Result<Self> {
-        let (client, runtime) = connect(config)?;
         let backend = Self {
-            client: futures::lock::Mutex::new(client),
-            runtime: Some(runtime),
+            pool: build_pool(config)?,
         };
         backend.ensure_schema()?;
         Ok(backend)
     }
 
+    fn run<F, T>(&self, future: F) -> AppResult<T>
+    where
+        F: std::future::Future<Output = AppResult<T>>,
+    {
+        let handle = tokio::runtime::Handle::try_current().map_err(|_| {
+            ApiError::Internal("The PostgreSQL backend needs a Tokio runtime.".to_string())
+        })?;
+        if handle.runtime_flavor() != tokio::runtime::RuntimeFlavor::MultiThread {
+            return Err(ApiError::Internal(
+                "The PostgreSQL backend needs a multi-thread Tokio runtime.".to_string(),
+            ));
+        }
+        tokio::task::block_in_place(|| handle.block_on(future))
+    }
+
     fn ensure_schema(&self) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client.batch_execute(&db::postgres_schema()).await?;
             let found: Option<String> = client
                 .query_opt(
@@ -1266,39 +1270,35 @@ impl PostgresBackend {
     }
 }
 
-fn connect(config: &PostgresConfig) -> anyhow::Result<(Client, tokio::runtime::Runtime)> {
-    let config = config.clone();
-    let (sender, receiver) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let runtime = match tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .build()
-        {
-            Ok(runtime) => runtime,
-            Err(err) => {
-                let _ = sender.send(Err(anyhow::anyhow!(
-                    "The PostgreSQL client runtime cannot start: {err}"
-                )));
-                return;
-            }
-        };
-        let result = runtime.block_on(connect_client(&config));
-        match result {
-            Ok(client) => {
-                let _ = sender.send(Ok((client, runtime)));
-            }
-            Err(err) => {
-                let _ = sender.send(Err(err));
-            }
-        }
-    });
-    receiver.recv().map_err(|_| {
-        anyhow::anyhow!("The PostgreSQL client stopped before the connection was ready.")
-    })?
+fn build_pool(config: &PostgresConfig) -> anyhow::Result<Pool> {
+    let manager = match config.sslmode {
+        SslMode::Disable => Manager::from_config(
+            postgres_config(config),
+            tokio_postgres::NoTls,
+            ManagerConfig::default(),
+        ),
+        _ => Manager::from_config(
+            postgres_config(config),
+            tls_connector(config)?,
+            ManagerConfig::default(),
+        ),
+    };
+    Pool::builder(manager)
+        .max_size(config.pool_size())
+        .build()
+        .map_err(|err| anyhow::anyhow!("The PostgreSQL connection pool cannot start: {err}"))
 }
 
-pub(crate) async fn connect_client(config: &PostgresConfig) -> anyhow::Result<Client> {
+fn pool_error(err: deadpool_postgres::PoolError) -> ApiError {
+    match err {
+        deadpool_postgres::PoolError::Backend(err) => err.into(),
+        other => ApiError::Internal(format!(
+            "The PostgreSQL connection pool is unavailable: {other}"
+        )),
+    }
+}
+
+fn postgres_config(config: &PostgresConfig) -> tokio_postgres::Config {
     let mut pg = tokio_postgres::Config::new();
     pg.host(&config.host)
         .port(config.port)
@@ -1316,6 +1316,11 @@ pub(crate) async fn connect_client(config: &PostgresConfig) -> anyhow::Result<Cl
     if !config.password().is_empty() {
         pg.password(config.password());
     }
+    pg
+}
+
+pub(crate) async fn connect_client(config: &PostgresConfig) -> anyhow::Result<Client> {
+    let pg = postgres_config(config);
     let target = config.target();
     match config.sslmode {
         SslMode::Disable => {
@@ -1799,7 +1804,7 @@ fn row_schedule(row: &tokio_postgres::Row) -> AppResult<Schedule> {
 
 async fn pg_project_team_ids<C>(client: &C, project_id: &str) -> AppResult<Vec<String>>
 where
-    C: tokio_postgres::GenericClient + Sync,
+    C: deadpool_postgres::GenericClient,
 {
     let rows = client
         .query(
@@ -1816,7 +1821,7 @@ async fn pg_write_project_teams<C>(
     team_ids: &[String],
 ) -> AppResult<()>
 where
-    C: tokio_postgres::GenericClient + Sync,
+    C: deadpool_postgres::GenericClient,
 {
     client
         .execute(
@@ -1845,7 +1850,7 @@ async fn pg_write_template_credentials<C>(
     credential_ids: &[String],
 ) -> AppResult<()>
 where
-    C: tokio_postgres::GenericClient + Sync,
+    C: deadpool_postgres::GenericClient,
 {
     client
         .execute(
@@ -1867,7 +1872,7 @@ where
 
 async fn pg_insert_source<C>(client: &C, source: &InventorySource) -> AppResult<()>
 where
-    C: tokio_postgres::GenericClient + Sync,
+    C: deadpool_postgres::GenericClient,
 {
     client
         .execute(
@@ -1893,7 +1898,7 @@ where
 
 async fn pg_refresh_summary<C>(client: &C, inventory_id: &str) -> AppResult<()>
 where
-    C: tokio_postgres::GenericClient + Sync,
+    C: deadpool_postgres::GenericClient,
 {
     let rows = client
         .query(
@@ -1943,7 +1948,7 @@ async fn pg_json_references_credential<C>(
     credential_id: &str,
 ) -> AppResult<bool>
 where
-    C: tokio_postgres::GenericClient + Sync,
+    C: deadpool_postgres::GenericClient,
 {
     let rows = client
         .query(
@@ -1986,15 +1991,15 @@ impl Backend for PostgresBackend {
     }
 
     fn export_sqlite(&self, dest: &Path) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             crate::portable::to_sqlite(&client, dest).await
         })
     }
 
     fn restore_sqlite(&self, source: &Path) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client.batch_execute("BEGIN").await?;
             match crate::portable::copy_from_sqlite(&client, source, true).await {
                 Ok(()) => {
@@ -2010,8 +2015,8 @@ impl Backend for PostgresBackend {
     }
 
     fn busy(&self) -> AppResult<bool> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let jobs: i64 = client
                 .query_one(
                     "SELECT COUNT(*) FROM jobs WHERE status IN ('pending', 'running')",
@@ -2031,16 +2036,16 @@ impl Backend for PostgresBackend {
     }
 
     fn ping(&self) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client.query_one("SELECT 1", &[]).await?;
             Ok(())
         })
     }
 
     fn settings_rows(&self) -> AppResult<HashMap<String, String>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client.query("SELECT key, value FROM settings", &[]).await?;
             Ok(rows
                 .into_iter()
@@ -2050,8 +2055,8 @@ impl Backend for PostgresBackend {
     }
 
     fn set_setting(&self, key: &str, value: &str) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "INSERT INTO settings (key, value) VALUES ($1, $2)
@@ -2064,16 +2069,16 @@ impl Backend for PostgresBackend {
     }
 
     fn count_teams(&self) -> AppResult<i64> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client.query_one("SELECT COUNT(*) FROM teams", &[]).await?;
             Ok(row.get(0))
         })
     }
 
     fn seed_state(&self, key: &str) -> AppResult<Option<String>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt("SELECT value FROM seed_state WHERE key = $1", &[&key])
                 .await?;
@@ -2082,8 +2087,8 @@ impl Backend for PostgresBackend {
     }
 
     fn set_seed_state(&self, key: &str, value: &str) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "INSERT INTO seed_state (key, value) VALUES ($1, $2)
@@ -2096,8 +2101,8 @@ impl Backend for PostgresBackend {
     }
 
     fn user_by_username(&self, username: &str) -> AppResult<Option<User>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
                     &format!("SELECT {USER_COLUMNS} FROM users WHERE lower(username) = lower($1)"),
@@ -2109,8 +2114,8 @@ impl Backend for PostgresBackend {
     }
 
     fn user_by_session(&self, token: &str) -> AppResult<Option<User>> {
-        let row = block_on(async {
-            let client = self.client.lock().await;
+        let row = self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .query_opt(
                     "SELECT u.id, u.username, u.display_name, u.password_hash, u.auth_source,
@@ -2119,6 +2124,7 @@ impl Backend for PostgresBackend {
                     &[&token],
                 )
                 .await
+                .map_err(ApiError::from)
         })?;
         let Some(row) = row else {
             return Ok(None);
@@ -2132,8 +2138,8 @@ impl Backend for PostgresBackend {
     }
 
     fn user_by_api_token(&self, token_hash: &str) -> AppResult<Option<User>> {
-        let row = block_on(async {
-            let client = self.client.lock().await;
+        let row = self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .query_opt(
                     "SELECT u.id, u.username, u.display_name, u.password_hash, u.auth_source,
@@ -2142,26 +2148,28 @@ impl Backend for PostgresBackend {
                     &[&token_hash],
                 )
                 .await
+                .map_err(ApiError::from)
         })?;
         let Some(row) = row else {
             return Ok(None);
         };
         let token_id: String = row.try_get(9)?;
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "UPDATE api_tokens SET last_used_at = $2 WHERE id = $1",
                     &[&token_id, &db::now()],
                 )
                 .await
+                .map_err(ApiError::from)
         })?;
         Ok(Some(row_user(&row)?))
     }
 
     fn create_session(&self, token: &str, user_id: &str) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "INSERT INTO sessions (token, user_id, expires_at) VALUES ($1, $2, $3)",
@@ -2173,8 +2181,8 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_session(&self, token: &str) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute("DELETE FROM sessions WHERE token = $1", &[&token])
                 .await?;
@@ -2183,8 +2191,8 @@ impl Backend for PostgresBackend {
     }
 
     fn purge_sessions(&self) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute("DELETE FROM sessions WHERE expires_at < $1", &[&db::now()])
                 .await?;
@@ -2201,8 +2209,8 @@ impl Backend for PostgresBackend {
         auth_source: &str,
         is_admin: bool,
     ) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "INSERT INTO users
@@ -2224,8 +2232,8 @@ impl Backend for PostgresBackend {
     }
 
     fn user_by_id(&self, id: &str) -> AppResult<Option<User>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
                     &format!("SELECT {USER_COLUMNS} FROM users WHERE id = $1"),
@@ -2237,8 +2245,8 @@ impl Backend for PostgresBackend {
     }
 
     fn list_users(&self) -> AppResult<Vec<(User, i64)>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     &format!(
@@ -2262,8 +2270,8 @@ impl Backend for PostgresBackend {
         email: Option<&str>,
         password_hash: Option<&str>,
     ) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             if let Some(password_hash) = password_hash {
                 client
                     .execute(
@@ -2285,8 +2293,8 @@ impl Backend for PostgresBackend {
     }
 
     fn set_user_email(&self, id: &str, email: Option<&str>) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute("UPDATE users SET email = $2 WHERE id = $1", &[&id, &email])
                 .await?;
@@ -2302,8 +2310,8 @@ impl Backend for PostgresBackend {
         disabled: bool,
         password_hash: Option<&str>,
     ) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             if let Some(password_hash) = password_hash {
                 client
                     .execute(
@@ -2333,8 +2341,8 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_user_sessions(&self, user_id: &str) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute("DELETE FROM sessions WHERE user_id = $1", &[&user_id])
                 .await?;
@@ -2343,8 +2351,8 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_user(&self, id: &str) -> AppResult<bool> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             Ok(client
                 .execute("DELETE FROM users WHERE id = $1", &[&id])
                 .await?
@@ -2353,8 +2361,8 @@ impl Backend for PostgresBackend {
     }
 
     fn other_active_admins(&self, user_id: &str) -> AppResult<i64> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_one(
                     "SELECT COUNT(*) FROM users
@@ -2375,8 +2383,8 @@ impl Backend for PostgresBackend {
         token_hash: &str,
         created_at: &str,
     ) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "INSERT INTO api_tokens (id, user_id, name, prefix, token_hash, created_at)
@@ -2389,8 +2397,8 @@ impl Backend for PostgresBackend {
     }
 
     fn list_api_tokens(&self, user_id: &str) -> AppResult<Vec<ApiToken>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     "SELECT id, name, prefix, created_at, last_used_at
@@ -2403,8 +2411,8 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_api_token(&self, id: &str, user_id: &str) -> AppResult<bool> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             Ok(client
                 .execute(
                     "DELETE FROM api_tokens WHERE id = $1 AND user_id = $2",
@@ -2430,8 +2438,8 @@ impl Backend for PostgresBackend {
                  WHERE m.user_id = $1 ORDER BY t.name"
             )
         };
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client.query(&sql, &[&user_id]).await?;
             rows.iter()
                 .map(|row| Ok((row_team(row)?, row.try_get::<_, String>(7)?)))
@@ -2440,8 +2448,8 @@ impl Backend for PostgresBackend {
     }
 
     fn list_user_memberships(&self, user_id: &str) -> AppResult<Vec<UserMembership>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     "SELECT t.id, t.name, COALESCE(t.organization_id, ''), COALESCE(o.name, ''), m.role, m.source
@@ -2470,8 +2478,8 @@ impl Backend for PostgresBackend {
 
     fn replace_settings(&self, rows: &[(String, String)]) -> AppResult<()> {
         let keys: Vec<&str> = rows.iter().map(|(key, _)| key.as_str()).collect();
-        block_on(async {
-            let mut client = self.client.lock().await;
+        self.run(async {
+            let mut client = self.pool.get().await.map_err(pool_error)?;
             let transaction = client.transaction().await?;
             for (key, value) in rows {
                 transaction
@@ -2491,8 +2499,8 @@ impl Backend for PostgresBackend {
     }
 
     fn environment(&self, id: &str) -> AppResult<Option<Environment>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
                     "SELECT e.id, e.team_id, e.organization_id, e.name, e.image, e.pull_policy,
@@ -2510,8 +2518,8 @@ impl Backend for PostgresBackend {
     }
 
     fn team_by_id(&self, id: &str) -> AppResult<Option<Team>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
                     &format!(
@@ -2526,8 +2534,8 @@ impl Backend for PostgresBackend {
     }
 
     fn role_of(&self, team_id: &str, user_id: &str) -> AppResult<Option<String>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
                     "SELECT role FROM memberships WHERE team_id = $1 AND user_id = $2",
@@ -2546,8 +2554,8 @@ impl Backend for PostgresBackend {
         description: &str,
         ldap_group: Option<&str>,
     ) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "INSERT INTO teams (id, organization_id, name, description, ldap_group, created_at)
@@ -2573,8 +2581,8 @@ impl Backend for PostgresBackend {
         description: &str,
         ldap_group: Option<&str>,
     ) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
                     "UPDATE teams SET name = $2, description = $3, ldap_group = $4 WHERE id = $1",
@@ -2589,8 +2597,8 @@ impl Backend for PostgresBackend {
     }
 
     fn set_team_organization(&self, team_id: &str, organization_id: &str) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
                     "UPDATE teams SET organization_id = $2 WHERE id = $1",
@@ -2605,8 +2613,8 @@ impl Backend for PostgresBackend {
     }
 
     fn insert_organization(&self, id: &str, name: &str, description: &str) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "INSERT INTO organizations (id, name, description, created_at)
@@ -2619,8 +2627,8 @@ impl Backend for PostgresBackend {
     }
 
     fn update_organization(&self, id: &str, name: &str, description: &str) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
                     "UPDATE organizations SET name = $2, description = $3 WHERE id = $1",
@@ -2635,8 +2643,8 @@ impl Backend for PostgresBackend {
     }
 
     fn organization(&self, id: &str) -> AppResult<Option<Organization>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
                     "SELECT id, name, description, created_at FROM organizations WHERE id = $1",
@@ -2648,8 +2656,8 @@ impl Backend for PostgresBackend {
     }
 
     fn organization_by_name(&self, name: &str) -> AppResult<Option<Organization>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
                     "SELECT id, name, description, created_at FROM organizations WHERE name = $1",
@@ -2672,8 +2680,8 @@ impl Backend for PostgresBackend {
              ORDER BY o.name"
                 .to_string()
         };
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = if admin {
                 client.query(&sql, &[]).await?
             } else {
@@ -2684,8 +2692,8 @@ impl Backend for PostgresBackend {
     }
 
     fn teams_in_organization(&self, organization_id: &str) -> AppResult<Vec<Team>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     &format!(
@@ -2701,8 +2709,8 @@ impl Backend for PostgresBackend {
     }
 
     fn teams_with_ldap(&self) -> AppResult<Vec<Team>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     &format!(
@@ -2724,8 +2732,8 @@ impl Backend for PostgresBackend {
         role: &str,
         source: &str,
     ) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "INSERT INTO memberships (team_id, user_id, role, source)
@@ -2741,8 +2749,8 @@ impl Backend for PostgresBackend {
     }
 
     fn grant_manual_membership(&self, team_id: &str, user_id: &str, role: &str) -> AppResult<()> {
-        let source = block_on(async {
-            let client = self.client.lock().await;
+        let source = self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
                     "SELECT source FROM memberships WHERE team_id = $1 AND user_id = $2",
@@ -2760,8 +2768,8 @@ impl Backend for PostgresBackend {
     }
 
     fn list_members(&self, team_id: &str) -> AppResult<Vec<Member>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     "SELECT u.id, u.username, u.display_name, m.role, m.source
@@ -2775,8 +2783,8 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_membership(&self, team_id: &str, user_id: &str) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "DELETE FROM memberships WHERE team_id = $1 AND user_id = $2",
@@ -2788,8 +2796,8 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_ldap_membership(&self, team_id: &str, user_id: &str) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "DELETE FROM memberships WHERE team_id = $1 AND user_id = $2 AND source = 'ldap'",
@@ -2801,8 +2809,8 @@ impl Backend for PostgresBackend {
     }
 
     fn list_projects(&self, team_id: &str) -> AppResult<Vec<Project>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     &format!(
@@ -2828,15 +2836,15 @@ impl Backend for PostgresBackend {
                 .map(row_project)
                 .collect::<AppResult<Vec<_>>>()?;
             for project in &mut projects {
-                project.team_ids = pg_project_team_ids(&*client, &project.id).await?;
+                project.team_ids = pg_project_team_ids(&client, &project.id).await?;
             }
             Ok(projects)
         })
     }
 
     fn project(&self, id: &str) -> AppResult<Option<Project>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
                     &format!(
@@ -2850,14 +2858,14 @@ impl Backend for PostgresBackend {
                 return Ok(None);
             };
             let mut project = row_project(&row)?;
-            project.team_ids = pg_project_team_ids(&*client, &project.id).await?;
+            project.team_ids = pg_project_team_ids(&client, &project.id).await?;
             Ok(Some(project))
         })
     }
 
     fn project_visible(&self, id: &str, team_id: &str) -> AppResult<bool> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
                     "SELECT 1 FROM projects p
@@ -2878,8 +2886,8 @@ impl Backend for PostgresBackend {
     }
 
     fn insert_project(&self, project: &Project) -> AppResult<()> {
-        block_on(async {
-            let mut client = self.client.lock().await;
+        self.run(async {
+            let mut client = self.pool.get().await.map_err(pool_error)?;
             let transaction = client.transaction().await?;
             transaction
                 .execute(
@@ -2908,8 +2916,8 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_project(&self, id: &str, team_id: &str) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
                     "DELETE FROM projects p
@@ -2945,8 +2953,8 @@ impl Backend for PostgresBackend {
         source: &str,
         revision: &str,
     ) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
                     "UPDATE projects
@@ -2963,8 +2971,8 @@ impl Backend for PostgresBackend {
     }
 
     fn set_project_organization(&self, id: &str, organization_id: &str) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
                     "UPDATE projects SET organization_id = $2 WHERE id = $1",
@@ -2979,8 +2987,8 @@ impl Backend for PostgresBackend {
     }
 
     fn replace_project_teams(&self, project_id: &str, team_ids: &[String]) -> AppResult<()> {
-        block_on(async {
-            let mut client = self.client.lock().await;
+        self.run(async {
+            let mut client = self.pool.get().await.map_err(pool_error)?;
             let transaction = client.transaction().await?;
             pg_write_project_teams(&transaction, project_id, team_ids).await?;
             transaction.commit().await?;
@@ -2989,8 +2997,8 @@ impl Backend for PostgresBackend {
     }
 
     fn set_project_credential(&self, id: &str, credential_id: Option<&str>) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
                     "UPDATE projects SET credential_id = $2 WHERE id = $1",
@@ -3005,8 +3013,8 @@ impl Backend for PostgresBackend {
     }
 
     fn set_project_admin_saved(&self, id: &str, admin_saved: bool) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
                     "UPDATE projects SET admin_saved = $2 WHERE id = $1",
@@ -3021,8 +3029,8 @@ impl Backend for PostgresBackend {
     }
 
     fn set_project_sync_success(&self, id: &str, at: &str, commit: &str) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
                     "UPDATE projects
@@ -3039,8 +3047,8 @@ impl Backend for PostgresBackend {
     }
 
     fn set_project_sync_failed(&self, id: &str) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
                     "UPDATE projects SET last_sync_status = 'failed' WHERE id = $1",
@@ -3055,8 +3063,8 @@ impl Backend for PostgresBackend {
     }
 
     fn list_inventories(&self, team_id: &str) -> AppResult<Vec<Inventory>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     &format!(
@@ -3071,8 +3079,8 @@ impl Backend for PostgresBackend {
     }
 
     fn inventory(&self, id: &str) -> AppResult<Option<Inventory>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
                     &format!("SELECT {INVENTORY_COLUMNS} FROM inventories WHERE id = $1"),
@@ -3089,8 +3097,8 @@ impl Backend for PostgresBackend {
         sources: &[InventorySource],
         refresh: bool,
     ) -> AppResult<()> {
-        block_on(async {
-            let mut client = self.client.lock().await;
+        self.run(async {
+            let mut client = self.pool.get().await.map_err(pool_error)?;
             let transaction = client.transaction().await?;
             transaction
                 .execute(
@@ -3123,8 +3131,8 @@ impl Backend for PostgresBackend {
     }
 
     fn update_inventory(&self, id: &str, team_id: &str, name: &str, body: &str) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
                     "UPDATE inventories SET name = $3, body = $4
@@ -3140,8 +3148,8 @@ impl Backend for PostgresBackend {
     }
 
     fn set_inventory_admin_saved(&self, id: &str, admin_saved: bool) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "UPDATE inventories SET admin_saved = $2 WHERE id = $1",
@@ -3153,8 +3161,8 @@ impl Backend for PostgresBackend {
     }
 
     fn set_inventory_body(&self, id: &str, team_id: &str, body: &str) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
                     "UPDATE inventories SET body = $3 WHERE id = $1 AND team_id = $2",
@@ -3169,8 +3177,8 @@ impl Backend for PostgresBackend {
     }
 
     fn list_inventory_sources(&self, inventory_id: &str) -> AppResult<Vec<InventorySource>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     &format!(
@@ -3185,8 +3193,8 @@ impl Backend for PostgresBackend {
     }
 
     fn inventory_source(&self, id: &str) -> AppResult<Option<InventorySource>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
                     &format!("SELECT {SOURCE_COLUMNS} FROM inventory_sources WHERE id = $1"),
@@ -3203,8 +3211,8 @@ impl Backend for PostgresBackend {
         source: &InventorySource,
         admin_saved: bool,
     ) -> AppResult<()> {
-        block_on(async {
-            let mut client = self.client.lock().await;
+        self.run(async {
+            let mut client = self.pool.get().await.map_err(pool_error)?;
             let transaction = client.transaction().await?;
             pg_insert_source(&transaction, source).await?;
             pg_refresh_summary(&transaction, inventory_id).await?;
@@ -3220,8 +3228,8 @@ impl Backend for PostgresBackend {
     }
 
     fn set_inventory_source_body(&self, id: &str, body: &str) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "UPDATE inventory_sources SET body = $2 WHERE id = $1",
@@ -3237,8 +3245,8 @@ impl Backend for PostgresBackend {
         source: &InventorySource,
         admin_saved: bool,
     ) -> AppResult<()> {
-        block_on(async {
-            let mut client = self.client.lock().await;
+        self.run(async {
+            let mut client = self.pool.get().await.map_err(pool_error)?;
             let transaction = client.transaction().await?;
             let changed = transaction
                 .execute(
@@ -3275,8 +3283,8 @@ impl Backend for PostgresBackend {
         inventory_id: &str,
         admin_saved: bool,
     ) -> AppResult<()> {
-        block_on(async {
-            let mut client = self.client.lock().await;
+        self.run(async {
+            let mut client = self.pool.get().await.map_err(pool_error)?;
             let transaction = client.transaction().await?;
             let changed = transaction
                 .execute(
@@ -3300,9 +3308,9 @@ impl Backend for PostgresBackend {
     }
 
     fn refresh_inventory_summary(&self, inventory_id: &str) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
-            pg_refresh_summary(&*client, inventory_id).await
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
+            pg_refresh_summary(&client, inventory_id).await
         })
     }
 
@@ -3312,8 +3320,8 @@ impl Backend for PostgresBackend {
         bodies: &[(String, String)],
         admin_saved: bool,
     ) -> AppResult<()> {
-        block_on(async {
-            let mut client = self.client.lock().await;
+        self.run(async {
+            let mut client = self.pool.get().await.map_err(pool_error)?;
             let transaction = client.transaction().await?;
             for (source_id, body) in bodies {
                 transaction
@@ -3336,8 +3344,8 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_inventory(&self, id: &str, team_id: &str) -> AppResult<()> {
-        block_on(async {
-            let mut client = self.client.lock().await;
+        self.run(async {
+            let mut client = self.pool.get().await.map_err(pool_error)?;
             let transaction = client.transaction().await?;
             let rows = transaction
                 .query(
@@ -3390,8 +3398,8 @@ impl Backend for PostgresBackend {
         inventory_id: &str,
         team_id: &str,
     ) -> AppResult<Vec<String>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     "SELECT name FROM templates
@@ -3408,8 +3416,8 @@ impl Backend for PostgresBackend {
         inventory_id: &str,
         team_id: &str,
     ) -> AppResult<Vec<String>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     "SELECT name, graph FROM workflows WHERE team_id = $1",
@@ -3436,8 +3444,8 @@ impl Backend for PostgresBackend {
     }
 
     fn list_credentials(&self, team_id: &str) -> AppResult<Vec<Credential>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     "SELECT id, team_id, name, kind, '' AS secret_blob, created_at, auto, disabled
@@ -3450,8 +3458,8 @@ impl Backend for PostgresBackend {
     }
 
     fn credential(&self, id: &str) -> AppResult<Option<Credential>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
                     &format!("SELECT {CREDENTIAL_COLUMNS} FROM credentials WHERE id = $1"),
@@ -3463,8 +3471,8 @@ impl Backend for PostgresBackend {
     }
 
     fn insert_credential(&self, item: &Credential) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "INSERT INTO credentials
@@ -3487,8 +3495,8 @@ impl Backend for PostgresBackend {
     }
 
     fn update_credential(&self, item: &Credential) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
                     "UPDATE credentials SET name = $3, secret_blob = $4, disabled = $5
@@ -3510,8 +3518,8 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_credential(&self, id: &str, team_id: &str) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
                     "DELETE FROM credentials WHERE id = $1 AND team_id = $2",
@@ -3530,8 +3538,8 @@ impl Backend for PostgresBackend {
         credential_id: &str,
         team_id: &str,
     ) -> AppResult<Vec<CredentialUsage>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     "SELECT i.id, i.name, s.id, s.name, NULL::TEXT, NULL::TEXT
@@ -3559,8 +3567,8 @@ impl Backend for PostgresBackend {
 
     fn list_environments(&self, team_id: &str) -> AppResult<Vec<Environment>> {
         let team = self.team_by_id(team_id)?.ok_or(ApiError::NotFound)?;
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     "SELECT e.id, e.team_id, e.organization_id, e.name, e.image, e.pull_policy,
@@ -3592,8 +3600,8 @@ impl Backend for PostgresBackend {
     }
 
     fn insert_environment(&self, item: &Environment) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "INSERT INTO environments (
@@ -3620,8 +3628,8 @@ impl Backend for PostgresBackend {
 
     fn update_environment(&self, item: &Environment) -> AppResult<()> {
         let global = item.team_id.is_none() && item.organization_id.is_none();
-        block_on(async {
-            let mut client = self.client.lock().await;
+        self.run(async {
+            let mut client = self.pool.get().await.map_err(pool_error)?;
             let transaction = client.transaction().await?;
             let changed = transaction
                 .execute(
@@ -3663,8 +3671,8 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_environment(&self, id: &str) -> AppResult<()> {
-        block_on(async {
-            let mut client = self.client.lock().await;
+        self.run(async {
+            let mut client = self.pool.get().await.map_err(pool_error)?;
             let transaction = client.transaction().await?;
             let changed = transaction
                 .execute("DELETE FROM environments WHERE id = $1", &[&id])
@@ -3686,8 +3694,8 @@ impl Backend for PostgresBackend {
     }
 
     fn list_templates(&self, team_id: &str) -> AppResult<Vec<Template>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     &format!(
@@ -3701,8 +3709,8 @@ impl Backend for PostgresBackend {
     }
 
     fn template(&self, id: &str) -> AppResult<Option<Template>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
                     &format!("SELECT {TEMPLATE_COLUMNS} FROM templates WHERE id = $1"),
@@ -3714,8 +3722,8 @@ impl Backend for PostgresBackend {
     }
 
     fn insert_template(&self, item: &Template, credential_ids: &[String]) -> AppResult<()> {
-        block_on(async {
-            let mut client = self.client.lock().await;
+        self.run(async {
+            let mut client = self.pool.get().await.map_err(pool_error)?;
             let transaction = client.transaction().await?;
             transaction
                 .execute(
@@ -3753,8 +3761,8 @@ impl Backend for PostgresBackend {
     }
 
     fn update_template(&self, item: &Template, credential_ids: &[String]) -> AppResult<()> {
-        block_on(async {
-            let mut client = self.client.lock().await;
+        self.run(async {
+            let mut client = self.pool.get().await.map_err(pool_error)?;
             let transaction = client.transaction().await?;
             let changed = transaction
                 .execute(
@@ -3794,8 +3802,8 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_template(&self, id: &str, team_id: &str) -> AppResult<()> {
-        block_on(async {
-            let mut client = self.client.lock().await;
+        self.run(async {
+            let mut client = self.pool.get().await.map_err(pool_error)?;
             let transaction = client.transaction().await?;
             let changed = transaction
                 .execute(
@@ -3818,8 +3826,8 @@ impl Backend for PostgresBackend {
     }
 
     fn template_credential_ids(&self, template_id: &str) -> AppResult<Vec<String>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     "SELECT credential_id FROM template_credentials
@@ -3832,8 +3840,8 @@ impl Backend for PostgresBackend {
     }
 
     fn list_template_credential_links(&self, team_id: &str) -> AppResult<Vec<(String, String)>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     "SELECT tc.template_id, tc.credential_id
@@ -3849,8 +3857,8 @@ impl Backend for PostgresBackend {
     }
 
     fn list_hooks(&self, team_id: &str) -> AppResult<Vec<Hook>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     &format!("SELECT {HOOK_COLUMNS} FROM hooks WHERE team_id = $1 ORDER BY name"),
@@ -3862,8 +3870,8 @@ impl Backend for PostgresBackend {
     }
 
     fn hook(&self, id: &str) -> AppResult<Option<Hook>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
                     &format!("SELECT {HOOK_COLUMNS} FROM hooks WHERE id = $1"),
@@ -3875,8 +3883,8 @@ impl Backend for PostgresBackend {
     }
 
     fn insert_hook(&self, item: &Hook) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "INSERT INTO hooks (
@@ -3903,8 +3911,8 @@ impl Backend for PostgresBackend {
     }
 
     fn update_hook(&self, item: &Hook) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
                     "UPDATE hooks SET name = $3, match_alertname = $4, match_status = $5,
@@ -3930,8 +3938,8 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_hook(&self, id: &str, team_id: &str) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
                     "DELETE FROM hooks WHERE id = $1 AND team_id = $2",
@@ -3946,8 +3954,8 @@ impl Backend for PostgresBackend {
     }
 
     fn list_deliveries(&self, team_id: &str, limit: i64) -> AppResult<Vec<Delivery>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     &format!(
@@ -3963,8 +3971,8 @@ impl Backend for PostgresBackend {
     }
 
     fn insert_delivery(&self, item: &NewDelivery<'_>) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "INSERT INTO hook_deliveries (
@@ -3987,8 +3995,8 @@ impl Backend for PostgresBackend {
     }
 
     fn job(&self, id: &str) -> AppResult<Option<Job>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
                     &format!("SELECT {JOB_COLUMNS} FROM jobs WHERE id = $1"),
@@ -4002,8 +4010,8 @@ impl Backend for PostgresBackend {
     fn list_jobs(&self, team_id: &str, query: &JobQuery) -> AppResult<(Vec<Job>, i64)> {
         let limit = query.limit.clamp(1, 100);
         let offset = query.offset.max(0);
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     &format!(
@@ -4046,8 +4054,8 @@ impl Backend for PostgresBackend {
     }
 
     fn insert_job(&self, item: &Job) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "INSERT INTO jobs (
@@ -4083,8 +4091,8 @@ impl Backend for PostgresBackend {
     }
 
     fn mark_running(&self, id: &str) -> AppResult<bool> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
                     "UPDATE jobs SET status = 'running', started_at = COALESCE(started_at, $2)
@@ -4097,8 +4105,8 @@ impl Backend for PostgresBackend {
     }
 
     fn set_failed_hosts(&self, id: &str, failed_hosts: &str) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "UPDATE jobs SET failed_hosts = $2 WHERE id = $1",
@@ -4110,8 +4118,8 @@ impl Backend for PostgresBackend {
     }
 
     fn set_job_parameters(&self, id: &str, parameters: &str) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "UPDATE jobs SET parameters = $2 WHERE id = $1",
@@ -4123,8 +4131,8 @@ impl Backend for PostgresBackend {
     }
 
     fn finish_job(&self, id: &str, status: &str) -> AppResult<bool> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
                     "UPDATE jobs SET status = $2, finished_at = $3
@@ -4137,8 +4145,8 @@ impl Backend for PostgresBackend {
     }
 
     fn insert_event(&self, job_id: &str, stream: &str, line: &str) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "INSERT INTO job_events (job_id, ts, stream, line) VALUES ($1, $2, $3, $4)",
@@ -4150,8 +4158,8 @@ impl Backend for PostgresBackend {
     }
 
     fn events_after(&self, job_id: &str, after: i64, limit: i64) -> AppResult<Vec<JobEvent>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     "SELECT id, ts, stream, line FROM job_events
@@ -4164,8 +4172,8 @@ impl Backend for PostgresBackend {
     }
 
     fn events_count_between(&self, job_id: &str, after: i64, before: i64) -> AppResult<i64> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_one(
                     "SELECT COUNT(*) FROM job_events
@@ -4178,8 +4186,8 @@ impl Backend for PostgresBackend {
     }
 
     fn events_bytes(&self, job_id: &str) -> AppResult<i64> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_one(
                     "SELECT COALESCE(SUM(octet_length(line) + 1), 0)
@@ -4192,8 +4200,8 @@ impl Backend for PostgresBackend {
     }
 
     fn events_last(&self, job_id: &str, limit: i64) -> AppResult<Vec<JobEvent>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     "SELECT id, ts, stream, line FROM job_events
@@ -4211,8 +4219,8 @@ impl Backend for PostgresBackend {
     }
 
     fn workflow_job(&self, id: &str) -> AppResult<Option<WorkflowJob>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
                     "SELECT id, workflow_id, team_id, name, status, extra_vars, launched_by,
@@ -4226,8 +4234,8 @@ impl Backend for PostgresBackend {
     }
 
     fn insert_workflow_job(&self, item: &WorkflowJob) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "INSERT INTO workflow_jobs (
@@ -4253,8 +4261,8 @@ impl Backend for PostgresBackend {
     }
 
     fn set_workflow_status(&self, id: &str, status: &str, finish: bool) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             if finish {
                 client
                     .execute(
@@ -4275,8 +4283,8 @@ impl Backend for PostgresBackend {
     }
 
     fn insert_workflow_node(&self, workflow_job_id: &str, node_id: &str) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "INSERT INTO workflow_nodes (workflow_job_id, node_id, phase, job_id)
@@ -4295,8 +4303,8 @@ impl Backend for PostgresBackend {
         phase: &str,
         job_id: Option<&str>,
     ) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "UPDATE workflow_nodes SET phase = $3, job_id = COALESCE($4, job_id)
@@ -4309,8 +4317,8 @@ impl Backend for PostgresBackend {
     }
 
     fn workflow_nodes(&self, workflow_job_id: &str) -> AppResult<Vec<WorkflowNodeRow>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     "SELECT node_id, phase, job_id FROM workflow_nodes
@@ -4324,8 +4332,8 @@ impl Backend for PostgresBackend {
 
     fn recent_jobs(&self, team_id: &str, limit: i64) -> AppResult<Vec<Job>> {
         let limit = limit.clamp(1, 100);
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     &format!(
@@ -4340,8 +4348,8 @@ impl Backend for PostgresBackend {
     }
 
     fn job_activity(&self, team_id: &str, from: &str, to: &str) -> AppResult<Vec<JobActivity>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     "SELECT status, started_at, finished_at FROM jobs
@@ -4358,8 +4366,8 @@ impl Backend for PostgresBackend {
     }
 
     fn import_report(&self) -> AppResult<Option<serde_json::Value>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
                     "SELECT value FROM settings WHERE key = $1",
@@ -4374,8 +4382,8 @@ impl Backend for PostgresBackend {
     }
 
     fn first_workflow(&self, team_id: &str) -> AppResult<Option<Workflow>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
                     &format!(
@@ -4390,8 +4398,8 @@ impl Backend for PostgresBackend {
     }
 
     fn first_hook(&self, team_id: &str) -> AppResult<Option<Hook>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
                     &format!(
@@ -4406,8 +4414,8 @@ impl Backend for PostgresBackend {
     }
 
     fn list_workflows(&self, team_id: &str) -> AppResult<Vec<Workflow>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     &format!(
@@ -4422,8 +4430,8 @@ impl Backend for PostgresBackend {
     }
 
     fn workflow(&self, id: &str) -> AppResult<Option<Workflow>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
                     &format!("SELECT {WORKFLOW_COLUMNS} FROM workflows WHERE id = $1"),
@@ -4435,8 +4443,8 @@ impl Backend for PostgresBackend {
     }
 
     fn insert_workflow(&self, item: &Workflow) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "INSERT INTO workflows (
@@ -4458,8 +4466,8 @@ impl Backend for PostgresBackend {
     }
 
     fn update_workflow(&self, item: &Workflow) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
                     "UPDATE workflows
@@ -4483,8 +4491,8 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_workflow(&self, id: &str, team_id: &str) -> AppResult<()> {
-        block_on(async {
-            let mut client = self.client.lock().await;
+        self.run(async {
+            let mut client = self.pool.get().await.map_err(pool_error)?;
             let transaction = client.transaction().await?;
             let changed = transaction
                 .execute(
@@ -4507,8 +4515,8 @@ impl Backend for PostgresBackend {
     }
 
     fn workflow_team(&self, id: &str) -> AppResult<Option<String>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt("SELECT team_id FROM workflows WHERE id = $1", &[&id])
                 .await?;
@@ -4517,8 +4525,8 @@ impl Backend for PostgresBackend {
     }
 
     fn list_team_schedules(&self, team_id: &str) -> AppResult<Vec<(Schedule, String)>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     &format!(
@@ -4549,8 +4557,8 @@ impl Backend for PostgresBackend {
     }
 
     fn schedule(&self, id: &str) -> AppResult<Option<Schedule>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
                     &format!("SELECT {SCHEDULE_COLUMNS} FROM schedules WHERE id = $1"),
@@ -4562,8 +4570,8 @@ impl Backend for PostgresBackend {
     }
 
     fn list_schedules(&self, kind: &str, target_id: &str) -> AppResult<Vec<Schedule>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     &format!(
@@ -4579,8 +4587,8 @@ impl Backend for PostgresBackend {
 
     fn insert_schedule(&self, item: &Schedule) -> AppResult<()> {
         let end_count = item.end_count.map(|count| count as i32);
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "INSERT INTO schedules (
@@ -4622,8 +4630,8 @@ impl Backend for PostgresBackend {
 
     fn update_schedule(&self, item: &Schedule) -> AppResult<()> {
         let end_count = item.end_count.map(|count| count as i32);
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
                     "UPDATE schedules SET
@@ -4662,8 +4670,8 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_schedule(&self, id: &str, team_id: &str) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
                     "DELETE FROM schedules WHERE id = $1 AND team_id = $2",
@@ -4685,8 +4693,8 @@ impl Backend for PostgresBackend {
         next_run_at: Option<&str>,
         occurrence_count: i64,
     ) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
                     "UPDATE schedules SET enabled = $3, next_run_at = $4,
@@ -4710,8 +4718,8 @@ impl Backend for PostgresBackend {
     }
 
     fn claim_missed(&self, id: &str, team_id: &str) -> AppResult<Option<String>> {
-        block_on(async {
-            let mut client = self.client.lock().await;
+        self.run(async {
+            let mut client = self.pool.get().await.map_err(pool_error)?;
             let transaction = client.transaction().await?;
             let row = transaction
                 .query_opt(
@@ -4738,8 +4746,8 @@ impl Backend for PostgresBackend {
     }
 
     fn restore_missed(&self, id: &str, team_id: &str, missed_at: &str) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "UPDATE schedules SET missed_at = $3, updated_at = $4
@@ -4752,8 +4760,8 @@ impl Backend for PostgresBackend {
     }
 
     fn due_schedules(&self, now: &str) -> AppResult<Vec<Schedule>> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
                     &format!(
@@ -4774,8 +4782,8 @@ impl Backend for PostgresBackend {
         next_run_at: Option<&str>,
         occurrence_count: i64,
     ) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "UPDATE schedules SET next_run_at = $2, occurrence_count = $3, updated_at = $4
@@ -4788,8 +4796,8 @@ impl Backend for PostgresBackend {
     }
 
     fn note_miss(&self, id: &str, missed_at: Option<&str>) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "UPDATE schedules SET missed_at = $2, updated_at = $3 WHERE id = $1",
@@ -4801,8 +4809,8 @@ impl Backend for PostgresBackend {
     }
 
     fn set_launch_block(&self, id: &str, reason: Option<&str>) -> AppResult<()> {
-        block_on(async {
-            let client = self.client.lock().await;
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
                     "UPDATE schedules SET launch_block = $2, updated_at = $3 WHERE id = $1",
