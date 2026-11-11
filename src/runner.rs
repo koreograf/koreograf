@@ -1069,19 +1069,18 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
         log(state, job_id, "system", "HTTP proxy from the environment.");
     }
     let project = load_project(state, &template).await?;
+    let project_credential = match &project {
+        Some(project) if project.source_type == "git" => project_credential_secret(state, project)?,
+        _ => None,
+    };
     if let Some(project) = &project {
-        let credential = if project.source_type == "git" {
-            project_credential_secret(state, project)?
-        } else {
-            None
-        };
         let source = materialize_project(
             project,
             &state.cfg.data_dir,
             &settings.proxy,
             template.update_on_launch,
             &state.cfg.project_roots,
-            credential.as_ref(),
+            project_credential.as_ref(),
         )
         .await
         .map_err(sync_log_line)?;
@@ -1239,6 +1238,17 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
         container_mode.is_some(),
         &mut env,
     )?;
+    if template.tool == "ansible" {
+        if let (Some(project), Some(secret)) = (&project, project_credential.as_ref()) {
+            galaxy_credential_env(
+                secret,
+                &project.source,
+                container_mode.is_some(),
+                &work,
+                &mut env,
+            )?;
+        }
+    }
     apply_proxy_env(&mut env, &settings.proxy);
     if container_mode.is_some() {
         match crate::tls::controller_trust_pem() {
@@ -1659,6 +1669,50 @@ fn apply_credentials(
         env.push((
             "KOREOGRAF_VAULT_LIST".into(),
             guest_path(container, work, "vault.list"),
+        ));
+    }
+    Ok(())
+}
+
+fn galaxy_credential_env(
+    secret: &Value,
+    source: &str,
+    container: bool,
+    work: &Path,
+    env: &mut Vec<(String, String)>,
+) -> Result<(), String> {
+    crate::credentials::check("scm", secret)?;
+    let username = auth_text(secret, "username");
+    let password = auth_text(secret, "password");
+    let key = auth_text(secret, "private_key");
+    let passphrase = auth_text(secret, "passphrase");
+    if !password.is_empty() {
+        write_secret(&work.join("project-git.pass"), password)?;
+        env.push((
+            "KOREOGRAF_GIT_USERNAME".into(),
+            if username.is_empty() {
+                default_git_username(source).to_string()
+            } else {
+                username.to_string()
+            },
+        ));
+        env.push((
+            "KOREOGRAF_GIT_PASSWORD_FILE".into(),
+            guest_path(container, work, "project-git.pass"),
+        ));
+    }
+    if !key.is_empty() {
+        write_secret(&work.join("project-git_key"), key)?;
+        env.push((
+            "KOREOGRAF_GIT_SSH_KEY".into(),
+            guest_path(container, work, "project-git_key"),
+        ));
+    }
+    if !passphrase.is_empty() {
+        write_secret(&work.join("project-key.pass"), passphrase)?;
+        env.push((
+            "KOREOGRAF_GIT_KEY_PASSPHRASE_FILE".into(),
+            guest_path(container, work, "project-key.pass"),
         ));
     }
     Ok(())
@@ -4696,6 +4750,373 @@ mod tests {
         let dir = github.dir.clone();
         drop(github);
         assert!(!dir.exists());
+    }
+
+    #[test]
+    fn galaxy_credential_env_uses_the_project_username_fallback() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let work = std::env::temp_dir().join(format!("koreograf-galaxy-env-{nanos}"));
+        std::fs::create_dir_all(&work).unwrap();
+        let secret = serde_json::json!({"password": "token-value"});
+        let mut env = Vec::new();
+        galaxy_credential_env(
+            &secret,
+            "https://gitlab.example.com/group/repo.git",
+            false,
+            &work,
+            &mut env,
+        )
+        .unwrap();
+        let map: std::collections::HashMap<String, String> = env.iter().cloned().collect();
+        assert_eq!(
+            map.get("KOREOGRAF_GIT_USERNAME").map(String::as_str),
+            Some("oauth2")
+        );
+        let password = PathBuf::from(map.get("KOREOGRAF_GIT_PASSWORD_FILE").unwrap());
+        assert_eq!(
+            std::fs::read_to_string(&password).unwrap().trim(),
+            "token-value"
+        );
+        assert!(!format!("{env:?}").contains("token-value"));
+
+        let mut github = Vec::new();
+        galaxy_credential_env(
+            &secret,
+            "https://github.com/example/repo.git",
+            false,
+            &work,
+            &mut github,
+        )
+        .unwrap();
+        assert!(github
+            .iter()
+            .any(|(key, value)| key == "KOREOGRAF_GIT_USERNAME" && value == "x-access-token"));
+        let _ = std::fs::remove_dir_all(work);
+    }
+
+    fn test_git(repo: &Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", repo)
+            .output()
+            .expect("git");
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn test_serve_git_http(mut stream: std::net::TcpStream, root: &Path) {
+        use std::io::{BufRead, BufReader, Write};
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut request = String::new();
+        if reader.read_line(&mut request).unwrap_or(0) == 0 {
+            return;
+        }
+        let path = request
+            .split_whitespace()
+            .nth(1)
+            .unwrap_or("/")
+            .split('?')
+            .next()
+            .unwrap_or("/");
+        use base64::Engine as _;
+        let expected = format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD.encode("galaxy-user:galaxy-secret-token")
+        );
+        let mut authorized = false;
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                break;
+            }
+            if line == "\r\n" || line == "\n" {
+                break;
+            }
+            if let Some((name, value)) = line.split_once(':') {
+                if name.eq_ignore_ascii_case("authorization") && value.trim() == expected {
+                    authorized = true;
+                }
+            }
+        }
+        let refused = |stream: &mut std::net::TcpStream, status: &str, extra: &str| {
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status}\r\n{extra}Content-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+        };
+        if !authorized {
+            refused(
+                &mut stream,
+                "401 Unauthorized",
+                "WWW-Authenticate: Basic realm=\"git\"\r\n",
+            );
+            return;
+        }
+        let relative = path.trim_start_matches('/');
+        if relative
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+        {
+            refused(&mut stream, "404 Not Found", "");
+            return;
+        }
+        let file = root.join(relative);
+        if !file.is_file() {
+            refused(&mut stream, "404 Not Found", "");
+            return;
+        }
+        let body = std::fs::read(&file).unwrap();
+        let _ = write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let _ = stream.write_all(&body);
+    }
+
+    fn test_git_http_server(root: PathBuf) -> std::net::SocketAddr {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let root = root.clone();
+                std::thread::spawn(move || test_serve_git_http(stream, &root));
+            }
+        });
+        addr
+    }
+
+    fn test_galaxy_repo(root: &Path) -> std::net::SocketAddr {
+        let source = root.join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        test_git(&source, &["init", "-b", "main"]);
+        test_git(&source, &["config", "user.email", "test@example.com"]);
+        test_git(&source, &["config", "user.name", "Koreograf Test"]);
+        std::fs::write(source.join("README.md"), "role\n").unwrap();
+        test_git(&source, &["add", "README.md"]);
+        test_git(&source, &["commit", "-m", "one"]);
+        let www = root.join("www");
+        std::fs::create_dir_all(&www).unwrap();
+        let bare = www.join("repo.git");
+        let output = std::process::Command::new("git")
+            .args(["clone", "--bare"])
+            .arg(&source)
+            .arg(&bare)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", root)
+            .output()
+            .expect("git clone");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        test_git(&bare, &["update-server-info"]);
+        test_git_http_server(www)
+    }
+
+    fn test_ansible_wrapper(
+        root: &Path,
+        work: &Path,
+        project: &Path,
+        galaxy_env: &[(String, String)],
+    ) -> std::process::Output {
+        let bin = root.join("bin");
+        let path = format!("{}:/usr/bin:/bin", bin.display());
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/wrapper.sh"))
+            .env_clear()
+            .env("PATH", &path)
+            .env("HOME", work)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("KOREOGRAF_TOOL", "ansible")
+            .env("KOREOGRAF_WORK", work)
+            .env("KOREOGRAF_PROJECT", project)
+            .env("KOREOGRAF_COLLECTIONS", root.join("collections"))
+            .env("KOREOGRAF_ROLES", root.join("roles"))
+            .env("KOREOGRAF_TOFU", root.join("tofu"))
+            .env("KOREOGRAF_INVENTORY", work.join("hosts"))
+            .env("KOREOGRAF_ENTRYPOINT", "site.yml")
+            .env("KOREOGRAF_EXTRA", work.join("extra.yml"));
+        for (key, value) in galaxy_env {
+            cmd.env(key, value);
+        }
+        cmd.output().expect("wrapper")
+    }
+
+    fn test_galaxy_bin(root: &Path) {
+        write_executable(
+            &root.join("bin").join("ansible-galaxy"),
+            r#"#!/bin/sh
+req=""
+dest=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -r) req=$2; shift 2 ;;
+    -p) dest=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+src=$(sed -n 's/^[[:space:]]*-[[:space:]]*src:[[:space:]]*//p' "$req" | head -n 1)
+mkdir -p "$dest"
+git clone "$src" "$dest/role"
+"#,
+        );
+        write_executable(
+            &root.join("bin").join("ansible-playbook"),
+            "#!/bin/sh\nexit 0\n",
+        );
+    }
+
+    #[test]
+    fn galaxy_role_install_uses_the_project_credential() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("koreograf-galaxy-role-{nanos}"));
+        std::fs::create_dir_all(&root).unwrap();
+        test_galaxy_bin(&root);
+        let addr = test_galaxy_repo(&root);
+        let url = format!("http://{addr}/repo.git");
+        let requirements = format!("roles:\n  - src: {url}\n    name: role\n");
+        let secret = serde_json::json!({
+            "username": "galaxy-user",
+            "password": "galaxy-secret-token"
+        });
+
+        let work = root.join("work-with");
+        let project = root.join("project-with");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("requirements.yml"), &requirements).unwrap();
+        let mut env = Vec::new();
+        galaxy_credential_env(&secret, &url, false, &work, &mut env).unwrap();
+        let output = test_ansible_wrapper(&root, &work, &project, &env);
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.status.success(), "{text}");
+        assert!(root.join("roles").join("role").join("README.md").is_file());
+        assert!(!text.contains("galaxy-secret-token"), "{text}");
+        let _ = std::fs::remove_dir_all(root.join("roles"));
+
+        let work = root.join("work-without");
+        let project = root.join("project-without");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("requirements.yml"), &requirements).unwrap();
+        let output = test_ansible_wrapper(&root, &work, &project, &[]);
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.status.success(), "{text}");
+        assert!(
+            text.contains("Role install failed. The existing cache is used anyway."),
+            "{text}"
+        );
+        assert!(!root.join("roles").join("role").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ansible_playbook_does_not_see_the_galaxy_git_credential() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("koreograf-galaxy-clear-{nanos}"));
+        let work = root.join("work");
+        let project = root.join("project");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        write_executable(
+            &root.join("bin").join("ansible-playbook"),
+            r#"#!/bin/sh
+status=0
+printf 'ASKPASS=%s\n' "${GIT_ASKPASS:-unset}"
+printf 'GITSSH=%s\n' "${GIT_SSH:-unset}"
+printf 'GITSSHVARIANT=%s\n' "${GIT_SSH_VARIANT:-unset}"
+printf 'USERNAME=%s\n' "${KOREOGRAF_GIT_USERNAME:-unset}"
+printf 'PASSFILE=%s\n' "${KOREOGRAF_GIT_PASSWORD_FILE:-unset}"
+printf 'SSHKEY=%s\n' "${KOREOGRAF_GIT_SSH_KEY:-unset}"
+printf 'PASSPHRASE=%s\n' "${KOREOGRAF_GIT_KEY_PASSPHRASE_FILE:-unset}"
+for path in "$KOREOGRAF_WORK"/project-* "$KOREOGRAF_WORK"/git-askpass "$KOREOGRAF_WORK"/git-ssh; do
+  if [ -e "$path" ]; then
+    printf 'LEFTOVER=%s\n' "$(basename "$path")"
+    status=1
+  fi
+done
+if grep -R -q 'galaxy-secret-token' "$KOREOGRAF_WORK" 2>/dev/null; then
+  printf 'LEFTOVER=token\n'
+  status=1
+fi
+exit "$status"
+"#,
+        );
+        let secret = serde_json::json!({
+            "username": "galaxy-user",
+            "password": "galaxy-secret-token",
+            "private_key": "test-key",
+            "passphrase": "key-pass"
+        });
+        let mut env = Vec::new();
+        galaxy_credential_env(
+            &secret,
+            "https://gitlab.example.com/group/repo.git",
+            false,
+            &work,
+            &mut env,
+        )
+        .unwrap();
+        let output = test_ansible_wrapper(&root, &work, &project, &env);
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.status.success(), "{text}");
+        for key in [
+            "ASKPASS",
+            "GITSSH",
+            "GITSSHVARIANT",
+            "USERNAME",
+            "PASSFILE",
+            "SSHKEY",
+            "PASSPHRASE",
+        ] {
+            assert!(text.contains(&format!("{key}=unset")), "{key}: {text}");
+        }
+        assert!(!text.contains("LEFTOVER"), "{text}");
+        assert!(!text.contains("galaxy-secret-token"), "{text}");
+        assert!(!text.contains("test-key"), "{text}");
+
+        let work = root.join("work-plain");
+        let project = root.join("project-plain");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        let output = test_ansible_wrapper(&root, &work, &project, &[]);
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.status.success(), "{text}");
+        assert!(!text.contains("LEFTOVER"), "{text}");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
