@@ -49,27 +49,50 @@ fi
 
 mkdir -p "$KOREOGRAF_COLLECTIONS" "$KOREOGRAF_ROLES" "$KOREOGRAF_TOFU" "$KOREOGRAF_WORK/tmp"
 
-if [ -n "${KOREOGRAF_GIT_PASSWORD_FILE:-}" ]; then
+if [ -n "${KOREOGRAF_GIT_PASSWORD_FILE:-}" ] || [ -n "${KOREOGRAF_GIT_KEY_PASSPHRASE_FILE:-}" ]; then
   cat > "$KOREOGRAF_WORK/git-askpass" <<'EOF'
 #!/bin/sh
 case "$1" in
-  *sername*) printf '%s\n' "${KOREOGRAF_GIT_USERNAME:-git}" ;;
-  *) cat "$KOREOGRAF_GIT_PASSWORD_FILE" ;;
+  *sername*)
+    if [ -n "${KOREOGRAF_GIT_PASSWORD_FILE:-}" ]; then
+      printf '%s\n' "${KOREOGRAF_GIT_USERNAME:-git}"
+    fi
+    ;;
+  *assphrase*)
+    if [ -n "${KOREOGRAF_GIT_KEY_PASSPHRASE_FILE:-}" ]; then
+      cat "$KOREOGRAF_GIT_KEY_PASSPHRASE_FILE"
+    fi
+    ;;
+  *)
+    if [ -n "${KOREOGRAF_GIT_PASSWORD_FILE:-}" ]; then
+      cat "$KOREOGRAF_GIT_PASSWORD_FILE"
+    fi
+    ;;
 esac
 EOF
   chmod 700 "$KOREOGRAF_WORK/git-askpass"
-  export GIT_ASKPASS="$KOREOGRAF_WORK/git-askpass"
-  export GIT_TERMINAL_PROMPT=0
+  if [ -n "${KOREOGRAF_GIT_PASSWORD_FILE:-}" ]; then
+    export GIT_ASKPASS="$KOREOGRAF_WORK/git-askpass"
+    export GIT_TERMINAL_PROMPT=0
+  fi
 fi
 if [ -n "${KOREOGRAF_GIT_SSH_KEY:-}" ]; then
   cat > "$KOREOGRAF_WORK/git-ssh" <<'EOF'
 #!/bin/sh
+if [ -n "${KOREOGRAF_GIT_KEY_PASSPHRASE_FILE:-}" ]; then
+  SSH_ASKPASS="$KOREOGRAF_WORK/git-askpass" SSH_ASKPASS_REQUIRE=force DISPLAY=none exec ssh -i "$KOREOGRAF_GIT_SSH_KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new "$@"
+fi
 exec ssh -i "$KOREOGRAF_GIT_SSH_KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new "$@"
 EOF
   chmod 700 "$KOREOGRAF_WORK/git-ssh"
   export GIT_SSH="$KOREOGRAF_WORK/git-ssh"
   export GIT_SSH_VARIANT=ssh
 fi
+
+clear_git_auth() {
+  unset GIT_ASKPASS GIT_SSH GIT_SSH_VARIANT GIT_TERMINAL_PROMPT
+  unset KOREOGRAF_GIT_PASSWORD_FILE KOREOGRAF_GIT_USERNAME KOREOGRAF_GIT_SSH_KEY KOREOGRAF_GIT_KEY_PASSPHRASE_FILE
+}
 
 list_cols() {
   root="$KOREOGRAF_COLLECTIONS/ansible_collections"
@@ -130,6 +153,7 @@ run_ansible() {
   else
     log "No requirements.yml, Galaxy step skipped."
   fi
+  clear_git_auth
   log "Collection cache after the run:"
   after=$(list_cols || true)
   if [ -z "$after" ]; then

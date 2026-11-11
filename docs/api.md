@@ -138,7 +138,7 @@ Every inventory source that uses a NetBox credential uses the same credential ro
 | --- | --- |
 | `ssh` | `private_key` or `password`, one of them required. Optional `username`, `passphrase`, `become_method` (`sudo`, `su`, `pbrun`, `pfexec`, `doas`, `dzdo`, `ksu`, `runas`), `become_username`, `become_password` |
 | `vault` | `password` required. Optional `vault_id` |
-| `scm` | `private_key` or `password`. Optional `username`, `passphrase`. Used by a project that selects it. Without a username, a token uses `oauth2` for GitLab and `x-access-token` for GitHub |
+| `scm` | `private_key` or `password`. Optional `username`, `passphrase`. Used by a project's Sync, update on launch, and the Galaxy step of its Ansible jobs. Without a username, a token uses `oauth2` for GitLab and `x-access-token` for GitHub |
 | `net` | `username` or `password`. Optional `private_key`, `authorize_password` |
 | `aws` | `access_key`, `secret_key`. Optional `security_token` |
 | `azure` | `subscription_id`, `client_id`, `secret`, `tenant` |
