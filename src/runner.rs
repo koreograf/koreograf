@@ -5046,6 +5046,7 @@ git clone "$src" "$dest/role"
         write_executable(
             &root.join("bin").join("ansible-playbook"),
             r#"#!/bin/sh
+status=0
 printf 'ASKPASS=%s\n' "${GIT_ASKPASS:-unset}"
 printf 'GITSSH=%s\n' "${GIT_SSH:-unset}"
 printf 'GITSSHVARIANT=%s\n' "${GIT_SSH_VARIANT:-unset}"
@@ -5053,6 +5054,17 @@ printf 'USERNAME=%s\n' "${KOREOGRAF_GIT_USERNAME:-unset}"
 printf 'PASSFILE=%s\n' "${KOREOGRAF_GIT_PASSWORD_FILE:-unset}"
 printf 'SSHKEY=%s\n' "${KOREOGRAF_GIT_SSH_KEY:-unset}"
 printf 'PASSPHRASE=%s\n' "${KOREOGRAF_GIT_KEY_PASSPHRASE_FILE:-unset}"
+for path in "$KOREOGRAF_WORK"/project-* "$KOREOGRAF_WORK"/git-askpass "$KOREOGRAF_WORK"/git-ssh; do
+  if [ -e "$path" ]; then
+    printf 'LEFTOVER=%s\n' "$(basename "$path")"
+    status=1
+  fi
+done
+if grep -R -q 'galaxy-secret-token' "$KOREOGRAF_WORK" 2>/dev/null; then
+  printf 'LEFTOVER=token\n'
+  status=1
+fi
+exit "$status"
 "#,
         );
         let secret = serde_json::json!({
@@ -5088,8 +5100,22 @@ printf 'PASSPHRASE=%s\n' "${KOREOGRAF_GIT_KEY_PASSPHRASE_FILE:-unset}"
         ] {
             assert!(text.contains(&format!("{key}=unset")), "{key}: {text}");
         }
+        assert!(!text.contains("LEFTOVER"), "{text}");
         assert!(!text.contains("galaxy-secret-token"), "{text}");
         assert!(!text.contains("test-key"), "{text}");
+
+        let work = root.join("work-plain");
+        let project = root.join("project-plain");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        let output = test_ansible_wrapper(&root, &work, &project, &[]);
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.status.success(), "{text}");
+        assert!(!text.contains("LEFTOVER"), "{text}");
         let _ = std::fs::remove_dir_all(root);
     }
 
