@@ -37,6 +37,7 @@ mod scan;
 mod schedule;
 mod seed;
 mod settings;
+mod store;
 mod tls;
 mod workflow;
 

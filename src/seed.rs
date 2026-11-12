@@ -13,6 +13,7 @@ use crate::db::{
     self, Environment, Hook, Inventory, InventorySource, Project, Template, User, Workflow,
 };
 use crate::error::AppResult;
+use crate::store;
 
 const SEEDED_ENVIRONMENTS_KEY: &str = "default_environments";
 
@@ -91,7 +92,7 @@ trait SeedStore {
 
 impl SeedStore for Connection {
     fn user_by_username(&self, username: &str) -> AppResult<Option<User>> {
-        db::user_by_username(self, username)
+        store::auth::user_by_username(self, username)
     }
 
     fn insert_user(
@@ -103,7 +104,7 @@ impl SeedStore for Connection {
         auth_source: &str,
         is_admin: bool,
     ) -> AppResult<()> {
-        db::insert_user(
+        store::auth::insert_user(
             self,
             id,
             username,
@@ -119,19 +120,19 @@ impl SeedStore for Connection {
     }
 
     fn seed_state(&self, key: &str) -> AppResult<Option<String>> {
-        db::seed_state(self, key)
+        store::settings::seed_state(self, key)
     }
 
     fn set_seed_state(&self, key: &str, value: &str) -> AppResult<()> {
-        db::set_seed_state(self, key, value)
+        store::settings::set_seed_state(self, key, value)
     }
 
     fn setting(&self, key: &str) -> AppResult<Option<String>> {
-        db::setting(self, key)
+        store::settings::setting(self, key)
     }
 
     fn set_setting(&self, key: &str, value: &str) -> AppResult<()> {
-        db::set_setting(self, key, value)
+        store::settings::set_setting(self, key, value)
     }
 
     fn environment_exists(&self, id: &str) -> AppResult<bool> {
@@ -294,7 +295,7 @@ impl<T: Backend + ?Sized> SeedStore for T {
 
 pub fn seed(conn: &Connection, cfg: &Config) -> AppResult<Option<String>> {
     let tx = conn.unchecked_transaction()?;
-    db::purge_sessions(&tx)?;
+    store::auth::purge_sessions(&tx)?;
     let generated = seed_with(&*tx, cfg)?;
     tx.commit()?;
     if let Some(password) = &generated {

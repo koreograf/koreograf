@@ -8,8 +8,6 @@ use rusqlite::Connection;
 use rustls::pki_types::pem::PemObject;
 use tokio_postgres::Client;
 
-use rusqlite::params;
-
 use crate::config::{DatabaseConfig, PostgresConfig, SslMode};
 use crate::db::{
     self, ApiToken, Credential, CredentialUsage, Delivery, Environment, Hook, Inventory,
@@ -18,6 +16,7 @@ use crate::db::{
     WorkflowNodeRow,
 };
 use crate::error::{ApiError, AppResult};
+use crate::store;
 
 pub(crate) trait Backend: Send + Sync {
     fn engine(&self) -> &'static str;
@@ -335,12 +334,12 @@ impl Backend for SqliteBackend {
 
     fn settings_rows(&self) -> AppResult<HashMap<String, String>> {
         let conn = lock(&self.conn)?;
-        crate::settings::read_rows(&conn)
+        store::settings::read_rows(&conn)
     }
 
     fn set_setting(&self, key: &str, value: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::set_setting(&conn, key, value)
+        store::settings::set_setting(&conn, key, value)
     }
 
     fn count_teams(&self) -> AppResult<i64> {
@@ -350,42 +349,42 @@ impl Backend for SqliteBackend {
 
     fn seed_state(&self, key: &str) -> AppResult<Option<String>> {
         let conn = lock(&self.conn)?;
-        db::seed_state(&conn, key)
+        store::settings::seed_state(&conn, key)
     }
 
     fn set_seed_state(&self, key: &str, value: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::set_seed_state(&conn, key, value)
+        store::settings::set_seed_state(&conn, key, value)
     }
 
     fn user_by_username(&self, username: &str) -> AppResult<Option<User>> {
         let conn = lock(&self.conn)?;
-        db::user_by_username(&conn, username)
+        store::auth::user_by_username(&conn, username)
     }
 
     fn user_by_session(&self, token: &str) -> AppResult<Option<User>> {
         let conn = lock(&self.conn)?;
-        db::user_by_session(&conn, token)
+        store::auth::user_by_session(&conn, token)
     }
 
     fn user_by_api_token(&self, token_hash: &str) -> AppResult<Option<User>> {
         let conn = lock(&self.conn)?;
-        db::user_by_api_token(&conn, token_hash)
+        store::auth::user_by_api_token(&conn, token_hash)
     }
 
     fn create_session(&self, token: &str, user_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::create_session(&conn, token, user_id)
+        store::auth::create_session(&conn, token, user_id)
     }
 
     fn delete_session(&self, token: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::delete_session(&conn, token)
+        store::auth::delete_session(&conn, token)
     }
 
     fn purge_sessions(&self) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::purge_sessions(&conn)
+        store::auth::purge_sessions(&conn)
     }
 
     fn insert_user(
@@ -398,7 +397,7 @@ impl Backend for SqliteBackend {
         is_admin: bool,
     ) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::insert_user(
+        store::auth::insert_user(
             &conn,
             id,
             username,
@@ -411,12 +410,12 @@ impl Backend for SqliteBackend {
 
     fn user_by_id(&self, id: &str) -> AppResult<Option<User>> {
         let conn = lock(&self.conn)?;
-        db::user_by_id(&conn, id)
+        store::auth::user_by_id(&conn, id)
     }
 
     fn list_users(&self) -> AppResult<Vec<(User, i64)>> {
         let conn = lock(&self.conn)?;
-        db::list_users(&conn)
+        store::auth::list_users(&conn)
     }
 
     fn update_profile(
@@ -427,12 +426,12 @@ impl Backend for SqliteBackend {
         password_hash: Option<&str>,
     ) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::update_profile(&conn, id, display_name, email, password_hash)
+        store::auth::update_profile(&conn, id, display_name, email, password_hash)
     }
 
     fn set_user_email(&self, id: &str, email: Option<&str>) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::set_user_email(&conn, id, email)
+        store::auth::set_user_email(&conn, id, email)
     }
 
     fn update_user(
@@ -444,22 +443,22 @@ impl Backend for SqliteBackend {
         password_hash: Option<&str>,
     ) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::update_user(&conn, id, display_name, is_admin, disabled, password_hash)
+        store::auth::update_user(&conn, id, display_name, is_admin, disabled, password_hash)
     }
 
     fn delete_user_sessions(&self, user_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::delete_user_sessions(&conn, user_id)
+        store::auth::delete_user_sessions(&conn, user_id)
     }
 
     fn delete_user(&self, id: &str) -> AppResult<bool> {
         let conn = lock(&self.conn)?;
-        db::delete_user(&conn, id)
+        store::auth::delete_user(&conn, id)
     }
 
     fn other_active_admins(&self, user_id: &str) -> AppResult<i64> {
         let conn = lock(&self.conn)?;
-        db::other_active_admins(&conn, user_id)
+        store::auth::other_active_admins(&conn, user_id)
     }
 
     fn create_api_token(
@@ -472,17 +471,17 @@ impl Backend for SqliteBackend {
         created_at: &str,
     ) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::create_api_token(&conn, id, user_id, name, prefix, token_hash, created_at)
+        store::auth::create_api_token(&conn, id, user_id, name, prefix, token_hash, created_at)
     }
 
     fn list_api_tokens(&self, user_id: &str) -> AppResult<Vec<ApiToken>> {
         let conn = lock(&self.conn)?;
-        db::list_api_tokens(&conn, user_id)
+        store::auth::list_api_tokens(&conn, user_id)
     }
 
     fn delete_api_token(&self, id: &str, user_id: &str) -> AppResult<bool> {
         let conn = lock(&self.conn)?;
-        db::delete_api_token(&conn, id, user_id)
+        store::auth::delete_api_token(&conn, id, user_id)
     }
 
     fn list_teams_for_user(&self, user_id: &str, admin: bool) -> AppResult<Vec<(Team, String)>> {
@@ -497,16 +496,7 @@ impl Backend for SqliteBackend {
 
     fn replace_settings(&self, rows: &[(String, String)]) -> AppResult<()> {
         let mut conn = lock(&self.conn)?;
-        let tx = conn.transaction()?;
-        tx.execute("DELETE FROM settings", [])?;
-        for (key, value) in rows {
-            tx.execute(
-                "INSERT INTO settings (key, value) VALUES (?1, ?2)",
-                params![key, value],
-            )?;
-        }
-        tx.commit()?;
-        Ok(())
+        store::settings::replace(&mut conn, rows)
     }
 
     fn environment(&self, id: &str) -> AppResult<Option<Environment>> {
@@ -1382,32 +1372,6 @@ fn connection_error(err: tokio_postgres::Error, target: &str) -> anyhow::Error {
     )
 }
 
-fn row_user(row: &tokio_postgres::Row) -> AppResult<User> {
-    let is_admin: i32 = row.try_get(5)?;
-    let disabled: i32 = row.try_get(6)?;
-    Ok(User {
-        id: row.try_get(0)?,
-        username: row.try_get(1)?,
-        display_name: row.try_get(2)?,
-        password_hash: row.try_get(3)?,
-        auth_source: row.try_get(4)?,
-        is_admin: is_admin != 0,
-        disabled: disabled != 0,
-        created_at: row.try_get(7)?,
-        email: row.try_get(8)?,
-    })
-}
-
-fn row_api_token(row: &tokio_postgres::Row) -> AppResult<ApiToken> {
-    Ok(ApiToken {
-        id: row.try_get(0)?,
-        name: row.try_get(1)?,
-        prefix: row.try_get(2)?,
-        created_at: row.try_get(3)?,
-        last_used_at: row.try_get(4)?,
-    })
-}
-
 fn row_job(row: &tokio_postgres::Row) -> AppResult<Job> {
     Ok(Job {
         id: row.try_get(0)?,
@@ -1528,9 +1492,6 @@ fn row_environment(row: &tokio_postgres::Row) -> AppResult<Environment> {
         },
     })
 }
-
-const USER_COLUMNS: &str =
-    "id, username, display_name, password_hash, auth_source, is_admin, disabled, created_at, email";
 
 const JOB_COLUMNS: &str = "id, team_id, template_id, workflow_job_id, workflow_node_id, name, \
      tool, status, extra_vars, launched_by, trigger, started_at, finished_at, created_at, \
@@ -2022,7 +1983,9 @@ impl Backend for PostgresBackend {
     fn settings_rows(&self) -> AppResult<HashMap<String, String>> {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
-            let rows = client.query("SELECT key, value FROM settings", &[]).await?;
+            let rows = client
+                .query(&store::sql::postgres(store::settings::SETTINGS_ROWS), &[])
+                .await?;
             Ok(rows
                 .into_iter()
                 .map(|row| (row.get(0), row.get(1)))
@@ -2035,8 +1998,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "INSERT INTO settings (key, value) VALUES ($1, $2)
-                     ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                    &store::sql::postgres(store::settings::INSERT_SETTING),
                     &[&key, &value],
                 )
                 .await?;
@@ -2056,7 +2018,7 @@ impl Backend for PostgresBackend {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
-                .query_opt("SELECT value FROM seed_state WHERE key = $1", &[&key])
+                .query_opt(&store::sql::postgres(store::settings::SEED_STATE), &[&key])
                 .await?;
             Ok(row.map(|row| row.get(0)))
         })
@@ -2067,8 +2029,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "INSERT INTO seed_state (key, value) VALUES ($1, $2)
-                     ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                    &store::sql::postgres(store::settings::SET_SEED_STATE),
                     &[&key, &value],
                 )
                 .await?;
@@ -2079,13 +2040,11 @@ impl Backend for PostgresBackend {
     fn user_by_username(&self, username: &str) -> AppResult<Option<User>> {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
-            let row = client
-                .query_opt(
-                    &format!("SELECT {USER_COLUMNS} FROM users WHERE lower(username) = lower($1)"),
-                    &[&username],
-                )
-                .await?;
-            row.as_ref().map(row_user).transpose()
+            let sql = store::sql::Dialect::Postgres.render(&store::auth::user_by_username_sql(
+                store::sql::Dialect::Postgres,
+            ));
+            let row = client.query_opt(&sql, &[&username]).await?;
+            row.as_ref().map(store::auth::row_user).transpose()
         })
     }
 
@@ -2094,9 +2053,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .query_opt(
-                    "SELECT u.id, u.username, u.display_name, u.password_hash, u.auth_source,
-                            u.is_admin, u.disabled, u.created_at, u.email, s.expires_at
-                     FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = $1",
+                    &store::sql::postgres(store::auth::USER_BY_SESSION),
                     &[&token],
                 )
                 .await
@@ -2110,7 +2067,7 @@ impl Backend for PostgresBackend {
             self.delete_session(token)?;
             return Ok(None);
         }
-        Ok(Some(row_user(&row)?))
+        Ok(Some(store::auth::row_user(&row)?))
     }
 
     fn user_by_api_token(&self, token_hash: &str) -> AppResult<Option<User>> {
@@ -2118,9 +2075,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .query_opt(
-                    "SELECT u.id, u.username, u.display_name, u.password_hash, u.auth_source,
-                            u.is_admin, u.disabled, u.created_at, u.email, t.id
-                     FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = $1",
+                    &store::sql::postgres(store::auth::USER_BY_API_TOKEN),
                     &[&token_hash],
                 )
                 .await
@@ -2134,13 +2089,13 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "UPDATE api_tokens SET last_used_at = $2 WHERE id = $1",
+                    &store::sql::postgres(store::auth::TOUCH_API_TOKEN),
                     &[&token_id, &db::now()],
                 )
                 .await
                 .map_err(ApiError::from)
         })?;
-        Ok(Some(row_user(&row)?))
+        Ok(Some(store::auth::row_user(&row)?))
     }
 
     fn create_session(&self, token: &str, user_id: &str) -> AppResult<()> {
@@ -2148,7 +2103,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "INSERT INTO sessions (token, user_id, expires_at) VALUES ($1, $2, $3)",
+                    &store::sql::postgres(store::auth::CREATE_SESSION),
                     &[&token, &user_id, &db::plus_secs(7 * 24 * 3600)],
                 )
                 .await?;
@@ -2160,7 +2115,10 @@ impl Backend for PostgresBackend {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
-                .execute("DELETE FROM sessions WHERE token = $1", &[&token])
+                .execute(
+                    &store::sql::postgres(store::auth::DELETE_SESSION),
+                    &[&token],
+                )
                 .await?;
             Ok(())
         })
@@ -2170,7 +2128,10 @@ impl Backend for PostgresBackend {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
-                .execute("DELETE FROM sessions WHERE expires_at < $1", &[&db::now()])
+                .execute(
+                    &store::sql::postgres(store::auth::PURGE_SESSIONS),
+                    &[&db::now()],
+                )
                 .await?;
             Ok(())
         })
@@ -2189,9 +2150,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "INSERT INTO users
-                        (id, username, display_name, password_hash, auth_source, is_admin, created_at)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                    &store::sql::postgres(store::auth::INSERT_USER),
                     &[
                         &id,
                         &username,
@@ -2211,30 +2170,20 @@ impl Backend for PostgresBackend {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
-                .query_opt(
-                    &format!("SELECT {USER_COLUMNS} FROM users WHERE id = $1"),
-                    &[&id],
-                )
+                .query_opt(&store::sql::postgres(store::auth::USER_BY_ID), &[&id])
                 .await?;
-            row.as_ref().map(row_user).transpose()
+            row.as_ref().map(store::auth::row_user).transpose()
         })
     }
 
     fn list_users(&self) -> AppResult<Vec<(User, i64)>> {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
-            let rows = client
-                .query(
-                    &format!(
-                        "SELECT {USER_COLUMNS},
-                                (SELECT COUNT(*) FROM memberships m WHERE m.user_id = users.id)
-                         FROM users ORDER BY lower(username)"
-                    ),
-                    &[],
-                )
-                .await?;
+            let sql = store::sql::Dialect::Postgres
+                .render(&store::auth::list_users_sql(store::sql::Dialect::Postgres));
+            let rows = client.query(&sql, &[]).await?;
             rows.iter()
-                .map(|row| Ok((row_user(row)?, row.try_get::<_, i64>(9)?)))
+                .map(|row| Ok((store::auth::row_user(row)?, row.try_get::<_, i64>(9)?)))
                 .collect()
         })
     }
@@ -2251,15 +2200,14 @@ impl Backend for PostgresBackend {
             if let Some(password_hash) = password_hash {
                 client
                     .execute(
-                        "UPDATE users SET display_name = $2, email = $3, password_hash = $4
-                         WHERE id = $1",
+                        &store::sql::postgres(store::auth::UPDATE_PROFILE_PASSWORD),
                         &[&id, &display_name, &email, &password_hash],
                     )
                     .await?;
             } else {
                 client
                     .execute(
-                        "UPDATE users SET display_name = $2, email = $3 WHERE id = $1",
+                        &store::sql::postgres(store::auth::UPDATE_PROFILE),
                         &[&id, &display_name, &email],
                     )
                     .await?;
@@ -2272,7 +2220,10 @@ impl Backend for PostgresBackend {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
-                .execute("UPDATE users SET email = $2 WHERE id = $1", &[&id, &email])
+                .execute(
+                    &store::sql::postgres(store::auth::SET_USER_EMAIL),
+                    &[&id, &email],
+                )
                 .await?;
             Ok(())
         })
@@ -2291,9 +2242,7 @@ impl Backend for PostgresBackend {
             if let Some(password_hash) = password_hash {
                 client
                     .execute(
-                        "UPDATE users SET display_name = $2, is_admin = $3, disabled = $4,
-                            password_hash = $5
-                         WHERE id = $1",
+                        &store::sql::postgres(store::auth::UPDATE_USER_PASSWORD),
                         &[
                             &id,
                             &display_name,
@@ -2306,8 +2255,7 @@ impl Backend for PostgresBackend {
             } else {
                 client
                     .execute(
-                        "UPDATE users SET display_name = $2, is_admin = $3, disabled = $4
-                         WHERE id = $1",
+                        &store::sql::postgres(store::auth::UPDATE_USER),
                         &[&id, &display_name, &(is_admin as i32), &(disabled as i32)],
                     )
                     .await?;
@@ -2320,7 +2268,10 @@ impl Backend for PostgresBackend {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
-                .execute("DELETE FROM sessions WHERE user_id = $1", &[&user_id])
+                .execute(
+                    &store::sql::postgres(store::auth::DELETE_USER_SESSIONS),
+                    &[&user_id],
+                )
                 .await?;
             Ok(())
         })
@@ -2330,7 +2281,7 @@ impl Backend for PostgresBackend {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             Ok(client
-                .execute("DELETE FROM users WHERE id = $1", &[&id])
+                .execute(&store::sql::postgres(store::auth::DELETE_USER), &[&id])
                 .await?
                 > 0)
         })
@@ -2341,8 +2292,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_one(
-                    "SELECT COUNT(*) FROM users
-                     WHERE is_admin != 0 AND disabled = 0 AND id != $1",
+                    &store::sql::postgres(store::auth::OTHER_ACTIVE_ADMINS),
                     &[&user_id],
                 )
                 .await?;
@@ -2363,8 +2313,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "INSERT INTO api_tokens (id, user_id, name, prefix, token_hash, created_at)
-                     VALUES ($1, $2, $3, $4, $5, $6)",
+                    &store::sql::postgres(store::auth::CREATE_API_TOKEN),
                     &[&id, &user_id, &name, &prefix, &token_hash, &created_at],
                 )
                 .await?;
@@ -2377,12 +2326,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    "SELECT id, name, prefix, created_at, last_used_at
-                     FROM api_tokens WHERE user_id = $1 ORDER BY created_at, name",
+                    &store::sql::postgres(store::auth::LIST_API_TOKENS),
                     &[&user_id],
                 )
                 .await?;
-            rows.iter().map(row_api_token).collect()
+            rows.iter().map(store::auth::row_api_token).collect()
         })
     }
 
@@ -2391,7 +2339,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             Ok(client
                 .execute(
-                    "DELETE FROM api_tokens WHERE id = $1 AND user_id = $2",
+                    &store::sql::postgres(store::auth::DELETE_API_TOKEN),
                     &[&id, &user_id],
                 )
                 .await?
@@ -2453,22 +2401,20 @@ impl Backend for PostgresBackend {
     }
 
     fn replace_settings(&self, rows: &[(String, String)]) -> AppResult<()> {
-        let keys: Vec<&str> = rows.iter().map(|(key, _)| key.as_str()).collect();
         self.run(async {
             let mut client = self.pool.get().await.map_err(pool_error)?;
             let transaction = client.transaction().await?;
+            transaction
+                .execute(&store::sql::postgres(store::settings::DELETE_SETTINGS), &[])
+                .await?;
             for (key, value) in rows {
                 transaction
                     .execute(
-                        "INSERT INTO settings (key, value) VALUES ($1, $2)
-                         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                        &store::sql::postgres(store::settings::INSERT_SETTING),
                         &[key, value],
                     )
                     .await?;
             }
-            transaction
-                .execute("DELETE FROM settings WHERE NOT (key = ANY($1))", &[&keys])
-                .await?;
             transaction.commit().await?;
             Ok(())
         })

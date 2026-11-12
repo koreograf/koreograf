@@ -253,11 +253,9 @@ pub fn configured_mode(cfg: &crate::Config) -> RunnerMode {
     else {
         return cfg.runner.in_container(cfg.container_image);
     };
-    conn.query_row(
-        "SELECT value FROM settings WHERE key = 'runner'",
-        [],
-        |row| row.get::<_, String>(0),
-    )
+    conn.query_row(crate::store::settings::SETTING, ["runner"], |row| {
+        row.get::<_, String>(0)
+    })
     .ok()
     .map(|value| parse_runner_stored(&value, cfg.runner).in_container(cfg.container_image))
     .unwrap_or(cfg.runner.in_container(cfg.container_image))
@@ -797,17 +795,6 @@ fn decrypt_secret(state: &Shared, raw: Option<&String>) -> AppResult<String> {
     state
         .decrypt(raw)
         .map_err(|_| ApiError::bad("the_saved_setting_cannot_be_read"))
-}
-
-pub(crate) fn read_rows(db: &Connection) -> AppResult<HashMap<String, String>> {
-    let mut stmt = db.prepare("SELECT key, value FROM settings")?;
-    let mapped = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
-    let mut rows = HashMap::new();
-    for item in mapped {
-        let (key, value) = item?;
-        rows.insert(key, value);
-    }
-    Ok(rows)
 }
 
 fn proxy_from_env() -> (ProxySettings, bool) {
