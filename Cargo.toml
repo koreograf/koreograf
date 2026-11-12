@@ -39,7 +39,7 @@ tokio = { version = "1", features = ["full"] }
 tokio-postgres = "0.7"
 tokio-postgres-rustls = { version = "0.14", features = ["aws-lc-rs"] }
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.7", features = ["set-header", "trace"] }
+tower-http = { version = "0.7", features = ["compression-br", "compression-gzip", "set-header", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 url = "2"

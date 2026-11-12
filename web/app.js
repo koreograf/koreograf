@@ -62,7 +62,16 @@ function esc(value) {
   }[ch]));
 }
 
-let messages = { de: {}, en: {} };
+let messages = {};
+
+async function loadCatalog(id) {
+  if (messages[id]) return;
+  try {
+    messages[id] = await fetch(`/i18n/${id}.json`).then((response) => response.json());
+  } catch {
+    messages[id] = {};
+  }
+}
 
 function lookup(language, key) {
   const table = messages[language] || {};
@@ -93,6 +102,7 @@ async function setLang(next) {
   if (leaveGuard && leaveGuard() && !(await confirmDialog({ title: t("discard_unsaved_changes"), confirmLabel: t("ok") }))) return;
   leaveGuard = null;
   lang = languageId(next);
+  await loadCatalog(lang);
   localStorage.setItem("koreograf.lang", lang);
   document.documentElement.lang = lang;
   if (!me) renderLogin("");
@@ -8807,15 +8817,8 @@ async function route() {
 }
 
 async function boot() {
-  try {
-    const [german, english] = await Promise.all([
-      fetch("/i18n/de.json").then((response) => response.json()),
-      fetch("/i18n/en.json").then((response) => response.json()),
-    ]);
-    messages = { de: german, en: english };
-  } catch {
-    messages = { de: {}, en: {} };
-  }
+  const catalogs = lang === "de" ? ["de"] : ["de", lang];
+  await Promise.all(catalogs.map(loadCatalog));
   try {
     me = await api("GET", "/api/me");
     const known = (me.teams || []).some((team) => team.id === teamId);
