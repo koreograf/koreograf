@@ -32,16 +32,22 @@ jobs:
     uses: ./.github/workflows/ci.yml
 
   image:
-    name: image
+    name: image (${{ matrix.arch }})
     needs: tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
-      id-token: write
-    outputs:
-      digest: ${{ steps.build.outputs.digest }}
-      tag: ${{ steps.tags.outputs.tag }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            platform: linux/amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -54,8 +60,6 @@ jobs:
           version="${RELEASE_TAG#v}"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - name: Set up Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Log in to GHCR
@@ -69,30 +73,92 @@ jobs:
         run: |
           echo "sha=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
           echo "date=$(date -u +%F)" >> "$GITHUB_OUTPUT"
-      - name: Build and push
+      - name: Build and push by digest
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
-          push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
           provenance: true
           sbom: true
-          tags: |
-            ghcr.io/koreograf/koreograf:${{ steps.tags.outputs.version }}
-            ghcr.io/koreograf/koreograf:${{ steps.tags.outputs.tag }}
+          outputs: type=image,name=ghcr.io/koreograf/koreograf,push-by-digest=true,name-canonical=true,push=true
           build-args: |
             VERSION=${{ steps.tags.outputs.version }}
             SOURCE=https://github.com/koreograf/koreograf
             GIT_SHA=${{ steps.build-info.outputs.sha }}
             BUILT_AT=${{ steps.build-info.outputs.date }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=koreograf-release-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=koreograf-release-${{ matrix.arch }}
+      - name: Export the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+      - name: Upload the digest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  image-manifest:
+    name: image manifest
+    needs: image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      digest: ${{ steps.merge.outputs.digest }}
+      tag: ${{ steps.tags.outputs.tag }}
+    steps:
+      - name: Image tags
+        id: tags
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+      - name: Download the digests
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Log in to GHCR
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create the manifest list
+        id: merge
+        env:
+          VERSION: ${{ steps.tags.outputs.version }}
+          TAG: ${{ steps.tags.outputs.tag }}
+        run: |
+          cd /tmp/digests
+          refs=()
+          for digest in *; do
+            refs+=("ghcr.io/koreograf/koreograf@sha256:${digest}")
+          done
+          docker buildx imagetools create \
+            -t "ghcr.io/koreograf/koreograf:${VERSION}" \
+            -t "ghcr.io/koreograf/koreograf:${TAG}" \
+            "${refs[@]}"
+          digest="$(docker buildx imagetools inspect "ghcr.io/koreograf/koreograf:${TAG}" --format '{{json .Manifest}}' | jq -r .digest)"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - name: Sign the image
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.merge.outputs.digest }}
         run: cosign sign --yes "ghcr.io/koreograf/koreograf@${DIGEST}"
 
   packages:
@@ -172,7 +238,7 @@ jobs:
 
   notes:
     name: release notes
-    needs: image
+    needs: image-manifest
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -180,8 +246,8 @@ jobs:
       - name: Add the digest to the release notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DIGEST: ${{ needs.image.outputs.digest }}
-          TAG: ${{ needs.image.outputs.tag }}
+          DIGEST: ${{ needs.image-manifest.outputs.digest }}
+          TAG: ${{ needs.image-manifest.outputs.tag }}
         run: |
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             exit 0
