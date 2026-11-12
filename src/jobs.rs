@@ -1422,7 +1422,7 @@ mod tests {
         };
         {
             let db = state.db().expect("db");
-            db::insert_job(
+            crate::store::jobs::insert_job(
                 &db,
                 &db::Job {
                     id: "src-failed".into(),
@@ -1458,7 +1458,9 @@ mod tests {
         let copy = relaunch(&state, "src-failed", "admin", true).expect("relaunch");
         let params = {
             let db = state.db().expect("db");
-            let job = db::job(&db, &copy).expect("read").expect("job");
+            let job = crate::store::jobs::job(&db, &copy)
+                .expect("read")
+                .expect("job");
             assert_eq!(job.trigger, "relaunch");
             assert_eq!(job.status, "pending");
             assert!(!job.parameters.contains("secret"));
@@ -1523,7 +1525,7 @@ mod tests {
         .to_string();
         {
             let db = state.db().expect("db");
-            db::insert_job(
+            crate::store::jobs::insert_job(
                 &db,
                 &db::Job {
                     id: "src-canceled".into(),
@@ -1545,7 +1547,7 @@ mod tests {
                 },
             )
             .expect("insert canceled");
-            db::insert_job(
+            crate::store::jobs::insert_job(
                 &db,
                 &db::Job {
                     id: "src-canceled-hosts".into(),
@@ -1578,7 +1580,9 @@ mod tests {
         let copy = relaunch(&state, "src-canceled", "admin", false).expect("relaunch");
         {
             let db = state.db().expect("db");
-            let job = db::job(&db, &copy).expect("read").expect("job");
+            let job = crate::store::jobs::job(&db, &copy)
+                .expect("read")
+                .expect("job");
             assert_eq!(job.trigger, "relaunch");
             assert_eq!(job.status, "pending");
             let params = db::json_object(&job.parameters);
@@ -1603,7 +1607,9 @@ mod tests {
         let limited = relaunch(&state, "src-canceled-hosts", "admin", true).expect("limit");
         {
             let db = state.db().expect("db");
-            let job = db::job(&db, &limited).expect("read").expect("job");
+            let job = crate::store::jobs::job(&db, &limited)
+                .expect("read")
+                .expect("job");
             let params = db::json_object(&job.parameters);
             assert_eq!(params["spec"]["limit"], "web-1");
             assert_eq!(params["spec"]["tags"], "heal");
@@ -1666,7 +1672,9 @@ mod tests {
         assert!(!text.contains("koreograf_jobs_started_total{"), "{text}");
         {
             let db = state.db().expect("db");
-            let job = db::job(&db, &job_id).expect("read").expect("job");
+            let job = crate::store::jobs::job(&db, &job_id)
+                .expect("read")
+                .expect("job");
             assert_eq!(job.status, "canceled");
         }
         let _ = std::fs::remove_dir_all(dir);
@@ -1757,7 +1765,7 @@ mod tests {
             }],
             "edges": []
         });
-        db::insert_workflow(
+        crate::store::workflows::insert_workflow(
             db,
             &db::Workflow {
                 id: id.clone(),
@@ -1776,7 +1784,7 @@ mod tests {
     async fn wait_workflow(state: &Shared, id: &str) -> String {
         for _ in 0..50 {
             if let Ok(db) = state.db() {
-                if let Ok(Some(run)) = db::workflow_job(&db, id) {
+                if let Ok(Some(run)) = crate::store::workflows::workflow_job(&db, id) {
                     if matches!(run.status.as_str(), "successful" | "failed" | "canceled") {
                         return run.status;
                     }
@@ -2028,7 +2036,7 @@ mod tests {
         .to_string();
         {
             let db = state.db().expect("db");
-            db::insert_job(
+            crate::store::jobs::insert_job(
                 &db,
                 &db::Job {
                     id: "stored-shell".into(),
@@ -2129,7 +2137,7 @@ mod tests {
             let template_id = insert_shell(&db, &team_id, None, "true");
             let workflow_id =
                 insert_override_workflow(&db, &team_id, &template_id, json!({}), false);
-            db::insert_workflow_job(
+            crate::store::workflows::insert_workflow_job(
                 &db,
                 &db::WorkflowJob {
                     id: "wf-run".into(),
@@ -2145,7 +2153,7 @@ mod tests {
                 },
             )
             .expect("workflow job");
-            db::insert_job(
+            crate::store::jobs::insert_job(
                 &db,
                 &db::Job {
                     id: "node-job".into(),
@@ -2220,7 +2228,7 @@ mod tests {
         let script = format!("touch '{}'", marker.display());
         {
             let db = state.db().expect("db");
-            db::insert_job(
+            crate::store::jobs::insert_job(
                 &db,
                 &db::Job {
                     id: "bypass".into(),
@@ -2253,8 +2261,10 @@ mod tests {
         runner::execute(state.clone(), "bypass".into()).await;
         let (status, log) = {
             let db = state.db().expect("db");
-            let job = db::job(&db, "bypass").expect("read").expect("job");
-            let events = db::events_after(&db, "bypass", 0, 50).expect("events");
+            let job = crate::store::jobs::job(&db, "bypass")
+                .expect("read")
+                .expect("job");
+            let events = crate::store::jobs::events_after(&db, "bypass", 0, 50).expect("events");
             let log = events
                 .iter()
                 .map(|event| event.line.clone())

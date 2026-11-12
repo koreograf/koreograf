@@ -328,7 +328,7 @@ impl Backend for SqliteBackend {
     }
 
     fn ping(&self) -> AppResult<()> {
-        lock(&self.conn)?.query_row("SELECT 1", [], |_| Ok(()))?;
+        lock(&self.conn)?.query_row(store::sql::PING, [], |_| Ok(()))?;
         Ok(())
     }
 
@@ -955,92 +955,92 @@ impl Backend for SqliteBackend {
 
     fn list_deliveries(&self, team_id: &str, limit: i64) -> AppResult<Vec<Delivery>> {
         let conn = lock(&self.conn)?;
-        db::list_deliveries(&conn, team_id, limit)
+        store::deliveries::list_deliveries(&conn, team_id, limit)
     }
 
     fn insert_delivery(&self, item: &NewDelivery<'_>) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::insert_delivery(&conn, *item)
+        store::deliveries::insert_delivery(&conn, *item)
     }
 
     fn job(&self, id: &str) -> AppResult<Option<Job>> {
         let conn = lock(&self.conn)?;
-        db::job(&conn, id)
+        store::jobs::job(&conn, id)
     }
 
     fn list_jobs(&self, team_id: &str, query: &JobQuery) -> AppResult<(Vec<Job>, i64)> {
         let conn = lock(&self.conn)?;
-        db::list_jobs(&conn, team_id, query)
+        store::jobs::list_jobs(&conn, team_id, query)
     }
 
     fn insert_job(&self, item: &Job) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::insert_job(&conn, item)
+        store::jobs::insert_job(&conn, item)
     }
 
     fn mark_running(&self, id: &str) -> AppResult<bool> {
         let conn = lock(&self.conn)?;
-        db::mark_running(&conn, id)
+        store::jobs::mark_running(&conn, id)
     }
 
     fn set_failed_hosts(&self, id: &str, failed_hosts: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::set_failed_hosts(&conn, id, failed_hosts)
+        store::jobs::set_failed_hosts(&conn, id, failed_hosts)
     }
 
     fn set_job_parameters(&self, id: &str, parameters: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::set_job_parameters(&conn, id, parameters)
+        store::jobs::set_job_parameters(&conn, id, parameters)
     }
 
     fn finish_job(&self, id: &str, status: &str) -> AppResult<bool> {
         let conn = lock(&self.conn)?;
-        db::finish_job(&conn, id, status)
+        store::jobs::finish_job(&conn, id, status)
     }
 
     fn insert_event(&self, job_id: &str, stream: &str, line: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::insert_event(&conn, job_id, stream, line)
+        store::jobs::insert_event(&conn, job_id, stream, line)
     }
 
     fn events_after(&self, job_id: &str, after: i64, limit: i64) -> AppResult<Vec<JobEvent>> {
         let conn = lock(&self.conn)?;
-        db::events_after(&conn, job_id, after, limit)
+        store::jobs::events_after(&conn, job_id, after, limit)
     }
 
     fn events_count_between(&self, job_id: &str, after: i64, before: i64) -> AppResult<i64> {
         let conn = lock(&self.conn)?;
-        db::events_count_between(&conn, job_id, after, before)
+        store::jobs::events_count_between(&conn, job_id, after, before)
     }
 
     fn events_bytes(&self, job_id: &str) -> AppResult<i64> {
         let conn = lock(&self.conn)?;
-        db::events_bytes(&conn, job_id)
+        store::jobs::events_bytes(&conn, job_id)
     }
 
     fn events_last(&self, job_id: &str, limit: i64) -> AppResult<Vec<JobEvent>> {
         let conn = lock(&self.conn)?;
-        db::events_last(&conn, job_id, limit)
+        store::jobs::events_last(&conn, job_id, limit)
     }
 
     fn workflow_job(&self, id: &str) -> AppResult<Option<WorkflowJob>> {
         let conn = lock(&self.conn)?;
-        db::workflow_job(&conn, id)
+        store::workflows::workflow_job(&conn, id)
     }
 
     fn insert_workflow_job(&self, item: &WorkflowJob) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::insert_workflow_job(&conn, item)
+        store::workflows::insert_workflow_job(&conn, item)
     }
 
     fn set_workflow_status(&self, id: &str, status: &str, finish: bool) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::set_workflow_status(&conn, id, status, finish)
+        store::workflows::set_workflow_status(&conn, id, status, finish)
     }
 
     fn insert_workflow_node(&self, workflow_job_id: &str, node_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::insert_workflow_node(&conn, workflow_job_id, node_id)
+        store::workflows::insert_workflow_node(&conn, workflow_job_id, node_id)
     }
 
     fn set_workflow_node(
@@ -1051,30 +1051,22 @@ impl Backend for SqliteBackend {
         job_id: Option<&str>,
     ) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::set_workflow_node(&conn, workflow_job_id, node_id, phase, job_id)
+        store::workflows::set_workflow_node(&conn, workflow_job_id, node_id, phase, job_id)
     }
 
     fn workflow_nodes(&self, workflow_job_id: &str) -> AppResult<Vec<WorkflowNodeRow>> {
         let conn = lock(&self.conn)?;
-        db::workflow_nodes(&conn, workflow_job_id)
+        store::workflows::workflow_nodes(&conn, workflow_job_id)
     }
 
     fn recent_jobs(&self, team_id: &str, limit: i64) -> AppResult<Vec<Job>> {
         let conn = lock(&self.conn)?;
-        let (jobs, _) = db::list_jobs(
-            &conn,
-            team_id,
-            &db::JobQuery {
-                limit,
-                ..Default::default()
-            },
-        )?;
-        Ok(jobs)
+        store::jobs::recent_jobs(&conn, team_id, limit)
     }
 
     fn job_activity(&self, team_id: &str, from: &str, to: &str) -> AppResult<Vec<JobActivity>> {
         let conn = lock(&self.conn)?;
-        db::job_activity(&conn, team_id, from, to)
+        store::jobs::job_activity(&conn, team_id, from, to)
     }
 
     fn import_report(&self) -> AppResult<Option<serde_json::Value>> {
@@ -1084,7 +1076,7 @@ impl Backend for SqliteBackend {
 
     fn first_workflow(&self, team_id: &str) -> AppResult<Option<Workflow>> {
         let conn = lock(&self.conn)?;
-        db::first_workflow(&conn, team_id)
+        store::workflows::first_workflow(&conn, team_id)
     }
 
     fn first_hook(&self, team_id: &str) -> AppResult<Option<Hook>> {
@@ -1094,62 +1086,62 @@ impl Backend for SqliteBackend {
 
     fn list_workflows(&self, team_id: &str) -> AppResult<Vec<Workflow>> {
         let conn = lock(&self.conn)?;
-        db::list_workflows(&conn, team_id)
+        store::workflows::list_workflows(&conn, team_id)
     }
 
     fn workflow(&self, id: &str) -> AppResult<Option<Workflow>> {
         let conn = lock(&self.conn)?;
-        db::workflow(&conn, id)
+        store::workflows::workflow(&conn, id)
     }
 
     fn insert_workflow(&self, item: &Workflow) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::insert_workflow(&conn, item)
+        store::workflows::insert_workflow(&conn, item)
     }
 
     fn update_workflow(&self, item: &Workflow) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::update_workflow(&conn, item)
+        store::workflows::update_workflow(&conn, item)
     }
 
     fn delete_workflow(&self, id: &str, team_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::delete_workflow(&conn, id, team_id)
+        store::workflows::delete_workflow(&conn, id, team_id)
     }
 
     fn workflow_team(&self, id: &str) -> AppResult<Option<String>> {
         let conn = lock(&self.conn)?;
-        Ok(db::workflow(&conn, id)?.map(|item| item.team_id))
+        Ok(store::workflows::workflow(&conn, id)?.map(|item| item.team_id))
     }
 
     fn list_team_schedules(&self, team_id: &str) -> AppResult<Vec<(Schedule, String)>> {
         let conn = lock(&self.conn)?;
-        db::list_team_schedules(&conn, team_id)
+        store::schedules::list_team_schedules(&conn, team_id)
     }
 
     fn schedule(&self, id: &str) -> AppResult<Option<Schedule>> {
         let conn = lock(&self.conn)?;
-        db::schedule(&conn, id)
+        store::schedules::schedule(&conn, id)
     }
 
     fn list_schedules(&self, kind: &str, target_id: &str) -> AppResult<Vec<Schedule>> {
         let conn = lock(&self.conn)?;
-        db::list_schedules(&conn, kind, target_id)
+        store::schedules::list_schedules(&conn, kind, target_id)
     }
 
     fn insert_schedule(&self, item: &Schedule) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::insert_schedule(&conn, item)
+        store::schedules::insert_schedule(&conn, item)
     }
 
     fn update_schedule(&self, item: &Schedule) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::update_schedule(&conn, item)
+        store::schedules::update_schedule(&conn, item)
     }
 
     fn delete_schedule(&self, id: &str, team_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::delete_schedule(&conn, id, team_id)
+        store::schedules::delete_schedule(&conn, id, team_id)
     }
 
     fn set_schedule_enabled(
@@ -1161,22 +1153,29 @@ impl Backend for SqliteBackend {
         occurrence_count: i64,
     ) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::set_schedule_enabled(&conn, id, team_id, enabled, next_run_at, occurrence_count)
+        store::schedules::set_schedule_enabled(
+            &conn,
+            id,
+            team_id,
+            enabled,
+            next_run_at,
+            occurrence_count,
+        )
     }
 
     fn claim_missed(&self, id: &str, team_id: &str) -> AppResult<Option<String>> {
         let mut conn = lock(&self.conn)?;
-        db::claim_missed(&mut conn, id, team_id)
+        store::schedules::claim_missed(&mut conn, id, team_id)
     }
 
     fn restore_missed(&self, id: &str, team_id: &str, missed_at: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::restore_missed(&conn, id, team_id, missed_at)
+        store::schedules::restore_missed(&conn, id, team_id, missed_at)
     }
 
     fn due_schedules(&self, now: &str) -> AppResult<Vec<Schedule>> {
         let conn = lock(&self.conn)?;
-        db::due_schedules(&conn, now)
+        store::schedules::due_schedules(&conn, now)
     }
 
     fn advance_schedule(
@@ -1186,17 +1185,17 @@ impl Backend for SqliteBackend {
         occurrence_count: i64,
     ) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::advance_schedule(&conn, id, next_run_at, occurrence_count)
+        store::schedules::advance_schedule(&conn, id, next_run_at, occurrence_count)
     }
 
     fn note_miss(&self, id: &str, missed_at: Option<&str>) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::note_miss(&conn, id, missed_at)
+        store::schedules::note_miss(&conn, id, missed_at)
     }
 
     fn set_launch_block(&self, id: &str, reason: Option<&str>) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::set_launch_block(&conn, id, reason)
+        store::schedules::set_launch_block(&conn, id, reason)
     }
 }
 
@@ -1372,150 +1371,6 @@ fn connection_error(err: tokio_postgres::Error, target: &str) -> anyhow::Error {
     )
 }
 
-fn row_job(row: &tokio_postgres::Row) -> AppResult<Job> {
-    Ok(Job {
-        id: row.try_get(0)?,
-        team_id: row.try_get(1)?,
-        template_id: row.try_get(2)?,
-        workflow_job_id: row.try_get(3)?,
-        workflow_node_id: row.try_get(4)?,
-        name: row.try_get(5)?,
-        tool: row.try_get(6)?,
-        status: row.try_get(7)?,
-        extra_vars: row.try_get(8)?,
-        launched_by: row.try_get(9)?,
-        trigger: row.try_get(10)?,
-        started_at: row.try_get(11)?,
-        finished_at: row.try_get(12)?,
-        created_at: row.try_get(13)?,
-        parameters: row.try_get(14)?,
-        failed_hosts: row.try_get(15)?,
-    })
-}
-
-fn row_job_activity(row: &tokio_postgres::Row) -> AppResult<JobActivity> {
-    Ok(JobActivity {
-        status: row.try_get(0)?,
-        started_at: row.try_get(1)?,
-        finished_at: row.try_get(2)?,
-    })
-}
-
-fn row_job_event(row: &tokio_postgres::Row) -> AppResult<JobEvent> {
-    Ok(JobEvent {
-        id: row.try_get(0)?,
-        ts: row.try_get(1)?,
-        stream: row.try_get(2)?,
-        line: row.try_get(3)?,
-    })
-}
-
-fn row_workflow_job(row: &tokio_postgres::Row) -> AppResult<WorkflowJob> {
-    Ok(WorkflowJob {
-        id: row.try_get(0)?,
-        workflow_id: row.try_get(1)?,
-        team_id: row.try_get(2)?,
-        name: row.try_get(3)?,
-        status: row.try_get(4)?,
-        extra_vars: row.try_get(5)?,
-        launched_by: row.try_get(6)?,
-        trigger: row.try_get(7)?,
-        created_at: row.try_get(8)?,
-        finished_at: row.try_get(9)?,
-    })
-}
-
-fn row_workflow_node(row: &tokio_postgres::Row) -> AppResult<WorkflowNodeRow> {
-    Ok(WorkflowNodeRow {
-        node_id: row.try_get(0)?,
-        phase: row.try_get(1)?,
-        job_id: row.try_get(2)?,
-    })
-}
-
-const JOB_COLUMNS: &str = "id, team_id, template_id, workflow_job_id, workflow_node_id, name, \
-     tool, status, extra_vars, launched_by, trigger, started_at, finished_at, created_at, \
-     parameters, failed_hosts";
-
-const JOB_FILTER: &str = "team_id = $1
-  AND ($2 = ''
-    OR strpos(lower(name), lower($2)) > 0
-    OR strpos(lower(tool), lower($2)) > 0
-    OR strpos(lower(status), lower($2)) > 0
-    OR strpos(lower(trigger), lower($2)) > 0)
-  AND ($3 = '' OR status = $3)
-  AND ($4 = '' OR tool = $4)
-  AND ($5 = '' OR trigger = $5)
-  AND ($6 = '' OR template_id = $6)
-  AND ($7 = '' OR created_at >= $7)
-  AND ($8 = '' OR created_at <= $8)";
-
-const WORKFLOW_COLUMNS: &str = "id, team_id, name, description, graph, created_at, admin_saved";
-
-const DELIVERY_COLUMNS: &str =
-    "d.id, d.hook_id, h.name, d.status, d.summary, d.job_id, d.workflow_job_id, d.created_at";
-
-const SCHEDULE_COLUMNS: &str =
-    "id, team_id, name, target_kind, target_id, timezone, start_date, start_time, frequency, \
-     weekdays, end_kind, end_count, end_date, enabled, next_run_at, missed_at, occurrence_count, \
-     created_by, created_at, updated_at, updated_by, launch_block";
-
-fn row_workflow(row: &tokio_postgres::Row) -> AppResult<Workflow> {
-    let admin_saved: i32 = row.try_get(6)?;
-    Ok(Workflow {
-        id: row.try_get(0)?,
-        team_id: row.try_get(1)?,
-        name: row.try_get(2)?,
-        description: row.try_get(3)?,
-        graph: row.try_get(4)?,
-        created_at: row.try_get(5)?,
-        admin_saved: admin_saved != 0,
-    })
-}
-
-fn row_delivery(row: &tokio_postgres::Row) -> AppResult<Delivery> {
-    Ok(Delivery {
-        id: row.try_get(0)?,
-        hook_id: row.try_get(1)?,
-        hook_name: row.try_get(2)?,
-        status: row.try_get(3)?,
-        summary: row.try_get(4)?,
-        job_id: row.try_get(5)?,
-        workflow_job_id: row.try_get(6)?,
-        created_at: row.try_get(7)?,
-    })
-}
-
-fn row_schedule(row: &tokio_postgres::Row) -> AppResult<Schedule> {
-    let enabled: i32 = row.try_get(13)?;
-    let occurrence_count: i32 = row.try_get(16)?;
-    let end_count: Option<i32> = row.try_get(11)?;
-    Ok(Schedule {
-        id: row.try_get(0)?,
-        team_id: row.try_get(1)?,
-        name: row.try_get(2)?,
-        target_kind: row.try_get(3)?,
-        target_id: row.try_get(4)?,
-        timezone: row.try_get(5)?,
-        start_date: row.try_get(6)?,
-        start_time: row.try_get(7)?,
-        frequency: row.try_get(8)?,
-        weekdays: row.try_get(9)?,
-        end_kind: row.try_get(10)?,
-        end_count: end_count.map(i64::from),
-        end_date: row.try_get(12)?,
-        enabled: enabled != 0,
-        next_run_at: row.try_get(14)?,
-        missed_at: row.try_get(15)?,
-        occurrence_count: i64::from(occurrence_count),
-        created_by: row.try_get(17)?,
-        created_at: row.try_get(18)?,
-        updated_at: row.try_get(19)?,
-        updated_by: row.try_get(20)?,
-        launch_block: row.try_get(21)?,
-    })
-}
-
 impl Backend for PostgresBackend {
     fn engine(&self) -> &'static str {
         "postgresql"
@@ -1553,15 +1408,12 @@ impl Backend for PostgresBackend {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             let jobs: i64 = client
-                .query_one(
-                    "SELECT COUNT(*) FROM jobs WHERE status IN ('pending', 'running')",
-                    &[],
-                )
+                .query_one(&store::sql::postgres(store::jobs::JOBS_BUSY), &[])
                 .await?
                 .get(0);
             let flows: i64 = client
                 .query_one(
-                    "SELECT COUNT(*) FROM workflow_jobs WHERE status IN ('pending', 'running')",
+                    &store::sql::postgres(store::workflows::WORKFLOW_JOBS_BUSY),
                     &[],
                 )
                 .await?
@@ -1573,7 +1425,7 @@ impl Backend for PostgresBackend {
     fn ping(&self) -> AppResult<()> {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
-            client.query_one("SELECT 1", &[]).await?;
+            client.query_one(store::sql::PING, &[]).await?;
             Ok(())
         })
     }
@@ -3304,15 +3156,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &format!(
-                        "SELECT {DELIVERY_COLUMNS}
-                         FROM hook_deliveries d JOIN hooks h ON h.id = d.hook_id
-                         WHERE h.team_id = $1 ORDER BY d.created_at DESC LIMIT $2"
-                    ),
+                    &store::sql::postgres(store::deliveries::LIST_DELIVERIES),
                     &[&team_id, &limit],
                 )
                 .await?;
-            rows.iter().map(row_delivery).collect()
+            rows.iter().map(store::deliveries::row_delivery).collect()
         })
     }
 
@@ -3321,9 +3169,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "INSERT INTO hook_deliveries (
-                        id, hook_id, status, summary, payload, job_id, workflow_job_id, created_at
-                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                    &store::sql::postgres(store::deliveries::INSERT_DELIVERY),
                     &[
                         &item.id,
                         &item.hook_id,
@@ -3344,12 +3190,9 @@ impl Backend for PostgresBackend {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
-                .query_opt(
-                    &format!("SELECT {JOB_COLUMNS} FROM jobs WHERE id = $1"),
-                    &[&id],
-                )
+                .query_opt(&store::sql::postgres(&store::jobs::job_by_id_sql()), &[&id])
                 .await?;
-            row.as_ref().map(row_job).transpose()
+            row.as_ref().map(store::jobs::row_job).transpose()
         })
     }
 
@@ -3360,10 +3203,9 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &format!(
-                        "SELECT {JOB_COLUMNS} FROM jobs WHERE {JOB_FILTER}
-                         ORDER BY created_at DESC, id DESC LIMIT $9 OFFSET $10"
-                    ),
+                    &store::sql::postgres(&store::jobs::list_jobs_sql(
+                        store::sql::Dialect::Postgres,
+                    )),
                     &[
                         &team_id,
                         &query.q,
@@ -3378,10 +3220,15 @@ impl Backend for PostgresBackend {
                     ],
                 )
                 .await?;
-            let items = rows.iter().map(row_job).collect::<AppResult<Vec<_>>>()?;
+            let items = rows
+                .iter()
+                .map(store::jobs::row_job)
+                .collect::<AppResult<Vec<_>>>()?;
             let total = client
                 .query_one(
-                    &format!("SELECT COUNT(*) FROM jobs WHERE {JOB_FILTER}"),
+                    &store::sql::postgres(&store::jobs::count_jobs_sql(
+                        store::sql::Dialect::Postgres,
+                    )),
                     &[
                         &team_id,
                         &query.q,
@@ -3404,14 +3251,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "INSERT INTO jobs (
-                        id, team_id, template_id, workflow_job_id, workflow_node_id, name, tool,
-                        status, extra_vars, launched_by, trigger, started_at, finished_at,
-                        created_at, parameters, failed_hosts
-                     ) VALUES (
-                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-                        $16
-                     )",
+                    &store::sql::postgres(store::jobs::INSERT_JOB),
                     &[
                         &item.id,
                         &item.team_id,
@@ -3441,8 +3281,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    "UPDATE jobs SET status = 'running', started_at = COALESCE(started_at, $2)
-                     WHERE id = $1 AND status = 'pending'",
+                    &store::sql::postgres(store::jobs::MARK_RUNNING),
                     &[&id, &db::now()],
                 )
                 .await?;
@@ -3455,7 +3294,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "UPDATE jobs SET failed_hosts = $2 WHERE id = $1",
+                    &store::sql::postgres(store::jobs::SET_FAILED_HOSTS),
                     &[&id, &failed_hosts],
                 )
                 .await?;
@@ -3468,7 +3307,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "UPDATE jobs SET parameters = $2 WHERE id = $1",
+                    &store::sql::postgres(store::jobs::SET_JOB_PARAMETERS),
                     &[&id, &parameters],
                 )
                 .await?;
@@ -3481,8 +3320,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    "UPDATE jobs SET status = $2, finished_at = $3
-                     WHERE id = $1 AND status IN ('pending', 'running')",
+                    &store::sql::postgres(store::jobs::FINISH_JOB),
                     &[&id, &status, &db::now()],
                 )
                 .await?;
@@ -3495,7 +3333,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "INSERT INTO job_events (job_id, ts, stream, line) VALUES ($1, $2, $3, $4)",
+                    &store::sql::postgres(store::jobs::INSERT_EVENT),
                     &[&job_id, &db::now(), &stream, &line],
                 )
                 .await?;
@@ -3508,12 +3346,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    "SELECT id, ts, stream, line FROM job_events
-                     WHERE job_id = $1 AND id > $2 ORDER BY id LIMIT $3",
+                    &store::sql::postgres(store::jobs::EVENTS_AFTER),
                     &[&job_id, &after, &limit],
                 )
                 .await?;
-            rows.iter().map(row_job_event).collect()
+            rows.iter().map(store::jobs::row_job_event).collect()
         })
     }
 
@@ -3522,8 +3359,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_one(
-                    "SELECT COUNT(*) FROM job_events
-                     WHERE job_id = $1 AND id > $2 AND id < $3",
+                    &store::sql::postgres(store::jobs::EVENTS_COUNT_BETWEEN),
                     &[&job_id, &after, &before],
                 )
                 .await?;
@@ -3536,8 +3372,9 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_one(
-                    "SELECT COALESCE(SUM(octet_length(line) + 1), 0)
-                     FROM job_events WHERE job_id = $1",
+                    &store::sql::postgres(store::jobs::events_bytes_sql(
+                        store::sql::Dialect::Postgres,
+                    )),
                     &[&job_id],
                 )
                 .await?;
@@ -3550,14 +3387,13 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    "SELECT id, ts, stream, line FROM job_events
-                     WHERE job_id = $1 ORDER BY id DESC LIMIT $2",
+                    &store::sql::postgres(store::jobs::EVENTS_LAST),
                     &[&job_id, &limit],
                 )
                 .await?;
             let mut events = rows
                 .iter()
-                .map(row_job_event)
+                .map(store::jobs::row_job_event)
                 .collect::<AppResult<Vec<_>>>()?;
             events.reverse();
             Ok(events)
@@ -3569,13 +3405,13 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    "SELECT id, workflow_id, team_id, name, status, extra_vars, launched_by,
-                            trigger, created_at, finished_at
-                     FROM workflow_jobs WHERE id = $1",
+                    &store::sql::postgres(&store::workflows::workflow_job_by_id_sql()),
                     &[&id],
                 )
                 .await?;
-            row.as_ref().map(row_workflow_job).transpose()
+            row.as_ref()
+                .map(store::workflows::row_workflow_job)
+                .transpose()
         })
     }
 
@@ -3584,10 +3420,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "INSERT INTO workflow_jobs (
-                        id, workflow_id, team_id, name, status, extra_vars, launched_by,
-                        trigger, created_at, finished_at
-                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                    &store::sql::postgres(store::workflows::INSERT_WORKFLOW_JOB),
                     &[
                         &item.id,
                         &item.workflow_id,
@@ -3612,14 +3445,14 @@ impl Backend for PostgresBackend {
             if finish {
                 client
                     .execute(
-                        "UPDATE workflow_jobs SET status = $2, finished_at = $3 WHERE id = $1",
+                        &store::sql::postgres(store::workflows::SET_WORKFLOW_STATUS_FINISHED),
                         &[&id, &status, &db::now()],
                     )
                     .await?;
             } else {
                 client
                     .execute(
-                        "UPDATE workflow_jobs SET status = $2 WHERE id = $1",
+                        &store::sql::postgres(store::workflows::SET_WORKFLOW_STATUS),
                         &[&id, &status],
                     )
                     .await?;
@@ -3633,8 +3466,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "INSERT INTO workflow_nodes (workflow_job_id, node_id, phase, job_id)
-                     VALUES ($1, $2, 'pending', NULL)",
+                    &store::sql::postgres(store::workflows::INSERT_WORKFLOW_NODE),
                     &[&workflow_job_id, &node_id],
                 )
                 .await?;
@@ -3653,8 +3485,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "UPDATE workflow_nodes SET phase = $3, job_id = COALESCE($4, job_id)
-                     WHERE workflow_job_id = $1 AND node_id = $2",
+                    &store::sql::postgres(store::workflows::SET_WORKFLOW_NODE),
                     &[&workflow_job_id, &node_id, &phase, &job_id],
                 )
                 .await?;
@@ -3667,12 +3498,13 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    "SELECT node_id, phase, job_id FROM workflow_nodes
-                     WHERE workflow_job_id = $1",
+                    &store::sql::postgres(store::workflows::WORKFLOW_NODES),
                     &[&workflow_job_id],
                 )
                 .await?;
-            rows.iter().map(row_workflow_node).collect()
+            rows.iter()
+                .map(store::workflows::row_workflow_node)
+                .collect()
         })
     }
 
@@ -3682,14 +3514,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &format!(
-                        "SELECT {JOB_COLUMNS} FROM jobs WHERE team_id = $1
-                         ORDER BY created_at DESC, id DESC LIMIT $2"
-                    ),
+                    &store::sql::postgres(&store::jobs::recent_jobs_sql()),
                     &[&team_id, &limit],
                 )
                 .await?;
-            rows.iter().map(row_job).collect()
+            rows.iter().map(store::jobs::row_job).collect()
         })
     }
 
@@ -3698,16 +3527,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    "SELECT status, started_at, finished_at FROM jobs
-                     WHERE team_id = $1
-                       AND ((finished_at IS NOT NULL AND finished_at >= $2
-                             AND finished_at <= $3)
-                         OR (started_at IS NOT NULL AND started_at >= $2
-                             AND started_at <= $3))",
+                    &store::sql::postgres(store::jobs::JOB_ACTIVITY),
                     &[&team_id, &from, &to],
                 )
                 .await?;
-            rows.iter().map(row_job_activity).collect()
+            rows.iter().map(store::jobs::row_job_activity).collect()
         })
     }
 
@@ -3716,7 +3540,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    "SELECT value FROM settings WHERE key = $1",
+                    &store::sql::postgres(store::settings::SETTING),
                     &[&crate::migration::REPORT_KEY],
                 )
                 .await?;
@@ -3732,14 +3556,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    &format!(
-                        "SELECT {WORKFLOW_COLUMNS} FROM workflows
-                         WHERE team_id = $1 ORDER BY created_at LIMIT 1"
-                    ),
+                    &store::sql::postgres(&store::workflows::first_workflow_sql()),
                     &[&team_id],
                 )
                 .await?;
-            row.as_ref().map(row_workflow).transpose()
+            row.as_ref().map(store::workflows::row_workflow).transpose()
         })
     }
 
@@ -3758,14 +3579,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &format!(
-                        "SELECT {WORKFLOW_COLUMNS} FROM workflows
-                         WHERE team_id = $1 ORDER BY name"
-                    ),
+                    &store::sql::postgres(&store::workflows::list_workflows_sql()),
                     &[&team_id],
                 )
                 .await?;
-            rows.iter().map(row_workflow).collect()
+            rows.iter().map(store::workflows::row_workflow).collect()
         })
     }
 
@@ -3774,11 +3592,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    &format!("SELECT {WORKFLOW_COLUMNS} FROM workflows WHERE id = $1"),
+                    &store::sql::postgres(&store::workflows::workflow_by_id_sql()),
                     &[&id],
                 )
                 .await?;
-            row.as_ref().map(row_workflow).transpose()
+            row.as_ref().map(store::workflows::row_workflow).transpose()
         })
     }
 
@@ -3787,9 +3605,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "INSERT INTO workflows (
-                        id, team_id, name, description, graph, created_at, admin_saved
-                     ) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                    &store::sql::postgres(store::workflows::INSERT_WORKFLOW),
                     &[
                         &item.id,
                         &item.team_id,
@@ -3810,9 +3626,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    "UPDATE workflows
-                     SET name = $3, description = $4, graph = $5, admin_saved = $6
-                     WHERE id = $1 AND team_id = $2",
+                    &store::sql::postgres(store::workflows::UPDATE_WORKFLOW),
                     &[
                         &item.id,
                         &item.team_id,
@@ -3836,7 +3650,7 @@ impl Backend for PostgresBackend {
             let transaction = client.transaction().await?;
             let changed = transaction
                 .execute(
-                    "DELETE FROM workflows WHERE id = $1 AND team_id = $2",
+                    &store::sql::postgres(store::workflows::DELETE_WORKFLOW),
                     &[&id, &team_id],
                 )
                 .await?;
@@ -3845,8 +3659,8 @@ impl Backend for PostgresBackend {
             }
             transaction
                 .execute(
-                    "DELETE FROM schedules WHERE target_kind = 'workflow' AND target_id = $1",
-                    &[&id],
+                    &store::sql::postgres(store::schedules::DELETE_SCHEDULES_FOR),
+                    &[&"workflow", &id],
                 )
                 .await?;
             transaction.commit().await?;
@@ -3858,7 +3672,10 @@ impl Backend for PostgresBackend {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
-                .query_opt("SELECT team_id FROM workflows WHERE id = $1", &[&id])
+                .query_opt(
+                    &store::sql::postgres(store::workflows::WORKFLOW_TEAM),
+                    &[&id],
+                )
                 .await?;
             Ok(row.map(|row| row.get(0)))
         })
@@ -3869,29 +3686,12 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &format!(
-                        "SELECT {SCHEDULE_COLUMNS},
-                            COALESCE(
-                                CASE target_kind
-                                    WHEN 'template' THEN (
-                                        SELECT name FROM templates WHERE id = schedules.target_id
-                                    )
-                                    WHEN 'workflow' THEN (
-                                        SELECT name FROM workflows WHERE id = schedules.target_id
-                                    )
-                                    ELSE ''
-                                END,
-                                ''
-                            )
-                         FROM schedules
-                         WHERE team_id = $1
-                         ORDER BY name"
-                    ),
+                    &store::sql::postgres(&store::schedules::list_team_schedules_sql()),
                     &[&team_id],
                 )
                 .await?;
             rows.iter()
-                .map(|row| Ok((row_schedule(row)?, row.try_get(22)?)))
+                .map(|row| Ok((store::schedules::row_schedule(row)?, row.try_get(22)?)))
                 .collect()
         })
     }
@@ -3901,11 +3701,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    &format!("SELECT {SCHEDULE_COLUMNS} FROM schedules WHERE id = $1"),
+                    &store::sql::postgres(&store::schedules::schedule_by_id_sql()),
                     &[&id],
                 )
                 .await?;
-            row.as_ref().map(row_schedule).transpose()
+            row.as_ref().map(store::schedules::row_schedule).transpose()
         })
     }
 
@@ -3914,14 +3714,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &format!(
-                        "SELECT {SCHEDULE_COLUMNS} FROM schedules
-                         WHERE target_kind = $1 AND target_id = $2 ORDER BY name"
-                    ),
+                    &store::sql::postgres(&store::schedules::list_schedules_sql()),
                     &[&kind, &target_id],
                 )
                 .await?;
-            rows.iter().map(row_schedule).collect()
+            rows.iter().map(store::schedules::row_schedule).collect()
         })
     }
 
@@ -3931,13 +3728,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "INSERT INTO schedules (
-                        id, team_id, name, target_kind, target_id, timezone, start_date, start_time,
-                        frequency, weekdays, end_kind, end_count, end_date, enabled, next_run_at,
-                        missed_at, occurrence_count, created_by, created_at, updated_at, updated_by,
-                        launch_block
-                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-                        $15, $16, $17, $18, $19, $20, $21, $22)",
+                    &store::sql::postgres(store::schedules::INSERT_SCHEDULE),
                     &[
                         &item.id,
                         &item.team_id,
@@ -3974,12 +3765,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    "UPDATE schedules SET
-                        name = $2, timezone = $3, start_date = $4, start_time = $5, frequency = $6,
-                        weekdays = $7, end_kind = $8, end_count = $9, end_date = $10,
-                        enabled = $11, next_run_at = $12, missed_at = $13, occurrence_count = $14,
-                        updated_at = $15, updated_by = $16, launch_block = $17
-                     WHERE id = $1 AND team_id = $18",
+                    &store::sql::postgres(store::schedules::UPDATE_SCHEDULE),
                     &[
                         &item.id,
                         &item.name,
@@ -4014,7 +3800,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    "DELETE FROM schedules WHERE id = $1 AND team_id = $2",
+                    &store::sql::postgres(store::schedules::DELETE_SCHEDULE),
                     &[&id, &team_id],
                 )
                 .await?;
@@ -4037,9 +3823,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    "UPDATE schedules SET enabled = $3, next_run_at = $4,
-                        occurrence_count = $5, updated_at = $6
-                     WHERE id = $1 AND team_id = $2",
+                    &store::sql::postgres(store::schedules::SET_SCHEDULE_ENABLED),
                     &[
                         &id,
                         &team_id,
@@ -4063,9 +3847,9 @@ impl Backend for PostgresBackend {
             let transaction = client.transaction().await?;
             let row = transaction
                 .query_opt(
-                    "SELECT missed_at FROM schedules
-                     WHERE id = $1 AND team_id = $2 AND missed_at IS NOT NULL
-                     FOR UPDATE",
+                    &store::sql::postgres(store::schedules::claim_missed_sql(
+                        store::sql::Dialect::Postgres,
+                    )),
                     &[&id, &team_id],
                 )
                 .await?;
@@ -4075,8 +3859,7 @@ impl Backend for PostgresBackend {
             let missed_at: String = row.get(0);
             transaction
                 .execute(
-                    "UPDATE schedules SET missed_at = NULL, updated_at = $3
-                     WHERE id = $1 AND team_id = $2 AND missed_at IS NOT NULL",
+                    &store::sql::postgres(store::schedules::CLEAR_MISSED),
                     &[&id, &team_id, &db::now()],
                 )
                 .await?;
@@ -4090,8 +3873,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "UPDATE schedules SET missed_at = $3, updated_at = $4
-                     WHERE id = $1 AND team_id = $2 AND missed_at IS NULL",
+                    &store::sql::postgres(store::schedules::RESTORE_MISSED),
                     &[&id, &team_id, &missed_at, &db::now()],
                 )
                 .await?;
@@ -4104,15 +3886,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &format!(
-                        "SELECT {SCHEDULE_COLUMNS} FROM schedules
-                         WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= $1
-                         ORDER BY next_run_at"
-                    ),
+                    &store::sql::postgres(&store::schedules::due_schedules_sql()),
                     &[&now],
                 )
                 .await?;
-            rows.iter().map(row_schedule).collect()
+            rows.iter().map(store::schedules::row_schedule).collect()
         })
     }
 
@@ -4126,8 +3904,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "UPDATE schedules SET next_run_at = $2, occurrence_count = $3, updated_at = $4
-                     WHERE id = $1",
+                    &store::sql::postgres(store::schedules::ADVANCE_SCHEDULE),
                     &[&id, &next_run_at, &(occurrence_count as i32), &db::now()],
                 )
                 .await?;
@@ -4140,7 +3917,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "UPDATE schedules SET missed_at = $2, updated_at = $3 WHERE id = $1",
+                    &store::sql::postgres(store::schedules::NOTE_MISS),
                     &[&id, &missed_at, &db::now()],
                 )
                 .await?;
@@ -4153,7 +3930,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "UPDATE schedules SET launch_block = $2, updated_at = $3 WHERE id = $1",
+                    &store::sql::postgres(store::schedules::SET_LAUNCH_BLOCK),
                     &[&id, &reason, &db::now()],
                 )
                 .await?;

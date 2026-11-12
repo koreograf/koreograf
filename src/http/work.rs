@@ -1199,7 +1199,8 @@ mod tests {
         {
             let db = state.db().unwrap();
             for i in 1..=2_500 {
-                db::insert_event(&db, "job", "stdout", &format!("line-{i}")).unwrap();
+                crate::store::jobs::insert_event(&db, "job", "stdout", &format!("line-{i}"))
+                    .unwrap();
             }
         }
         let events = events_for_page(state.store(), "job").unwrap();
@@ -1224,8 +1225,10 @@ mod tests {
         {
             let db = state.db().unwrap();
             for i in 1..=2_500 {
-                db::insert_event(&db, "job", "stdout", &format!("line-{i}")).unwrap();
-                db::insert_event(&db, "other", "stdout", &format!("other-{i}")).unwrap();
+                crate::store::jobs::insert_event(&db, "job", "stdout", &format!("line-{i}"))
+                    .unwrap();
+                crate::store::jobs::insert_event(&db, "other", "stdout", &format!("other-{i}"))
+                    .unwrap();
             }
         }
         let events = events_for_page(state.store(), "job").unwrap();

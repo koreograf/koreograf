@@ -1127,7 +1127,7 @@ mod tests {
             )
             .expect("template");
             let now = db::now();
-            db::insert_schedule(
+            crate::store::schedules::insert_schedule(
                 &db,
                 &db::Schedule {
                     id: "operator-schedule".into(),
@@ -1159,7 +1159,7 @@ mod tests {
         };
         let item = {
             let db = state.db().expect("db");
-            db::schedule(&db, "operator-schedule")
+            crate::store::schedules::schedule(&db, "operator-schedule")
                 .expect("read")
                 .expect("schedule")
         };
@@ -1192,7 +1192,7 @@ mod tests {
         }
         let item = {
             let db = state.db().expect("db");
-            db::schedule(&db, "operator-schedule")
+            crate::store::schedules::schedule(&db, "operator-schedule")
                 .expect("read")
                 .expect("schedule")
         };
@@ -1285,7 +1285,7 @@ mod tests {
             )
             .expect("template");
             let now = db::now();
-            db::insert_schedule(
+            crate::store::schedules::insert_schedule(
                 &db,
                 &db::Schedule {
                     id: "member-schedule".into(),
@@ -1317,7 +1317,7 @@ mod tests {
         };
         let load = || {
             let db = state.db().expect("db");
-            db::schedule(&db, "member-schedule")
+            crate::store::schedules::schedule(&db, "member-schedule")
                 .expect("read")
                 .expect("schedule")
         };
