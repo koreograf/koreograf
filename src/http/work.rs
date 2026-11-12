@@ -6,7 +6,8 @@ use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
+use axum::routing::{delete, get, post, put};
+use axum::{Json, Router};
 use futures::stream::Stream;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -26,6 +27,35 @@ use super::{
     accepted, blank, created, gate, job_json, no_content, require_description, require_name,
     team_header,
 };
+
+pub(super) fn routes() -> Router<Shared> {
+    Router::new()
+        .route("/templates", get(list_templates).post(create_template))
+        .route(
+            "/templates/{id}",
+            put(update_template).delete(delete_template),
+        )
+        .route("/templates/{id}/launch", post(launch_template))
+        .route("/jobs", get(list_jobs))
+        .route("/jobs/{id}", get(get_job))
+        .route("/jobs/{id}/cancel", post(cancel_job))
+        .route("/jobs/{id}/relaunch", post(relaunch_job))
+        .route("/jobs/{id}/output", get(job_output))
+        .route("/jobs/{id}/events", get(job_events))
+        .route("/workflows", get(list_workflows).post(create_workflow))
+        .route(
+            "/workflows/{id}",
+            get(get_workflow)
+                .put(update_workflow)
+                .delete(delete_workflow),
+        )
+        .route("/workflows/{id}/launch", post(launch_workflow))
+        .route("/workflow-jobs/{id}", get(get_workflow_job))
+        .route("/hooks", get(list_hooks).post(create_hook))
+        .route("/hooks/{id}", delete(delete_hook).put(update_hook))
+        .route("/hooks/{id}/test", post(test_hook))
+        .route("/hooks/{id}/deliveries", get(list_deliveries))
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

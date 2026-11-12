@@ -10,6 +10,7 @@ mod hooks;
 mod inventories;
 mod jobs;
 mod projects;
+mod routes;
 mod schedules;
 mod settings;
 mod teams;

@@ -7,7 +7,8 @@ use axum::body::Body;
 use axum::extract::State;
 use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
+use axum::routing::{get, post};
+use axum::{Json, Router};
 use http_body_util::BodyExt;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -19,6 +20,14 @@ use crate::db::Team;
 use crate::error::ApiJson;
 use crate::settings;
 use crate::Shared;
+
+pub(crate) fn routes() -> Router<Shared> {
+    Router::new()
+        .route("/assistant", get(status))
+        .route("/assistant/chat", post(chat))
+        .route("/assistant/confirm", post(confirm))
+        .route("/assistant/cancel", post(cancel))
+}
 
 const DEFAULT_MAX_TOKENS: u32 = 800;
 const DEFAULT_TIMEOUT_SECS: u64 = 60;

@@ -1,7 +1,8 @@
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
-use axum::Json;
+use axum::routing::{get, post, put};
+use axum::{Json, Router};
 use chrono::{Timelike, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -15,6 +16,23 @@ use crate::schedule::{self, Input, Rule};
 use crate::Shared;
 
 use super::{created, gate, no_content, require_name, team_header};
+
+pub(super) fn routes() -> Router<Shared> {
+    Router::new()
+        .route(
+            "/templates/{id}/schedules",
+            get(list_for_template).post(create_for_template),
+        )
+        .route(
+            "/workflows/{id}/schedules",
+            get(list_for_workflow).post(create_for_workflow),
+        )
+        .route("/schedules", get(list_for_team))
+        .route("/schedules/preview", post(preview))
+        .route("/schedules/{id}", put(update).delete(remove))
+        .route("/schedules/{id}/enabled", post(set_enabled))
+        .route("/schedules/{id}/missed", post(answer_missed))
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

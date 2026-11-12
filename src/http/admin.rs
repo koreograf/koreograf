@@ -1,8 +1,9 @@
 use axum::body::Bytes;
-use axum::extract::{Query, State};
+use axum::extract::{DefaultBodyLimit, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
+use axum::routing::{get, post};
+use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
@@ -13,6 +14,16 @@ use crate::db;
 use crate::dbmigrate::{self, MigrationStatus, PendingTarget, Runtime};
 use crate::error::{ApiError, ApiJson, AppResult};
 use crate::Shared;
+
+pub(super) fn routes() -> Router<Shared> {
+    Router::new()
+        .route("/maintenance", get(maintenance_status))
+        .route("/admin/backup", get(download).post(restore))
+        .route("/admin/database/status", get(database_status))
+        .route("/admin/database/check", post(database_check))
+        .route("/admin/database/migrate", post(database_migrate))
+        .layer(DefaultBodyLimit::max(256 * 1024 * 1024))
+}
 
 #[derive(Deserialize, Default)]
 pub struct DownloadQuery {

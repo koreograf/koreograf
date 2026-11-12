@@ -6,7 +6,8 @@ use axum::extract::{ConnectInfo, FromRequestParts, Path, State};
 use axum::http::request::Parts;
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
+use axum::routing::{delete, get, post};
+use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -17,6 +18,20 @@ use crate::db::{self, User};
 use crate::error::{ApiError, ApiJson, AppResult};
 use crate::ldap;
 use crate::Shared;
+
+pub(super) fn routes() -> Router<Shared> {
+    Router::new()
+        .route("/login", post(login))
+        .route("/logout", post(logout))
+        .route("/me", get(me).put(update_me))
+        .route("/me/tokens", get(list_tokens).post(create_token))
+        .route("/me/tokens/{id}", delete(delete_token))
+        .route("/users", get(list_users).post(create_user))
+        .route(
+            "/users/{id}",
+            get(get_user).put(update_user).delete(delete_user),
+        )
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

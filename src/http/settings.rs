@@ -1,5 +1,6 @@
 use axum::extract::State;
-use axum::Json;
+use axum::routing::get;
+use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -7,6 +8,10 @@ use crate::auth::AuthUser;
 use crate::error::{ApiError, ApiJson, AppResult};
 use crate::settings::{self, LlmWrite, SettingsWrite};
 use crate::Shared;
+
+pub(super) fn routes() -> Router<Shared> {
+    Router::new().route("/settings", get(get_settings).put(put_settings))
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
