@@ -8,6 +8,41 @@ use crate::common::{call_cookie as call, call_raw_headers as call_raw};
 
 use crate::common::*;
 
+const DYNAMIC_PREFIX_KEYS: [(&str, &[&str]); 3] = [
+    (
+        "preflight_runtime_",
+        &[
+            "preflight_runtime_missing",
+            "preflight_runtime_not_answering",
+            "preflight_runtime_timeout",
+        ],
+    ),
+    (
+        "schedule.day.",
+        &[
+            "schedule.day.fr",
+            "schedule.day.mo",
+            "schedule.day.sa",
+            "schedule.day.su",
+            "schedule.day.th",
+            "schedule.day.tu",
+            "schedule.day.we",
+        ],
+    ),
+    (
+        "schedule.short.",
+        &[
+            "schedule.short.fr",
+            "schedule.short.mo",
+            "schedule.short.sa",
+            "schedule.short.su",
+            "schedule.short.th",
+            "schedule.short.tu",
+            "schedule.short.we",
+        ],
+    ),
+];
+
 #[tokio::test]
 async fn a_request_without_json_returns_a_catalog_error() {
     let harness = TestApp::boot("json", Options::default());
@@ -127,17 +162,17 @@ fn message_catalogs_match_and_cover_the_ui() {
         "API keys missing from the catalogs: {api_missing:?}"
     );
 
-    let dynamic_prefixes = ["schedule.day.", "schedule.short."];
+    let dynamic_prefixes = DYNAMIC_PREFIX_KEYS.map(|(prefix, _)| prefix);
     let index = std::fs::read_to_string(root.join("web/index.html")).expect("index.html");
     let web = format!("{script}\n{index}");
     let rust = rust_sources(&root.join("src"));
     let mut unused = BTreeSet::new();
     for key in de.keys() {
         if quoted_literal(&web, key)
-            || rust.contains(key)
+            || quoted_literal(&rust, key)
             || dynamic_prefixes
                 .iter()
-                .any(|prefix| key.starts_with(prefix))
+                .any(|prefix| key.starts_with(*prefix))
         {
             continue;
         }
@@ -167,6 +202,24 @@ fn message_catalogs_match_and_cover_the_ui() {
         runner.contains("konnte den remote-verweis"),
         "git still reports a missing remote ref in German"
     );
+}
+
+#[test]
+fn dynamic_catalog_prefixes_have_their_keys() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let de = load_catalog(&root.join("web/i18n/de.json"));
+    let en = load_catalog(&root.join("web/i18n/en.json"));
+    for (prefix, keys) in DYNAMIC_PREFIX_KEYS {
+        assert!(!keys.is_empty(), "{prefix} has no expected keys");
+        for key in keys {
+            assert!(
+                key.starts_with(prefix),
+                "{key} does not start with {prefix}"
+            );
+            assert!(de.contains_key(*key), "de is missing {key}");
+            assert!(en.contains_key(*key), "en is missing {key}");
+        }
+    }
 }
 
 fn quoted_literal(source: &str, key: &str) -> bool {
