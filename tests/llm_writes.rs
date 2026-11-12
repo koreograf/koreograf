@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;

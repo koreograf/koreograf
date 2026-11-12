@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 
