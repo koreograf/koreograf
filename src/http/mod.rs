@@ -72,11 +72,16 @@ fn same_origin(expected: &(String, String, u16), actual: &(String, String, u16))
     expected == actual
 }
 
+fn maintenance_allowed(method: &Method, path: &str) -> bool {
+    matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
+        || matches!(
+            path,
+            "/api/login" | "/api/logout" | "/api/v1/login" | "/api/v1/logout"
+        )
+}
+
 async fn maintenance_guard(State(state): State<Shared>, req: Request, next: Next) -> Response {
-    if !state.in_maintenance()
-        || matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS)
-        || matches!(req.uri().path(), "/api/login" | "/api/logout")
-    {
+    if !state.in_maintenance() || maintenance_allowed(req.method(), req.uri().path()) {
         return next.run(req).await;
     }
     ApiError::unavailable("maintenance_mode_is_active").into_response()
@@ -157,8 +162,14 @@ fn api_routes() -> Router<Shared> {
         .fallback(not_found)
 }
 
+fn api_prefixes(routes: Router<Shared>) -> Router<Shared> {
+    Router::new()
+        .nest("/api/v1", routes.clone())
+        .nest("/api", routes)
+}
+
 pub(crate) fn api_router(state: Shared) -> Router {
-    Router::new().nest("/api", api_routes()).with_state(state)
+    api_prefixes(api_routes()).with_state(state)
 }
 
 fn mcp_router(state: Shared) -> Router<Shared> {
@@ -200,13 +211,9 @@ pub fn router(state: Shared) -> Router {
         .route("/", get(index))
         .route("/{*path}", any(asset))
         .route("/hooks/{id}/{token}", post(work::ingest))
-        .nest(
-            "/api",
-            api_routes().layer(axum::middleware::from_fn_with_state(
-                state.clone(),
-                origin_guard,
-            )),
-        );
+        .merge(api_prefixes(api_routes().layer(
+            axum::middleware::from_fn_with_state(state.clone(), origin_guard),
+        )));
     if state.cfg.mcp {
         app = app.merge(mcp_router(state.clone()));
     }
@@ -526,7 +533,25 @@ pub fn no_content() -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{require_description, require_name};
+    use axum::http::Method;
+
+    use super::{maintenance_allowed, require_description, require_name};
+
+    #[test]
+    fn maintenance_keeps_both_sign_in_paths_open() {
+        for prefix in ["/api", "/api/v1"] {
+            assert!(maintenance_allowed(
+                &Method::POST,
+                &format!("{prefix}/login")
+            ));
+            assert!(maintenance_allowed(
+                &Method::POST,
+                &format!("{prefix}/logout")
+            ));
+            assert!(!maintenance_allowed(&Method::POST, &format!("{prefix}/me")));
+        }
+        assert!(maintenance_allowed(&Method::GET, "/api/v1/jobs"));
+    }
 
     #[test]
     fn names_and_descriptions_count_characters() {

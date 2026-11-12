@@ -21,11 +21,11 @@ function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (ch) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
 }
 function h(text) { return esc(text); }
-if (backupDownloadUrl(true) !== "/api/admin/backup?tofu_state=true") {
+if (backupDownloadUrl(true) !== "/api/v1/admin/backup?tofu_state=true") {
   console.error(backupDownloadUrl(true));
   process.exit(1);
 }
-if (backupDownloadUrl(false) !== "/api/admin/backup") {
+if (backupDownloadUrl(false) !== "/api/v1/admin/backup") {
   console.error(backupDownloadUrl(false));
   process.exit(1);
 }
@@ -154,7 +154,7 @@ fn ui_reads_version_and_links_the_repository() {
             "a page does not request the version"
         );
     }
-    assert!(load.contains("/api/version"));
+    assert!(load.contains("/api/v1/version"));
     assert!(load.contains("data.commit"));
     assert!(version_slot.contains("https://github.com/koreograf/koreograf"));
     assert!(version_slot.contains("target=\"_blank\""));
@@ -171,7 +171,7 @@ fn auto_mode_names_a_missing_runtime() {
     assert!(script.contains("id=\"environment-runtime-warning\""));
     assert!(script.contains("this_execution_environment_is_ignored_until_docker_or"));
     assert!(script.contains("no_container_runtime"));
-    assert!(script.contains("api(\"GET\", \"/api/runner\")"));
+    assert!(script.contains("api(\"GET\", \"/api/v1/runner\")"));
     assert_environment_warning_cases(&script);
     let en = std::fs::read_to_string(root.join("web/i18n/en.json")).expect("en");
     let de = std::fs::read_to_string(root.join("web/i18n/de.json")).expect("de");
@@ -426,9 +426,9 @@ fn credentials_and_admin_objects_use_the_edit_overlay() {
     ));
     let credential = extract_braced_function(&script, "function openCredentialDialog");
     assert!(credential.contains("openEditDialog({"));
-    assert!(credential.contains("api(\"POST\", \"/api/credentials\""));
-    assert!(credential.contains("api(\"PUT\", `/api/credentials/"));
-    assert!(credential.contains("api(\"DELETE\", `/api/credentials/"));
+    assert!(credential.contains("api(\"POST\", \"/api/v1/credentials\""));
+    assert!(credential.contains("api(\"PUT\", `/api/v1/credentials/"));
+    assert!(credential.contains("api(\"DELETE\", `/api/v1/credentials/"));
     assert!(credential.contains("data-credential-delete"));
     assert!(credential.contains("hint: \"fields_marked_with_a_star_are_required\""));
     assert!(credential.contains("hint: \"\","));
@@ -441,15 +441,15 @@ fn credentials_and_admin_objects_use_the_edit_overlay() {
     assert!(organizations.contains("openOrganizationDialog(null)"));
     let organization = extract_braced_function(&script, "function openOrganizationDialog");
     assert!(organization.contains("openEditDialog({"));
-    assert!(organization.contains("api(\"POST\", \"/api/organizations\""));
-    assert!(organization.contains("api(\"PUT\", `/api/organizations/"));
+    assert!(organization.contains("api(\"POST\", \"/api/v1/organizations\""));
+    assert!(organization.contains("api(\"PUT\", `/api/v1/organizations/"));
     assert!(organization.contains("{ id: \"general\", label: t(\"general\")"));
     assert!(organization.contains("{ id: \"teams\", label: t(\"teams\")"));
     assert!(organization.contains("onTab: editing ? (tab) => rememberEditHash("));
     let team = extract_braced_function(&script, "function openTeamDialog");
     assert!(team.contains("openEditDialog({"));
-    assert!(team.contains("api(\"POST\", \"/api/teams\""));
-    assert!(team.contains("api(\"PUT\", `/api/teams/"));
+    assert!(team.contains("api(\"POST\", \"/api/v1/teams\""));
+    assert!(team.contains("api(\"PUT\", `/api/v1/teams/"));
     assert!(!script.contains("id=\"team-form\""));
     let users = extract_braced_function(&script, "async function pageUsers");
     assert!(users.contains("openUserDialog(item, teams, request.tab)"));
@@ -458,11 +458,11 @@ fn credentials_and_admin_objects_use_the_edit_overlay() {
     assert!(user.contains("openEditDialog({"));
     assert!(user.contains("{ id: \"account\", label: t(\"account\")"));
     assert!(user.contains("{ id: \"memberships\", label: t(\"memberships\")"));
-    assert!(user.contains("api(\"PUT\", `/api/users/"));
-    assert!(user.contains("api(\"DELETE\", `/api/users/"));
+    assert!(user.contains("api(\"PUT\", `/api/v1/users/"));
+    assert!(user.contains("api(\"DELETE\", `/api/v1/users/"));
     assert!(user.contains("onTab: (tab) => rememberEditHash("));
     let create = extract_braced_function(&script, "function openUserCreateDialog");
-    assert!(create.contains("api(\"POST\", \"/api/users\""));
+    assert!(create.contains("api(\"POST\", \"/api/v1/users\""));
     assert!(create.contains("class=\"field required\""));
     assert!(!script.contains("id=\"create-user\""));
     for function in [&credential, &organization, &team, &create] {
@@ -483,8 +483,8 @@ fn projects_and_inventories_use_the_edit_overlay() {
     assert!(projects.contains("clearEditHash();"));
     let project = extract_braced_function(&script, "async function openProjectDialog");
     assert!(project.contains("openEditDialog({"));
-    assert!(project.contains("api(\"POST\", \"/api/projects\""));
-    assert!(project.contains("api(\"PUT\", `/api/projects/"));
+    assert!(project.contains("api(\"POST\", \"/api/v1/projects\""));
+    assert!(project.contains("api(\"PUT\", `/api/v1/projects/"));
     assert!(project.contains("{ id: \"general\", label: t(\"general\")"));
     assert!(project.contains("{ id: \"source\", label: t(\"source_2\")"));
     assert!(project.contains("{ id: \"assignment\", label: t(\"assignment\")"));
@@ -504,8 +504,8 @@ fn projects_and_inventories_use_the_edit_overlay() {
     assert!(inventories.contains("#/inventories?new=1"));
     let inventory = extract_braced_function(&script, "async function openInventoryDialog");
     assert!(inventory.contains("openEditDialog({"));
-    assert!(inventory.contains("api(\"POST\", \"/api/inventories\""));
-    assert!(inventory.contains("api(\"PUT\", `/api/inventories/"));
+    assert!(inventory.contains("api(\"POST\", \"/api/v1/inventories\""));
+    assert!(inventory.contains("api(\"PUT\", `/api/v1/inventories/"));
     assert!(inventory.contains("bindSourcePicks(projects, credentials)"));
     assert!(inventory.contains("markSaved();"));
     assert!(inventory.contains("close();"));
@@ -533,8 +533,8 @@ fn hooks_environments_and_team_members_use_the_edit_overlay() {
     assert!(hooks.contains("clearEditHash();"));
     let hook = extract_braced_function(&script, "async function openHookDialog");
     assert!(hook.contains("openEditDialog({"));
-    assert!(hook.contains("api(\"POST\", \"/api/hooks\""));
-    assert!(hook.contains("api(\"PUT\", `/api/hooks/"));
+    assert!(hook.contains("api(\"POST\", \"/api/v1/hooks\""));
+    assert!(hook.contains("api(\"PUT\", `/api/v1/hooks/"));
     assert!(hook.contains("jsonObject(form.extra_vars.value"));
     assert!(hook.contains("markSaved();"));
     assert!(hook.contains("close();"));
@@ -548,8 +548,8 @@ fn hooks_environments_and_team_members_use_the_edit_overlay() {
     assert!(runtime.contains("clearEditHash();"));
     let environment = extract_braced_function(&script, "function openEnvironmentDialog");
     assert!(environment.contains("openEditDialog({"));
-    assert!(environment.contains("api(\"POST\", \"/api/environments\""));
-    assert!(environment.contains("api(\"PUT\", `/api/environments/"));
+    assert!(environment.contains("api(\"POST\", \"/api/v1/environments\""));
+    assert!(environment.contains("api(\"PUT\", `/api/v1/environments/"));
     assert!(environment.contains("environmentImagePlaceholder(dialog.form.tool.value)"));
     assert!(environment.contains("markSaved();"));
     assert!(environment.contains("close();"));
@@ -564,7 +564,7 @@ fn hooks_environments_and_team_members_use_the_edit_overlay() {
     assert!(team.contains("#/team?new=member"));
     let member = extract_braced_function(&script, "function openMemberDialog");
     assert!(member.contains("openEditDialog({"));
-    assert!(member.contains("api(\"POST\", `/api/teams/${encodeURIComponent(teamId)}/members`"));
+    assert!(member.contains("api(\"POST\", `/api/v1/teams/${encodeURIComponent(teamId)}/members`"));
     assert!(member.contains("markSaved();"));
     assert!(member.contains("close();"));
     assert!(member.contains("await route();"));
@@ -604,8 +604,8 @@ fn template_create_and_edit_use_the_tabbed_overlay() {
     assert!(dialog.contains("#tofu-options"));
     assert!(dialog.contains("#shell-options"));
     assert!(dialog.contains("environmentOptions(tool, selected)"));
-    assert!(dialog.contains("api(\"POST\", \"/api/templates\""));
-    assert!(dialog.contains("api(\"PUT\", `/api/templates/"));
+    assert!(dialog.contains("api(\"POST\", \"/api/v1/templates\""));
+    assert!(dialog.contains("api(\"PUT\", `/api/v1/templates/"));
     assert!(dialog.contains("markSaved();"));
     assert!(dialog.contains("close();"));
     assert!(dialog.contains("await route();"));
@@ -618,7 +618,7 @@ fn template_create_and_edit_use_the_tabbed_overlay() {
     assert!(dialog[submit..tab].contains("throw error"));
     assert!(!dialog[submit..tab].contains("handle(error)"));
     let remove = extract_braced_function(&script, "async function deleteTemplate");
-    assert!(remove.contains("api(\"DELETE\", `/api/templates/"));
+    assert!(remove.contains("api(\"DELETE\", `/api/v1/templates/"));
     assert!(remove.contains("markSaved();"));
     assert!(remove.contains("dialog.close();"));
     assert!(remove.contains("await route();"));
@@ -903,7 +903,7 @@ fn workflow_create_uses_the_edit_overlay() {
     assert!(dialog.contains("name=\"name\" required"));
     assert!(dialog.contains("maxlength=\"1000\""));
     assert!(dialog.contains("submit: t(\"create_and_open\")"));
-    assert!(dialog.contains("api(\"POST\", \"/api/workflows\""));
+    assert!(dialog.contains("api(\"POST\", \"/api/v1/workflows\""));
     assert!(dialog.contains("graph: { nodes: [], edges: [] }"));
     assert!(dialog.contains("markSaved();"));
     assert!(dialog.contains("close();"));
@@ -946,7 +946,7 @@ function submit() {{
 openWorkflowDialog();
 check(captured.title === "new_workflow", "workflow overlay title is missing");
 submit().then(async () => {{
-  check(posted.method === "POST" && posted.path === "/api/workflows", "workflow create did not post");
+  check(posted.method === "POST" && posted.path === "/api/v1/workflows", "workflow create did not post");
   check(posted.body.name === "Heal" && posted.body.description === "restart", "workflow body is wrong");
   check(posted.body.graph.nodes.length === 0 && posted.body.graph.edges.length === 0, "workflow graph is not empty");
   check(saved === 1 && closed === 1 && navigated === "#/workflows/w1", "workflow create did not open the editor");
@@ -1297,7 +1297,7 @@ fn the_preflight_notice_uses_the_missing_tool_and_runtime() {
     let script = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("web/app.js"))
         .expect("app.js");
     assert!(script.contains("id=\"preflight-check\""));
-    assert!(script.contains("api(\"GET\", \"/api/runner/preflight\")"));
+    assert!(script.contains("api(\"GET\", \"/api/v1/runner/preflight\")"));
     let function = extract_braced_function(&script, "function preflightNotices(report)");
     let probe = format!(
         r#"{function}

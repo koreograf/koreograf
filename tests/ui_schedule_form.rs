@@ -32,8 +32,8 @@ check(mount.includes("data-schedule-new"), "the empty state has no create contro
 check(mount.includes("schedule_empty_hint"), "the empty state does not explain a schedule");
 check(/all && !items\.length/.test(mount), "the schedules page has no empty state");
 const picker = extractFunction("openNewScheduleDialog");
-check(picker.includes("/api/templates"), "the picker does not list templates");
-check(picker.includes("/api/workflows"), "the picker does not list workflows");
+check(picker.includes("/api/v1/templates"), "the picker does not list templates");
+check(picker.includes("/api/v1/workflows"), "the picker does not list workflows");
 check(picker.includes("schedule_needs_target"), "the picker does not explain a missing target");
 const form = extractFunction("openScheduleForm");
 check(form.includes('name="target_ref"'), "the schedule form cannot pick a template or workflow");
