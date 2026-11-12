@@ -1,28 +1,30 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use axum::extract::{Path, Query, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use chrono::{DateTime, Duration as ChronoDuration, NaiveDate, SecondsFormat, TimeZone, Utc};
 use chrono_tz::Tz;
-use serde::Deserialize;
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, Role};
 use crate::backend::Backend;
-use crate::cacheinfo;
-use crate::db::{self, Credential, Environment, Inventory, InventorySource, Project};
+use crate::cacheinfo::{self, CacheEntry};
+use crate::db::{
+    self, Credential, Delivery, Environment, Inventory, InventorySource, Organization, Project,
+};
 use crate::error::{ApiError, ApiJson, AppResult};
-use crate::inventory::{self, InventoryData, InventoryHost};
+use crate::inventory::{self, EffectiveVar, InventoryData, InventoryHost};
 use crate::jobs;
+use crate::preflight;
 use crate::runner;
 use crate::Shared;
 
 use super::{
-    blank, check_static_ini, created, gate, no_content, require_description, require_name,
-    team_header,
+    blank, check_static_ini, gate, no_content, require_description, require_name, team_header,
 };
 
 pub(super) fn routes() -> Router<Shared> {
@@ -203,11 +205,437 @@ pub struct DashboardQuery {
     timezone: String,
 }
 
+#[derive(Serialize)]
+pub(super) struct RunnerStatusResponse {
+    runner_mode: &'static str,
+    local_jobs: &'static str,
+    runtime: Option<String>,
+    container_image: bool,
+    local_tools: LocalToolsResponse,
+    default_environment_ansible: String,
+    default_environment_opentofu: String,
+    default_environment_shell: String,
+}
+
+#[derive(Serialize)]
+struct LocalToolsResponse {
+    ansible: bool,
+    opentofu: bool,
+    shell: bool,
+}
+
+#[derive(Serialize)]
+pub(super) struct PreflightResponse {
+    mode: &'static str,
+    container_image: bool,
+    ok: bool,
+    tools: Vec<preflight::ToolStatus>,
+    runtime: preflight::RuntimeStatus,
+    missing: Vec<preflight::Missing>,
+    messages: Vec<String>,
+}
+
+impl PreflightResponse {
+    fn new(report: &preflight::Report) -> Self {
+        Self {
+            mode: report.mode,
+            container_image: report.container_image,
+            ok: report.ok(),
+            tools: report.tools.clone(),
+            runtime: report.runtime.clone(),
+            missing: report.missing.clone(),
+            messages: report.messages(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub(super) struct OverviewResponse {
+    runner_mode: &'static str,
+    runtime: Option<String>,
+    preflight: Option<PreflightResponse>,
+    import: Option<Value>,
+    ldap: bool,
+    cache_bytes: u64,
+    jobs: Vec<Value>,
+    deliveries: Vec<Delivery>,
+    workflow_id: Option<String>,
+    workflow_name: Option<String>,
+    hook_id: Option<String>,
+    hook_name: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(super) struct DashboardResponse {
+    range_days: i64,
+    timezone: String,
+    from: String,
+    to: String,
+    series: Vec<DashboardSeriesResponse>,
+    cache: DashboardCacheResponse,
+}
+
+#[derive(Serialize)]
+struct DashboardSeriesResponse {
+    date: String,
+    started: u64,
+    successful: u64,
+    failed: u64,
+    canceled: u64,
+}
+
+#[derive(Serialize)]
+struct DashboardCacheResponse {
+    collections: usize,
+    roles: usize,
+    tofu_bytes: u64,
+}
+
+#[derive(Serialize)]
+pub(super) struct TeamResponse {
+    id: String,
+    name: String,
+    description: String,
+    ldap_group: Option<String>,
+    organization_id: String,
+    organization_name: String,
+    created_at: String,
+}
+
+impl TeamResponse {
+    fn new(team: &db::Team) -> Self {
+        Self {
+            id: team.id.clone(),
+            name: team.name.clone(),
+            description: team.description.clone(),
+            ldap_group: team.ldap_group.clone(),
+            organization_id: team.organization_id.clone(),
+            organization_name: team.organization_name.clone(),
+            created_at: team.created_at.clone(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub(super) struct TeamRoleResponse {
+    #[serde(flatten)]
+    team: TeamResponse,
+    role: String,
+}
+
+#[derive(Serialize)]
+#[serde(transparent)]
+pub(super) struct TeamListResponse(Vec<TeamRoleResponse>);
+
+#[derive(Serialize)]
+#[serde(transparent)]
+pub(super) struct MemberListResponse(Vec<db::Member>);
+
+#[derive(Serialize)]
+pub(super) struct MemberCreatedResponse {
+    user_id: String,
+    role: String,
+}
+
+#[derive(Serialize)]
+pub(super) struct ProjectResponse {
+    id: String,
+    team_id: String,
+    organization_id: String,
+    organization_name: String,
+    name: String,
+    source_type: String,
+    source: String,
+    revision: String,
+    credential_id: Option<String>,
+    created_at: String,
+    team_ids: Vec<String>,
+    last_sync_at: String,
+    last_sync_commit: String,
+    last_sync_status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sync: Option<SyncResponse>,
+}
+
+impl ProjectResponse {
+    fn new(project: &Project, team: &str) -> Self {
+        Self {
+            id: project.id.clone(),
+            team_id: project.team_id.clone(),
+            organization_id: project.organization_id.clone(),
+            organization_name: project.organization_name.clone(),
+            name: project.name.clone(),
+            source_type: project.source_type.clone(),
+            source: runner::mask_git_url(&project.source),
+            revision: project.revision.clone(),
+            credential_id: if project.team_id == team {
+                project.credential_id.clone()
+            } else {
+                None
+            },
+            created_at: project.created_at.clone(),
+            team_ids: project.team_ids.clone(),
+            last_sync_at: project.last_sync_at.clone(),
+            last_sync_commit: project.last_sync_commit.clone(),
+            last_sync_status: project.last_sync_status.clone(),
+            sync: None,
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub(super) struct ProjectListResponse(Vec<ProjectResponse>);
+
+#[derive(Serialize)]
+pub(super) struct SyncResponse {
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vars: Option<BTreeMap<String, String>>,
+}
+
+impl SyncResponse {
+    fn from_result(result: AppResult<String>) -> Self {
+        match result {
+            Ok(path) => Self {
+                ok: true,
+                path: Some(path),
+                error: None,
+                vars: None,
+            },
+            Err(ApiError::BadRequest(message)) => Self {
+                ok: false,
+                path: None,
+                error: Some(message.key),
+                vars: Some(message.vars),
+            },
+            Err(err) => Self {
+                ok: false,
+                path: None,
+                error: Some(err.to_string()),
+                vars: None,
+            },
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub(super) struct SyncProjectResponse {
+    path: String,
+}
+
+#[derive(Serialize)]
+pub(super) struct InventorySourceResponse {
+    id: String,
+    name: String,
+    kind: String,
+    source: Value,
+    credential_id: Option<String>,
+    host_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    body: Option<String>,
+}
+
+impl InventorySourceResponse {
+    fn summary(source: &InventorySource) -> Self {
+        Self {
+            id: source.id.clone(),
+            name: source.name.clone(),
+            kind: source.kind.clone(),
+            source: db::json_object(&source.source_json),
+            credential_id: source.credential_id.clone(),
+            host_count: inventory::parse_hosts(&source.body).len(),
+            body: None,
+        }
+    }
+
+    fn detail(source: &InventorySource) -> Self {
+        Self {
+            body: Some(source.body.clone()),
+            ..Self::summary(source)
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(transparent)]
+pub(super) struct InventoryListResponse(Vec<InventorySummaryResponse>);
+
+#[derive(Serialize)]
+pub(super) struct InventorySummaryResponse {
+    id: String,
+    team_id: String,
+    name: String,
+    created_at: String,
+    source_kind: String,
+    source: Value,
+    credential_id: Option<String>,
+    source_count: usize,
+    sources: Vec<InventorySourceResponse>,
+    host_count: usize,
+    group_count: usize,
+}
+
+#[derive(Serialize)]
+pub(super) struct InventoryDetailResponse {
+    id: String,
+    team_id: String,
+    name: String,
+    body: String,
+    created_at: String,
+    source_kind: String,
+    source: Value,
+    credential_id: Option<String>,
+    source_count: usize,
+    sources: Vec<InventorySourceResponse>,
+    host_count: usize,
+    group_count: usize,
+    hosts: Vec<InventoryHost>,
+}
+
+#[derive(Serialize)]
+pub(super) struct InventoryHostsResponse {
+    id: String,
+    total: usize,
+    page: usize,
+    page_size: usize,
+    groups: Vec<String>,
+    hosts: Vec<InventoryHost>,
+}
+
+#[derive(Serialize)]
+pub(super) struct InventoryHostSourceResponse {
+    id: Option<String>,
+    name: String,
+    kind: String,
+}
+
+#[derive(Serialize)]
+pub(super) struct InventoryHostResponse {
+    id: String,
+    name: String,
+    groups: Vec<String>,
+    source: InventoryHostSourceResponse,
+    vars: Vec<EffectiveVar>,
+    netbox_id: Option<String>,
+    netbox_url: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(super) struct InventoryGroupsResponse {
+    id: String,
+    total: usize,
+    groups: Vec<InventoryGroupEntryResponse>,
+}
+
+#[derive(Serialize)]
+struct InventoryGroupEntryResponse {
+    name: String,
+    host_count: usize,
+    children: Vec<String>,
+    vars: BTreeMap<String, String>,
+}
+
+#[derive(Serialize)]
+pub(super) struct InventoryGroupResponse {
+    id: String,
+    name: String,
+    children: Vec<String>,
+    parents: Vec<String>,
+    vars: BTreeMap<String, String>,
+    host_count: usize,
+    total: usize,
+    page: usize,
+    page_size: usize,
+    hosts: Vec<InventoryHost>,
+}
+
+#[derive(Serialize)]
+pub(super) struct CredentialUsageResponse {
+    inventory_id: Option<String>,
+    inventory_name: Option<String>,
+    source_id: Option<String>,
+    source_name: Option<String>,
+    project_id: Option<String>,
+    project_name: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(super) struct CredentialSummaryResponse {
+    id: String,
+    name: String,
+    kind: String,
+    created_at: String,
+    usages: Vec<CredentialUsageResponse>,
+}
+
+#[derive(Serialize)]
+#[serde(transparent)]
+pub(super) struct CredentialListResponse(Vec<CredentialSummaryResponse>);
+
+#[derive(Serialize)]
+pub(super) struct CreatedCredentialResponse {
+    id: String,
+    name: String,
+    kind: String,
+}
+
+#[derive(Serialize)]
+pub(super) struct CredentialDetailResponse {
+    id: String,
+    name: String,
+    kind: String,
+    created_at: String,
+    fields: Value,
+    set: Vec<String>,
+    usages: Vec<CredentialUsageResponse>,
+}
+
+#[derive(Serialize)]
+#[serde(transparent)]
+pub(super) struct EnvironmentListResponse(Vec<Environment>);
+
+#[derive(Serialize)]
+pub(super) struct CacheResponse {
+    collections_bytes: u64,
+    roles_bytes: u64,
+    tofu_bytes: u64,
+    collections: Vec<CacheEntry>,
+    roles: Vec<CacheEntry>,
+    note: &'static str,
+}
+
+#[derive(Serialize)]
+pub(super) struct PluginResponse {
+    id: &'static str,
+    summary: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(transparent)]
+pub(super) struct PluginListResponse(Vec<PluginResponse>);
+
+#[derive(Serialize)]
+#[serde(transparent)]
+pub(super) struct OrganizationListResponse(Vec<Organization>);
+
+#[derive(Serialize)]
+pub(super) struct OrganizationDetailResponse {
+    id: String,
+    name: String,
+    description: String,
+    created_at: String,
+    teams: Vec<TeamResponse>,
+}
+
 pub async fn runner_status(
     State(state): State<Shared>,
     headers: HeaderMap,
     user: AuthUser,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<RunnerStatusResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     // The probe awaits. Load settings only after it returns.
@@ -218,40 +646,41 @@ pub async fn runner_status(
     } else {
         None
     };
-    Ok(Json(json!({
-        "runner_mode": effective.runner.as_str(),
-        "local_jobs": state.cfg.local_jobs.as_str(),
-        "runtime": runtime,
-        "container_image": report.container_image,
-        "local_tools": {
-            "ansible": report.tool_ready("ansible"),
-            "opentofu": report.tool_ready("opentofu"),
-            "shell": report.tool_ready("shell"),
+    Ok(Json(RunnerStatusResponse {
+        runner_mode: effective.runner.as_str(),
+        local_jobs: state.cfg.local_jobs.as_str(),
+        runtime,
+        container_image: report.container_image,
+        local_tools: LocalToolsResponse {
+            ansible: report.tool_ready("ansible"),
+            opentofu: report.tool_ready("opentofu"),
+            shell: report.tool_ready("shell"),
         },
-        "default_environment_ansible": effective.default_environment_ansible,
-        "default_environment_opentofu": effective.default_environment_opentofu,
-        "default_environment_shell": effective.default_environment_shell,
-    })))
+        default_environment_ansible: effective.default_environment_ansible,
+        default_environment_opentofu: effective.default_environment_opentofu,
+        default_environment_shell: effective.default_environment_shell,
+    }))
 }
 
 pub async fn runner_preflight(
     State(state): State<Shared>,
     user: AuthUser,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<PreflightResponse>> {
     if !user.is_admin {
         return Err(ApiError::Forbidden);
     }
     let effective = crate::settings::load(&state)?;
     let report = crate::preflight::check(effective.runner, state.cfg.container_image).await;
-    state.set_preflight_report(report.clone());
-    Ok(Json(report.json()))
+    let response = PreflightResponse::new(&report);
+    state.set_preflight_report(report);
+    Ok(Json(response))
 }
 
 pub async fn overview(
     State(state): State<Shared>,
     headers: HeaderMap,
     user: AuthUser,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<OverviewResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     // The preflight awaits. Take it before the database lock so the
@@ -273,20 +702,20 @@ pub async fn overview(
     } else {
         None
     };
-    Ok(Json(json!({
-        "runner_mode": effective.runner.as_str(),
-        "runtime": runtime,
-        "preflight": preflight.as_ref().map(|report| report.json()),
-        "import": import,
-        "ldap": effective.directory().is_some(),
-        "cache_bytes": cache.collections_bytes + cache.roles_bytes + cache.tofu_bytes,
-        "jobs": jobs.iter().map(|job| super::job_json(job, None)).collect::<Vec<_>>(),
-        "deliveries": deliveries,
-        "workflow_id": workflow.as_ref().map(|item| &item.id),
-        "workflow_name": workflow.as_ref().map(|item| &item.name),
-        "hook_id": hook.as_ref().map(|item| &item.id),
-        "hook_name": hook.as_ref().map(|item| &item.name),
-    })))
+    Ok(Json(OverviewResponse {
+        runner_mode: effective.runner.as_str(),
+        runtime,
+        preflight: preflight.as_ref().map(PreflightResponse::new),
+        import,
+        ldap: effective.directory().is_some(),
+        cache_bytes: cache.collections_bytes + cache.roles_bytes + cache.tofu_bytes,
+        jobs: jobs.iter().map(|job| super::job_json(job, None)).collect(),
+        deliveries,
+        workflow_id: workflow.as_ref().map(|item| item.id.clone()),
+        workflow_name: workflow.as_ref().map(|item| item.name.clone()),
+        hook_id: hook.as_ref().map(|item| item.id.clone()),
+        hook_name: hook.as_ref().map(|item| item.name.clone()),
+    }))
 }
 
 #[derive(Clone, Default)]
@@ -317,7 +746,7 @@ pub async fn dashboard(
     headers: HeaderMap,
     user: AuthUser,
     Query(query): Query<DashboardQuery>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<DashboardResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     let days = query.days.trim().parse::<i64>().unwrap_or(1).clamp(1, 14);
@@ -362,52 +791,49 @@ pub async fn dashboard(
     let series = buckets
         .iter()
         .enumerate()
-        .map(|(offset, day)| {
-            json!({
-                "date": (first + ChronoDuration::days(offset as i64)).to_string(),
-                "started": day.started,
-                "successful": day.successful,
-                "failed": day.failed,
-                "canceled": day.canceled,
-            })
+        .map(|(offset, day)| DashboardSeriesResponse {
+            date: (first + ChronoDuration::days(offset as i64)).to_string(),
+            started: day.started,
+            successful: day.successful,
+            failed: day.failed,
+            canceled: day.canceled,
         })
-        .collect::<Vec<_>>();
-    Ok(Json(json!({
-        "range_days": days,
-        "timezone": timezone.name(),
-        "from": from,
-        "to": to,
-        "series": series,
-        "cache": {
-            "collections": cache.collections.len(),
-            "roles": cache.roles.len(),
-            "tofu_bytes": cache.tofu_bytes,
+        .collect();
+    Ok(Json(DashboardResponse {
+        range_days: days,
+        timezone: timezone.name().to_string(),
+        from,
+        to,
+        series,
+        cache: DashboardCacheResponse {
+            collections: cache.collections.len(),
+            roles: cache.roles.len(),
+            tofu_bytes: cache.tofu_bytes,
         },
-    })))
+    }))
 }
 
-pub async fn list_teams(State(state): State<Shared>, user: AuthUser) -> AppResult<Json<Value>> {
+pub async fn list_teams(
+    State(state): State<Shared>,
+    user: AuthUser,
+) -> AppResult<Json<TeamListResponse>> {
     let teams = state.store().list_teams_for_user(&user.id, user.is_admin)?;
-    Ok(Json(json!(teams
-        .into_iter()
-        .map(|(team, role)| json!({
-            "id": team.id,
-            "name": team.name,
-            "description": team.description,
-            "ldap_group": team.ldap_group,
-            "organization_id": team.organization_id,
-            "organization_name": team.organization_name,
-            "role": role,
-            "created_at": team.created_at,
-        }))
-        .collect::<Vec<_>>())))
+    Ok(Json(TeamListResponse(
+        teams
+            .into_iter()
+            .map(|(team, role)| TeamRoleResponse {
+                team: TeamResponse::new(&team),
+                role,
+            })
+            .collect(),
+    )))
 }
 
 pub async fn create_team(
     State(state): State<Shared>,
     user: AuthUser,
     ApiJson(body): ApiJson<TeamBody>,
-) -> AppResult<axum::response::Response> {
+) -> AppResult<(StatusCode, Json<TeamResponse>)> {
     if !user.is_admin {
         return Err(ApiError::Forbidden);
     }
@@ -426,7 +852,7 @@ pub async fn create_team(
         .store()
         .upsert_membership(&id, &user.id, "owner", "manual")?;
     let team = state.store().team_by_id(&id)?.ok_or(ApiError::NotFound)?;
-    Ok(created(team_json(&team)))
+    Ok((StatusCode::CREATED, Json(TeamResponse::new(&team))))
 }
 
 pub async fn update_team(
@@ -434,7 +860,7 @@ pub async fn update_team(
     user: AuthUser,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<TeamBody>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<TeamResponse>> {
     gate(&state, &user, &id, Role::Owner)?;
     let name = require_name(&body.name)?;
     let ldap_group = blank(body.ldap_group);
@@ -455,7 +881,7 @@ pub async fn update_team(
         ldap_group.as_deref(),
     )?;
     let team = state.store().team_by_id(&id)?.ok_or(ApiError::NotFound)?;
-    Ok(Json(team_json(&team)))
+    Ok(Json(TeamResponse::new(&team)))
 }
 
 fn organization_for_new_team(
@@ -481,10 +907,10 @@ pub async fn list_members(
     State(state): State<Shared>,
     user: AuthUser,
     Path(id): Path<String>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<MemberListResponse>> {
     gate(&state, &user, &id, Role::Viewer)?;
     let members = state.store().list_members(&id)?;
-    Ok(Json(json!(members)))
+    Ok(Json(MemberListResponse(members)))
 }
 
 pub async fn add_member(
@@ -492,7 +918,7 @@ pub async fn add_member(
     user: AuthUser,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<MemberBody>,
-) -> AppResult<axum::response::Response> {
+) -> AppResult<(StatusCode, Json<MemberCreatedResponse>)> {
     gate(&state, &user, &id, Role::Owner)?;
     let role =
         Role::parse(&body.role).ok_or_else(|| ApiError::bad("role_is_viewer_operator_or_owner"))?;
@@ -504,8 +930,12 @@ pub async fn add_member(
     state
         .store()
         .grant_manual_membership(&id, &member.id, role.as_str())?;
-    Ok(created(
-        json!({"user_id": member.id, "role": role.as_str()}),
+    Ok((
+        StatusCode::CREATED,
+        Json(MemberCreatedResponse {
+            user_id: member.id,
+            role: role.as_str().to_string(),
+        }),
     ))
 }
 
@@ -528,7 +958,7 @@ pub async fn get_project(
     headers: HeaderMap,
     user: AuthUser,
     Path(id): Path<String>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<ProjectResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     let db = state.store();
@@ -536,21 +966,21 @@ pub async fn get_project(
         return Err(ApiError::NotFound);
     }
     let project = db.project(&id)?.ok_or(ApiError::NotFound)?;
-    Ok(Json(project_json(&project, &team)))
+    Ok(Json(ProjectResponse::new(&project, &team)))
 }
 
 pub async fn list_projects(
     State(state): State<Shared>,
     headers: HeaderMap,
     user: AuthUser,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<ProjectListResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     let db = state.store();
-    Ok(Json(Value::Array(
+    Ok(Json(ProjectListResponse(
         db.list_projects(&team)?
             .iter()
-            .map(|project| project_json(project, &team))
+            .map(|project| ProjectResponse::new(project, &team))
             .collect(),
     )))
 }
@@ -561,7 +991,7 @@ pub async fn update_project(
     user: AuthUser,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<ProjectUpdateBody>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<ProjectResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let (updated, sync_changed, discard_checkout) = {
@@ -624,17 +1054,17 @@ pub async fn update_project(
         let updated = db.project(&id)?.ok_or(ApiError::NotFound)?;
         (updated, changed && source_type == "git", discard)
     };
-    let mut value = project_json(&updated, &team);
+    let mut response = ProjectResponse::new(&updated, &team);
     if discard_checkout {
         jobs::discard_project_checkout(&state, &updated);
     }
     if sync_changed {
-        let sync = sync_json(jobs::sync_project(&state, &updated).await);
+        let sync = SyncResponse::from_result(jobs::sync_project(&state, &updated).await);
         let db = state.store();
-        value = project_json(&db.project(&id)?.ok_or(ApiError::NotFound)?, &team);
-        value["sync"] = sync;
+        response = ProjectResponse::new(&db.project(&id)?.ok_or(ApiError::NotFound)?, &team);
+        response.sync = Some(sync);
     }
-    Ok(Json(value))
+    Ok(Json(response))
 }
 
 pub async fn create_project(
@@ -642,7 +1072,7 @@ pub async fn create_project(
     headers: HeaderMap,
     user: AuthUser,
     ApiJson(body): ApiJson<ProjectBody>,
-) -> AppResult<axum::response::Response> {
+) -> AppResult<(StatusCode, Json<ProjectResponse>)> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let name = require_name(&body.name)?;
@@ -671,7 +1101,7 @@ pub async fn create_project(
         validate_project_credential(db, &team, blank(body.credential_id).as_deref())?;
     let project = Project {
         id: Uuid::new_v4().to_string(),
-        team_id: team,
+        team_id: team.clone(),
         organization_id,
         organization_name: String::new(),
         name,
@@ -688,7 +1118,10 @@ pub async fn create_project(
     };
     db.insert_project(&project)?;
     let stored = db.project(&project.id)?.ok_or(ApiError::NotFound)?;
-    Ok(created(json!(stored)))
+    Ok((
+        StatusCode::CREATED,
+        Json(ProjectResponse::new(&stored, &team)),
+    ))
 }
 
 fn validate_project_source(
@@ -742,16 +1175,6 @@ fn validate_project_source(
     Ok((source.to_string(), revision.to_string()))
 }
 
-fn sync_json(result: AppResult<String>) -> Value {
-    match result {
-        Ok(path) => json!({"ok": true, "path": path}),
-        Err(ApiError::BadRequest(message)) => {
-            json!({"ok": false, "error": message.key, "vars": message.vars})
-        }
-        Err(err) => json!({"ok": false, "error": err.to_string()}),
-    }
-}
-
 fn project_path_error(err: runner::ProjectPathError, is_admin: bool) -> ApiError {
     match err {
         runner::ProjectPathError::NotDirectory if is_admin => {
@@ -764,14 +1187,6 @@ fn project_path_error(err: runner::ProjectPathError, is_admin: bool) -> ApiError
             ApiError::bad("path_projects_are_limited_to_administrators")
         }
     }
-}
-
-fn project_json(project: &Project, team: &str) -> Value {
-    let mut value = json!(project);
-    if project.team_id != team {
-        value["credential_id"] = Value::Null;
-    }
-    value
 }
 
 fn validate_project_credential(
@@ -828,7 +1243,7 @@ pub async fn sync_project(
     headers: HeaderMap,
     user: AuthUser,
     Path(id): Path<String>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<SyncProjectResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let project = {
@@ -840,23 +1255,23 @@ pub async fn sync_project(
         project
     };
     let path = jobs::sync_project(&state, &project).await?;
-    Ok(Json(json!({"path": path})))
+    Ok(Json(SyncProjectResponse { path }))
 }
 
 pub async fn list_inventories(
     State(state): State<Shared>,
     headers: HeaderMap,
     user: AuthUser,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<InventoryListResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     let db = state.store();
     let items = db.list_inventories(&team)?;
     let mut rows = Vec::with_capacity(items.len());
     for item in &items {
-        rows.push(inventory_summary_json(db, item)?);
+        rows.push(inventory_summary(db, item)?);
     }
-    Ok(Json(json!(rows)))
+    Ok(Json(InventoryListResponse(rows)))
 }
 
 pub async fn get_inventory(
@@ -864,12 +1279,12 @@ pub async fn get_inventory(
     headers: HeaderMap,
     user: AuthUser,
     Path(id): Path<String>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<InventorySummaryResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     let db = state.store();
     let item = visible_inventory(db, &id, &team)?;
-    Ok(Json(inventory_summary_json(db, &item)?))
+    Ok(Json(inventory_summary(db, &item)?))
 }
 
 const HOST_PAGE_SIZE: usize = 50;
@@ -899,7 +1314,7 @@ pub async fn list_inventory_hosts(
     user: AuthUser,
     Path(id): Path<String>,
     Query(query): Query<HostQuery>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<InventoryHostsResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     let db = state.store();
@@ -915,14 +1330,14 @@ pub async fn list_inventory_hosts(
         .filter(|host| matches_host(host, &needle, &group))
         .collect();
     let page = page_hosts(shown, &query);
-    Ok(Json(json!({
-        "id": item.id,
-        "total": page.total,
-        "page": page.page,
-        "page_size": page.page_size,
-        "groups": groups,
-        "hosts": page.hosts,
-    })))
+    Ok(Json(InventoryHostsResponse {
+        id: item.id,
+        total: page.total,
+        page: page.page,
+        page_size: page.page_size,
+        groups,
+        hosts: page.hosts,
+    }))
 }
 
 struct HostPage {
@@ -962,7 +1377,7 @@ pub async fn get_inventory_host(
     headers: HeaderMap,
     user: AuthUser,
     Path((id, name)): Path<(String, String)>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<InventoryHostResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     let db = state.store();
@@ -978,27 +1393,27 @@ pub async fn get_inventory_host(
         .find(|item| item.name == "netbox_id")
         .map(|item| item.value.clone());
     let source = host_source(&sources, &name);
-    let source_json = match source {
-        Some(source) => json!({
-            "id": source.id,
-            "name": source.name,
-            "kind": source.kind,
-        }),
-        None => json!({
-            "id": Value::Null,
-            "name": item.name,
-            "kind": item.source_kind,
-        }),
+    let source_response = match source {
+        Some(source) => InventoryHostSourceResponse {
+            id: Some(source.id.clone()),
+            name: source.name.clone(),
+            kind: source.kind.clone(),
+        },
+        None => InventoryHostSourceResponse {
+            id: None,
+            name: item.name.clone(),
+            kind: item.source_kind.clone(),
+        },
     };
-    Ok(Json(json!({
-        "id": item.id,
-        "name": host.name,
-        "groups": inventory::host_groups(&data, &name),
-        "source": source_json,
-        "vars": vars,
-        "netbox_id": netbox_id,
-        "netbox_url": netbox_url(&state, db, source, netbox_id.as_deref()),
-    })))
+    Ok(Json(InventoryHostResponse {
+        id: item.id,
+        name: host.name.clone(),
+        groups: inventory::host_groups(&data, &name),
+        source: source_response,
+        vars,
+        netbox_url: netbox_url(&state, db, source, netbox_id.as_deref()),
+        netbox_id,
+    }))
 }
 
 pub async fn list_inventory_groups(
@@ -1006,30 +1421,29 @@ pub async fn list_inventory_groups(
     headers: HeaderMap,
     user: AuthUser,
     Path(id): Path<String>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<InventoryGroupsResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     let db = state.store();
     let item = visible_inventory(db, &id, &team)?;
     let sources = db.list_inventory_sources(&item.id)?;
     let data = inventory_data(&item, &sources);
-    let groups: Vec<Value> = data
+    let groups: Vec<InventoryGroupEntryResponse> = data
         .groups
         .iter()
-        .map(|group| {
-            json!({
-                "name": group.name,
-                "host_count": inventory::group_hosts(&data, &group.name).len(),
-                "children": group.children,
-                "vars": group.vars,
-            })
+        .map(|group| InventoryGroupEntryResponse {
+            name: group.name.clone(),
+            host_count: inventory::group_hosts(&data, &group.name).len(),
+            children: group.children.clone(),
+            vars: group.vars.clone(),
         })
         .collect();
-    Ok(Json(json!({
-        "id": item.id,
-        "total": groups.len(),
-        "groups": groups,
-    })))
+    let total = groups.len();
+    Ok(Json(InventoryGroupsResponse {
+        id: item.id,
+        total,
+        groups,
+    }))
 }
 
 pub async fn get_inventory_group(
@@ -1038,7 +1452,7 @@ pub async fn get_inventory_group(
     user: AuthUser,
     Path((id, name)): Path<(String, String)>,
     Query(query): Query<HostQuery>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<InventoryGroupResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     let db = state.store();
@@ -1058,24 +1472,24 @@ pub async fn get_inventory_group(
         .filter(|host| matches_host(host, &needle, ""))
         .collect();
     let page = page_hosts(shown, &query);
-    let parents: Vec<&str> = data
+    let parents: Vec<String> = data
         .groups
         .iter()
         .filter(|item| item.children.iter().any(|child| child == &name))
-        .map(|item| item.name.as_str())
+        .map(|item| item.name.clone())
         .collect();
-    Ok(Json(json!({
-        "id": item.id,
-        "name": group.name,
-        "children": group.children,
-        "parents": parents,
-        "vars": group.vars,
-        "host_count": page.total,
-        "total": page.total,
-        "page": page.page,
-        "page_size": page.page_size,
-        "hosts": page.hosts,
-    })))
+    Ok(Json(InventoryGroupResponse {
+        id: item.id,
+        name: group.name,
+        children: group.children,
+        parents,
+        vars: group.vars,
+        host_count: page.total,
+        total: page.total,
+        page: page.page,
+        page_size: page.page_size,
+        hosts: page.hosts,
+    }))
 }
 
 fn visible_inventory(db: &dyn Backend, id: &str, team: &str) -> AppResult<Inventory> {
@@ -1193,7 +1607,7 @@ pub async fn update_inventory(
     user: AuthUser,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<InventoryUpdateBody>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<InventoryDetailResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let name = require_name(&body.name)?;
@@ -1227,7 +1641,7 @@ pub async fn update_inventory(
     }
     db.set_inventory_admin_saved(&id, user.is_admin)?;
     let item = db.inventory(&id)?.ok_or(ApiError::NotFound)?;
-    Ok(Json(inventory_json(db, &item)?))
+    Ok(Json(inventory_detail(db, &item)?))
 }
 
 pub async fn create_inventory(
@@ -1235,7 +1649,7 @@ pub async fn create_inventory(
     headers: HeaderMap,
     user: AuthUser,
     ApiJson(body): ApiJson<InventoryBody>,
-) -> AppResult<axum::response::Response> {
+) -> AppResult<(StatusCode, Json<InventoryDetailResponse>)> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let name = require_name(&body.name)?;
@@ -1280,60 +1694,59 @@ pub async fn create_inventory(
     let sources: Vec<db::InventorySource> = source.into_iter().collect();
     let db = state.store();
     db.insert_inventory(&item, &sources, false)?;
-    Ok(created(inventory_json(db, &item)?))
+    Ok((StatusCode::CREATED, Json(inventory_detail(db, &item)?)))
 }
 
-fn source_json(source: &InventorySource) -> Value {
-    json!({
-        "id": source.id,
-        "name": source.name,
-        "kind": source.kind,
-        "source": db::json_object(&source.source_json),
-        "credential_id": source.credential_id,
-        "host_count": crate::inventory::parse_hosts(&source.body).len(),
+fn inventory_summary(c: &dyn Backend, item: &Inventory) -> AppResult<InventorySummaryResponse> {
+    let sources = c.list_inventory_sources(&item.id)?;
+    let data = inventory_data(item, &sources);
+    Ok(InventorySummaryResponse {
+        id: item.id.clone(),
+        team_id: item.team_id.clone(),
+        name: item.name.clone(),
+        created_at: item.created_at.clone(),
+        source_kind: item.source_kind.clone(),
+        source: db::json_object(&item.source_json),
+        credential_id: item.credential_id.clone(),
+        source_count: sources.len(),
+        sources: sources
+            .iter()
+            .map(InventorySourceResponse::summary)
+            .collect(),
+        host_count: data.hosts.len(),
+        group_count: group_count(&data),
     })
 }
 
-pub(super) fn inventory_summary_json(c: &dyn Backend, item: &Inventory) -> AppResult<Value> {
+pub(super) fn inventory_detail(
+    c: &dyn Backend,
+    item: &Inventory,
+) -> AppResult<InventoryDetailResponse> {
     let sources = c.list_inventory_sources(&item.id)?;
     let data = inventory_data(item, &sources);
-    Ok(json!({
-        "id": item.id,
-        "team_id": item.team_id,
-        "name": item.name,
-        "created_at": item.created_at,
-        "source_kind": item.source_kind,
-        "source": db::json_object(&item.source_json),
-        "credential_id": item.credential_id,
-        "source_count": sources.len(),
-        "sources": sources.iter().map(source_json).collect::<Vec<_>>(),
-        "host_count": data.hosts.len(),
-        "group_count": group_count(&data),
-    }))
+    Ok(InventoryDetailResponse {
+        id: item.id.clone(),
+        team_id: item.team_id.clone(),
+        name: item.name.clone(),
+        body: item.body.clone(),
+        created_at: item.created_at.clone(),
+        source_kind: item.source_kind.clone(),
+        source: db::json_object(&item.source_json),
+        credential_id: item.credential_id.clone(),
+        source_count: sources.len(),
+        sources: sources
+            .iter()
+            .map(InventorySourceResponse::detail)
+            .collect(),
+        host_count: data.hosts.len(),
+        group_count: group_count(&data),
+        hosts: data.hosts,
+    })
 }
 
 pub(super) fn inventory_json(c: &dyn Backend, item: &Inventory) -> AppResult<Value> {
-    let sources = c.list_inventory_sources(&item.id)?;
-    let data = inventory_data(item, &sources);
-    Ok(json!({
-        "id": item.id,
-        "team_id": item.team_id,
-        "name": item.name,
-        "body": item.body,
-        "created_at": item.created_at,
-        "source_kind": item.source_kind,
-        "source": db::json_object(&item.source_json),
-        "credential_id": item.credential_id,
-        "source_count": sources.len(),
-        "sources": sources.iter().map(|source| {
-            let mut value = source_json(source);
-            value["body"] = json!(source.body);
-            value
-        }).collect::<Vec<_>>(),
-        "host_count": data.hosts.len(),
-        "group_count": group_count(&data),
-        "hosts": data.hosts,
-    }))
+    serde_json::to_value(inventory_detail(c, item)?)
+        .map_err(|err| ApiError::Internal(err.to_string()))
 }
 
 pub async fn delete_inventory(
@@ -1361,21 +1774,21 @@ pub async fn list_credentials(
     State(state): State<Shared>,
     headers: HeaderMap,
     user: AuthUser,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<CredentialListResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     let db = state.store();
     let mut items = Vec::new();
     for item in db.list_credentials(&team)? {
-        items.push(json!({
-            "id": item.id,
-            "name": item.name,
-            "kind": item.kind,
-            "created_at": item.created_at,
-            "usages": usage_json(db, &item.id, &team)?,
-        }));
+        items.push(CredentialSummaryResponse {
+            id: item.id.clone(),
+            name: item.name.clone(),
+            kind: item.kind.clone(),
+            created_at: item.created_at.clone(),
+            usages: usage_list(db, &item.id, &team)?,
+        });
     }
-    Ok(Json(json!(items)))
+    Ok(Json(CredentialListResponse(items)))
 }
 
 pub async fn create_credential(
@@ -1383,7 +1796,7 @@ pub async fn create_credential(
     headers: HeaderMap,
     user: AuthUser,
     ApiJson(body): ApiJson<CredentialBody>,
-) -> AppResult<axum::response::Response> {
+) -> AppResult<(StatusCode, Json<CreatedCredentialResponse>)> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Owner)?;
     if !crate::credentials::known_kind(&body.kind) {
@@ -1408,11 +1821,14 @@ pub async fn create_credential(
     };
     let db = state.store();
     db.insert_credential(&item)?;
-    Ok(created(json!({
-        "id": item.id,
-        "name": item.name,
-        "kind": item.kind,
-    })))
+    Ok((
+        StatusCode::CREATED,
+        Json(CreatedCredentialResponse {
+            id: item.id,
+            name: item.name,
+            kind: item.kind,
+        }),
+    ))
 }
 
 pub async fn delete_credential(
@@ -1450,19 +1866,18 @@ fn usage_label(usage: &db::CredentialUsage) -> String {
     }
 }
 
-fn usage_json(c: &dyn Backend, id: &str, team: &str) -> AppResult<Value> {
-    Ok(json!(c
-        .credential_usages(id, team)?
+fn usage_list(c: &dyn Backend, id: &str, team: &str) -> AppResult<Vec<CredentialUsageResponse>> {
+    Ok(c.credential_usages(id, team)?
         .into_iter()
-        .map(|usage| json!({
-            "inventory_id": usage.inventory_id,
-            "inventory_name": usage.inventory_name,
-            "source_id": usage.source_id,
-            "source_name": usage.source_name,
-            "project_id": usage.project_id,
-            "project_name": usage.project_name,
-        }))
-        .collect::<Vec<_>>()))
+        .map(|usage| CredentialUsageResponse {
+            inventory_id: usage.inventory_id,
+            inventory_name: usage.inventory_name,
+            source_id: usage.source_id,
+            source_name: usage.source_name,
+            project_id: usage.project_id,
+            project_name: usage.project_name,
+        })
+        .collect())
 }
 
 fn open_credential(state: &Shared, id: &str, team: &str) -> AppResult<(Credential, Value)> {
@@ -1480,17 +1895,21 @@ fn open_credential(state: &Shared, id: &str, team: &str) -> AppResult<(Credentia
     Ok((item, secret))
 }
 
-fn credential_json(item: &Credential, secret: &Value, usages: Value) -> Value {
+fn credential_detail(
+    item: &Credential,
+    secret: &Value,
+    usages: Vec<CredentialUsageResponse>,
+) -> CredentialDetailResponse {
     let (fields, set) = crate::credentials::describe(&item.kind, secret);
-    json!({
-        "id": item.id,
-        "name": item.name,
-        "kind": item.kind,
-        "created_at": item.created_at,
-        "fields": fields,
-        "set": set,
-        "usages": usages,
-    })
+    CredentialDetailResponse {
+        id: item.id.clone(),
+        name: item.name.clone(),
+        kind: item.kind.clone(),
+        created_at: item.created_at.clone(),
+        fields,
+        set,
+        usages,
+    }
 }
 
 pub async fn get_credential(
@@ -1498,15 +1917,15 @@ pub async fn get_credential(
     headers: HeaderMap,
     user: AuthUser,
     Path(id): Path<String>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<CredentialDetailResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Owner)?;
     let (item, secret) = open_credential(&state, &id, &team)?;
     let usages = {
         let db = state.store();
-        usage_json(db, &item.id, &team)?
+        usage_list(db, &item.id, &team)?
     };
-    Ok(Json(credential_json(&item, &secret, usages)))
+    Ok(Json(credential_detail(&item, &secret, usages)))
 }
 
 pub async fn update_credential(
@@ -1515,7 +1934,7 @@ pub async fn update_credential(
     user: AuthUser,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<CredentialUpdate>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<CredentialDetailResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Owner)?;
     let (mut item, previous) = open_credential(&state, &id, &team)?;
@@ -1533,19 +1952,21 @@ pub async fn update_credential(
     item.disabled = false;
     let db = state.store();
     db.update_credential(&item)?;
-    let usages = usage_json(db, &item.id, &team)?;
-    Ok(Json(credential_json(&item, &secret, usages)))
+    let usages = usage_list(db, &item.id, &team)?;
+    Ok(Json(credential_detail(&item, &secret, usages)))
 }
 
 pub async fn list_environments(
     State(state): State<Shared>,
     headers: HeaderMap,
     user: AuthUser,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<EnvironmentListResponse>> {
     let team_id = team_header(&headers)?;
     gate(&state, &user, &team_id, Role::Viewer)?;
     let db = state.store();
-    Ok(Json(json!(db.list_environments(&team_id)?)))
+    Ok(Json(EnvironmentListResponse(
+        db.list_environments(&team_id)?,
+    )))
 }
 
 fn environment_scope(raw: Option<&str>, fallback: &str) -> AppResult<String> {
@@ -1636,7 +2057,7 @@ pub async fn create_environment(
     headers: HeaderMap,
     user: AuthUser,
     ApiJson(body): ApiJson<EnvironmentBody>,
-) -> AppResult<axum::response::Response> {
+) -> AppResult<(StatusCode, Json<Environment>)> {
     let team_id = team_header(&headers)?;
     gate(&state, &user, &team_id, Role::Owner)?;
     let (name, image, pull_policy, network, description, tool) =
@@ -1665,7 +2086,7 @@ pub async fn create_environment(
     apply_environment_scope(&mut item, &scope, &team)?;
     db.insert_environment(&item)?;
     let stored = db.environment(&item.id)?.ok_or(ApiError::NotFound)?;
-    Ok(created(json!(stored)))
+    Ok((StatusCode::CREATED, Json(stored)))
 }
 
 pub async fn get_environment(
@@ -1673,13 +2094,13 @@ pub async fn get_environment(
     headers: HeaderMap,
     user: AuthUser,
     Path(id): Path<String>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<Environment>> {
     let team_id = team_header(&headers)?;
     gate(&state, &user, &team_id, Role::Viewer)?;
     let db = state.store();
     let team = db.team_by_id(&team_id)?.ok_or(ApiError::NotFound)?;
     let item = visible_environment(db, &id, &team)?;
-    Ok(Json(json!(item)))
+    Ok(Json(item))
 }
 
 pub async fn update_environment(
@@ -1688,7 +2109,7 @@ pub async fn update_environment(
     user: AuthUser,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<EnvironmentBody>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<Environment>> {
     let team_id = team_header(&headers)?;
     gate(&state, &user, &team_id, Role::Owner)?;
     let db = state.store();
@@ -1709,7 +2130,7 @@ pub async fn update_environment(
     apply_environment_scope(&mut item, &scope, &team)?;
     db.update_environment(&item)?;
     let stored = db.environment(&item.id)?.ok_or(ApiError::NotFound)?;
-    Ok(Json(json!(stored)))
+    Ok(Json(stored))
 }
 
 pub async fn delete_environment(
@@ -1734,42 +2155,47 @@ pub async fn cache(
     State(state): State<Shared>,
     headers: HeaderMap,
     user: AuthUser,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<CacheResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     let report = cacheinfo::team_cache(&state.cfg.data_dir, &team);
-    Ok(Json(json!({
-        "collections_bytes": report.collections_bytes,
-        "roles_bytes": report.roles_bytes,
-        "tofu_bytes": report.tofu_bytes,
-        "collections": report.collections,
-        "roles": report.roles,
-        "note": "the_cache_lives_under_data_cache_and_stays",
-    })))
+    Ok(Json(CacheResponse {
+        collections_bytes: report.collections_bytes,
+        roles_bytes: report.roles_bytes,
+        tofu_bytes: report.tofu_bytes,
+        collections: report.collections,
+        roles: report.roles,
+        note: "the_cache_lives_under_data_cache_and_stays",
+    }))
 }
 
-pub async fn plugins(user: AuthUser) -> Json<Value> {
+pub async fn plugins(user: AuthUser) -> Json<PluginListResponse> {
     let _ = user;
-    Json(json!(runner::tools()
-        .iter()
-        .map(|tool| json!({"id": tool.id, "summary": tool.summary}))
-        .collect::<Vec<_>>()))
+    Json(PluginListResponse(
+        runner::tools()
+            .iter()
+            .map(|tool| PluginResponse {
+                id: tool.id,
+                summary: tool.summary,
+            })
+            .collect(),
+    ))
 }
 
 pub async fn list_organizations(
     State(state): State<Shared>,
     user: AuthUser,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<OrganizationListResponse>> {
     let db = state.store();
     let items = db.list_organizations(&user.id, user.is_admin)?;
-    Ok(Json(json!(items)))
+    Ok(Json(OrganizationListResponse(items)))
 }
 
 pub async fn create_organization(
     State(state): State<Shared>,
     user: AuthUser,
     ApiJson(body): ApiJson<OrganizationBody>,
-) -> AppResult<axum::response::Response> {
+) -> AppResult<(StatusCode, Json<Organization>)> {
     if !user.is_admin {
         return Err(ApiError::Forbidden);
     }
@@ -1778,14 +2204,14 @@ pub async fn create_organization(
     let db = state.store();
     db.insert_organization(&id, &name, &require_description(&body.description)?)?;
     let item = db.organization(&id)?.ok_or(ApiError::NotFound)?;
-    Ok(created(json!(item)))
+    Ok((StatusCode::CREATED, Json(item)))
 }
 
 pub async fn get_organization(
     State(state): State<Shared>,
     user: AuthUser,
     Path(id): Path<String>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<OrganizationDetailResponse>> {
     let db = state.store();
     let item = db.organization(&id)?.ok_or(ApiError::NotFound)?;
     if !user.is_admin
@@ -1797,13 +2223,13 @@ pub async fn get_organization(
         return Err(ApiError::Forbidden);
     }
     let teams = db.teams_in_organization(&id)?;
-    Ok(Json(json!({
-        "id": item.id,
-        "name": item.name,
-        "description": item.description,
-        "created_at": item.created_at,
-        "teams": teams.iter().map(team_json).collect::<Vec<_>>(),
-    })))
+    Ok(Json(OrganizationDetailResponse {
+        id: item.id,
+        name: item.name,
+        description: item.description,
+        created_at: item.created_at,
+        teams: teams.iter().map(TeamResponse::new).collect(),
+    }))
 }
 
 pub async fn update_organization(
@@ -1811,7 +2237,7 @@ pub async fn update_organization(
     user: AuthUser,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<OrganizationBody>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<Organization>> {
     if !user.is_admin {
         return Err(ApiError::Forbidden);
     }
@@ -1819,19 +2245,7 @@ pub async fn update_organization(
     let db = state.store();
     db.update_organization(&id, &name, &require_description(&body.description)?)?;
     let item = db.organization(&id)?.ok_or(ApiError::NotFound)?;
-    Ok(Json(json!(item)))
-}
-
-fn team_json(team: &db::Team) -> Value {
-    json!({
-        "id": team.id,
-        "name": team.name,
-        "description": team.description,
-        "ldap_group": team.ldap_group,
-        "organization_id": team.organization_id,
-        "organization_name": team.organization_name,
-        "created_at": team.created_at,
-    })
+    Ok(Json(item))
 }
 
 #[cfg(test)]

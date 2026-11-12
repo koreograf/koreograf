@@ -9,7 +9,6 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use serde::Serialize;
-use serde_json::{json, Value};
 use tokio::process::Command;
 
 use crate::config::RunnerMode;
@@ -234,18 +233,6 @@ impl Report {
             }
         }
         lines.join("\n")
-    }
-
-    pub fn json(&self) -> Value {
-        json!({
-            "mode": self.mode,
-            "container_image": self.container_image,
-            "ok": self.ok(),
-            "tools": self.tools,
-            "runtime": self.runtime,
-            "missing": self.missing,
-            "messages": self.messages(),
-        })
     }
 }
 

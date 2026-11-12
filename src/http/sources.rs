@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use axum::extract::{Path, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
@@ -17,7 +17,7 @@ use crate::runner;
 use crate::scan;
 use crate::Shared;
 
-use super::catalog::inventory_json;
+use super::catalog::{inventory_detail, inventory_json, InventoryDetailResponse};
 use super::{blank, check_static_ini, created, gate, require_name, team_header};
 
 pub(super) fn routes() -> Router<Shared> {
@@ -757,7 +757,7 @@ pub(super) async fn create_with_sources(
     inputs: Vec<SourceInput>,
     admin_saved: bool,
     user: &AuthUser,
-) -> AppResult<axum::response::Response> {
+) -> AppResult<(StatusCode, Json<InventoryDetailResponse>)> {
     if inputs.len() > MAX_SOURCES {
         return Err(ApiError::bad("at_most_8_sources"));
     }
@@ -796,7 +796,7 @@ pub(super) async fn create_with_sources(
     let db = state.store();
     db.insert_inventory(&item, &sources, true)?;
     let item = db.inventory(&inventory_id)?.ok_or(ApiError::NotFound)?;
-    Ok(created(inventory_json(db, &item)?))
+    Ok((StatusCode::CREATED, Json(inventory_detail(db, &item)?)))
 }
 
 pub async fn add_source(
