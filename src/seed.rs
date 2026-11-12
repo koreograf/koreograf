@@ -185,7 +185,7 @@ impl SeedStore for Connection {
     }
 
     fn insert_workflow(&self, item: &Workflow) -> AppResult<()> {
-        db::insert_workflow(self, item)
+        crate::store::workflows::insert_workflow(self, item)
     }
 
     fn insert_hook(&self, item: &Hook) -> AppResult<()> {
@@ -293,20 +293,20 @@ impl<T: Backend + ?Sized> SeedStore for T {
     }
 }
 
-pub fn seed(conn: &Connection, cfg: &Config) -> AppResult<Option<String>> {
-    let tx = conn.unchecked_transaction()?;
-    store::auth::purge_sessions(&tx)?;
-    let generated = seed_with(&*tx, cfg)?;
-    tx.commit()?;
-    if let Some(password) = &generated {
-        write_password_file(&cfg.data_dir.join("initial-admin-password"), password)?;
-    }
-    Ok(generated)
-}
-
-pub(crate) fn seed_postgres(backend: &dyn Backend, cfg: &Config) -> AppResult<Option<String>> {
-    backend.purge_sessions()?;
-    let generated = seed_with(backend, cfg)?;
+pub fn seed(backend: &dyn Backend, cfg: &Config) -> AppResult<Option<String>> {
+    let generated = if let Some(conn) = backend.sqlite() {
+        let conn = conn.lock().map_err(|_| {
+            crate::error::ApiError::Internal("The SQLite database lock is damaged.".into())
+        })?;
+        let tx = conn.unchecked_transaction()?;
+        store::auth::purge_sessions(&tx)?;
+        let generated = seed_with(&*tx, cfg)?;
+        tx.commit()?;
+        generated
+    } else {
+        backend.purge_sessions()?;
+        seed_with(backend, cfg)?
+    };
     if let Some(password) = &generated {
         write_password_file(&cfg.data_dir.join("initial-admin-password"), password)?;
     }

@@ -1,5 +1,7 @@
 use crate::error::AppResult;
 
+pub(crate) const PING: &str = "SELECT 1";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Dialect {
     Sqlite,
@@ -172,6 +174,16 @@ impl Column for Option<String> {
 }
 
 impl Column for i64 {
+    fn from_sqlite(row: &rusqlite::Row<'_>, index: usize) -> AppResult<Self> {
+        Ok(row.get(index)?)
+    }
+
+    fn from_postgres(row: &tokio_postgres::Row, index: usize) -> AppResult<Self> {
+        Ok(row.try_get(index)?)
+    }
+}
+
+impl Column for Option<i32> {
     fn from_sqlite(row: &rusqlite::Row<'_>, index: usize) -> AppResult<Self> {
         Ok(row.get(index)?)
     }

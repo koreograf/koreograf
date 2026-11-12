@@ -231,14 +231,7 @@ pub fn boot_with(mut cfg: Config, database: DatabaseConfig) -> anyhow::Result<Sh
     runner::scrub_job_dirs(&cfg.data_dir);
     let backend = backend::open(&database, &cfg.data_dir)?;
     let cipher = crypto::load_cipher(&cfg.data_dir)?;
-    if let Some(conn) = backend.sqlite() {
-        let conn = conn
-            .lock()
-            .map_err(|_| anyhow::anyhow!("The SQLite database lock is damaged."))?;
-        seed::seed(&conn, &cfg)?;
-    } else {
-        seed::seed_postgres(backend.as_ref(), &cfg)?;
-    }
+    seed::seed(backend.as_ref(), &cfg)?;
     cfg.admin_password = None;
     let state = Arc::new(AppState {
         backend,
