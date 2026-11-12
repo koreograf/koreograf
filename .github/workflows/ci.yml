@@ -326,8 +326,10 @@ jobs:
           build-args: |
             GIT_SHA=${{ steps.build-info.outputs.sha }}
             BUILT_AT=${{ steps.build-info.outputs.date }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            LTO=false
+            CODEGEN_UNITS=16
+          cache-from: type=gha,scope=koreograf-image-amd64
+          cache-to: type=gha,mode=max,scope=koreograf-image-amd64
       - name: Check image labels and the reported version
         if: github.event_name != 'workflow_call'
         env:

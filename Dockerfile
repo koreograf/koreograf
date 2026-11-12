@@ -13,6 +13,10 @@ SHELL ["/bin/ash", "-o", "pipefail", "-c"]
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 ARG TARGETARCH
+ARG LTO=thin
+ARG CODEGEN_UNITS=1
+ENV CARGO_PROFILE_RELEASE_LTO=$LTO \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=$CODEGEN_UNITS
 RUN case "$TARGETARCH" in \
         amd64) target=x86_64-unknown-linux-musl ;; \
         arm64) target=aarch64-unknown-linux-musl ;; \
