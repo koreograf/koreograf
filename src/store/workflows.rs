@@ -112,7 +112,7 @@ pub(crate) fn delete_workflow(c: &Connection, id: &str, team_id: &str) -> AppRes
         return Err(ApiError::NotFound);
     }
     c.execute(
-        crate::store::schedules::DELETE_SCHEDULES_FOR,
+        crate::features::schedules::store::DELETE_SCHEDULES_FOR,
         params!["workflow", id],
     )?;
     Ok(())

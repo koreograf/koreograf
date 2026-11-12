@@ -16,6 +16,7 @@ use crate::db::{
     WorkflowNodeRow,
 };
 use crate::error::{ApiError, AppResult};
+use crate::features::schedules;
 use crate::store;
 
 pub(crate) trait Backend: Send + Sync {
@@ -1116,32 +1117,32 @@ impl Backend for SqliteBackend {
 
     fn list_team_schedules(&self, team_id: &str) -> AppResult<Vec<(Schedule, String)>> {
         let conn = lock(&self.conn)?;
-        store::schedules::list_team_schedules(&conn, team_id)
+        schedules::store::list_team_schedules(&conn, team_id)
     }
 
     fn schedule(&self, id: &str) -> AppResult<Option<Schedule>> {
         let conn = lock(&self.conn)?;
-        store::schedules::schedule(&conn, id)
+        schedules::store::schedule(&conn, id)
     }
 
     fn list_schedules(&self, kind: &str, target_id: &str) -> AppResult<Vec<Schedule>> {
         let conn = lock(&self.conn)?;
-        store::schedules::list_schedules(&conn, kind, target_id)
+        schedules::store::list_schedules(&conn, kind, target_id)
     }
 
     fn insert_schedule(&self, item: &Schedule) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::schedules::insert_schedule(&conn, item)
+        schedules::store::insert_schedule(&conn, item)
     }
 
     fn update_schedule(&self, item: &Schedule) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::schedules::update_schedule(&conn, item)
+        schedules::store::update_schedule(&conn, item)
     }
 
     fn delete_schedule(&self, id: &str, team_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::schedules::delete_schedule(&conn, id, team_id)
+        schedules::store::delete_schedule(&conn, id, team_id)
     }
 
     fn set_schedule_enabled(
@@ -1153,7 +1154,7 @@ impl Backend for SqliteBackend {
         occurrence_count: i64,
     ) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::schedules::set_schedule_enabled(
+        schedules::store::set_schedule_enabled(
             &conn,
             id,
             team_id,
@@ -1165,17 +1166,17 @@ impl Backend for SqliteBackend {
 
     fn claim_missed(&self, id: &str, team_id: &str) -> AppResult<Option<String>> {
         let mut conn = lock(&self.conn)?;
-        store::schedules::claim_missed(&mut conn, id, team_id)
+        schedules::store::claim_missed(&mut conn, id, team_id)
     }
 
     fn restore_missed(&self, id: &str, team_id: &str, missed_at: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::schedules::restore_missed(&conn, id, team_id, missed_at)
+        schedules::store::restore_missed(&conn, id, team_id, missed_at)
     }
 
     fn due_schedules(&self, now: &str) -> AppResult<Vec<Schedule>> {
         let conn = lock(&self.conn)?;
-        store::schedules::due_schedules(&conn, now)
+        schedules::store::due_schedules(&conn, now)
     }
 
     fn advance_schedule(
@@ -1185,17 +1186,17 @@ impl Backend for SqliteBackend {
         occurrence_count: i64,
     ) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::schedules::advance_schedule(&conn, id, next_run_at, occurrence_count)
+        schedules::store::advance_schedule(&conn, id, next_run_at, occurrence_count)
     }
 
     fn note_miss(&self, id: &str, missed_at: Option<&str>) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::schedules::note_miss(&conn, id, missed_at)
+        schedules::store::note_miss(&conn, id, missed_at)
     }
 
     fn set_launch_block(&self, id: &str, reason: Option<&str>) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::schedules::set_launch_block(&conn, id, reason)
+        schedules::store::set_launch_block(&conn, id, reason)
     }
 }
 
@@ -3659,7 +3660,7 @@ impl Backend for PostgresBackend {
             }
             transaction
                 .execute(
-                    &store::sql::postgres(store::schedules::DELETE_SCHEDULES_FOR),
+                    &store::sql::postgres(schedules::store::DELETE_SCHEDULES_FOR),
                     &[&"workflow", &id],
                 )
                 .await?;
@@ -3686,12 +3687,12 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &store::sql::postgres(&store::schedules::list_team_schedules_sql()),
+                    &store::sql::postgres(&schedules::store::list_team_schedules_sql()),
                     &[&team_id],
                 )
                 .await?;
             rows.iter()
-                .map(|row| Ok((store::schedules::row_schedule(row)?, row.try_get(22)?)))
+                .map(|row| Ok((schedules::store::row_schedule(row)?, row.try_get(22)?)))
                 .collect()
         })
     }
@@ -3701,11 +3702,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    &store::sql::postgres(&store::schedules::schedule_by_id_sql()),
+                    &store::sql::postgres(&schedules::store::schedule_by_id_sql()),
                     &[&id],
                 )
                 .await?;
-            row.as_ref().map(store::schedules::row_schedule).transpose()
+            row.as_ref().map(schedules::store::row_schedule).transpose()
         })
     }
 
@@ -3714,11 +3715,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &store::sql::postgres(&store::schedules::list_schedules_sql()),
+                    &store::sql::postgres(&schedules::store::list_schedules_sql()),
                     &[&kind, &target_id],
                 )
                 .await?;
-            rows.iter().map(store::schedules::row_schedule).collect()
+            rows.iter().map(schedules::store::row_schedule).collect()
         })
     }
 
@@ -3728,7 +3729,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::schedules::INSERT_SCHEDULE),
+                    &store::sql::postgres(schedules::store::INSERT_SCHEDULE),
                     &[
                         &item.id,
                         &item.team_id,
@@ -3765,7 +3766,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    &store::sql::postgres(store::schedules::UPDATE_SCHEDULE),
+                    &store::sql::postgres(schedules::store::UPDATE_SCHEDULE),
                     &[
                         &item.id,
                         &item.name,
@@ -3800,7 +3801,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    &store::sql::postgres(store::schedules::DELETE_SCHEDULE),
+                    &store::sql::postgres(schedules::store::DELETE_SCHEDULE),
                     &[&id, &team_id],
                 )
                 .await?;
@@ -3823,7 +3824,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    &store::sql::postgres(store::schedules::SET_SCHEDULE_ENABLED),
+                    &store::sql::postgres(schedules::store::SET_SCHEDULE_ENABLED),
                     &[
                         &id,
                         &team_id,
@@ -3847,7 +3848,7 @@ impl Backend for PostgresBackend {
             let transaction = client.transaction().await?;
             let row = transaction
                 .query_opt(
-                    &store::sql::postgres(store::schedules::claim_missed_sql(
+                    &store::sql::postgres(schedules::store::claim_missed_sql(
                         store::sql::Dialect::Postgres,
                     )),
                     &[&id, &team_id],
@@ -3859,7 +3860,7 @@ impl Backend for PostgresBackend {
             let missed_at: String = row.get(0);
             transaction
                 .execute(
-                    &store::sql::postgres(store::schedules::CLEAR_MISSED),
+                    &store::sql::postgres(schedules::store::CLEAR_MISSED),
                     &[&id, &team_id, &db::now()],
                 )
                 .await?;
@@ -3873,7 +3874,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::schedules::RESTORE_MISSED),
+                    &store::sql::postgres(schedules::store::RESTORE_MISSED),
                     &[&id, &team_id, &missed_at, &db::now()],
                 )
                 .await?;
@@ -3886,11 +3887,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &store::sql::postgres(&store::schedules::due_schedules_sql()),
+                    &store::sql::postgres(&schedules::store::due_schedules_sql()),
                     &[&now],
                 )
                 .await?;
-            rows.iter().map(store::schedules::row_schedule).collect()
+            rows.iter().map(schedules::store::row_schedule).collect()
         })
     }
 
@@ -3904,7 +3905,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::schedules::ADVANCE_SCHEDULE),
+                    &store::sql::postgres(schedules::store::ADVANCE_SCHEDULE),
                     &[&id, &next_run_at, &(occurrence_count as i32), &db::now()],
                 )
                 .await?;
@@ -3917,7 +3918,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::schedules::NOTE_MISS),
+                    &store::sql::postgres(schedules::store::NOTE_MISS),
                     &[&id, &missed_at, &db::now()],
                 )
                 .await?;
@@ -3930,7 +3931,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::schedules::SET_LAUNCH_BLOCK),
+                    &store::sql::postgres(schedules::store::SET_LAUNCH_BLOCK),
                     &[&id, &reason, &db::now()],
                 )
                 .await?;

@@ -1,6 +1,5 @@
 mod admin;
 mod catalog;
-mod schedules;
 mod session;
 mod settings;
 mod sources;
@@ -150,7 +149,7 @@ fn api_routes() -> Router<Shared> {
         .merge(admin::routes())
         .merge(catalog::routes())
         .merge(llm::routes())
-        .merge(schedules::routes())
+        .merge(crate::features::schedules::routes())
         .merge(session::routes())
         .merge(settings::routes())
         .merge(sources::routes())
