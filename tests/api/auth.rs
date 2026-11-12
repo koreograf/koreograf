@@ -1092,3 +1092,297 @@ async fn api_token_follows_the_local_runner_rule() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn session_endpoints_return_the_documented_shape() {
+    let harness = TestApp::boot("session-shape", Options::default());
+    let app = harness.app.clone();
+    let dir = harness.dir.clone();
+
+    let (status, login, cookie) = call(
+        &app,
+        "POST",
+        "/api/v1/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{login}");
+    let cookie = cookie.expect("session cookie");
+    let admin_id = login["id"].clone();
+    let team_id = login["teams"][0]["id"].clone();
+    let org_id = login["teams"][0]["organization_id"].clone();
+    assert!(admin_id.is_string());
+    assert!(team_id.is_string());
+    assert!(org_id.is_string());
+    let profile = json!({
+        "auth_source": "local",
+        "display_name": "Administrator",
+        "email": null,
+        "id": admin_id.clone(),
+        "is_admin": true,
+        "memberships": [{
+            "organization_id": org_id.clone(),
+            "organization_name": "Plattform",
+            "role": "owner",
+            "source": "manual",
+            "team_id": team_id.clone(),
+            "team_name": "Plattform"
+        }],
+        "teams": [{
+            "description": "Sample team. An LDAP group can later use this group name.",
+            "id": team_id.clone(),
+            "ldap_group": null,
+            "name": "Plattform",
+            "organization_id": org_id.clone(),
+            "organization_name": "Plattform",
+            "role": "owner"
+        }],
+        "username": "admin"
+    });
+    assert_eq!(login, profile);
+
+    let (status, me, _) = call(&app, "GET", "/api/v1/me", Some(&cookie), None, None).await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    assert_eq!(me, profile);
+
+    let (status, saved, _) = call(
+        &app,
+        "PUT",
+        "/api/v1/me",
+        Some(&cookie),
+        None,
+        Some(json!({"display_name": "Administrator", "email": null})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved, profile);
+
+    let (status, token, _) = call(
+        &app,
+        "POST",
+        "/api/v1/me/tokens",
+        Some(&cookie),
+        None,
+        Some(json!({"name": "shape"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{token}");
+    let token_id = token["id"].clone();
+    assert!(token_id.is_string());
+    assert!(token["created_at"].is_string());
+    assert!(token["prefix"].is_string());
+    assert!(token["secret"].is_string());
+    assert_eq!(
+        token,
+        json!({
+            "created_at": token["created_at"].clone(),
+            "id": token_id.clone(),
+            "last_used_at": null,
+            "name": "shape",
+            "prefix": token["prefix"].clone(),
+            "secret": token["secret"].clone()
+        })
+    );
+
+    let (status, tokens, _) =
+        call(&app, "GET", "/api/v1/me/tokens", Some(&cookie), None, None).await;
+    assert_eq!(status, StatusCode::OK, "{tokens}");
+    assert_eq!(
+        tokens,
+        json!([{
+            "created_at": token["created_at"].clone(),
+            "id": token_id.clone(),
+            "last_used_at": null,
+            "name": "shape",
+            "prefix": token["prefix"].clone()
+        }])
+    );
+
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/v1/users",
+        Some(&cookie),
+        None,
+        Some(json!({
+            "username": "shape",
+            "display_name": "Shape User",
+            "password": "shape-secret-1",
+            "is_admin": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let user_id = created["id"].clone();
+    let created_at = created["created_at"].clone();
+    assert!(user_id.is_string());
+    assert!(created_at.is_string());
+    let account = json!({
+        "auth_source": "local",
+        "created_at": created_at.clone(),
+        "disabled": false,
+        "display_name": "Shape User",
+        "email": null,
+        "id": user_id.clone(),
+        "is_admin": false,
+        "team_count": 0,
+        "username": "shape"
+    });
+    assert_eq!(created, account);
+
+    let (status, users, _) = call(&app, "GET", "/api/v1/users", Some(&cookie), None, None).await;
+    assert_eq!(status, StatusCode::OK, "{users}");
+    assert_eq!(
+        users,
+        json!([
+            {
+                "auth_source": "local",
+                "created_at": users[0]["created_at"].clone(),
+                "disabled": false,
+                "display_name": "Administrator",
+                "email": null,
+                "id": admin_id.clone(),
+                "is_admin": true,
+                "team_count": 1,
+                "username": "admin"
+            },
+            account.clone()
+        ])
+    );
+
+    let (status, detail, _) = call(
+        &app,
+        "GET",
+        &format!(
+            "/api/v1/users/{}",
+            user_id.as_str().expect("user id is a string")
+        ),
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(
+        detail,
+        json!({
+            "auth_source": "local",
+            "created_at": created_at.clone(),
+            "disabled": false,
+            "display_name": "Shape User",
+            "email": null,
+            "id": user_id.clone(),
+            "is_admin": false,
+            "memberships": [],
+            "team_count": 0,
+            "username": "shape"
+        })
+    );
+
+    let team = team_id.as_str().expect("team id is a string");
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/teams/{team}/members"),
+        Some(&cookie),
+        Some(team),
+        Some(json!({"username": "shape", "role": "viewer"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, detail, _) = call(
+        &app,
+        "GET",
+        &format!("/api/v1/users/{}", user_id.as_str().unwrap()),
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(
+        detail,
+        json!({
+            "auth_source": "local",
+            "created_at": created_at.clone(),
+            "disabled": false,
+            "display_name": "Shape User",
+            "email": null,
+            "id": user_id.clone(),
+            "is_admin": false,
+            "memberships": [{
+                "organization_id": org_id.clone(),
+                "organization_name": "Plattform",
+                "role": "viewer",
+                "source": "manual",
+                "team_id": team_id.clone(),
+                "team_name": "Plattform"
+            }],
+            "team_count": 1,
+            "username": "shape"
+        })
+    );
+
+    let (status, updated, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/v1/users/{}", user_id.as_str().unwrap()),
+        Some(&cookie),
+        None,
+        Some(json!({
+            "display_name": "Shape User 2",
+            "is_admin": false,
+            "disabled": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(
+        updated,
+        json!({
+            "auth_source": "local",
+            "created_at": created_at,
+            "disabled": false,
+            "display_name": "Shape User 2",
+            "email": null,
+            "id": user_id.clone(),
+            "is_admin": false,
+            "memberships": [{
+                "organization_id": org_id,
+                "organization_name": "Plattform",
+                "role": "viewer",
+                "source": "manual",
+                "team_id": team_id,
+                "team_name": "Plattform"
+            }],
+            "team_count": 1,
+            "username": "shape"
+        })
+    );
+
+    let (status, _, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/v1/me/tokens/{}", token_id.as_str().unwrap()),
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/v1/users/{}", user_id.as_str().unwrap()),
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

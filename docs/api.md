@@ -94,6 +94,14 @@ On a machine without Compose, read `data/initial-admin-password` instead of `doc
 
 API errors are `{"error": "<key>"}` with optional `vars`. A missing team role is 403 `you_are_not_allowed_to_do_this`. An id that is unknown or belongs to another team is 404 `not_found`; those responses do not say that an object belongs to another team, so a client cannot tell a foreign id from a missing one. A non-administrator who saves a path project gets 400 `the_project_path_is_not_allowed` for both a missing directory and a disallowed path. Administrators keep the clearer `the_project_path_is_not_a_directory` for a missing directory; sensitive and data paths remain `the_project_path_is_not_allowed`.
 
+## Session responses
+
+`GET /api/v1/me`, `PUT /api/v1/me`, and a successful `POST /api/v1/login` return one profile object with `id`, `username`, `display_name`, `auth_source`, `email`, `is_admin`, `teams`, and `memberships`. `email` is a string or `null`. Each team has `id`, `name`, `description`, `ldap_group` (string or `null`), `organization_id`, `organization_name`, and `role`. Each membership has `team_id`, `team_name`, `organization_id`, `organization_name`, `role`, and `source`.
+
+`GET /api/v1/users` returns an array of account summaries with `id`, `username`, `display_name`, `auth_source`, `email`, `is_admin`, `disabled`, `created_at`, and `team_count`. `POST /api/v1/users` returns 201 with that summary. `GET /api/v1/users/{id}` and `PUT /api/v1/users/{id}` return the summary plus `memberships`; `team_count` matches the length of that list.
+
+`GET /api/v1/me/tokens` returns an array with `id`, `name`, `prefix`, `created_at`, and `last_used_at`. `POST /api/v1/me/tokens` returns 201 with those fields plus the one-time `secret`; `last_used_at` is `null` until the token is used.
+
 ## Request bodies
 
 Names are at most 120 characters. Empty optional strings are omitted.
