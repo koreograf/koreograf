@@ -1,90 +1,18 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+mod common;
 
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
-use http_body_util::BodyExt;
-use koreograf::{Config, CookieSecure, LocalJobs, RunnerMode};
+use std::path::Path;
+use std::time::Duration;
+
+use axum::http::StatusCode;
+use common::{
+    create_database, drop_database, postgres_client, postgres_guard, postgres_test_url, Options,
+    TestApp,
+};
 use serde_json::{json, Value};
-use tower::ServiceExt;
 
 const PASSWORD: &str = "S3cret-Database-Password-Should-Not-Leak";
-
-fn config(dir: &Path) -> Config {
-    Config {
-        bind: "127.0.0.1:0".into(),
-        data_dir: dir.to_path_buf(),
-        web_dir: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web"),
-        examples_dir: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples"),
-        admin_user: "admin".into(),
-        admin_password: Some("test-admin-pass".into()),
-        runner: RunnerMode::Local,
-        container_image: false,
-        job_timeout_secs: 60,
-        job_output_lines: 8_000,
-        local_jobs: LocalJobs::All,
-        project_roots: vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples")],
-        hsts: false,
-        cookie_secure: CookieSecure::Auto,
-        trusted_proxy: false,
-        mcp: false,
-        public_url: Vec::new(),
-        data_host: None,
-        ldap: None,
-    }
-}
-
-async fn call(
-    app: &axum::Router,
-    method: &str,
-    uri: &str,
-    cookie: Option<&str>,
-    body: Option<Value>,
-) -> (StatusCode, Value, Option<String>) {
-    let mut builder = Request::builder().method(method).uri(uri);
-    if let Some(cookie) = cookie {
-        builder = builder.header("cookie", cookie);
-    }
-    let request = if let Some(body) = body {
-        builder
-            .header("content-type", "application/json")
-            .body(Body::from(body.to_string()))
-            .unwrap()
-    } else {
-        builder.body(Body::empty()).unwrap()
-    };
-    let response = app.clone().oneshot(request).await.unwrap();
-    let status = response.status();
-    let cookie = response
-        .headers()
-        .get("set-cookie")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
-        .map(str::to_string);
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    let parsed = if bytes.is_empty() {
-        Value::Null
-    } else {
-        serde_json::from_slice(&bytes)
-            .unwrap_or(Value::String(String::from_utf8_lossy(&bytes).to_string()))
-    };
-    (status, parsed, cookie)
-}
-
-async fn login(app: &axum::Router, username: &str, password: &str) -> String {
-    let (status, body, cookie) = call(
-        app,
-        "POST",
-        "/api/login",
-        None,
-        Some(json!({"username": username, "password": password})),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    cookie.expect("session cookie")
-}
 
 fn body_text(value: &Value) -> String {
     serde_json::to_string(value).unwrap_or_default()
@@ -137,23 +65,24 @@ fn target_body(host: &str, port: u16, password: &str) -> Value {
 
 #[tokio::test]
 async fn failed_checks_refuse_to_start_and_never_echo_the_password() {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock")
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!("koreograf-db-wizard-{nanos}"));
-    let state = koreograf::boot(config(&dir)).expect("boot");
-    let app = koreograf::router(state.clone());
-    let admin = login(&app, "admin", "test-admin-pass").await;
+    let app = TestApp::boot(
+        "db-wizard",
+        Options {
+            mcp: false,
+            ..Options::default()
+        },
+    );
+    let admin = app.login("admin", common::ADMIN_PASSWORD).await;
 
-    let (status, body, _) = call(
-        &app,
-        "POST",
-        "/api/admin/database/check",
-        Some(&admin),
-        Some(target_body("127.0.0.1", 1, PASSWORD)),
-    )
-    .await;
+    let (status, body) = app
+        .call(
+            "POST",
+            "/api/admin/database/check",
+            Some(&admin),
+            None,
+            Some(target_body("127.0.0.1", 1, PASSWORD)),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["all_passed"], false);
     assert!(body["id"].is_null(), "{body}");
@@ -167,64 +96,64 @@ async fn failed_checks_refuse_to_start_and_never_echo_the_password() {
         "{body}"
     );
 
-    let (status, body, _) = call(
-        &app,
-        "POST",
-        "/api/admin/database/migrate",
-        Some(&admin),
-        Some(json!({"id": "not-a-check"})),
-    )
-    .await;
+    let (status, body) = app
+        .call(
+            "POST",
+            "/api/admin/database/migrate",
+            Some(&admin),
+            None,
+            Some(json!({"id": "not-a-check"})),
+        )
+        .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"], "run_the_checks_again", "{body}");
     assert!(!body_text(&body).contains(PASSWORD), "{body}");
 
-    let (status, body, _) = call(&app, "GET", "/api/maintenance", None, None).await;
+    let (status, body) = app.call("GET", "/api/maintenance", None, None, None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["active"], false, "{body}");
 
-    let (status, body, _) = call(
-        &app,
-        "GET",
-        "/api/admin/database/status",
-        Some(&admin),
-        None,
-    )
-    .await;
+    let (status, body) = app
+        .call(
+            "GET",
+            "/api/admin/database/status",
+            Some(&admin),
+            None,
+            None,
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["migration"]["running"], false, "{body}");
     assert!(body["migration"]["audit"].is_null(), "{body}");
     assert!(!body_text(&body).contains(PASSWORD), "{body}");
-
-    drop(app);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
 async fn the_wizard_routes_need_an_administrator() {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock")
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!("koreograf-db-wizard-admin-{nanos}"));
-    let state = koreograf::boot(config(&dir)).expect("boot");
-    let app = koreograf::router(state.clone());
-    let admin = login(&app, "admin", "test-admin-pass").await;
-    let (status, body, _) = call(
-        &app,
-        "POST",
-        "/api/users",
-        Some(&admin),
-        Some(json!({
-            "username": "viewer",
-            "password": "viewer-pass",
-            "display_name": "Viewer",
-            "is_admin": false
-        })),
-    )
-    .await;
+    let app = TestApp::boot(
+        "db-wizard-admin",
+        Options {
+            mcp: false,
+            ..Options::default()
+        },
+    );
+    let admin = app.login("admin", common::ADMIN_PASSWORD).await;
+    let (status, body) = app
+        .call(
+            "POST",
+            "/api/users",
+            Some(&admin),
+            None,
+            Some(json!({
+                "username": "viewer",
+                "password": "viewer-pass",
+                "display_name": "Viewer",
+                "is_admin": false
+            })),
+        )
+        .await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
-    let viewer = login(&app, "viewer", "viewer-pass").await;
+    let viewer = app.login("viewer", "viewer-pass").await;
 
     for (method, uri, body) in [
         ("GET", "/api/admin/database/status", None),
@@ -239,12 +168,9 @@ async fn the_wizard_routes_need_an_administrator() {
             Some(json!({"id": "x"})),
         ),
     ] {
-        let (status, body, _) = call(&app, method, uri, Some(&viewer), body).await;
+        let (status, body) = app.call(method, uri, Some(&viewer), None, body).await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}: {body}");
     }
-
-    drop(app);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -327,53 +253,14 @@ fn the_wizard_and_the_maintenance_banner_are_in_the_ui_and_catalogs() {
     }
 }
 
-fn postgres_test_url() -> Option<String> {
-    let Ok(url) = std::env::var("KOREOGRAF_TEST_POSTGRES_URL") else {
-        eprintln!("skipping PostgreSQL test: KOREOGRAF_TEST_POSTGRES_URL is not set");
-        return None;
-    };
-    (!url.trim().is_empty()).then_some(url)
-}
-
-async fn postgres_client(url: &str) -> tokio_postgres::Client {
-    let (client, connection) = tokio_postgres::connect(url, tokio_postgres::NoTls)
-        .await
-        .expect("postgres connection");
-    tokio::spawn(async move {
-        let _ = connection.await;
-    });
-    client
-}
-
-static POSTGRES_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
-
-async fn postgres_guard() -> tokio::sync::MutexGuard<'static, ()> {
-    POSTGRES_LOCK
-        .get_or_init(|| tokio::sync::Mutex::new(()))
-        .lock()
-        .await
-}
-
 #[tokio::test]
 async fn the_ui_migration_copies_rows_enters_maintenance_and_returns_a_password_free_url() {
     let Some(base) = postgres_test_url() else {
         return;
     };
     let _guard = postgres_guard().await;
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock")
-        .as_nanos();
-    let name = format!("koreograf_ui_migrate_{nanos}");
-    let base_client = postgres_client(&base).await;
-    base_client
-        .batch_execute(&format!("CREATE DATABASE \"{name}\""))
-        .await
-        .expect("create database");
-    drop(base_client);
-    let mut target_url = url::Url::parse(&base).expect("base url");
-    target_url.set_path(&format!("/{name}"));
-    let target_url = target_url.to_string();
+    let name = common::postgres_database_name("ui_migrate");
+    let target_url = create_database(&base, &name).await;
     let parsed = url::Url::parse(&target_url).expect("target url");
     let host = parsed.host_str().expect("host").to_string();
     let port = parsed.port().unwrap_or(5432);
@@ -385,10 +272,14 @@ async fn the_ui_migration_copies_rows_enters_maintenance_and_returns_a_password_
         .map(|(_, value)| value.to_string())
         .unwrap_or_else(|| "disable".to_string());
 
-    let dir = std::env::temp_dir().join(format!("koreograf-ui-migrate-source-{nanos}"));
-    let state = koreograf::boot(config(&dir)).expect("boot");
-    let app = koreograf::router(state.clone());
-    let admin = login(&app, "admin", "test-admin-pass").await;
+    let app = TestApp::boot(
+        "ui-migrate-source",
+        Options {
+            mcp: false,
+            ..Options::default()
+        },
+    );
+    let admin = app.login("admin", common::ADMIN_PASSWORD).await;
 
     let body = json!({
         "host": host,
@@ -399,40 +290,43 @@ async fn the_ui_migration_copies_rows_enters_maintenance_and_returns_a_password_
         "sslmode": sslmode,
         "ca_file": null
     });
-    let (status, checked, _) = call(
-        &app,
-        "POST",
-        "/api/admin/database/check",
-        Some(&admin),
-        Some(body),
-    )
-    .await;
+    let (status, checked) = app
+        .call(
+            "POST",
+            "/api/admin/database/check",
+            Some(&admin),
+            None,
+            Some(body),
+        )
+        .await;
     assert_eq!(status, StatusCode::OK, "{checked}");
     assert_eq!(checked["all_passed"], true, "{checked}");
     assert_no_password(&checked, &target_password);
     let id = checked["id"].as_str().expect("check id").to_string();
 
-    let (status, started, _) = call(
-        &app,
-        "POST",
-        "/api/admin/database/migrate",
-        Some(&admin),
-        Some(json!({"id": id})),
-    )
-    .await;
+    let (status, started) = app
+        .call(
+            "POST",
+            "/api/admin/database/migrate",
+            Some(&admin),
+            None,
+            Some(json!({"id": id})),
+        )
+        .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{started}");
 
     let mut last = Value::Null;
     for _ in 0..100 {
         tokio::time::sleep(Duration::from_millis(100)).await;
-        let (status, status_body, _) = call(
-            &app,
-            "GET",
-            "/api/admin/database/status",
-            Some(&admin),
-            None,
-        )
-        .await;
+        let (status, status_body) = app
+            .call(
+                "GET",
+                "/api/admin/database/status",
+                Some(&admin),
+                None,
+                None,
+            )
+            .await;
         assert_eq!(status, StatusCode::OK, "{status_body}");
         last = status_body;
         if last["migration"]["done"] == true || last["migration"]["failed"] == true {
@@ -460,18 +354,19 @@ async fn the_ui_migration_copies_rows_enters_maintenance_and_returns_a_password_
     );
     assert_no_password(&last, &target_password);
 
-    let (status, public, _) = call(&app, "GET", "/api/maintenance", None, None).await;
+    let (status, public) = app.call("GET", "/api/maintenance", None, None, None).await;
     assert_eq!(status, StatusCode::OK, "{public}");
     assert_eq!(public["active"], true, "{public}");
 
-    let (status, refused, _) = call(
-        &app,
-        "POST",
-        "/api/admin/database/migrate",
-        Some(&admin),
-        Some(json!({"id": "again"})),
-    )
-    .await;
+    let (status, refused) = app
+        .call(
+            "POST",
+            "/api/admin/database/migrate",
+            Some(&admin),
+            None,
+            Some(json!({"id": "again"})),
+        )
+        .await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{refused}");
     assert_eq!(refused["error"], "maintenance_mode_is_active", "{refused}");
 
@@ -484,11 +379,5 @@ async fn the_ui_migration_copies_rows_enters_maintenance_and_returns_a_password_
     assert!(users > 0, "the target has no users");
     drop(target);
     drop(app);
-
-    let base_client = postgres_client(&base).await;
-    let _ = base_client
-        .batch_execute(&format!("DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)"))
-        .await;
-    drop(base_client);
-    let _ = std::fs::remove_dir_all(&dir);
+    drop_database(&base, &name).await;
 }

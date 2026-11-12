@@ -1,94 +1,19 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod common;
+
 use std::net::{IpAddr, SocketAddr};
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Once, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
-use axum::body::Body;
 use axum::extract::ConnectInfo;
-use axum::http::{HeaderMap, Request, StatusCode};
+use axum::http::StatusCode;
 use axum::Extension;
-use http_body_util::BodyExt;
-use koreograf::{Config, CookieSecure, LdapConfig, LocalJobs, RunnerMode};
-use serde_json::{json, Value};
+use common::{login_reply, Options, Reply, TestApp};
+use koreograf::LdapConfig;
+use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tower::ServiceExt;
-
-fn temp_dir(label: &str) -> PathBuf {
-    static NEXT: AtomicUsize = AtomicUsize::new(0);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!(
-        "koreograf-signin-throttle-{label}-{nanos}-{}",
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
-fn config(dir: &Path, trusted_proxy: bool, ldap: Option<LdapConfig>) -> Config {
-    Config {
-        bind: "127.0.0.1:0".into(),
-        data_dir: dir.to_path_buf(),
-        web_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web"),
-        examples_dir: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples"),
-        admin_user: "admin".into(),
-        admin_password: Some("test-admin-pass".into()),
-        runner: RunnerMode::Local,
-        container_image: false,
-        job_timeout_secs: 60,
-        job_output_lines: 8_000,
-        local_jobs: LocalJobs::All,
-        project_roots: vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples")],
-        hsts: false,
-        cookie_secure: CookieSecure::Auto,
-        trusted_proxy,
-        mcp: false,
-        public_url: Vec::new(),
-        data_host: None,
-        ldap,
-    }
-}
-
-struct Reply {
-    status: StatusCode,
-    body: Value,
-    headers: HeaderMap,
-}
-
-async fn login(
-    app: &axum::Router,
-    forwarded_for: Option<&str>,
-    username: &str,
-    password: &str,
-) -> Reply {
-    let mut builder = Request::builder()
-        .method("POST")
-        .uri("/api/login")
-        .header("content-type", "application/json");
-    if let Some(source) = forwarded_for {
-        builder = builder.header("x-forwarded-for", source);
-    }
-    let request = builder
-        .body(Body::from(
-            json!({ "username": username, "password": password }).to_string(),
-        ))
-        .unwrap();
-    let response = app.clone().oneshot(request).await.unwrap();
-    let status = response.status();
-    let headers = response.headers().clone();
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-    Reply {
-        status,
-        body,
-        headers,
-    }
-}
 
 fn retry_after(reply: &Reply) -> u64 {
     reply
@@ -181,69 +106,82 @@ fn directory_config(url: String) -> LdapConfig {
 
 #[tokio::test]
 async fn a_burst_of_bad_passwords_ends_in_a_retry_after() {
-    let dir = temp_dir("burst");
-    let state = koreograf::boot(config(&dir, false, None)).unwrap();
-    let app = koreograf::router(state).layer(Extension(ConnectInfo(SocketAddr::from((
-        [127, 0, 0, 1],
-        40000,
-    )))));
+    let harness = TestApp::boot(
+        "signin-burst",
+        Options {
+            mcp: false,
+            ..Options::default()
+        },
+    );
+    let app = harness
+        .app
+        .clone()
+        .layer(Extension(ConnectInfo(SocketAddr::from((
+            [127, 0, 0, 1],
+            40000,
+        )))));
 
     for _ in 0..5 {
-        let reply = login(&app, None, "admin", "wrong-password").await;
+        let reply = login_reply(&app, None, "admin", "wrong-password").await;
         assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
         assert_eq!(reply.body["error"], "invalid_username_or_password");
     }
 
-    let blocked = login(&app, None, "admin", "wrong-password").await;
+    let blocked = login_reply(&app, None, "admin", "wrong-password").await;
     assert_eq!(blocked.status, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(blocked.body["error"], "invalid_username_or_password");
     let retry = retry_after(&blocked);
     assert!((1..=60).contains(&retry), "{retry}");
 
-    let refused = login(&app, None, "admin", "test-admin-pass").await;
+    let refused = login_reply(&app, None, "admin", "test-admin-pass").await;
     assert_eq!(refused.status, StatusCode::TOO_MANY_REQUESTS);
     assert!(retry_after(&refused) >= 1);
-
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[tokio::test]
 async fn another_source_is_not_locked_out() {
-    let dir = temp_dir("source");
-    let state = koreograf::boot(config(&dir, true, None)).unwrap();
-    let app = koreograf::router(state);
+    let harness = TestApp::boot(
+        "signin-source",
+        Options {
+            mcp: false,
+            trusted_proxy: true,
+            ..Options::default()
+        },
+    );
+    let app = harness.app.clone();
 
     for _ in 0..5 {
-        let reply = login(&app, Some("203.0.113.10"), "admin", "wrong-password").await;
+        let reply = login_reply(&app, Some("203.0.113.10"), "admin", "wrong-password").await;
         assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
     }
-    let blocked = login(&app, Some("203.0.113.10"), "admin", "wrong-password").await;
+    let blocked = login_reply(&app, Some("203.0.113.10"), "admin", "wrong-password").await;
     assert_eq!(blocked.status, StatusCode::TOO_MANY_REQUESTS);
 
-    let other_bad = login(&app, Some("203.0.113.11"), "admin", "wrong-password").await;
+    let other_bad = login_reply(&app, Some("203.0.113.11"), "admin", "wrong-password").await;
     assert_eq!(other_bad.status, StatusCode::UNAUTHORIZED);
 
-    let other_ok = login(&app, Some("203.0.113.11"), "admin", "test-admin-pass").await;
+    let other_ok = login_reply(&app, Some("203.0.113.11"), "admin", "test-admin-pass").await;
     assert_eq!(other_ok.status, StatusCode::OK);
 
-    let still_blocked = login(&app, Some("203.0.113.10"), "admin", "test-admin-pass").await;
+    let still_blocked = login_reply(&app, Some("203.0.113.10"), "admin", "test-admin-pass").await;
     assert_eq!(still_blocked.status, StatusCode::TOO_MANY_REQUESTS);
-
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[tokio::test]
 async fn an_unknown_source_is_not_throttled() {
-    let dir = temp_dir("unknown");
-    let state = koreograf::boot(config(&dir, false, None)).unwrap();
-    let app = koreograf::router(state);
+    let harness = TestApp::boot(
+        "signin-unknown",
+        Options {
+            mcp: false,
+            ..Options::default()
+        },
+    );
+    let app = harness.app.clone();
 
     for _ in 0..6 {
-        let reply = login(&app, None, "admin", "wrong-password").await;
+        let reply = login_reply(&app, None, "admin", "wrong-password").await;
         assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
     }
-
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 async fn direct_login(client: &reqwest::Client, url: &str, password: &str) -> StatusCode {
@@ -258,9 +196,14 @@ async fn direct_login(client: &reqwest::Client, url: &str, password: &str) -> St
 
 #[tokio::test]
 async fn a_busy_direct_peer_does_not_lock_out_another_loopback_address() {
-    let dir = temp_dir("peer");
-    let state = koreograf::boot(config(&dir, false, None)).unwrap();
-    let app = koreograf::router(state);
+    let harness = TestApp::boot(
+        "signin-peer",
+        Options {
+            mcp: false,
+            ..Options::default()
+        },
+    );
+    let app = harness.app.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -305,31 +248,36 @@ async fn a_busy_direct_peer_does_not_lock_out_another_loopback_address() {
     );
 
     server.abort();
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[tokio::test]
 async fn a_refused_sign_in_does_not_contact_the_directory() {
-    let dir = temp_dir("directory");
     let (url, connections, handle) = rejecting_directory().await;
-    let state = koreograf::boot(config(&dir, true, Some(directory_config(url)))).unwrap();
-    let app = koreograf::router(state);
+    let harness = TestApp::boot(
+        "signin-directory",
+        Options {
+            mcp: false,
+            trusted_proxy: true,
+            ldap: Some(directory_config(url)),
+            ..Options::default()
+        },
+    );
+    let app = harness.app.clone();
 
     for _ in 0..5 {
-        let reply = login(&app, Some("203.0.113.20"), "ada", "wrong-password").await;
+        let reply = login_reply(&app, Some("203.0.113.20"), "ada", "wrong-password").await;
         assert_eq!(reply.status, StatusCode::UNAUTHORIZED);
     }
     tokio::time::sleep(Duration::from_millis(200)).await;
     let before = connections.load(Ordering::SeqCst);
     assert!(before > 0, "the directory probe was never contacted");
 
-    let blocked = login(&app, Some("203.0.113.20"), "ada", "wrong-password").await;
+    let blocked = login_reply(&app, Some("203.0.113.20"), "ada", "wrong-password").await;
     assert_eq!(blocked.status, StatusCode::TOO_MANY_REQUESTS);
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(connections.load(Ordering::SeqCst), before);
 
     handle.abort();
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[derive(Clone, Default)]
@@ -373,13 +321,19 @@ fn capture_logs() -> Arc<Mutex<Vec<u8>>> {
 
 #[tokio::test]
 async fn the_failure_log_names_the_username_and_source_without_the_password() {
-    let dir = temp_dir("log");
-    let state = koreograf::boot(config(&dir, true, None)).unwrap();
-    let app = koreograf::router(state);
+    let harness = TestApp::boot(
+        "signin-log",
+        Options {
+            mcp: false,
+            trusted_proxy: true,
+            ..Options::default()
+        },
+    );
+    let app = harness.app.clone();
 
     let buffer = capture_logs();
     buffer.lock().unwrap().clear();
-    let reply = login(
+    let reply = login_reply(
         &app,
         Some("198.51.100.20"),
         "  ADMIN  ",
@@ -395,6 +349,4 @@ async fn the_failure_log_names_the_username_and_source_without_the_password() {
         "{text}"
     );
     assert!(!text.contains("TopSecret-ShouldNotAppear"), "{text}");
-
-    let _ = std::fs::remove_dir_all(dir);
 }
