@@ -363,7 +363,7 @@ pub(crate) async fn copy_source<F>(
 where
     F: FnMut(&'static str, i64),
 {
-    client.batch_execute(&db::postgres_schema()).await?;
+    db::ensure_postgres_schema(client).await?;
     client.batch_execute("BEGIN").await?;
     let copied = async {
         portable::copy_from_sqlite_with(client, source, false, progress).await?;

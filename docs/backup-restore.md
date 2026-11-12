@@ -17,6 +17,14 @@ An administrator opens **Backup** in the sidebar. In the German UI the link is *
 
 `GET /api/admin/backup` and `POST /api/admin/backup` are limited to the local administrator. `GET /api/admin/backup?tofu_state=true` includes the OpenTofu state.
 
+## Schema versions and upgrades
+
+Koreograf applies schema changes from numbered migrations in `migrations/sqlite/` and `migrations/postgres/`. The files are embedded into the binary, applied in order, and each one runs in a transaction together with its version update. SQLite stores the version in `PRAGMA user_version`; PostgreSQL stores it in `schema_meta` under `schema_version`.
+
+Version `1` is the numbered baseline (`0001_baseline.sql`), which is the schema of the 0.1.0-alpha releases. A fresh database starts at `0` and applies the baseline. An existing database that reports version `1` without the numbered baseline marker is recognised as a legacy database: the old idempotent step runs once, the database is stamped with the baseline version, and later starts skip it. A database with a version newer than the running build refuses to start, so an older binary cannot damage newer data. A migration that fails rolls back, and the stored version stays unchanged; the next start retries it.
+
+Backups and imports follow the same rule. An older backup is migrated after it is unpacked; a backup from a newer build is refused before anything is replaced. `koreograf db migrate` applies the PostgreSQL migrations to the empty target before copying, so the target ends on the same schema version as the SQLite source. `tests/upgrade.rs` opens a database created by 0.1.0-alpha.10 on both engines and checks that users, teams, templates, and jobs survive the upgrade.
+
 ## Copy SQLite data to PostgreSQL
 
 The full guide is [PostgreSQL](postgresql.md#move-an-existing-sqlite-installation). `koreograf db migrate --to postgres://…` and **Settings → Database** copy the current SQLite database into an empty PostgreSQL database. The CLI needs the server stopped; the UI runs the same checks and copy in maintenance mode. Both open `koreograf.db` read-only, so the SQLite file is never changed.

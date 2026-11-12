@@ -9,6 +9,7 @@ use serde_json::Value;
 use crate::error::{ApiError, AppResult};
 
 pub(crate) const SCHEMA_VERSION: u32 = 1;
+const BASELINE_VERSION: u32 = 1;
 
 pub fn now() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
@@ -20,283 +21,30 @@ pub fn plus_secs(secs: i64) -> String {
         .to_string()
 }
 
-const SCHEMA: &str = r#"
-CREATE TABLE IF NOT EXISTS users (
-  id TEXT PRIMARY KEY,
-  username TEXT NOT NULL UNIQUE COLLATE NOCASE,
-  display_name TEXT NOT NULL,
-  password_hash TEXT,
-  auth_source TEXT NOT NULL,
-  is_admin INTEGER NOT NULL DEFAULT 0,
-  disabled INTEGER NOT NULL DEFAULT 0,
-  email TEXT,
-  created_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS sessions (
-  token TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  expires_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS api_tokens (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  prefix TEXT NOT NULL,
-  token_hash TEXT NOT NULL UNIQUE,
-  created_at TEXT NOT NULL,
-  last_used_at TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id);
-CREATE TABLE IF NOT EXISTS teams (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL UNIQUE,
-  description TEXT NOT NULL DEFAULT '',
-  ldap_group TEXT,
-  created_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS memberships (
-  team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  role TEXT NOT NULL,
-  source TEXT NOT NULL,
-  PRIMARY KEY (team_id, user_id)
-);
-CREATE TABLE IF NOT EXISTS projects (
-  id TEXT PRIMARY KEY,
-  team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  source_type TEXT NOT NULL,
-  source TEXT NOT NULL,
-  revision TEXT NOT NULL DEFAULT '',
-  credential_id TEXT,
-  created_at TEXT NOT NULL,
-  admin_saved INTEGER NOT NULL DEFAULT 1,
-  last_sync_at TEXT NOT NULL DEFAULT '',
-  last_sync_commit TEXT NOT NULL DEFAULT '',
-  last_sync_status TEXT NOT NULL DEFAULT '',
-  UNIQUE (team_id, name)
-);
-CREATE TABLE IF NOT EXISTS inventories (
-  id TEXT PRIMARY KEY,
-  team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  body TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  source_kind TEXT NOT NULL DEFAULT 'ini',
-  source_json TEXT NOT NULL DEFAULT '{}',
-  credential_id TEXT,
-  admin_saved INTEGER NOT NULL DEFAULT 1,
-  UNIQUE (team_id, name)
-);
-CREATE TABLE IF NOT EXISTS inventory_sources (
-  id TEXT PRIMARY KEY,
-  inventory_id TEXT NOT NULL REFERENCES inventories(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  kind TEXT NOT NULL,
-  source_json TEXT NOT NULL DEFAULT '{}',
-  credential_id TEXT,
-  body TEXT NOT NULL DEFAULT '',
-  position INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS credentials (
-  id TEXT PRIMARY KEY,
-  team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  kind TEXT NOT NULL,
-  secret_blob TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  auto INTEGER NOT NULL DEFAULT 0,
-  disabled INTEGER NOT NULL DEFAULT 0,
-  UNIQUE (team_id, name)
-);
-CREATE TABLE IF NOT EXISTS environments (
-  id TEXT PRIMARY KEY,
-  team_id TEXT REFERENCES teams(id) ON DELETE CASCADE,
-  organization_id TEXT,
-  name TEXT NOT NULL,
-  tool TEXT NOT NULL DEFAULT 'any',
-  image TEXT NOT NULL,
-  pull_policy TEXT NOT NULL,
-  network TEXT NOT NULL DEFAULT '',
-  description TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS templates (
-  id TEXT PRIMARY KEY,
-  team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  description TEXT NOT NULL DEFAULT '',
-  tool TEXT NOT NULL,
-  project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
-  inventory_id TEXT REFERENCES inventories(id) ON DELETE SET NULL,
-  credential_id TEXT REFERENCES credentials(id) ON DELETE SET NULL,
-  environment_id TEXT REFERENCES environments(id) ON DELETE SET NULL,
-  no_environment INTEGER NOT NULL DEFAULT 0,
-  entrypoint TEXT NOT NULL DEFAULT '',
-  extra_vars TEXT NOT NULL DEFAULT '{}',
-  spec TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  update_on_launch INTEGER NOT NULL DEFAULT 1,
-  admin_saved INTEGER NOT NULL DEFAULT 1,
-  prompt_on_launch INTEGER NOT NULL DEFAULT 0,
-  UNIQUE (team_id, name)
-);
-CREATE TABLE IF NOT EXISTS template_credentials (
-  template_id TEXT NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
-  credential_id TEXT NOT NULL REFERENCES credentials(id) ON DELETE CASCADE,
-  position INTEGER NOT NULL,
-  PRIMARY KEY (template_id, credential_id)
-);
-CREATE TABLE IF NOT EXISTS workflow_jobs (
-  id TEXT PRIMARY KEY,
-  workflow_id TEXT,
-  team_id TEXT NOT NULL,
-  name TEXT NOT NULL,
-  status TEXT NOT NULL,
-  extra_vars TEXT NOT NULL DEFAULT '{}',
-  launched_by TEXT NOT NULL,
-  trigger TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  finished_at TEXT
-);
-CREATE TABLE IF NOT EXISTS jobs (
-  id TEXT PRIMARY KEY,
-  team_id TEXT NOT NULL,
-  template_id TEXT,
-  workflow_job_id TEXT,
-  workflow_node_id TEXT,
-  name TEXT NOT NULL,
-  tool TEXT NOT NULL,
-  status TEXT NOT NULL,
-  extra_vars TEXT NOT NULL DEFAULT '{}',
-  launched_by TEXT NOT NULL,
-  trigger TEXT NOT NULL,
-  started_at TEXT,
-  finished_at TEXT,
-  created_at TEXT NOT NULL,
-  parameters TEXT NOT NULL DEFAULT '{}',
-  failed_hosts TEXT NOT NULL DEFAULT '[]'
-);
-CREATE TABLE IF NOT EXISTS job_events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  job_id TEXT NOT NULL,
-  ts TEXT NOT NULL,
-  stream TEXT NOT NULL,
-  line TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS workflows (
-  id TEXT PRIMARY KEY,
-  team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  description TEXT NOT NULL DEFAULT '',
-  graph TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  admin_saved INTEGER NOT NULL DEFAULT 1,
-  UNIQUE (team_id, name)
-);
-CREATE TABLE IF NOT EXISTS workflow_nodes (
-  workflow_job_id TEXT NOT NULL,
-  node_id TEXT NOT NULL,
-  phase TEXT NOT NULL,
-  job_id TEXT,
-  PRIMARY KEY (workflow_job_id, node_id)
-);
-CREATE TABLE IF NOT EXISTS hooks (
-  id TEXT PRIMARY KEY,
-  team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  token TEXT NOT NULL UNIQUE,
-  match_alertname TEXT NOT NULL,
-  match_status TEXT NOT NULL DEFAULT 'firing',
-  template_id TEXT,
-  workflow_id TEXT,
-  extra_vars TEXT NOT NULL DEFAULT '{}',
-  enabled INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL,
-  UNIQUE (team_id, name)
-);
-CREATE TABLE IF NOT EXISTS hook_deliveries (
-  id TEXT PRIMARY KEY,
-  hook_id TEXT NOT NULL,
-  status TEXT NOT NULL,
-  summary TEXT NOT NULL,
-  payload TEXT NOT NULL,
-  job_id TEXT,
-  workflow_job_id TEXT,
-  created_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS organizations (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL UNIQUE,
-  description TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS project_teams (
-  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-  PRIMARY KEY (project_id, team_id)
-);
-CREATE TABLE IF NOT EXISTS settings (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS seed_state (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS schedules (
-  id TEXT PRIMARY KEY,
-  team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  target_kind TEXT NOT NULL,
-  target_id TEXT NOT NULL,
-  timezone TEXT NOT NULL,
-  start_date TEXT NOT NULL,
-  start_time TEXT NOT NULL,
-  frequency TEXT NOT NULL,
-  weekdays TEXT NOT NULL DEFAULT '',
-  end_kind TEXT NOT NULL,
-  end_count INTEGER,
-  end_date TEXT,
-  enabled INTEGER NOT NULL DEFAULT 1,
-  next_run_at TEXT,
-  missed_at TEXT,
-  occurrence_count INTEGER NOT NULL DEFAULT 0,
-  created_by TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  UNIQUE (target_kind, target_id, name)
-);
-CREATE INDEX IF NOT EXISTS idx_jobs_team ON jobs(team_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_jobs_team_created ON jobs(team_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_jobs_team_status ON jobs(team_id, status, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_events_job ON job_events(job_id, id);
-CREATE INDEX IF NOT EXISTS idx_members_user ON memberships(user_id);
-CREATE INDEX IF NOT EXISTS idx_schedules_due ON schedules(enabled, next_run_at);
-CREATE INDEX IF NOT EXISTS idx_schedules_target ON schedules(target_kind, target_id);
-"#;
-
-pub(crate) fn postgres_schema() -> String {
-    let mut sql = SCHEMA.replace(" COLLATE NOCASE", "").replace(
-        "INTEGER PRIMARY KEY AUTOINCREMENT",
-        "BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY",
-    );
-    sql.push_str(
-        "
-ALTER TABLE teams ADD COLUMN IF NOT EXISTS organization_id TEXT;
-ALTER TABLE projects ADD COLUMN IF NOT EXISTS organization_id TEXT;
-ALTER TABLE schedules ADD COLUMN IF NOT EXISTS updated_by TEXT NOT NULL DEFAULT '';
-ALTER TABLE schedules ADD COLUMN IF NOT EXISTS launch_block TEXT;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_nocase ON users (lower(username));
-CREATE TABLE IF NOT EXISTS schema_meta (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL
-);
-",
-    );
-    sql
+pub(crate) struct Migration {
+    pub(crate) version: u32,
+    pub(crate) name: &'static str,
+    pub(crate) sql: &'static str,
 }
+
+pub(crate) const SQLITE_MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    name: "0001_baseline",
+    sql: include_str!("../migrations/sqlite/0001_baseline.sql"),
+}];
+
+pub(crate) const POSTGRES_MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    name: "0001_baseline",
+    sql: include_str!("../migrations/postgres/0001_baseline.sql"),
+}];
+
+const META_TABLE: &str = "CREATE TABLE IF NOT EXISTS schema_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+)";
+
+const LEGACY_MARKER: &str = "legacy_reconciled";
 
 fn column_exists(c: &Connection, table: &str, column: &str) -> AppResult<bool> {
     let mut stmt = c.prepare(&format!("PRAGMA table_info({table})"))?;
@@ -309,7 +57,7 @@ fn column_exists(c: &Connection, table: &str, column: &str) -> AppResult<bool> {
     Ok(false)
 }
 
-fn migrate(c: &Connection) -> AppResult<()> {
+fn legacy_migrate(c: &Connection) -> AppResult<()> {
     if !column_exists(c, "users", "disabled")? {
         c.execute(
             "ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0",
@@ -626,7 +374,6 @@ CREATE INDEX IF NOT EXISTS idx_jobs_team_status ON jobs(team_id, status, created
         }
         c.execute("DELETE FROM settings WHERE key = 'ldap_ca_file'", [])?;
     }
-    c.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
 }
 
@@ -634,8 +381,167 @@ pub(crate) fn schema_version(c: &Connection) -> AppResult<u32> {
     Ok(c.query_row("PRAGMA user_version", [], |row| row.get(0))?)
 }
 
+fn check_supported(found: u32) -> AppResult<()> {
+    if found > SCHEMA_VERSION {
+        return Err(ApiError::Internal(format!(
+            "The database uses schema {found}, but this build supports {SCHEMA_VERSION}. Upgrade Koreograf before opening it."
+        )));
+    }
+    Ok(())
+}
+
+fn legacy_reconciled(c: &Connection) -> AppResult<bool> {
+    let value = c
+        .query_row(
+            "SELECT value FROM schema_meta WHERE key = ?1",
+            [LEGACY_MARKER],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    Ok(value.is_some())
+}
+
+fn mark_legacy_reconciled(c: &Connection) -> AppResult<()> {
+    c.execute(
+        "INSERT INTO schema_meta (key, value) VALUES (?1, '1')
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        [LEGACY_MARKER],
+    )?;
+    Ok(())
+}
+
+fn apply_sqlite_migrations(c: &Connection, migrations: &[Migration]) -> AppResult<()> {
+    let mut found = schema_version(c)?;
+    for migration in migrations {
+        if migration.version <= found {
+            continue;
+        }
+        let transaction = c.unchecked_transaction()?;
+        transaction.execute_batch(migration.sql)?;
+        transaction.pragma_update(None, "user_version", migration.version)?;
+        transaction.execute(
+            "INSERT INTO schema_meta (key, value) VALUES (?1, ?2)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            params![format!("migration:{}", migration.version), migration.name],
+        )?;
+        transaction.commit()?;
+        found = migration.version;
+    }
+    Ok(())
+}
+
 pub(crate) fn ensure_schema(c: &Connection) -> AppResult<()> {
-    migrate(c)
+    let found = schema_version(c)?;
+    check_supported(found)?;
+    let had_tables: i64 = c.query_row(
+        "SELECT EXISTS (
+            SELECT 1 FROM sqlite_master
+            WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    c.execute_batch(META_TABLE)?;
+    if found < BASELINE_VERSION {
+        apply_sqlite_migrations(c, &SQLITE_MIGRATIONS[..1])?;
+    }
+    if found <= BASELINE_VERSION && !legacy_reconciled(c)? {
+        if had_tables == 1 {
+            let transaction = c.unchecked_transaction()?;
+            legacy_migrate(&transaction)?;
+            mark_legacy_reconciled(&transaction)?;
+            transaction.commit()?;
+        } else {
+            mark_legacy_reconciled(c)?;
+        }
+    }
+    apply_sqlite_migrations(c, SQLITE_MIGRATIONS)
+}
+
+pub(crate) async fn ensure_postgres_schema(client: &tokio_postgres::Client) -> AppResult<()> {
+    client.batch_execute(META_TABLE).await?;
+    let found: Option<String> = client
+        .query_opt(
+            "SELECT value FROM schema_meta WHERE key = 'schema_version'",
+            &[],
+        )
+        .await?
+        .map(|row| row.get(0));
+    let found = found
+        .as_deref()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(0);
+    check_supported(found)?;
+    apply_postgres_migrations(client, POSTGRES_MIGRATIONS, found).await?;
+    if found <= BASELINE_VERSION && !postgres_legacy_reconciled(client).await? {
+        mark_postgres_legacy_reconciled(client).await?;
+    }
+    Ok(())
+}
+
+async fn postgres_legacy_reconciled(client: &tokio_postgres::Client) -> AppResult<bool> {
+    let value: Option<String> = client
+        .query_opt(
+            "SELECT value FROM schema_meta WHERE key = $1",
+            &[&LEGACY_MARKER],
+        )
+        .await?
+        .map(|row| row.get(0));
+    Ok(value.is_some())
+}
+
+async fn mark_postgres_legacy_reconciled(client: &tokio_postgres::Client) -> AppResult<()> {
+    client
+        .execute(
+            "INSERT INTO schema_meta (key, value) VALUES ($1, '1')
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            &[&LEGACY_MARKER],
+        )
+        .await?;
+    Ok(())
+}
+
+pub(crate) async fn apply_postgres_migrations(
+    client: &tokio_postgres::Client,
+    migrations: &[Migration],
+    mut found: u32,
+) -> AppResult<()> {
+    for migration in migrations {
+        if migration.version <= found {
+            continue;
+        }
+        client.batch_execute("BEGIN").await?;
+        let result = async {
+            client.batch_execute(migration.sql).await?;
+            client
+                .execute(
+                    "INSERT INTO schema_meta (key, value) VALUES ('schema_version', $1)
+                     ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                    &[&migration.version.to_string()],
+                )
+                .await?;
+            client
+                .execute(
+                    "INSERT INTO schema_meta (key, value) VALUES ($1, $2)
+                     ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                    &[&format!("migration:{}", migration.version), &migration.name],
+                )
+                .await?;
+            Ok::<(), ApiError>(())
+        }
+        .await;
+        match result {
+            Ok(()) => {
+                client.batch_execute("COMMIT").await?;
+                found = migration.version;
+            }
+            Err(err) => {
+                let _ = client.batch_execute("ROLLBACK").await;
+                return Err(err);
+            }
+        }
+    }
+    Ok(())
 }
 
 pub fn open(path: &Path) -> AppResult<Connection> {
@@ -645,15 +551,10 @@ pub fn open(path: &Path) -> AppResult<Connection> {
     let conn = Connection::open(path)?;
     conn.busy_timeout(Duration::from_secs(5))?;
     let found = schema_version(&conn)?;
-    if found > SCHEMA_VERSION {
-        return Err(ApiError::Internal(format!(
-            "The database uses schema {found}, but this build supports {SCHEMA_VERSION}. Upgrade Koreograf before opening it."
-        )));
-    }
+    check_supported(found)?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
-    conn.execute_batch(SCHEMA)?;
-    migrate(&conn)?;
+    ensure_schema(&conn)?;
     Ok(conn)
 }
 
@@ -3497,6 +3398,11 @@ mod tests {
         }
     }
 
+    fn forget_legacy_marker(conn: &Connection) {
+        conn.execute("DELETE FROM schema_meta WHERE key = ?1", [LEGACY_MARKER])
+            .unwrap();
+    }
+
     fn job_database(prefix: &str) -> (std::path::PathBuf, Connection) {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -3681,6 +3587,7 @@ mod tests {
             [],
         )
         .unwrap();
+        forget_legacy_marker(&conn);
         ensure_schema(&conn).unwrap();
         let old: i64 = conn
             .query_row(
@@ -3726,6 +3633,7 @@ mod tests {
             [],
         )
         .unwrap();
+        forget_legacy_marker(&conn);
         ensure_schema(&conn).unwrap();
         let value: i64 = conn
             .query_row(
@@ -3781,6 +3689,7 @@ mod tests {
             [],
         )
         .unwrap();
+        forget_legacy_marker(&conn);
         ensure_schema(&conn).unwrap();
         let inventory = inventory(&conn, "i1").unwrap().unwrap();
         let workflow = workflow(&conn, "w1").unwrap().unwrap();
@@ -3800,7 +3709,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let conn = Connection::open(dir.join("koreograf.db")).unwrap();
         conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
-        conn.execute_batch(SCHEMA).unwrap();
+        conn.execute_batch(SQLITE_MIGRATIONS[0].sql).unwrap();
         conn.execute(
             "INSERT INTO inventory_sources (id, inventory_id, name, kind, source_json, created_at)
              VALUES ('s1', 'i1', 'NetBox', 'netbox', ?1, '2020-01-01T00:00:00Z')",
@@ -3846,6 +3755,7 @@ mod tests {
             [],
         )
         .unwrap();
+        forget_legacy_marker(&conn);
         ensure_schema(&conn).unwrap();
         let insecure: Option<String> = conn
             .query_row(
@@ -4083,5 +3993,64 @@ mod tests {
         assert_eq!(item.tool, "any");
         drop(conn);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_migrations_end_at_the_supported_version() {
+        assert_eq!(SQLITE_MIGRATIONS.last().unwrap().version, SCHEMA_VERSION);
+        assert_eq!(POSTGRES_MIGRATIONS.last().unwrap().version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn a_failing_migration_keeps_the_sqlite_version() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
+        let migrations = [Migration {
+            version: SCHEMA_VERSION + 1,
+            name: "9999_broken",
+            sql: "CREATE TABLE broken (id TEXT",
+        }];
+        assert!(apply_sqlite_migrations(&conn, &migrations).is_err());
+        assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
+        let tables: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'broken'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 0);
+    }
+
+    #[test]
+    fn a_legacy_database_is_reconciled_once() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        assert!(legacy_reconciled(&conn).unwrap());
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('ldap_ca_file', '/keep')",
+            [],
+        )
+        .unwrap();
+        ensure_schema(&conn).unwrap();
+        let kept: Option<String> = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'ldap_ca_file'",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+        assert_eq!(kept.as_deref(), Some("/keep"));
+        forget_legacy_marker(&conn);
+        ensure_schema(&conn).unwrap();
+        let removed: Option<String> = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'ldap_ca_file'",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+        assert!(removed.is_none());
     }
 }
