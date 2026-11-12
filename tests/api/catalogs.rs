@@ -8,7 +8,16 @@ use crate::common::{call_cookie as call, call_raw_headers as call_raw};
 
 use crate::common::*;
 
-const DYNAMIC_PREFIX_KEYS: [(&str, &[&str]); 3] = [
+const DYNAMIC_PREFIX_KEYS: [(&str, &[&str]); 4] = [
+    (
+        "check_",
+        &[
+            "check_reachable",
+            "check_rights",
+            "check_server_version",
+            "check_tls",
+        ],
+    ),
     (
         "preflight_runtime_",
         &[
@@ -219,6 +228,11 @@ fn dynamic_catalog_prefixes_have_their_keys() {
             assert!(de.contains_key(*key), "de is missing {key}");
             assert!(en.contains_key(*key), "en is missing {key}");
         }
+    }
+    for id in koreograf::DATABASE_CHECK_IDS {
+        let key = format!("check_{id}");
+        assert!(de.contains_key(&key), "de is missing {key}");
+        assert!(en.contains_key(&key), "en is missing {key}");
     }
 }
 

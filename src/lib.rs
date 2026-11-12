@@ -55,7 +55,7 @@ pub use config::{
     LocalJobs, PostgresConfig, RunnerMode, SslMode,
 };
 pub use datalock::lock_data_directory;
-pub use dbmigrate::{db_migrate, db_migrate_requested};
+pub use dbmigrate::{db_migrate, db_migrate_requested, DATABASE_CHECK_IDS};
 pub use entrypoint::{entrypoint, entrypoint_requested};
 pub use health::{healthcheck, healthcheck_requested};
 
