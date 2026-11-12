@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.0-alpha.11](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.10...v0.1.0-alpha.11) (2026-11-11)
+
+
+### Bug Fixes
+
+* pass the project scm credential to the galaxy step of jobs ([#403](https://github.com/koreograf/koreograf/issues/403)) ([f9eb428](https://github.com/koreograf/koreograf/commit/f9eb4288af0ee4031afdb9df3940da7990569be7))
+* stop blocking tokio workers in the postgresql backend ([#405](https://github.com/koreograf/koreograf/issues/405)) ([1588a56](https://github.com/koreograf/koreograf/commit/1588a56ab6cd3bf33bd99e63a73a9838cdecd553))
+
 ## [0.1.0-alpha.10](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.9...v0.1.0-alpha.10) (2026-11-10)
 
 

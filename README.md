@@ -6,7 +6,7 @@ Koreograf is a prototype for team-scoped automation. One Rust binary serves the 
 
 ## Status
 
-Alpha [0.1.0-alpha.10](CHANGELOG.md). <!-- x-release-please-version -->
+Alpha [0.1.0-alpha.11](CHANGELOG.md). <!-- x-release-please-version -->
 `Cargo.toml` uses the same pre-release version.
 
 This is an early prototype, not a replacement for AWX and not a rebuild of Semaphore. There are no surveys, no Receptor, and no high-availability setup. A schedule can start a job or a workflow at a local clock time. SQLite is the default database. PostgreSQL is the second backend and serves the same API, browser UI, and features; backups work on both engines, and `koreograf db migrate` or **Settings → Database** moves a SQLite installation to PostgreSQL. See [docs/postgresql.md](docs/postgresql.md).
@@ -24,7 +24,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-Compose pulls `ghcr.io/koreograf/koreograf:0.1.0-alpha.10`. <!-- x-release-please-version -->
+Compose pulls `ghcr.io/koreograf/koreograf:0.1.0-alpha.11`. <!-- x-release-please-version -->
 It does not compile. This quick start describes that release. Features merged into `main` after it are not in the published image until the next release; use the build path below for those. Build this checkout without replacing that published tag:
 
 ```bash
