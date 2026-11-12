@@ -1,5 +1,10 @@
 #![allow(dead_code, clippy::expect_used, clippy::unwrap_used)]
 
+mod helpers;
+
+#[allow(unused_imports)]
+pub use helpers::*;
+
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
@@ -304,6 +309,65 @@ pub async fn call_bearer(
             .unwrap_or(Value::String(String::from_utf8_lossy(&bytes).to_string()))
     };
     (status, body)
+}
+
+pub async fn call_bearer_team(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    token: &str,
+    team: Option<&str>,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
+    let bearer = format!("Bearer {token}");
+    let has_body = body.is_some();
+    let mut extra = vec![("authorization", bearer.as_str())];
+    if has_body {
+        extra.push(("content-type", "application/json"));
+    }
+    if let Some(team) = team {
+        extra.push(("x-team-id", team));
+    }
+    let body = body.map(|value| value.to_string().into_bytes());
+    let (status, bytes, _) = call_raw(app, method, uri, None, &extra, body).await;
+    let body = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes)
+            .unwrap_or(Value::String(String::from_utf8_lossy(&bytes).to_string()))
+    };
+    (status, body)
+}
+
+pub async fn call_raw_headers(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    cookie: Option<&str>,
+    extra: &[(&str, &str)],
+    body: Option<Vec<u8>>,
+) -> (StatusCode, Vec<u8>, HeaderMap) {
+    let mut builder = Request::builder().method(method).uri(uri);
+    if let Some(cookie) = cookie {
+        builder = builder.header("cookie", cookie);
+    }
+    for (key, value) in extra {
+        builder = builder.header(*key, *value);
+    }
+    let request = match body {
+        Some(body) => builder.body(Body::from(body)).expect("request"),
+        None => builder.body(Body::empty()).expect("request"),
+    };
+    let response = app.clone().oneshot(request).await.expect("response");
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    (status, bytes.to_vec(), headers)
 }
 
 pub async fn call_raw(

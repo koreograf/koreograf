@@ -1,0 +1,172 @@
+use std::collections::BTreeSet;
+use std::path::Path;
+
+use axum::http::StatusCode;
+use serde_json::{json, Value};
+
+use crate::common::{call_cookie as call, call_raw_headers as call_raw};
+
+use crate::common::*;
+
+#[tokio::test]
+async fn a_request_without_json_returns_a_catalog_error() {
+    let harness = TestApp::boot("json", Options::default());
+    let app = harness.app.clone();
+    let dir = harness.dir.clone();
+
+    let (status, bytes, _) = call_raw(&app, "POST", "/api/login", None, &[], None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let missing: Value = serde_json::from_slice(&bytes).expect("json");
+    assert_eq!(missing["error"], "json_body_required");
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(!text.contains("Expected request"), "{text}");
+
+    let (status, bytes, _) = call_raw(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        &[("content-type", "text/plain")],
+        Some(b"{}".to_vec()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let wrong_type: Value = serde_json::from_slice(&bytes).expect("json");
+    assert_eq!(wrong_type["error"], "json_body_required");
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap();
+    let (status, templates, _) = call(
+        &app,
+        "GET",
+        "/api/templates",
+        Some(&cookie),
+        Some(team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{templates}");
+    let health_id = templates
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["name"] == "Healthcheck")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap();
+    let (status, bytes, _) = call_raw(
+        &app,
+        "POST",
+        &format!("/api/templates/{health_id}/launch"),
+        Some(&cookie),
+        &[("x-team-id", team)],
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let launch: Value = serde_json::from_slice(&bytes).expect("json");
+    assert_eq!(launch["error"], "json_body_required");
+
+    let finished = launch_and_wait(&app, &cookie, team, health_id).await;
+    assert_eq!(finished["status"], "successful", "{}", finished["events"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn message_catalogs_match_and_cover_the_ui() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let de_path = root.join("web/i18n/de.json");
+    let en_path = root.join("web/i18n/en.json");
+    assert_catalog_sorted(&de_path);
+    assert_catalog_sorted(&en_path);
+    let de = load_catalog(&de_path);
+    let en = load_catalog(&en_path);
+    assert_eq!(
+        de.keys().collect::<Vec<_>>(),
+        en.keys().collect::<Vec<_>>(),
+        "catalog keys differ"
+    );
+
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let mut missing = BTreeSet::new();
+    for key in ui_message_keys(&script) {
+        if !de.contains_key(&key) {
+            missing.insert(key);
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "app.js keys missing from the catalogs: {missing:?}"
+    );
+
+    let german_ui = umlaut_lines("web/app.js", &script);
+    assert!(german_ui.is_empty(), "German left in app.js: {german_ui:?}");
+    let mut german_src = Vec::new();
+    leftover_german(&root.join("src"), &mut german_src);
+    assert!(german_src.is_empty(), "German left in src: {german_src:?}");
+
+    let mut api_missing = BTreeSet::new();
+    for key in rust_message_keys(&root.join("src")) {
+        if !de.contains_key(&key) {
+            api_missing.insert(key);
+        }
+    }
+    assert!(
+        api_missing.is_empty(),
+        "API keys missing from the catalogs: {api_missing:?}"
+    );
+    for catalog in [&de, &en] {
+        let hint = catalog
+            .get("confirm_the_replacement_with_ersetzen")
+            .map(String::as_str)
+            .unwrap_or("");
+        assert!(
+            hint.contains("ERSETZEN"),
+            "restore hint must name the confirm token"
+        );
+    }
+
+    let runner = std::fs::read_to_string(root.join("src/runner.rs")).expect("runner.rs");
+    assert!(
+        runner.contains("nicht gefunden"),
+        "git still reports a missing revision in German"
+    );
+    assert!(
+        runner.contains("konnte den remote-verweis"),
+        "git still reports a missing remote ref in German"
+    );
+}
+
+#[test]
+fn source_control_token_hints_are_in_the_forms_and_catalogs() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    assert!(script.contains("[\"scm\", \"source_control\", \"source_control_credential_hint\"]"));
+    assert!(script.contains("credHint(\"source_control_username_hint\")"));
+    assert!(script.contains("h(\"source_control_project_hint\")"));
+    assert!(script.contains("h(\"source_control_key_hint\")"));
+    let en = std::fs::read_to_string(root.join("web/i18n/en.json")).expect("en");
+    let de = std::fs::read_to_string(root.join("web/i18n/de.json")).expect("de");
+    for catalog in [&en, &de] {
+        assert!(catalog.contains("x-access-token"));
+        assert!(catalog.contains("oauth2"));
+        assert!(catalog.contains("source_control_credential_hint"));
+        assert!(catalog.contains("source_control_username_hint"));
+        assert!(catalog.contains("source_control_project_hint"));
+    }
+    let docs = std::fs::read_to_string(root.join("docs/jobs.md")).expect("docs");
+    assert!(docs.contains("https://github.com/example/project.git"));
+    assert!(docs.contains("x-access-token"));
+    assert!(docs.contains("https://gitlab.com/example/project.git"));
+    assert!(docs.contains("oauth2"));
+}
