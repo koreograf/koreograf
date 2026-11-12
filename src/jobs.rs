@@ -239,9 +239,9 @@ pub fn relaunch(
                 return Err(ApiError::bad("only_ansible_jobs_have_failed_hosts"));
             }
             let hosts = runner::failed_host_names(&job.failed_hosts);
-            let limit = runner::limit_from_hosts(&hosts).map_err(ApiError::bad)?;
+            let limit = runner::limit_from_hosts(&hosts).map_err(ApiError::from)?;
             parameters =
-                runner::parameters_with_limit(&parameters, &limit).map_err(ApiError::bad)?;
+                runner::parameters_with_limit(&parameters, &limit).map_err(ApiError::from)?;
         }
         let differs =
             !crate::auth::command_matches_template(&template, &db::json_object(&parameters));
@@ -365,7 +365,7 @@ fn parameters_for_node(
     }
     if had_spec && template.tool == "ansible" {
         let spec = params.get("spec").cloned().unwrap_or_else(|| json!({}));
-        runner::check_ansible_spec(&spec).map_err(ApiError::bad)?;
+        runner::check_ansible_spec(&spec).map_err(ApiError::from)?;
     }
     if had_spec && template.tool == "opentofu" {
         if let Some(action) = params
@@ -573,7 +573,7 @@ fn parameters_for_launch(
         let empty = json!({});
         let base = params.get("spec").unwrap_or(&empty);
         let merged = merge_prompt_spec(base, spec).map_err(ApiError::bad)?;
-        runner::check_ansible_spec(&merged).map_err(ApiError::bad)?;
+        runner::check_ansible_spec(&merged).map_err(ApiError::from)?;
         let Some(map) = params.as_object_mut() else {
             return Err(ApiError::bad("parameters_are_invalid"));
         };
@@ -753,7 +753,7 @@ pub async fn sync_project(state: &Shared, project: &db::Project) -> AppResult<St
         }
         Err(err) => {
             state.store().set_project_sync_failed(&project.id)?;
-            Err(ApiError::bad(err))
+            Err(ApiError::from(err))
         }
     }
 }

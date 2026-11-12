@@ -798,14 +798,14 @@ fn build_template(
     if !runner::known_tool(&body.tool) {
         return Err(ApiError::bad("tool_is_ansible_opentofu_or_shell"));
     }
-    runner::check_relative(body.entrypoint.trim()).map_err(ApiError::bad)?;
+    runner::check_relative(body.entrypoint.trim()).map_err(ApiError::from)?;
     let extra = body.extra_vars.unwrap_or_else(|| json!({}));
     let spec = body.spec.unwrap_or_else(|| json!({}));
     if !extra.is_object() || !spec.is_object() {
         return Err(ApiError::bad("template.vars_not_objects"));
     }
     if body.tool == "ansible" {
-        runner::check_ansible_spec(&spec).map_err(ApiError::bad)?;
+        runner::check_ansible_spec(&spec).map_err(ApiError::from)?;
     }
     if let Some(action) = spec.get("action").and_then(Value::as_str) {
         if !matches!(action, "plan" | "apply") {
@@ -952,7 +952,7 @@ fn check_node_overrides(
         workflow::apply_overrides(&mut params, over);
         let spec = params.get("spec").cloned().unwrap_or_else(|| json!({}));
         if template.tool == "ansible" {
-            runner::check_ansible_spec(&spec).map_err(ApiError::bad)?;
+            runner::check_ansible_spec(&spec).map_err(ApiError::from)?;
         }
         if template.tool == "opentofu" {
             if let Some(action) = spec.get("action").and_then(Value::as_str) {

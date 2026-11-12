@@ -14,6 +14,56 @@ use crate::db::{self, Environment, Project, Template};
 use crate::metrics::{self, JobMeta};
 use crate::Shared;
 
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum RunnerError {
+    #[error("{0}")]
+    Spec(String),
+    #[error("{0}")]
+    Project(String),
+    #[error("{0}")]
+    Credentials(String),
+    #[error("{0}")]
+    Runtime(String),
+    #[error("{0}")]
+    Filesystem(String),
+    #[error("the job was canceled")]
+    Cancelled,
+    #[error("{0}")]
+    Timeout(String),
+    #[error("{0}")]
+    Internal(String),
+}
+
+impl RunnerError {
+    fn spec(message: impl Into<String>) -> Self {
+        Self::Spec(message.into())
+    }
+
+    fn project(message: impl Into<String>) -> Self {
+        Self::Project(message.into())
+    }
+
+    fn credentials(message: impl Into<String>) -> Self {
+        Self::Credentials(message.into())
+    }
+
+    fn runtime(message: impl Into<String>) -> Self {
+        Self::Runtime(message.into())
+    }
+
+    fn filesystem(message: impl Into<String>) -> Self {
+        Self::Filesystem(message.into())
+    }
+
+    fn timeout(message: impl Into<String>) -> Self {
+        Self::Timeout(message.into())
+    }
+
+    fn internal(message: impl Into<String>) -> Self {
+        Self::Internal(message.into())
+    }
+}
+
 const WRAPPER: &str = include_str!("wrapper.sh");
 const MAX_FILES: u32 = 4_000;
 const MAX_BYTES: u64 = 200 * 1024 * 1024;
@@ -135,14 +185,14 @@ pub fn local_tool_available(state: &Shared, tool: &str) -> bool {
         .unwrap_or(true)
 }
 
-pub fn check_ansible_spec(spec: &Value) -> Result<(), String> {
+pub fn check_ansible_spec(spec: &Value) -> Result<(), RunnerError> {
     if !spec.is_object() {
-        return Err("spec_must_be_an_object".into());
+        return Err(RunnerError::spec("spec_must_be_an_object"));
     }
     match spec.get("job_type") {
         None | Some(Value::Null) => {}
         Some(Value::String(job_type)) if job_type == "run" || job_type == "check" => {}
-        _ => return Err("type_is_run_or_check".into()),
+        _ => return Err(RunnerError::spec("type_is_run_or_check")),
     }
     check_tag_list(spec, "tags", "tags")?;
     check_tag_list(spec, "skip_tags", "skip_tags")?;
@@ -151,17 +201,17 @@ pub fn check_ansible_spec(spec: &Value) -> Result<(), String> {
     }
     if let Some(diff) = spec.get("diff") {
         if !diff.is_boolean() {
-            return Err("diff_is_yes_or_no".into());
+            return Err(RunnerError::spec("diff_is_yes_or_no"));
         }
     }
     if let Some(verbosity) = optional_u64(spec, "verbosity")? {
         if verbosity > 4 {
-            return Err("verbosity_is_0_to_4".into());
+            return Err(RunnerError::spec("verbosity_is_0_to_4"));
         }
     }
     if let Some(forks) = optional_u64(spec, "forks")? {
         if !(1..=50).contains(&forks) {
-            return Err("forks_is_a_number_from_1_to_50".into());
+            return Err(RunnerError::spec("forks_is_a_number_from_1_to_50"));
         }
     }
     Ok(())
@@ -178,7 +228,7 @@ fn tag_filter_is_set(spec: &Value) -> bool {
     })
 }
 
-pub fn ansible_env(spec: &Value) -> Result<Vec<(String, String)>, String> {
+pub fn ansible_env(spec: &Value) -> Result<Vec<(String, String)>, RunnerError> {
     check_ansible_spec(spec)?;
     let mut env = Vec::new();
     if spec.get("job_type").and_then(Value::as_str) == Some("check") {
@@ -210,26 +260,31 @@ pub fn ansible_env(spec: &Value) -> Result<Vec<(String, String)>, String> {
     Ok(env)
 }
 
-fn optional_text(spec: &Value, key: &str) -> Result<Option<String>, String> {
+fn optional_text(spec: &Value, key: &str) -> Result<Option<String>, RunnerError> {
     match spec.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(text)) => Ok(Some(text.clone())),
-        Some(_) => Err(crate::error::message("field.text", &[("field", key)])),
+        Some(_) => Err(RunnerError::spec(crate::error::message(
+            "field.text",
+            &[("field", key)],
+        ))),
     }
 }
 
-fn optional_u64(spec: &Value, key: &str) -> Result<Option<u64>, String> {
+fn optional_u64(spec: &Value, key: &str) -> Result<Option<u64>, RunnerError> {
     match spec.get(key) {
         None | Some(Value::Null) => Ok(None),
-        Some(Value::Number(number)) => number
-            .as_u64()
-            .map(Some)
-            .ok_or_else(|| crate::error::message("field.integer", &[("field", key)])),
-        Some(_) => Err(crate::error::message("field.integer", &[("field", key)])),
+        Some(Value::Number(number)) => number.as_u64().map(Some).ok_or_else(|| {
+            RunnerError::spec(crate::error::message("field.integer", &[("field", key)]))
+        }),
+        Some(_) => Err(RunnerError::spec(crate::error::message(
+            "field.integer",
+            &[("field", key)],
+        ))),
     }
 }
 
-fn check_tag_list(spec: &Value, key: &str, label: &str) -> Result<(), String> {
+fn check_tag_list(spec: &Value, key: &str, label: &str) -> Result<(), RunnerError> {
     let Some(text) = optional_text(spec, key)? else {
         return Ok(());
     };
@@ -237,7 +292,10 @@ fn check_tag_list(spec: &Value, key: &str, label: &str) -> Result<(), String> {
         return Ok(());
     }
     if text.len() > 300 {
-        return Err(crate::error::message("field.too_long", &[("field", label)]));
+        return Err(RunnerError::spec(crate::error::message(
+            "field.too_long",
+            &[("field", label)],
+        )));
     }
     for part in text.split(',') {
         let part = part.trim();
@@ -248,16 +306,16 @@ fn check_tag_list(spec: &Value, key: &str, label: &str) -> Result<(), String> {
                 .chars()
                 .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | ':' | '-'));
         if !token {
-            return Err(crate::error::message(
+            return Err(RunnerError::spec(crate::error::message(
                 "field.part_invalid",
                 &[("field", label), ("part", part)],
-            ));
+            )));
         }
     }
     Ok(())
 }
 
-fn check_limit(text: &str) -> Result<(), String> {
+fn check_limit(text: &str) -> Result<(), RunnerError> {
     if text.is_empty() {
         return Ok(());
     }
@@ -269,7 +327,7 @@ fn check_limit(text: &str) -> Result<(), String> {
             )
     });
     if text.len() > 4_000 || text.starts_with('-') || !allowed {
-        return Err("limit_contains_an_invalid_character".into());
+        return Err(RunnerError::spec("limit_contains_an_invalid_character"));
     }
     Ok(())
 }
@@ -294,9 +352,9 @@ pub fn failed_host_names(stored: &str) -> Vec<String> {
     host_record(stored).hosts
 }
 
-pub fn limit_from_hosts(hosts: &[String]) -> Result<String, String> {
+pub fn limit_from_hosts(hosts: &[String]) -> Result<String, RunnerError> {
     if hosts.is_empty() {
-        return Err("no_failed_hosts_are_stored_for_this_job".into());
+        return Err(RunnerError::spec("no_failed_hosts_are_stored_for_this_job"));
     }
     for host in hosts {
         let token = !host.is_empty()
@@ -306,10 +364,10 @@ pub fn limit_from_hosts(hosts: &[String]) -> Result<String, String> {
                 .chars()
                 .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-' | ':'));
         if !token {
-            return Err(crate::error::message(
+            return Err(RunnerError::spec(crate::error::message(
                 "limit.host_invalid",
                 &[("host", host)],
-            ));
+            )));
         }
     }
     let limit = hosts.join(",");
@@ -317,12 +375,12 @@ pub fn limit_from_hosts(hosts: &[String]) -> Result<String, String> {
     Ok(limit)
 }
 
-pub fn parameters_with_limit(parameters: &str, limit: &str) -> Result<String, String> {
+pub fn parameters_with_limit(parameters: &str, limit: &str) -> Result<String, RunnerError> {
     check_limit(limit)?;
     let mut params = db::json_object(parameters);
     {
         let Some(root) = params.as_object_mut() else {
-            return Err("parameters_are_invalid".into());
+            return Err(RunnerError::spec("parameters_are_invalid"));
         };
         let spec = root
             .entry("spec")
@@ -331,7 +389,7 @@ pub fn parameters_with_limit(parameters: &str, limit: &str) -> Result<String, St
             *spec = Value::Object(Default::default());
         }
         let Some(spec) = spec.as_object_mut() else {
-            return Err("parameters_are_invalid".into());
+            return Err(RunnerError::spec("parameters_are_invalid"));
         };
         spec.insert("limit".into(), Value::String(limit.to_string()));
     }
@@ -443,7 +501,7 @@ fn fatal_host(line: &str) -> Option<String> {
     Some(host.to_string())
 }
 
-pub fn check_relative(path: &str) -> Result<(), String> {
+pub fn check_relative(path: &str) -> Result<(), RunnerError> {
     if path.is_empty() {
         return Ok(());
     }
@@ -451,7 +509,9 @@ pub fn check_relative(path: &str) -> Result<(), String> {
         || path.contains('\\')
         || path.split('/').any(|part| part == ".." || part.is_empty())
     {
-        return Err("the_entry_path_must_be_relative_and_must".into());
+        return Err(RunnerError::spec(
+            "the_entry_path_must_be_relative_and_must",
+        ));
     }
     Ok(())
 }
@@ -514,12 +574,14 @@ pub fn container_argv(spec: &ContainerSpec) -> Vec<String> {
 
 /// Owner of the job directory. Secret files in that directory stay mode 0600
 /// and stay owned by this user, so the container has to be the same user.
-fn directory_user(path: &Path) -> Result<String, String> {
+fn directory_user(path: &Path) -> Result<String, RunnerError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
         let meta = fs::metadata(path).map_err(|err| {
-            format!("The job directory could not be read ({err}). The job was not started.")
+            RunnerError::filesystem(format!(
+                "The job directory could not be read ({err}). The job was not started."
+            ))
         })?;
         Ok(format!("{}:{}", meta.uid(), meta.gid()))
     }
@@ -556,7 +618,7 @@ async fn prepare_container_passwd(
     image: &str,
     work: &Path,
     user: &str,
-) -> Result<PasswdPrep, String> {
+) -> Result<PasswdPrep, RunnerError> {
     let Some((uid, gid)) = split_user(user) else {
         return Ok(PasswdPrep::Skip);
     };
@@ -565,7 +627,7 @@ async fn prepare_container_passwd(
     }
     let existing = match read_image_passwd(bin, image, &passwd_reader_name(work)).await {
         Ok(text) => text,
-        Err(err) => return Ok(PasswdPrep::Unreadable(err)),
+        Err(err) => return Ok(PasswdPrep::Unreadable(err.to_string())),
     };
     let Some(body) = passwd_with_uid(&existing, uid, gid, "/runner/work") else {
         return Ok(PasswdPrep::Skip);
@@ -636,7 +698,7 @@ fn passwd_reader_name(work: &Path) -> String {
     format!("koreograf-passwd-{safe}")
 }
 
-fn write_private_passwd(path: &Path, body: &str) -> Result<(), String> {
+fn write_private_passwd(path: &Path, body: &str) -> Result<(), RunnerError> {
     use std::io::Write;
     #[cfg(unix)]
     {
@@ -648,12 +710,14 @@ fn write_private_passwd(path: &Path, body: &str) -> Result<(), String> {
             .mode(0o644)
             .open(path)
             .map_err(|err| {
-                format!(
+                RunnerError::filesystem(format!(
                     "The container passwd could not be written ({err}). The job was not started."
-                )
+                ))
             })?;
         file.write_all(body.as_bytes()).map_err(|err| {
-            format!("The container passwd could not be written ({err}). The job was not started.")
+            RunnerError::filesystem(format!(
+                "The container passwd could not be written ({err}). The job was not started."
+            ))
         })?;
         // `OpenOptions` mode is masked by umask. A root-owned 0600 file is
         // unreadable for uid 10001, and OpenSSH then still reports
@@ -661,26 +725,30 @@ fn write_private_passwd(path: &Path, body: &str) -> Result<(), String> {
         let mut perms = file
             .metadata()
             .map_err(|err| {
-                format!(
+                RunnerError::filesystem(format!(
                     "The container passwd could not be written ({err}). The job was not started."
-                )
+                ))
             })?
             .permissions();
         use std::os::unix::fs::PermissionsExt;
         perms.set_mode(0o644);
         fs::set_permissions(path, perms).map_err(|err| {
-            format!("The container passwd could not be written ({err}). The job was not started.")
+            RunnerError::filesystem(format!(
+                "The container passwd could not be written ({err}). The job was not started."
+            ))
         })?;
         Ok(())
     }
     #[cfg(not(unix))]
     {
         let _ = (path, body);
-        Err("The container passwd could not be written. The job was not started.".into())
+        Err(RunnerError::filesystem(
+            "The container passwd could not be written. The job was not started.",
+        ))
     }
 }
 
-async fn read_image_passwd(bin: &str, image: &str, name: &str) -> Result<String, String> {
+async fn read_image_passwd(bin: &str, image: &str, name: &str) -> Result<String, RunnerError> {
     // Drop a reader left behind by an earlier timeout. `--rm` only runs
     // when this client exits on its own.
     remove_probe_container(bin, name).await;
@@ -708,11 +776,13 @@ async fn read_image_passwd(bin: &str, image: &str, name: &str) -> Result<String,
         Ok(Ok(output)) => output,
         Ok(Err(err)) => {
             remove_probe_container(bin, name).await;
-            return Err(format!("{bin} could not read the image passwd ({err})"));
+            return Err(RunnerError::runtime(format!(
+                "{bin} could not read the image passwd ({err})"
+            )));
         }
         Err(_) => {
             remove_probe_container(bin, name).await;
-            return Err("the read timed out".into());
+            return Err(RunnerError::timeout("the read timed out"));
         }
     };
     if !output.status.success() {
@@ -722,14 +792,15 @@ async fn read_image_passwd(bin: &str, image: &str, name: &str) -> Result<String,
             .find(|line| !line.trim().is_empty())
             .unwrap_or("cat /etc/passwd failed");
         let detail: String = detail.chars().take(180).collect();
-        return Err(detail);
+        return Err(RunnerError::runtime(detail));
     }
     if output.stdout.len() > 256 * 1024 {
-        return Err("the file is too large".into());
+        return Err(RunnerError::runtime("the file is too large"));
     }
-    let text = String::from_utf8(output.stdout).map_err(|_| "the file is not utf-8".to_string())?;
+    let text = String::from_utf8(output.stdout)
+        .map_err(|_| RunnerError::runtime("the file is not utf-8"))?;
     if !text.contains(':') {
-        return Err("the file is empty".into());
+        return Err(RunnerError::runtime("the file is empty"));
     }
     Ok(text)
 }
@@ -743,7 +814,7 @@ fn info_is_rootless(bin: &str, text: &str) -> bool {
     }
 }
 
-async fn runtime_is_rootless(bin: &str) -> Result<bool, String> {
+async fn runtime_is_rootless(bin: &str) -> Result<bool, RunnerError> {
     let format = if bin == "podman" {
         "{{.Host.Security.Rootless}}"
     } else {
@@ -761,21 +832,23 @@ async fn runtime_is_rootless(bin: &str) -> Result<bool, String> {
     let output = match result {
         Ok(Ok(output)) => output,
         Ok(Err(err)) => {
-            return Err(format!(
+            return Err(RunnerError::runtime(format!(
                 "The container runtime did not answer ({err}). The job was not started."
-            ));
+            )));
         }
         Err(_) => {
-            return Err("The container runtime did not answer. The job was not started.".into());
+            return Err(RunnerError::runtime(
+                "The container runtime did not answer. The job was not started.",
+            ));
         }
     };
     if !output.status.success() {
         let detail = last_stderr_line(&String::from_utf8_lossy(&output.stderr));
-        return Err(if detail.is_empty() {
-            "The container runtime did not answer. The job was not started.".into()
+        return Err(RunnerError::runtime(if detail.is_empty() {
+            "The container runtime did not answer. The job was not started.".to_string()
         } else {
             format!("The container runtime did not answer ({detail}). The job was not started.")
-        });
+        }));
     }
     Ok(info_is_rootless(
         bin,
@@ -992,9 +1065,9 @@ pub async fn execute(state: Shared, job_id: String) {
         return;
     }
     match prepare_and_run(&state, &job_id).await {
-        Ok(()) => {}
+        Ok(()) | Err(RunnerError::Cancelled) => {}
         Err(err) => {
-            log(&state, &job_id, "system", &err);
+            log(&state, &job_id, "system", &err.to_string());
             finish(&state, &job_id, false);
         }
     }
@@ -1002,37 +1075,41 @@ pub async fn execute(state: Shared, job_id: String) {
     forget_run(&state, &job_id);
 }
 
-async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
+async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), RunnerError> {
     let (job, template) = {
         let db = state.store();
         let job = db
             .job(job_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "Job is missing.".to_string())?;
+            .map_err(|e| RunnerError::internal(e.to_string()))?
+            .ok_or_else(|| RunnerError::internal("Job is missing."))?;
         let template = match &job.template_id {
             Some(id) => db
                 .template(id)
-                .map_err(|e| e.to_string())?
-                .ok_or_else(|| "Job template is missing.".to_string())?,
-            None => return Err("Job has no template.".into()),
+                .map_err(|e| RunnerError::internal(e.to_string()))?
+                .ok_or_else(|| RunnerError::internal("Job template is missing."))?,
+            None => return Err(RunnerError::internal("Job has no template.")),
         };
         (job, template)
     };
     let original = template.clone();
     let mut template = with_saved_parameters(template, &job);
     if !known_tool(&template.tool) {
-        return Err(format!("Unknown tool {}.", template.tool));
+        return Err(RunnerError::spec(format!(
+            "Unknown tool {}.",
+            template.tool
+        )));
     }
     check_relative(&template.entrypoint)?;
 
-    let settings = crate::settings::load(state).map_err(|err| err.to_string())?;
+    let settings =
+        crate::settings::load(state).map_err(|err| RunnerError::internal(err.to_string()))?;
     if settings.runner == RunnerMode::Auto {
         let preflight = crate::preflight::check(settings.runner, state.cfg.container_image).await;
         if state.cfg.container_image && !preflight.runtime.responding {
-            return Err(CONTAINER_SOCKET_MISSING.into());
+            return Err(RunnerError::runtime(CONTAINER_SOCKET_MISSING));
         }
         if let Some(problem) = preflight.job_problem(&template.tool) {
-            return Err(problem);
+            return Err(RunnerError::runtime(problem));
         }
     }
     let local_tool = local_tool_available(state, &template.tool);
@@ -1040,19 +1117,21 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
     if !can_run && template.environment_id.is_none() {
         let default = settings.default_environment(&template.tool);
         if default.is_empty() {
-            return Err(missing_default_environment(&template.tool));
+            return Err(RunnerError::spec(missing_default_environment(
+                &template.tool,
+            )));
         }
         template.environment_id = Some(default.to_string());
     }
 
     let work = state.cfg.data_dir.join("jobs").join(job_id);
     let stage = work.join("project");
-    fs::create_dir_all(&stage).map_err(|e| e.to_string())?;
+    fs::create_dir_all(&stage).map_err(|e| RunnerError::filesystem(e.to_string()))?;
     let _scrub = SecretScrub { work: work.clone() };
     let cache = state.cfg.data_dir.join("cache").join(&job.team_id);
     for sub in ["collections", "roles", "tofu", "tofu-state"] {
         let path = cache.join(sub);
-        fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+        fs::create_dir_all(&path).map_err(|e| RunnerError::filesystem(e.to_string()))?;
         if sub == "tofu-state" {
             set_private(&path)?;
         }
@@ -1103,20 +1182,21 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
     let mut entrypoint = template.entrypoint.clone();
     let spec: Value = serde_json::from_str(&template.spec).unwrap_or(Value::Null);
     if template.tool == "shell" && entrypoint.is_empty() {
-        let script = spec
-            .get("script")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "A shell template needs a script or an entry path.".to_string())?;
-        fs::write(stage.join("inline.sh"), script).map_err(|e| e.to_string())?;
+        let script = spec.get("script").and_then(Value::as_str).ok_or_else(|| {
+            RunnerError::spec("A shell template needs a script or an entry path.")
+        })?;
+        fs::write(stage.join("inline.sh"), script)
+            .map_err(|e| RunnerError::filesystem(e.to_string()))?;
         entrypoint = "inline.sh".into();
     }
     if entrypoint.is_empty() {
-        return Err("Entry path is missing.".into());
+        return Err(RunnerError::spec("Entry path is missing."));
     }
     check_relative(&entrypoint)?;
 
     let inventory_rel = write_job_inventory(state, &template, &work)?;
-    fs::write(work.join("wrapper.sh"), WRAPPER).map_err(|e| e.to_string())?;
+    fs::write(work.join("wrapper.sh"), WRAPPER)
+        .map_err(|e| RunnerError::filesystem(e.to_string()))?;
 
     let saved = db::json_object(&job.parameters)
         .get("tool")
@@ -1146,12 +1226,11 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
         (true, Some(bin), Some(env)) => Some((bin, env)),
         (true, None, Some(_)) if settings.runner == RunnerMode::Docker => {
             if state.cfg.container_image {
-                return Err(CONTAINER_SOCKET_MISSING.into());
+                return Err(RunnerError::runtime(CONTAINER_SOCKET_MISSING));
             }
-            return Err(
-                "An execution environment is set, but neither Docker nor Podman is reachable."
-                    .into(),
-            );
+            return Err(RunnerError::runtime(
+                "An execution environment is set, but neither Docker nor Podman is reachable.",
+            ));
         }
         (true, None, Some(_)) => {
             log(state, job_id, "system", AUTO_WITHOUT_RUNTIME);
@@ -1170,7 +1249,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
         }
     };
     if state.cfg.container_image && container_mode.is_none() {
-        return Err(CONTAINER_SOCKET_MISSING.into());
+        return Err(RunnerError::runtime(CONTAINER_SOCKET_MISSING));
     }
 
     let view_work = if container_mode.is_some() {
@@ -1214,7 +1293,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
     );
     let tofu_state = if template.tool == "opentofu" {
         let state = tofu_state_dir(&cache, &template.id)?;
-        fs::create_dir_all(&state).map_err(|e| e.to_string())?;
+        fs::create_dir_all(&state).map_err(|e| RunnerError::filesystem(e.to_string()))?;
         if let Some(parent) = state.parent() {
             set_private(parent)?;
         }
@@ -1280,7 +1359,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
     }
 
     if canceled(state, job_id) {
-        return Ok(());
+        return Err(RunnerError::Cancelled);
     }
 
     state.metrics.begin(&JobMeta {
@@ -1326,13 +1405,13 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
             let allowed = {
                 let db = state.store();
                 let launcher = crate::auth::launcher_is_admin(db, &job.launched_by)
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| RunnerError::internal(e.to_string()))?;
                 let params = db::json_object(&job.parameters);
                 let matches = crate::auth::command_matches_template(&original, &params);
                 let workflow_id = match job.workflow_job_id.as_deref().filter(|id| !id.is_empty()) {
                     Some(id) => db
                         .workflow_job(id)
-                        .map_err(|e| e.to_string())?
+                        .map_err(|e| RunnerError::internal(e.to_string()))?
                         .and_then(|run| run.workflow_id),
                     None => None,
                 };
@@ -1347,11 +1426,13 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
                     workflow_id.as_deref(),
                     requires_workflow,
                 )
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| RunnerError::internal(e.to_string()))?;
                 launcher && content
             };
             if !allowed {
-                return Err("Local runs are limited to administrators.".into());
+                return Err(RunnerError::spec(
+                    "Local runs are limited to administrators.",
+                ));
             }
         }
         log(state, job_id, "system", "Local run on the controller.");
@@ -1365,7 +1446,9 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
             .kill_on_drop(true);
         #[cfg(unix)]
         cmd.process_group(0);
-        let child = cmd.spawn().map_err(|e| format!("Start failed: {e}"))?;
+        let child = cmd
+            .spawn()
+            .map_err(|e| RunnerError::runtime(format!("Start failed: {e}")))?;
         let pid = child.id().unwrap_or(0);
         let proc = RunningProc {
             pid,
@@ -1389,7 +1472,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), String> {
     };
 
     if canceled(state, job_id) {
-        return Ok(());
+        return Err(RunnerError::Cancelled);
     }
     let cache_after = dir_size(&cache);
     log(
@@ -1491,20 +1574,24 @@ fn push_paths(
 
 /// State for one template, under that team's cache. The plugin cache stays
 /// in `cache/<team>/tofu`. A second team gets a different directory.
-fn tofu_state_dir(cache: &Path, template_id: &str) -> Result<PathBuf, String> {
+fn tofu_state_dir(cache: &Path, template_id: &str) -> Result<PathBuf, RunnerError> {
     if !safe_cache_key(template_id) {
-        return Err("The template id cannot be used as an OpenTofu state directory.".into());
+        return Err(RunnerError::spec(
+            "The template id cannot be used as an OpenTofu state directory.",
+        ));
     }
     Ok(cache.join("tofu-state").join(template_id))
 }
 
-fn set_private(path: &Path) -> Result<(), String> {
+fn set_private(path: &Path) -> Result<(), RunnerError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(path).map_err(|e| e.to_string())?.permissions();
+        let mut perms = fs::metadata(path)
+            .map_err(|e| RunnerError::filesystem(e.to_string()))?
+            .permissions();
         perms.set_mode(0o700);
-        fs::set_permissions(path, perms).map_err(|e| e.to_string())?;
+        fs::set_permissions(path, perms).map_err(|e| RunnerError::filesystem(e.to_string()))?;
     }
     #[cfg(not(unix))]
     let _ = path;
@@ -1533,23 +1620,28 @@ fn job_ca_env(guest: &str) -> Vec<(String, String)> {
     .collect()
 }
 
-fn write_job_ca_bundle(work: &Path, pem: &[u8]) -> Result<(), String> {
+fn write_job_ca_bundle(work: &Path, pem: &[u8]) -> Result<(), RunnerError> {
     use std::io::Write;
     let path = work.join("ca-bundle.pem");
-    let mut file = fs::File::create(&path)
-        .map_err(|err| format!("The job CA bundle could not be written ({err})."))?;
-    file.write_all(pem)
-        .map_err(|err| format!("The job CA bundle could not be written ({err})."))?;
+    let mut file = fs::File::create(&path).map_err(|err| {
+        RunnerError::filesystem(format!("The job CA bundle could not be written ({err})."))
+    })?;
+    file.write_all(pem).map_err(|err| {
+        RunnerError::filesystem(format!("The job CA bundle could not be written ({err})."))
+    })?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = file
             .metadata()
-            .map_err(|err| format!("The job CA bundle could not be written ({err})."))?
+            .map_err(|err| {
+                RunnerError::filesystem(format!("The job CA bundle could not be written ({err})."))
+            })?
             .permissions();
         perms.set_mode(0o644);
-        fs::set_permissions(&path, perms)
-            .map_err(|err| format!("The job CA bundle could not be written ({err})."))?;
+        fs::set_permissions(&path, perms).map_err(|err| {
+            RunnerError::filesystem(format!("The job CA bundle could not be written ({err})."))
+        })?;
     }
     Ok(())
 }
@@ -1612,26 +1704,29 @@ fn apply_credentials(
     work: &Path,
     container: bool,
     env: &mut Vec<(String, String)>,
-) -> Result<(), String> {
+) -> Result<(), RunnerError> {
     let mut used_files = Vec::new();
     let mut vault_lines = Vec::new();
     for (index, id) in ids.iter().enumerate() {
         let credential = {
             let db = state.store();
             db.credential(id)
-                .map_err(|e| e.to_string())?
-                .ok_or_else(|| "Credential is missing.".to_string())?
+                .map_err(|e| RunnerError::internal(e.to_string()))?
+                .ok_or_else(|| RunnerError::credentials("Credential is missing."))?
         };
         if credential.team_id != template.team_id {
-            return Err("The credential belongs to another team.".into());
+            return Err(RunnerError::credentials(
+                "The credential belongs to another team.",
+            ));
         }
         let plain = state
             .decrypt(&credential.secret_blob)
-            .map_err(|_| "Credentials cannot be read.".to_string())?;
-        let secret: Value =
-            serde_json::from_str(&plain).map_err(|_| "Credentials are not JSON.".to_string())?;
+            .map_err(|_| RunnerError::credentials("Credentials cannot be read."))?;
+        let secret: Value = serde_json::from_str(&plain)
+            .map_err(|_| RunnerError::credentials("Credentials are not JSON."))?;
         let prepared =
-            crate::credentials::prepare(credential.kind.as_str(), &secret, container, work)?;
+            crate::credentials::prepare(credential.kind.as_str(), &secret, container, work)
+                .map_err(RunnerError::credentials)?;
         let mut part = prepared.env;
         if credential.kind == "vault" {
             part.retain(|(key, _)| key != "KOREOGRAF_VAULT_FILE" && key != "KOREOGRAF_VAULT_ID");
@@ -1653,7 +1748,8 @@ fn apply_credentials(
             write_secret(&work.join(&unique), &body)?;
         }
         if credential.kind == "vault" {
-            let name = vault_name.ok_or_else(|| "Vault file is missing.".to_string())?;
+            let name =
+                vault_name.ok_or_else(|| RunnerError::credentials("Vault file is missing."))?;
             let label = secret
                 .get("vault_id")
                 .and_then(Value::as_str)
@@ -1680,8 +1776,8 @@ fn galaxy_credential_env(
     container: bool,
     work: &Path,
     env: &mut Vec<(String, String)>,
-) -> Result<(), String> {
-    crate::credentials::check("scm", secret)?;
+) -> Result<(), RunnerError> {
+    crate::credentials::check("scm", secret).map_err(RunnerError::credentials)?;
     let username = auth_text(secret, "username");
     let password = auth_text(secret, "password");
     let key = auth_text(secret, "private_key");
@@ -1731,9 +1827,9 @@ fn unique_file_name(used: &[String], name: &str, index: usize) -> String {
 
 /// One vault password on a line. The field separator is `|` because a tab is
 /// IFS whitespace and `read` would discard an empty vault id.
-fn vault_list_line(label: &str, path: &str) -> Result<String, String> {
+fn vault_list_line(label: &str, path: &str) -> Result<String, RunnerError> {
     if label.contains(['|', '\t', '\n', '\r', '@']) || path.contains(['|', '\n', '\r']) {
-        return Err("Vault id is invalid.".into());
+        return Err(RunnerError::credentials("Vault id is invalid."));
     }
     Ok(format!("{label}|{path}"))
 }
@@ -1746,7 +1842,7 @@ fn guest_path(container: bool, work: &Path, name: &str) -> String {
     }
 }
 
-fn write_secret(path: &Path, contents: &str) -> Result<(), String> {
+fn write_secret(path: &Path, contents: &str) -> Result<(), RunnerError> {
     let mut opts = OpenOptions::new();
     opts.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -1754,12 +1850,15 @@ fn write_secret(path: &Path, contents: &str) -> Result<(), String> {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let mut file = opts.open(path).map_err(|e| e.to_string())?;
+    let mut file = opts
+        .open(path)
+        .map_err(|e| RunnerError::filesystem(e.to_string()))?;
     use std::io::Write;
     file.write_all(contents.as_bytes())
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| RunnerError::filesystem(e.to_string()))?;
     if !contents.ends_with('\n') {
-        file.write_all(b"\n").map_err(|e| e.to_string())?;
+        file.write_all(b"\n")
+            .map_err(|e| RunnerError::filesystem(e.to_string()))?;
     }
     if let Err(err) = record_secret_file(path) {
         let _ = fs::remove_file(path);
@@ -1768,15 +1867,15 @@ fn write_secret(path: &Path, contents: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn record_secret_file(path: &Path) -> Result<(), String> {
+fn record_secret_file(path: &Path) -> Result<(), RunnerError> {
     let Some(name) = path.file_name().and_then(|item| item.to_str()) else {
-        return Err("Secret file name is invalid.".into());
+        return Err(RunnerError::filesystem("Secret file name is invalid."));
     };
     if !safe_manifest_name(name) {
-        return Err("Secret file name is invalid.".into());
+        return Err(RunnerError::filesystem("Secret file name is invalid."));
     }
     let Some(parent) = path.parent() else {
-        return Err("Secret file name is invalid.".into());
+        return Err(RunnerError::filesystem("Secret file name is invalid."));
     };
     let manifest = parent.join(SECRET_MANIFEST);
     let mut opts = OpenOptions::new();
@@ -1786,43 +1885,54 @@ fn record_secret_file(path: &Path) -> Result<(), String> {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let mut file = opts.open(&manifest).map_err(|e| e.to_string())?;
+    let mut file = opts
+        .open(&manifest)
+        .map_err(|e| RunnerError::filesystem(e.to_string()))?;
     use std::io::Write;
-    writeln!(file, "{name}").map_err(|e| e.to_string())
+    writeln!(file, "{name}").map_err(|e| RunnerError::filesystem(e.to_string()))
 }
 
-async fn load_project(state: &Shared, template: &Template) -> Result<Option<Project>, String> {
+async fn load_project(state: &Shared, template: &Template) -> Result<Option<Project>, RunnerError> {
     let Some(id) = &template.project_id else {
         return Ok(None);
     };
     let db = state.store();
     let project = db
         .project(id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "Project is missing.".to_string())?;
+        .map_err(|e| RunnerError::internal(e.to_string()))?
+        .ok_or_else(|| RunnerError::project("Project is missing."))?;
     let visible = db
         .project_visible(id, &template.team_id)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| RunnerError::internal(e.to_string()))?;
     if !visible {
-        return Err("This project is not visible to this team.".into());
+        return Err(RunnerError::project(
+            "This project is not visible to this team.",
+        ));
     }
     Ok(Some(project))
 }
 
-fn write_job_inventory(state: &Shared, template: &Template, work: &Path) -> Result<String, String> {
+fn write_job_inventory(
+    state: &Shared,
+    template: &Template,
+    work: &Path,
+) -> Result<String, RunnerError> {
     let Some(id) = &template.inventory_id else {
-        fs::write(work.join("inventory"), DEFAULT_INVENTORY).map_err(|err| err.to_string())?;
+        fs::write(work.join("inventory"), DEFAULT_INVENTORY)
+            .map_err(|err| RunnerError::filesystem(err.to_string()))?;
         return Ok("inventory".into());
     };
     let db = state.store();
     let inventory = db
         .inventory(id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "Inventory is missing.".to_string())?;
+        .map_err(|e| RunnerError::internal(e.to_string()))?
+        .ok_or_else(|| RunnerError::spec("Inventory is missing."))?;
     if inventory.team_id != template.team_id {
-        return Err("The inventory belongs to another team.".into());
+        return Err(RunnerError::spec("The inventory belongs to another team."));
     }
-    let sources = db.list_inventory_sources(id).map_err(|e| e.to_string())?;
+    let sources = db
+        .list_inventory_sources(id)
+        .map_err(|e| RunnerError::internal(e.to_string()))?;
     if sources.len() <= 1 {
         let body = sources
             .first()
@@ -1834,11 +1944,12 @@ fn write_job_inventory(state: &Shared, template: &Template, work: &Path) -> Resu
         } else {
             body
         };
-        fs::write(work.join("inventory"), body).map_err(|err| err.to_string())?;
+        fs::write(work.join("inventory"), body)
+            .map_err(|err| RunnerError::filesystem(err.to_string()))?;
         return Ok("inventory".into());
     }
     let dir = work.join("inventory.d");
-    fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+    fs::create_dir_all(&dir).map_err(|err| RunnerError::filesystem(err.to_string()))?;
     let mut written = 0usize;
     for (index, source) in sources.iter().enumerate() {
         if source.body.trim().is_empty() {
@@ -1846,11 +1957,12 @@ fn write_job_inventory(state: &Shared, template: &Template, work: &Path) -> Resu
         }
         let ext = inventory_extension(&source.body);
         fs::write(dir.join(format!("{index:02}.{ext}")), &source.body)
-            .map_err(|err| err.to_string())?;
+            .map_err(|err| RunnerError::filesystem(err.to_string()))?;
         written += 1;
     }
     if written == 0 {
-        fs::write(dir.join("00.ini"), DEFAULT_INVENTORY).map_err(|err| err.to_string())?;
+        fs::write(dir.join("00.ini"), DEFAULT_INVENTORY)
+            .map_err(|err| RunnerError::filesystem(err.to_string()))?;
     }
     Ok("inventory.d".into())
 }
@@ -1874,35 +1986,42 @@ fn load_environment(
     state: &Shared,
     template: &Template,
     launched_by: &str,
-) -> Result<Option<Environment>, String> {
+) -> Result<Option<Environment>, RunnerError> {
     let Some(id) = &template.environment_id else {
         return Ok(None);
     };
     let db = state.store();
     let environment = db
         .environment(id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "execution_environment_is_missing".to_string())?;
+        .map_err(|e| RunnerError::internal(e.to_string()))?
+        .ok_or_else(|| RunnerError::spec("execution_environment_is_missing"))?;
     let team = db
         .team_by_id(&template.team_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "team_is_missing".to_string())?;
+        .map_err(|e| RunnerError::internal(e.to_string()))?
+        .ok_or_else(|| RunnerError::spec("team_is_missing"))?;
     if !db::environment_visible(&environment, &team) {
-        return Err("the_execution_environment_is_not_visible_to_this".into());
+        return Err(RunnerError::spec(
+            "the_execution_environment_is_not_visible_to_this",
+        ));
     }
     if !environment_fits_tool(&template.tool, &environment.tool) {
-        return Err("the_execution_environment_is_for_another_tool".into());
+        return Err(RunnerError::spec(
+            "the_execution_environment_is_for_another_tool",
+        ));
     }
     if !valid_image(&environment.image) {
-        return Err("the_image_name_is_invalid".into());
+        return Err(RunnerError::spec("the_image_name_is_invalid"));
     }
     if !valid_network(&environment.network) {
-        return Err("the_network_name_is_invalid".into());
+        return Err(RunnerError::spec("the_network_name_is_invalid"));
     }
     if state.cfg.local_jobs == LocalJobs::Admins && privileged_network(&environment.network) {
-        let admin = crate::auth::launcher_is_admin(db, launched_by).map_err(|e| e.to_string())?;
+        let admin = crate::auth::launcher_is_admin(db, launched_by)
+            .map_err(|e| RunnerError::internal(e.to_string()))?;
         if !admin {
-            return Err("The execution environment network needs an administrator.".into());
+            return Err(RunnerError::spec(
+                "The execution environment network needs an administrator.",
+            ));
         }
     }
     Ok(Some(environment))
@@ -1933,17 +2052,22 @@ pub fn valid_image(image: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || "/:._-@".contains(ch))
 }
 
-fn sync_log_line(err: String) -> String {
-    match err.as_str() {
-        "sync_the_git_project_first" => "Sync the Git project first.".into(),
-        "the_project_path_is_not_a_directory" => ProjectPathError::NotDirectory.job_text().into(),
-        "the_project_path_is_not_allowed" => ProjectPathError::Denied.job_text().into(),
+fn sync_log_line(err: RunnerError) -> RunnerError {
+    let message = err.to_string();
+    match message.as_str() {
+        "sync_the_git_project_first" => RunnerError::project("Sync the Git project first."),
+        "the_project_path_is_not_a_directory" => {
+            RunnerError::project(ProjectPathError::NotDirectory.job_text())
+        }
+        "the_project_path_is_not_allowed" => {
+            RunnerError::project(ProjectPathError::Denied.job_text())
+        }
         "path_projects_are_limited_to_administrators" => {
-            ProjectPathError::AdminsOnly.job_text().into()
+            RunnerError::project(ProjectPathError::AdminsOnly.job_text())
         }
-        "the_git_checkout_is_owned_by_another_user" => {
-            "The Git checkout is owned by another user. Change its owner to 10001 or recreate the project.".into()
-        }
+        "the_git_checkout_is_owned_by_another_user" => RunnerError::project(
+            "The Git checkout is owned by another user. Change its owner to 10001 or recreate the project.",
+        ),
         _ => err,
     }
 }
@@ -2036,15 +2160,18 @@ fn is_secret_file(name: &str) -> bool {
         .any(|base| name == *base || name.ends_with(&format!("-{base}")))
 }
 
-fn write_extra_file(work: &Path, tool: &str, extra: &Value) -> Result<String, String> {
+fn write_extra_file(work: &Path, tool: &str, extra: &Value) -> Result<String, RunnerError> {
     if tool == "ansible" {
         let name = "extra.yml".to_string();
-        fs::write(work.join(&name), ansible_extra_yaml(extra)).map_err(|err| err.to_string())?;
+        fs::write(work.join(&name), ansible_extra_yaml(extra))
+            .map_err(|err| RunnerError::filesystem(err.to_string()))?;
         Ok(name)
     } else {
         let name = "extra.json".to_string();
-        let bytes = serde_json::to_vec_pretty(extra).map_err(|err| err.to_string())?;
-        fs::write(work.join(&name), bytes).map_err(|err| err.to_string())?;
+        let bytes = serde_json::to_vec_pretty(extra)
+            .map_err(|err| RunnerError::filesystem(err.to_string()))?;
+        fs::write(work.join(&name), bytes)
+            .map_err(|err| RunnerError::filesystem(err.to_string()))?;
         Ok(name)
     }
 }
@@ -2224,24 +2351,24 @@ pub(crate) fn stored_directory(
     path: &Path,
     data_dir: &Path,
     roots: &[PathBuf],
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, RunnerError> {
     match assess_path(path, data_dir) {
         Ok(PathState::Ready(canonical)) => {
             if within_roots(&canonical, roots) {
                 Ok(canonical)
             } else {
-                Err("the_project_path_is_not_allowed".into())
+                Err(RunnerError::project("the_project_path_is_not_allowed"))
             }
         }
-        Ok(PathState::Missing) => Err("the_project_path_is_not_a_directory".into()),
-        Err(err) => Err(err.api_key().into()),
+        Ok(PathState::Missing) => Err(RunnerError::project("the_project_path_is_not_a_directory")),
+        Err(err) => Err(RunnerError::project(err.api_key())),
     }
 }
 
-fn file_clone_allowed(url: &str, data_dir: &Path, roots: &[PathBuf]) -> Result<bool, String> {
+fn file_clone_allowed(url: &str, data_dir: &Path, roots: &[PathBuf]) -> Result<bool, RunnerError> {
     let Some(path) = file_url_path(url) else {
         if url.starts_with("file://") {
-            return Err("the_project_path_is_not_allowed".into());
+            return Err(RunnerError::project("the_project_path_is_not_allowed"));
         }
         return Ok(false);
     };
@@ -2250,11 +2377,11 @@ fn file_clone_allowed(url: &str, data_dir: &Path, roots: &[PathBuf]) -> Result<b
             if within_roots(&canonical, roots) {
                 Ok(true)
             } else {
-                Err("the_project_path_is_not_allowed".into())
+                Err(RunnerError::project("the_project_path_is_not_allowed"))
             }
         }
-        Ok(PathState::Missing) => Err("the_project_path_is_not_allowed".into()),
-        Err(err) => Err(err.api_key().into()),
+        Ok(PathState::Missing) => Err(RunnerError::project("the_project_path_is_not_allowed")),
+        Err(err) => Err(RunnerError::project(err.api_key())),
     }
 }
 
@@ -2434,7 +2561,7 @@ pub async fn materialize_project(
     update: bool,
     roots: &[PathBuf],
     credential: Option<&Value>,
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, RunnerError> {
     match project.source_type.as_str() {
         "path" => {
             let path = PathBuf::from(&project.source);
@@ -2442,14 +2569,14 @@ pub async fn materialize_project(
         }
         "git" => {
             if !valid_git(&project.source) {
-                return Err("the_git_address_is_invalid".into());
+                return Err(RunnerError::project("the_git_address_is_invalid"));
             }
             let dest = data_dir.join("checkouts").join(&project.id);
             if !update {
                 return if dest.join(".git").is_dir() {
                     Ok(dest)
                 } else {
-                    Err("sync_the_git_project_first".into())
+                    Err(RunnerError::project("sync_the_git_project_first"))
                 };
             }
             let allow_file = file_clone_allowed(&project.source, data_dir, roots)?;
@@ -2468,17 +2595,17 @@ pub async fn materialize_project(
             .await?;
             Ok(dest)
         }
-        other => Err(crate::error::message(
+        other => Err(RunnerError::project(crate::error::message(
             "project.unknown_source",
             &[("source", other)],
-        )),
+        ))),
     }
 }
 
 pub fn project_credential_secret(
     state: &Shared,
     project: &Project,
-) -> Result<Option<Value>, String> {
+) -> Result<Option<Value>, RunnerError> {
     let Some(id) = project.credential_id.as_deref() else {
         return Ok(None);
     };
@@ -2486,24 +2613,30 @@ pub fn project_credential_secret(
         let store = state.store();
         store
             .credential(id)
-            .map_err(|err| err.to_string())?
-            .ok_or_else(|| "Source control credential is missing.".to_string())?
+            .map_err(|err| RunnerError::internal(err.to_string()))?
+            .ok_or_else(|| RunnerError::credentials("Source control credential is missing."))?
     };
     if credential.kind != "scm" {
-        return Err("The credential is not a source control credential.".into());
+        return Err(RunnerError::credentials(
+            "The credential is not a source control credential.",
+        ));
     }
     if credential.disabled {
-        return Err("The source control credential is disabled.".into());
+        return Err(RunnerError::credentials(
+            "The source control credential is disabled.",
+        ));
     }
     if credential.team_id != project.team_id {
-        return Err("The credential belongs to another team.".into());
+        return Err(RunnerError::credentials(
+            "The credential belongs to another team.",
+        ));
     }
     let plain = state
         .decrypt(&credential.secret_blob)
-        .map_err(|_| "Credentials cannot be read.".to_string())?;
+        .map_err(|_| RunnerError::credentials("Credentials cannot be read."))?;
     serde_json::from_str(&plain)
         .map(Some)
-        .map_err(|_| "Credentials are not JSON.".to_string())
+        .map_err(|_| RunnerError::credentials("Credentials are not JSON."))
 }
 
 pub(crate) fn git_address_has_credentials(url: &str) -> bool {
@@ -2592,7 +2725,7 @@ fn default_git_username(url: &str) -> &'static str {
     }
 }
 
-fn private_temp_dir() -> Result<PathBuf, String> {
+fn private_temp_dir() -> Result<PathBuf, RunnerError> {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|value| value.as_nanos())
@@ -2604,25 +2737,28 @@ fn private_temp_dir() -> Result<PathBuf, String> {
         use std::os::unix::fs::DirBuilderExt;
         builder.mode(0o700);
     }
-    builder.create(&dir).map_err(|err| err.to_string())?;
+    builder
+        .create(&dir)
+        .map_err(|err| RunnerError::filesystem(err.to_string()))?;
     Ok(dir)
 }
 
-fn link_askpass(path: &Path) -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|err| err.to_string())?;
+fn link_askpass(path: &Path) -> Result<(), RunnerError> {
+    let exe = std::env::current_exe().map_err(|err| RunnerError::filesystem(err.to_string()))?;
     #[cfg(unix)]
     {
-        std::os::unix::fs::symlink(exe, path).map_err(|err| err.to_string())
+        std::os::unix::fs::symlink(exe, path)
+            .map_err(|err| RunnerError::filesystem(err.to_string()))
     }
     #[cfg(not(unix))]
     {
         fs::copy(exe, path)
             .map(|_| ())
-            .map_err(|err| err.to_string())
+            .map_err(|err| RunnerError::filesystem(err.to_string()))
     }
 }
 
-fn git_auth_material(secret: &Value, url: &str) -> Result<Option<GitAuth>, String> {
+fn git_auth_material(secret: &Value, url: &str) -> Result<Option<GitAuth>, RunnerError> {
     let username = auth_text(secret, "username");
     let password = auth_text(secret, "password");
     let key = auth_text(secret, "private_key");
@@ -2631,7 +2767,7 @@ fn git_auth_material(secret: &Value, url: &str) -> Result<Option<GitAuth>, Strin
         return Ok(None);
     }
     let dir = private_temp_dir()?;
-    let built = (|| -> Result<Vec<(String, String)>, String> {
+    let built = (|| -> Result<Vec<(String, String)>, RunnerError> {
         let mut env = Vec::new();
         if !password.is_empty() {
             let password_file = dir.join("git.pass");
@@ -2754,23 +2890,25 @@ fn git_text(output: &std::process::Output) -> String {
     }
 }
 
-async fn git_run(mut cmd: Command) -> Result<(), String> {
+async fn git_run(mut cmd: Command) -> Result<(), RunnerError> {
     let finished = tokio::time::timeout(Duration::from_secs(120), cmd.output()).await;
     let output = match finished {
-        Ok(result) => result.map_err(|err| format!("git: {err}"))?,
+        Ok(result) => result.map_err(|err| RunnerError::project(format!("git: {err}")))?,
         Err(_) => {
-            return Err("git_exceeded_the_120_second_time_limit".into());
+            return Err(RunnerError::timeout(
+                "git_exceeded_the_120_second_time_limit",
+            ));
         }
     };
     if output.status.success() {
         Ok(())
     } else {
-        Err(git_text(&output))
+        Err(RunnerError::project(git_text(&output)))
     }
 }
 
-fn missing_revision(err: &str) -> bool {
-    let lower = err.to_ascii_lowercase();
+fn missing_revision(err: impl std::fmt::Display) -> bool {
+    let lower = err.to_string().to_ascii_lowercase();
     lower.contains("not found")
         || lower.contains("nicht gefunden")
         || lower.contains("remote branch")
@@ -2785,7 +2923,7 @@ async fn git_clone(
     proxy: &crate::settings::ProxySettings,
     allow_file: bool,
     auth: Option<&GitAuth>,
-) -> Result<(), String> {
+) -> Result<(), RunnerError> {
     let mut cmd = git_cmd(proxy, allow_file, auth, None);
     cmd.arg("clone").arg("--depth").arg("1");
     if !revision.is_empty() {
@@ -2801,7 +2939,7 @@ async fn git_checkout(
     proxy: &crate::settings::ProxySettings,
     allow_file: bool,
     auth: Option<&GitAuth>,
-) -> Result<(), String> {
+) -> Result<(), RunnerError> {
     let mut fetch = git_cmd(proxy, allow_file, auth, Some(dest));
     fetch
         .arg("-C")
@@ -2823,7 +2961,7 @@ async fn git_update(
     proxy: &crate::settings::ProxySettings,
     allow_file: bool,
     auth: Option<&GitAuth>,
-) -> Result<(), String> {
+) -> Result<(), RunnerError> {
     if revision.is_empty() {
         let mut cmd = git_cmd(proxy, allow_file, auth, Some(dest));
         cmd.arg("-C").arg(dest).args(["pull", "--ff-only"]);
@@ -2839,25 +2977,27 @@ async fn git_sync(
     proxy: &crate::settings::ProxySettings,
     allow_file: bool,
     auth: Option<&GitAuth>,
-) -> Result<(), String> {
+) -> Result<(), RunnerError> {
     if !valid_revision(revision) {
-        return Err("revision_is_invalid".into());
+        return Err(RunnerError::project("revision_is_invalid"));
     }
     if dest.exists() && !dest.join(".git").is_dir() {
-        fs::remove_dir_all(dest)
-            .map_err(|err| format!("Incomplete checkout cannot be removed: {err}"))?;
+        fs::remove_dir_all(dest).map_err(|err| {
+            RunnerError::filesystem(format!("Incomplete checkout cannot be removed: {err}"))
+        })?;
     }
     if dest.join(".git").is_dir() {
         return git_update(revision, dest, proxy, allow_file, auth).await;
     }
     if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+        fs::create_dir_all(parent).map_err(|err| RunnerError::filesystem(err.to_string()))?;
     }
     match git_clone(url, revision, dest, proxy, allow_file, auth).await {
         Ok(()) => Ok(()),
         Err(err) if !revision.is_empty() && missing_revision(&err) => {
             if dest.exists() {
-                fs::remove_dir_all(dest).map_err(|remove| remove.to_string())?;
+                fs::remove_dir_all(dest)
+                    .map_err(|remove| RunnerError::filesystem(remove.to_string()))?;
             }
             git_clone(url, "", dest, proxy, allow_file, auth).await?;
             git_checkout(revision, dest, proxy, allow_file, auth).await
@@ -2871,22 +3011,24 @@ async fn git_sync(
     }
 }
 
-fn copy_tree(src: &Path, dst: &Path) -> Result<(), String> {
+fn copy_tree(src: &Path, dst: &Path) -> Result<(), RunnerError> {
     let mut files = 0u32;
     let mut bytes = 0u64;
     copy_inner(src, dst, &mut files, &mut bytes)
 }
 
-fn copy_inner(src: &Path, dst: &Path, files: &mut u32, bytes: &mut u64) -> Result<(), String> {
-    fs::create_dir_all(dst).map_err(|e| e.to_string())?;
-    for entry in fs::read_dir(src).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
+fn copy_inner(src: &Path, dst: &Path, files: &mut u32, bytes: &mut u64) -> Result<(), RunnerError> {
+    fs::create_dir_all(dst).map_err(|e| RunnerError::filesystem(e.to_string()))?;
+    for entry in fs::read_dir(src).map_err(|e| RunnerError::filesystem(e.to_string()))? {
+        let entry = entry.map_err(|e| RunnerError::filesystem(e.to_string()))?;
         let name = entry.file_name();
         let label = name.to_string_lossy();
         if label == ".git" || label == ".terraform" || label == "target" {
             continue;
         }
-        let kind = entry.file_type().map_err(|e| e.to_string())?;
+        let kind = entry
+            .file_type()
+            .map_err(|e| RunnerError::filesystem(e.to_string()))?;
         let to = dst.join(&name);
         if kind.is_symlink() {
             continue;
@@ -2899,9 +3041,11 @@ fn copy_inner(src: &Path, dst: &Path, files: &mut u32, bytes: &mut u64) -> Resul
         let len = entry.metadata().map(|meta| meta.len()).unwrap_or(0);
         *bytes += len;
         if *files > MAX_FILES || *bytes > MAX_BYTES {
-            return Err("Project is too large for a run (limit 4000 files or 200 MB).".into());
+            return Err(RunnerError::project(
+                "Project is too large for a run (limit 4000 files or 200 MB).",
+            ));
         }
-        fs::copy(entry.path(), &to).map_err(|e| e.to_string())?;
+        fs::copy(entry.path(), &to).map_err(|e| RunnerError::filesystem(e.to_string()))?;
     }
     Ok(())
 }
@@ -2968,13 +3112,15 @@ fn layout_decision(
     configured: Option<&Path>,
     detected: Option<&Path>,
     in_container: bool,
-) -> Result<DaemonLayout, String> {
+) -> Result<DaemonLayout, RunnerError> {
     match (configured, detected) {
-        (Some(configured), Some(detected)) if !same_dir(configured, detected) => Err(format!(
-            "KOREOGRAF_DATA_HOST ({}) is not the data directory the container daemon mounted ({}). The job was not started.",
-            configured.display(),
-            detected.display()
-        )),
+        (Some(configured), Some(detected)) if !same_dir(configured, detected) => {
+            Err(RunnerError::runtime(format!(
+                "KOREOGRAF_DATA_HOST ({}) is not the data directory the container daemon mounted ({}). The job was not started.",
+                configured.display(),
+                detected.display()
+            )))
+        }
         (_, Some(detected)) => Ok(DaemonLayout {
             host_data: Some(detected.to_path_buf()),
             probe: false,
@@ -2983,10 +3129,9 @@ fn layout_decision(
             host_data: Some(configured.to_path_buf()),
             probe: true,
         }),
-        (None, None) if in_container => Err(
-            "The container daemon cannot see the data directory. Set KOREOGRAF_DATA_HOST to the host path of that directory. The job was not started."
-                .into(),
-        ),
+        (None, None) if in_container => Err(RunnerError::runtime(
+            "The container daemon cannot see the data directory. Set KOREOGRAF_DATA_HOST to the host path of that directory. The job was not started.",
+        )),
         (None, None) => Ok(DaemonLayout {
             host_data: None,
             probe: false,
@@ -2998,23 +3143,23 @@ fn same_dir(left: &Path, right: &Path) -> bool {
     lexical_normal(left) == lexical_normal(right)
 }
 
-fn check_mount_token(path: &str) -> Result<(), String> {
+fn check_mount_token(path: &str) -> Result<(), RunnerError> {
     if path.contains(',') {
-        return Err(format!(
+        return Err(RunnerError::runtime(format!(
             "The mount path {path} cannot be passed to the container daemon. The job was not started."
-        ));
+        )));
     }
     Ok(())
 }
 
-fn require_visible_sources(mounts: &[(String, String, bool)]) -> Result<(), String> {
+fn require_visible_sources(mounts: &[(String, String, bool)]) -> Result<(), RunnerError> {
     for (host, guest, _) in mounts {
         check_mount_token(host)?;
         check_mount_token(guest)?;
         if !Path::new(host).exists() {
-            return Err(format!(
+            return Err(RunnerError::runtime(format!(
                 "The container daemon cannot see {host}. The job was not started."
-            ));
+            )));
         }
     }
     Ok(())
@@ -3024,7 +3169,7 @@ fn translate_mounts(
     mounts: &[(String, String, bool)],
     data_dir: &Path,
     host_data: &Path,
-) -> Result<Vec<(String, String, bool)>, String> {
+) -> Result<Vec<(String, String, bool)>, RunnerError> {
     let data = data_path(data_dir);
     let host_data = lexical_normal(host_data);
     let mut out = Vec::with_capacity(mounts.len());
@@ -3032,10 +3177,14 @@ fn translate_mounts(
         check_mount_token(host)?;
         check_mount_token(guest)?;
         let source = fs::canonicalize(host).map_err(|_| {
-            format!("The container daemon cannot see {host}. The job was not started.")
+            RunnerError::runtime(format!(
+                "The container daemon cannot see {host}. The job was not started."
+            ))
         })?;
         let relative = source.strip_prefix(&data).map_err(|_| {
-            format!("The container daemon cannot see {host}. The job was not started.")
+            RunnerError::runtime(format!(
+                "The container daemon cannot see {host}. The job was not started."
+            ))
         })?;
         let daemon = lexical_normal(&host_data.join(relative));
         let daemon_text = daemon.display().to_string();
@@ -3157,7 +3306,7 @@ async fn resolve_daemon_layout(
     bin: &str,
     data_dir: &Path,
     configured: Option<&Path>,
-) -> Result<DaemonLayout, String> {
+) -> Result<DaemonLayout, RunnerError> {
     let detected = detected_data_root(bin, data_dir).await;
     layout_decision(configured, detected.as_deref(), process_in_container())
 }
@@ -3239,7 +3388,7 @@ async fn probe_daemon_dirs(
     image: &str,
     job_id: &str,
     mounts: &[(String, String, bool)],
-) -> Result<(), String> {
+) -> Result<(), RunnerError> {
     if mounts.is_empty() {
         return Ok(());
     }
@@ -3276,16 +3425,15 @@ async fn probe_daemon_dirs(
         Ok(Ok(output)) => output,
         Ok(Err(err)) => {
             remove_probe_container(bin, &name).await;
-            return Err(format!(
+            return Err(RunnerError::runtime(format!(
                 "The mount check could not be started ({err}). The job was not started."
-            ));
+            )));
         }
         Err(_) => {
             remove_probe_container(bin, &name).await;
-            return Err(
-                "The container daemon did not answer the mount check. The job was not started."
-                    .into(),
-            );
+            return Err(RunnerError::runtime(
+                "The container daemon did not answer the mount check. The job was not started.",
+            ));
         }
     };
     remove_probe_container(bin, &name).await;
@@ -3296,10 +3444,14 @@ async fn probe_daemon_dirs(
     if shell_is_missing(&stderr) {
         return Ok(());
     }
-    Err(mount_check_error(&stderr))
+    Err(RunnerError::runtime(mount_check_error(&stderr)))
 }
 
-async fn run_container(state: &Shared, job_id: &str, run: ContainerRun<'_>) -> Result<i32, String> {
+async fn run_container(
+    state: &Shared,
+    job_id: &str,
+    run: ContainerRun<'_>,
+) -> Result<i32, RunnerError> {
     let ContainerRun {
         bin,
         environment,
@@ -3331,7 +3483,9 @@ async fn run_container(state: &Shared, job_id: &str, run: ContainerRun<'_>) -> R
     }
     for (host, _, _) in &mounts {
         if covers_data_dir(Path::new(host), &state.cfg.data_dir) {
-            return Err("The job container cannot mount the data directory.".into());
+            return Err(RunnerError::runtime(
+                "The job container cannot mount the data directory.",
+            ));
         }
     }
     require_visible_sources(&mounts)?;
@@ -3401,7 +3555,9 @@ async fn run_container(state: &Shared, job_id: &str, run: ContainerRun<'_>) -> R
         .kill_on_drop(true);
     #[cfg(unix)]
     cmd.process_group(0);
-    let child = cmd.spawn().map_err(|e| format!("{bin} run failed: {e}"))?;
+    let child = cmd
+        .spawn()
+        .map_err(|e| RunnerError::runtime(format!("{bin} run failed: {e}")))?;
     let pid = child.id().unwrap_or(0);
     let proc = RunningProc {
         pid,
@@ -3415,11 +3571,13 @@ async fn run_container(state: &Shared, job_id: &str, run: ContainerRun<'_>) -> R
     wait_child(state, job_id, child, timeout_secs, output_lines).await
 }
 
-fn write_env_file(path: &Path, env: &[(String, String)]) -> Result<(), String> {
+fn write_env_file(path: &Path, env: &[(String, String)]) -> Result<(), RunnerError> {
     let mut body = String::new();
     for (key, value) in env {
         if value.contains('\n') {
-            return Err(format!("Variable {key} cannot be passed to the container."));
+            return Err(RunnerError::runtime(format!(
+                "Variable {key} cannot be passed to the container."
+            )));
         }
         body.push_str(key);
         body.push('=');
@@ -3430,7 +3588,7 @@ fn write_env_file(path: &Path, env: &[(String, String)]) -> Result<(), String> {
     write_secret(path, &body)
 }
 
-async fn ensure_image(bin: &str, image: &str, policy: &str) -> Result<(), String> {
+async fn ensure_image(bin: &str, image: &str, policy: &str) -> Result<(), RunnerError> {
     match policy {
         "never" => Ok(()),
         "always" => pull_image(bin, image).await,
@@ -3455,24 +3613,29 @@ async fn image_present(bin: &str, image: &str) -> bool {
         .unwrap_or(false)
 }
 
-async fn pull_image(bin: &str, image: &str) -> Result<(), String> {
+async fn pull_image(bin: &str, image: &str) -> Result<(), RunnerError> {
     let mut cmd = Command::new(bin);
     cmd.args(["pull", image])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let mut child = cmd.spawn().map_err(|e| format!("Image pull: {e}"))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| RunnerError::runtime(format!("Image pull: {e}")))?;
     let stderr = child
         .stderr
         .take()
-        .ok_or_else(|| "Image pull: stderr is missing".to_string())?;
+        .ok_or_else(|| RunnerError::runtime("Image pull: stderr is missing"))?;
     // Read stderr while the process runs. An unread pipe fills and stalls the pull.
     let (status, tail) = tokio::join!(child.wait(), read_stderr_tail(stderr, PULL_STDERR_TAIL));
-    let status = status.map_err(|e| format!("Image pull: {e}"))?;
+    let status = status.map_err(|e| RunnerError::runtime(format!("Image pull: {e}")))?;
     if status.success() {
         Ok(())
     } else {
-        Err(pull_failure(image, &String::from_utf8_lossy(&tail)))
+        Err(RunnerError::runtime(pull_failure(
+            image,
+            &String::from_utf8_lossy(&tail),
+        )))
     }
 }
 
@@ -3733,15 +3896,15 @@ async fn wait_child(
     mut child: tokio::process::Child,
     timeout_secs: u64,
     output_lines: u64,
-) -> Result<i32, String> {
+) -> Result<i32, RunnerError> {
     let stdout = child
         .stdout
         .take()
-        .ok_or_else(|| "stdout is missing".to_string())?;
+        .ok_or_else(|| RunnerError::runtime("stdout is missing"))?;
     let stderr = child
         .stderr
         .take()
-        .ok_or_else(|| "stderr is missing".to_string())?;
+        .ok_or_else(|| RunnerError::runtime("stderr is missing"))?;
     let out = tokio::spawn(pump(
         state.clone(),
         job_id.to_string(),
@@ -3759,7 +3922,7 @@ async fn wait_child(
     let timeout = Duration::from_secs(timeout_secs);
     let status = match tokio::time::timeout(timeout, child.wait()).await {
         Ok(Ok(status)) => status,
-        Ok(Err(err)) => return Err(format!("Process: {err}")),
+        Ok(Err(err)) => return Err(RunnerError::runtime(format!("Process: {err}"))),
         Err(_) => {
             log(
                 state,
@@ -4152,7 +4315,7 @@ mod tests {
         let err = materialize_project(&missing, &dir, &proxy, false, &[], None)
             .await
             .unwrap_err();
-        assert_eq!(err, "sync_the_git_project_first");
+        assert_eq!(err.to_string(), "sync_the_git_project_first");
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -4452,11 +4615,11 @@ mod tests {
         assert!(!matched.probe);
         let mismatch = layout_decision(Some(Path::new("/tmp/other-data")), Some(detected), true)
             .expect_err("mismatch");
-        assert!(mismatch.contains("KOREOGRAF_DATA_HOST"));
-        assert!(mismatch.contains("was not started"));
+        assert!(mismatch.to_string().contains("KOREOGRAF_DATA_HOST"));
+        assert!(mismatch.to_string().contains("was not started"));
         let missing = layout_decision(None, None, true).expect_err("container without a path");
-        assert!(missing.contains("KOREOGRAF_DATA_HOST"));
-        assert!(missing.contains("was not started"));
+        assert!(missing.to_string().contains("KOREOGRAF_DATA_HOST"));
+        assert!(missing.to_string().contains("was not started"));
     }
 
     #[test]
@@ -4531,12 +4694,12 @@ mod tests {
             false,
         )];
         let err = translate_mounts(&outside, &data, host).expect_err("outside");
-        assert!(err.contains("was not started"));
+        assert!(err.to_string().contains("was not started"));
         let missing = Path::new("/no/such/koreograf-mount");
         let absent = vec![(missing.display().to_string(), "/runner/work".into(), false)];
         let err = require_visible_sources(&absent).expect_err("missing");
-        assert!(err.contains("was not started"));
-        assert!(err.contains("/no/such/koreograf-mount"));
+        assert!(err.to_string().contains("was not started"));
+        assert!(err.to_string().contains("/no/such/koreograf-mount"));
         let comma = vec![(work.display().to_string(), "/runner/work,ro".into(), false)];
         assert!(translate_mounts(&comma, &data, host).is_err());
         assert_eq!(probe_script(&mounts), "test -f /mnt0/wrapper.sh");
@@ -5223,10 +5386,10 @@ exit 1
             .expect("pull stalled on stderr")
             .expect_err("pull fails");
         assert!(started.elapsed() < Duration::from_secs(5));
-        assert!(err.contains("manifest unknown"), "{err}");
-        assert!(err.contains("missing:nope"), "{err}");
-        assert!(err.contains("[redacted]"), "{err}");
-        assert!(!err.contains("s3cret-token"), "{err}");
+        assert!(err.to_string().contains("manifest unknown"), "{err}");
+        assert!(err.to_string().contains("missing:nope"), "{err}");
+        assert!(err.to_string().contains("[redacted]"), "{err}");
+        assert!(!err.to_string().contains("s3cret-token"), "{err}");
         assert!(ok.is_ok(), "{ok:?}");
     }
 
@@ -5314,6 +5477,27 @@ exit 1
         assert!(check_relative("site.yml").is_ok());
         assert!(check_relative("../site.yml").is_err());
         assert!(check_relative("/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn a_rejected_spec_reports_the_spec_class() {
+        let err = check_ansible_spec(&serde_json::json!({"diff": "maybe"})).unwrap_err();
+        assert!(matches!(err, RunnerError::Spec(_)));
+        assert_eq!(err.to_string(), "diff_is_yes_or_no");
+    }
+
+    #[test]
+    fn an_unreadable_directory_reports_the_filesystem_class() {
+        let path = std::env::temp_dir().join(format!("koreograf-missing-{}", std::process::id()));
+        let err = set_private(&path).unwrap_err();
+        assert!(matches!(err, RunnerError::Filesystem(_)));
+    }
+
+    #[test]
+    fn a_missing_daemon_data_path_reports_the_runtime_class() {
+        let err = layout_decision(None, None, true).unwrap_err();
+        assert!(matches!(err, RunnerError::Runtime(_)));
+        assert!(err.to_string().contains("KOREOGRAF_DATA_HOST"));
     }
 
     #[test]
@@ -6227,16 +6411,16 @@ exit 0
         let err = materialize_project(&project, &data, &proxy, true, &roots, None)
             .await
             .unwrap_err();
-        assert_eq!(err, "the_project_path_is_not_allowed");
+        assert_eq!(err.to_string(), "the_project_path_is_not_allowed");
         let file_url = format!("file://{}", link.display());
         let file_err = file_clone_allowed(&file_url, &data, &roots).unwrap_err();
-        assert_eq!(file_err, "the_project_path_is_not_allowed");
+        assert_eq!(file_err.to_string(), "the_project_path_is_not_allowed");
         std::fs::remove_file(&link).unwrap();
         std::os::unix::fs::symlink(&inside, &link).unwrap();
         let outside_roots = materialize_project(&project, &data, &proxy, true, &[], None)
             .await
             .unwrap_err();
-        assert_eq!(outside_roots, "the_project_path_is_not_allowed");
+        assert_eq!(outside_roots.to_string(), "the_project_path_is_not_allowed");
         let path = materialize_project(&project, &data, &proxy, true, &roots, None)
             .await
             .unwrap();
