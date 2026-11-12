@@ -2,6 +2,7 @@
 
 mod auth;
 mod backup;
+mod catalog;
 mod catalogs;
 #[path = "../common/mod.rs"]
 mod common;
