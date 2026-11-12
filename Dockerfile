@@ -28,6 +28,7 @@ RUN case "$TARGETARCH" in \
     && printf 'fn main() {}\n' > src/main.rs \
     && cargo build --release --locked --target "$target"
 COPY src ./src
+COPY migrations ./migrations
 RUN case "$TARGETARCH" in \
         amd64) target=x86_64-unknown-linux-musl ;; \
         arm64) target=aarch64-unknown-linux-musl ;; \
