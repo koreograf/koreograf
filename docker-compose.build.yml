@@ -10,3 +10,6 @@ services:
       args:
         GIT_SHA: ${KOREOGRAF_GIT_SHA:-}
         BUILT_AT: ${KOREOGRAF_BUILT_AT:-}
+        LTO: ${KOREOGRAF_LTO:-thin}
+        CODEGEN_UNITS: ${KOREOGRAF_CODEGEN_UNITS:-1}
+        OPT_LEVEL: ${KOREOGRAF_OPT_LEVEL:-3}

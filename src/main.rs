@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+use std::process;
+
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -11,7 +13,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(answer) => println!("{answer}"),
             Err(err) => {
                 eprintln!("{err}");
-                std::process::exit(1);
+                process::exit(1);
             }
         }
         return Ok(());
@@ -20,20 +22,20 @@ async fn main() -> anyhow::Result<()> {
         let rest = args.iter().skip(1).map(String::as_str);
         if let Err(err) = koreograf::git_ssh(rest) {
             eprintln!("{err}");
-            std::process::exit(1);
+            process::exit(1);
         }
         return Ok(());
     }
     if koreograf::entrypoint_requested(&args) {
         if let Err(err) = koreograf::entrypoint(&args) {
             eprintln!("{err}");
-            std::process::exit(1);
+            process::exit(1);
         }
         return Ok(());
     }
     if koreograf::healthcheck_requested(&args) {
         let code = koreograf::healthcheck().await?;
-        std::process::exit(code);
+        process::exit(code);
     }
     if koreograf::version_requested(&args) {
         println!("{}", koreograf::version_line());
@@ -41,11 +43,11 @@ async fn main() -> anyhow::Result<()> {
     }
     if koreograf::doctor_requested(&args) {
         let code = koreograf::doctor().await?;
-        std::process::exit(code);
+        process::exit(code);
     }
     if koreograf::db_migrate_requested(&args) {
         let code = koreograf::db_migrate(&args).await?;
-        std::process::exit(code);
+        process::exit(code);
     }
     if koreograf::mcp::requested(&args) {
         let filter =
@@ -56,7 +58,7 @@ async fn main() -> anyhow::Result<()> {
             .init();
         if let Err(err) = koreograf::mcp::run().await {
             eprintln!("{err}");
-            std::process::exit(1);
+            process::exit(1);
         }
         return Ok(());
     }
