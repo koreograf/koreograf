@@ -3364,6 +3364,24 @@ async fn db_migrate_copies_every_table_and_resets_sequences() {
     assert!(stdout.contains("sslmode=disable"), "{stdout}");
 
     let client = postgres_client(&target).await;
+    let source = rusqlite::Connection::open_with_flags(
+        dir.join("koreograf.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .expect("source database");
+    let source_version: u32 = source
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("source schema version");
+    drop(source);
+    let target_version: String = client
+        .query_one(
+            "SELECT value FROM schema_meta WHERE key = 'schema_version'",
+            &[],
+        )
+        .await
+        .expect("target schema version")
+        .get(0);
+    assert_eq!(target_version, source_version.to_string());
     for (table, expected) in sqlite_counts(&dir.join("koreograf.db")) {
         let actual: i64 = client
             .query_one(&format!("SELECT COUNT(*) FROM \"{table}\""), &[])

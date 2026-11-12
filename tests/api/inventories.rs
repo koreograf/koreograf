@@ -1767,6 +1767,11 @@ async fn netbox_automatic_credentials_become_normal_and_get_their_url() {
             ],
         )
         .unwrap();
+        db.execute(
+            "DELETE FROM schema_meta WHERE key = 'legacy_reconciled'",
+            [],
+        )
+        .unwrap();
     }
     drop(app);
     drop(state);

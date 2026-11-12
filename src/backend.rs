@@ -1241,31 +1241,7 @@ impl PostgresBackend {
     fn ensure_schema(&self) -> AppResult<()> {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
-            client.batch_execute(&db::postgres_schema()).await?;
-            let found: Option<String> = client
-                .query_opt(
-                    "SELECT value FROM schema_meta WHERE key = 'schema_version'",
-                    &[],
-                )
-                .await?
-                .map(|row| row.get(0));
-            if let Some(found) = found {
-                let version = found.parse::<u32>().unwrap_or(u32::MAX);
-                if version > db::SCHEMA_VERSION {
-                    return Err(ApiError::Internal(format!(
-                        "The database uses schema {version}, but this build supports {}. Upgrade Koreograf before opening it.",
-                        db::SCHEMA_VERSION
-                    )));
-                }
-            }
-            client
-                .execute(
-                    "INSERT INTO schema_meta (key, value) VALUES ('schema_version', $1)
-                     ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-                    &[&db::SCHEMA_VERSION.to_string()],
-                )
-                .await?;
-            Ok(())
+            db::ensure_postgres_schema(&client).await
         })
     }
 }
@@ -4819,5 +4795,97 @@ impl Backend for PostgresBackend {
                 .await?;
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+
+    async fn postgres_version(client: &tokio_postgres::Client) -> u32 {
+        let value: String = client
+            .query_one(
+                "SELECT value FROM schema_meta WHERE key = 'schema_version'",
+                &[],
+            )
+            .await
+            .expect("schema version")
+            .get(0);
+        value.parse().expect("version number")
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failing_migration_keeps_the_postgres_version() {
+        let Ok(url) = std::env::var("KOREOGRAF_TEST_POSTGRES_URL") else {
+            eprintln!("skipping PostgreSQL test: KOREOGRAF_TEST_POSTGRES_URL is not set");
+            return;
+        };
+        if url.trim().is_empty() {
+            eprintln!("skipping PostgreSQL test: KOREOGRAF_TEST_POSTGRES_URL is empty");
+            return;
+        }
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let name = format!("koreograf_migration_{}_{nanos}", std::process::id());
+        let mut base = url::Url::parse(&url).expect("test postgres url");
+        let mut admin_url = base.clone();
+        admin_url.set_path("/postgres");
+        let (admin, admin_connection) =
+            tokio_postgres::connect(admin_url.as_str(), tokio_postgres::NoTls)
+                .await
+                .expect("postgres admin connection");
+        tokio::spawn(async move {
+            let _ = admin_connection.await;
+        });
+        admin
+            .batch_execute(&format!("CREATE DATABASE \"{name}\""))
+            .await
+            .expect("create database");
+        base.set_path(&format!("/{name}"));
+        let (client, connection) = tokio_postgres::connect(base.as_str(), tokio_postgres::NoTls)
+            .await
+            .expect("postgres connection");
+        tokio::spawn(async move {
+            let _ = connection.await;
+        });
+
+        db::ensure_postgres_schema(&client)
+            .await
+            .expect("baseline schema");
+        assert_eq!(postgres_version(&client).await, db::SCHEMA_VERSION);
+
+        let migrations = [db::Migration {
+            version: db::SCHEMA_VERSION + 1,
+            name: "9999_broken",
+            sql: "CREATE TABLE broken (id TEXT",
+        }];
+        assert!(
+            db::apply_postgres_migrations(&client, &migrations, db::SCHEMA_VERSION)
+                .await
+                .is_err()
+        );
+        assert_eq!(postgres_version(&client).await, db::SCHEMA_VERSION);
+        let broken: Option<String> = client
+            .query_opt("SELECT to_regclass('broken')::text", &[])
+            .await
+            .expect("table lookup")
+            .and_then(|row| row.get(0));
+        assert!(broken.is_none());
+
+        drop(client);
+        admin
+            .execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+                 WHERE datname = $1 AND pid <> pg_backend_pid()",
+                &[&name],
+            )
+            .await
+            .expect("terminate connections");
+        admin
+            .batch_execute(&format!("DROP DATABASE \"{name}\""))
+            .await
+            .expect("drop database");
     }
 }
