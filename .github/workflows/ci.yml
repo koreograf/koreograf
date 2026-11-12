@@ -298,6 +298,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: changes
     if: needs.changes.outputs.code == 'true'
+    env:
+      KOREOGRAF_LTO: "false"
+      KOREOGRAF_CODEGEN_UNITS: "16"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Lint the Dockerfile
@@ -326,8 +329,8 @@ jobs:
           build-args: |
             GIT_SHA=${{ steps.build-info.outputs.sha }}
             BUILT_AT=${{ steps.build-info.outputs.date }}
-            LTO=false
-            CODEGEN_UNITS=16
+            LTO=${{ env.KOREOGRAF_LTO }}
+            CODEGEN_UNITS=${{ env.KOREOGRAF_CODEGEN_UNITS }}
           cache-from: type=gha,scope=koreograf-image-amd64
           cache-to: type=gha,mode=max,scope=koreograf-image-amd64
       - name: Check image labels and the reported version
