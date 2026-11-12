@@ -77,7 +77,7 @@ async fn failed_checks_refuse_to_start_and_never_echo_the_password() {
     let (status, body) = app
         .call(
             "POST",
-            "/api/admin/database/check",
+            "/api/v1/admin/database/check",
             Some(&admin),
             None,
             Some(target_body("127.0.0.1", 1, PASSWORD)),
@@ -99,7 +99,7 @@ async fn failed_checks_refuse_to_start_and_never_echo_the_password() {
     let (status, body) = app
         .call(
             "POST",
-            "/api/admin/database/migrate",
+            "/api/v1/admin/database/migrate",
             Some(&admin),
             None,
             Some(json!({"id": "not-a-check"})),
@@ -159,12 +159,12 @@ async fn the_wizard_routes_need_an_administrator() {
         ("GET", "/api/admin/database/status", None),
         (
             "POST",
-            "/api/admin/database/check",
+            "/api/v1/admin/database/check",
             Some(target_body("127.0.0.1", 1, PASSWORD)),
         ),
         (
             "POST",
-            "/api/admin/database/migrate",
+            "/api/v1/admin/database/migrate",
             Some(json!({"id": "x"})),
         ),
     ] {
@@ -190,9 +190,12 @@ fn the_wizard_and_the_maintenance_banner_are_in_the_ui_and_catalogs() {
         script.contains("loadMaintenance()"),
         "the banner is not loaded"
     );
-    assert!(script.contains("/api/admin/database/check"), "check route");
     assert!(
-        script.contains("/api/admin/database/migrate"),
+        script.contains("/api/v1/admin/database/check"),
+        "check route"
+    );
+    assert!(
+        script.contains("/api/v1/admin/database/migrate"),
         "start route"
     );
 
@@ -293,7 +296,7 @@ async fn the_ui_migration_copies_rows_enters_maintenance_and_returns_a_password_
     let (status, checked) = app
         .call(
             "POST",
-            "/api/admin/database/check",
+            "/api/v1/admin/database/check",
             Some(&admin),
             None,
             Some(body),
@@ -307,7 +310,7 @@ async fn the_ui_migration_copies_rows_enters_maintenance_and_returns_a_password_
     let (status, started) = app
         .call(
             "POST",
-            "/api/admin/database/migrate",
+            "/api/v1/admin/database/migrate",
             Some(&admin),
             None,
             Some(json!({"id": id})),
@@ -361,7 +364,7 @@ async fn the_ui_migration_copies_rows_enters_maintenance_and_returns_a_password_
     let (status, refused) = app
         .call(
             "POST",
-            "/api/admin/database/migrate",
+            "/api/v1/admin/database/migrate",
             Some(&admin),
             None,
             Some(json!({"id": "again"})),

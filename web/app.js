@@ -653,7 +653,7 @@ async function loadVersion() {
   if (!versionRequested) {
     versionRequested = true;
     try {
-      const response = await fetch("/api/version", { credentials: "same-origin" });
+      const response = await fetch("/api/v1/version", { credentials: "same-origin" });
       if (response.ok) {
         const data = await response.json();
         const version = String(data.version || "");
@@ -675,7 +675,7 @@ function maintenanceBanner() {
 
 async function loadMaintenance() {
   try {
-    const response = await fetch("/api/maintenance", { credentials: "same-origin" });
+    const response = await fetch("/api/v1/maintenance", { credentials: "same-origin" });
     if (response.ok) {
       const data = await response.json();
       maintenanceActive = Boolean(data && data.active);
@@ -774,7 +774,7 @@ function shell(title, body, actions) {
     document.getElementById("main").focus();
   });
   document.querySelector("#logout").addEventListener("click", async () => {
-    try { await api("POST", "/api/logout"); } catch { /* session ended locally */ }
+    try { await api("POST", "/api/v1/logout"); } catch { /* session ended locally */ }
     me = null;
     go("#/login");
   });
@@ -861,7 +861,7 @@ function renderLogin(message, tone, vars, username) {
     button.disabled = true;
     const entered = form.username.value;
     try {
-      me = await api("POST", "/api/login", {
+      me = await api("POST", "/api/v1/login", {
         username: entered,
         password: form.password.value,
       });
@@ -1058,7 +1058,7 @@ function bindDashboard(tab, range) {
 async function pageDashboardTab() {
   const range = dashboardRange();
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-  const data = await api("GET", `/api/dashboard?days=${encodeURIComponent(range)}&tz=${encodeURIComponent(timezone)}`);
+  const data = await api("GET", `/api/v1/dashboard?days=${encodeURIComponent(range)}&tz=${encodeURIComponent(timezone)}`);
   shell(t("dashboard"), `
     ${dashboardTabs("dashboard")}
     <div id="panel-dashboard" role="tabpanel" aria-labelledby="tab-dashboard">
@@ -1070,7 +1070,7 @@ async function pageDashboardTab() {
 async function pageDashboard() {
   if (!needTeam()) return;
   if (dashboardTab() === "dashboard") return pageDashboardTab();
-  const data = await api("GET", "/api/overview");
+  const data = await api("GET", "/api/v1/overview");
   const jobs = (data.jobs || []).map((job) =>
     `<tr><td><a href="#/jobs/${esc(job.id)}">${esc(job.name)}</a></td><td class="tool">${esc(job.tool)}</td><td>${pill(job.status)}</td><td class="small muted">${esc(when(job.created_at))}</td><td class="small muted">${esc(spanText(job.started_at, job.finished_at, job.status))}</td></tr>`
   );
@@ -1108,7 +1108,7 @@ async function pageDashboard() {
     test.addEventListener("click", async () => {
       test.disabled = true;
       try {
-        const result = await api("POST", `/api/hooks/${encodeURIComponent(data.hook_id)}/test`);
+        const result = await api("POST", `/api/v1/hooks/${encodeURIComponent(data.hook_id)}/test`);
         if (result.workflow_job_id) go(`#/runs/${result.workflow_job_id}`);
         else if (result.job_id) go(`#/jobs/${result.job_id}`);
         else route();
@@ -1666,8 +1666,8 @@ async function openLaunchPrompt(item, launchWithOptions = false, preset = {}) {
   const spec = item.spec || {};
   const ansible = item.tool === "ansible";
   const [inventories, credentials] = await Promise.all([
-    ansible ? api("GET", "/api/inventories") : Promise.resolve([]),
-    api("GET", "/api/credentials"),
+    ansible ? api("GET", "/api/v1/inventories") : Promise.resolve([]),
+    api("GET", "/api/v1/credentials"),
   ]);
   const verbosity = Number(spec.verbosity) || 0;
   const inventoryId = preset.inventoryId || item.inventory_id;
@@ -1759,7 +1759,7 @@ async function openLaunchPrompt(item, launchWithOptions = false, preset = {}) {
             verbosity: Number.isInteger(level) ? level : 0,
           };
         }
-        const job = await api("POST", `/api/templates/${encodeURIComponent(item.id)}/launch`, body);
+        const job = await api("POST", `/api/v1/templates/${encodeURIComponent(item.id)}/launch`, body);
         close();
         go(`#/jobs/${job.id}`);
       } catch (error) {
@@ -1779,7 +1779,7 @@ async function openLaunchPrompt(item, launchWithOptions = false, preset = {}) {
 
 async function pageTemplates() {
   if (!needTeam()) return;
-  const items = await api("GET", "/api/templates");
+  const items = await api("GET", "/api/v1/templates");
   shell(t("templates"), `
     <section class="card">
       <div class="spread">
@@ -1837,7 +1837,7 @@ async function pageTemplates() {
         if (item && tofuApply(item) && !(await confirmTofuApply(item))) return;
         button.disabled = true;
         try {
-          const job = await api("POST", `/api/templates/${encodeURIComponent(button.dataset.launch)}/launch`, { extra_vars: {} });
+          const job = await api("POST", `/api/v1/templates/${encodeURIComponent(button.dataset.launch)}/launch`, { extra_vars: {} });
           go(`#/jobs/${job.id}`);
         } catch (error) {
           button.disabled = false;
@@ -1902,11 +1902,11 @@ function playbookChoice(books, entrypoint) {
 async function openTemplateDialog(existing, initialTab = "") {
   if (!needTeam()) return;
   const [projects, inventories, credentials, environments, runner] = await Promise.all([
-    api("GET", "/api/projects"),
-    api("GET", "/api/inventories"),
-    api("GET", "/api/credentials"),
-    api("GET", "/api/environments"),
-    api("GET", "/api/runner"),
+    api("GET", "/api/v1/projects"),
+    api("GET", "/api/v1/inventories"),
+    api("GET", "/api/v1/credentials"),
+    api("GET", "/api/v1/environments"),
+    api("GET", "/api/v1/runner"),
   ]);
   const editing = Boolean(existing);
   const readOnly = !can("operator");
@@ -2075,8 +2075,8 @@ async function openTemplateDialog(existing, initialTab = "") {
           spec: templateSpec(form),
           prompt_on_launch: form.prompt_on_launch.checked,
         };
-        if (editing) await api("PUT", `/api/templates/${encodeURIComponent(item.id)}`, body);
-        else await api("POST", "/api/templates", body);
+        if (editing) await api("PUT", `/api/v1/templates/${encodeURIComponent(item.id)}`, body);
+        else await api("POST", "/api/v1/templates", body);
         markSaved();
         close();
         await route();
@@ -2210,7 +2210,7 @@ async function openTemplateDialog(existing, initialTab = "") {
     if (!ansible) return;
     const current = form.entrypoint.value.trim();
     try {
-      const contents = await api("GET", `/api/projects/${encodeURIComponent(form.project_id.value)}/contents`);
+      const contents = await api("GET", `/api/v1/projects/${encodeURIComponent(form.project_id.value)}/contents`);
       const books = contents.playbooks || [];
       const known = books.map((path) => `<option value="${esc(path)}">${esc(path)}</option>`).join("");
       select.innerHTML = `${known}<option value="">${h("other_path")}</option>`;
@@ -2306,7 +2306,7 @@ async function openTemplateDialog(existing, initialTab = "") {
     const loadSchedules = async () => {
       scheduleLoaded = true;
       try {
-        scheduleRows = await api("GET", `/api/templates/${encodeURIComponent(item.id)}/schedules`);
+        scheduleRows = await api("GET", `/api/v1/templates/${encodeURIComponent(item.id)}/schedules`);
         scheduleStatus.hidden = true;
         drawSchedules();
       } catch (error) {
@@ -2337,7 +2337,7 @@ async function openTemplateDialog(existing, initialTab = "") {
 async function deleteTemplate(item, dialog) {
   if (!(await confirmDialog({ title: t("delete"), body: t("delete_this_template", { name: item.name }), confirmLabel: t("delete"), danger: true }))) return;
   try {
-    await api("DELETE", `/api/templates/${encodeURIComponent(item.id)}`);
+    await api("DELETE", `/api/v1/templates/${encodeURIComponent(item.id)}`);
     markSaved();
     dialog.close();
     await route();
@@ -2485,7 +2485,7 @@ function mountSchedules(card) {
   const kind = card.dataset.kind;
   const target = card.dataset.target;
   const all = kind === "all";
-  const path = all ? "/api/schedules" : `/api/${kind}s/${encodeURIComponent(target)}/schedules`;
+  const path = all ? "/api/v1/schedules" : `/api/v1/${kind}s/${encodeURIComponent(target)}/schedules`;
   let items = [];
   let query = "";
   let requested = false;
@@ -2511,8 +2511,8 @@ function mountSchedules(card) {
     }
     if (all && !openKind && openTarget) {
       const [templates, workflows] = await Promise.all([
-        api("GET", "/api/templates"),
-        api("GET", "/api/workflows"),
+        api("GET", "/api/v1/templates"),
+        api("GET", "/api/v1/workflows"),
       ]);
       if (templates.some((row) => row.id === openTarget)) openKind = "template";
       else if (workflows.some((row) => row.id === openTarget)) openKind = "workflow";
@@ -2578,8 +2578,8 @@ function mountSchedules(card) {
 
 async function openNewScheduleDialog(redraw) {
   const [templates, workflows] = await Promise.all([
-    api("GET", "/api/templates"),
-    api("GET", "/api/workflows"),
+    api("GET", "/api/v1/templates"),
+    api("GET", "/api/v1/workflows"),
   ]);
   const choices = [
     ...templates.map((item) => `<option value="template:${esc(item.id)}">${esc(item.name)} · ${h("template")}</option>`),
@@ -2616,7 +2616,7 @@ function bindScheduleActions(card, items, kind, target, draw, options = {}) {
       const item = items.find((row) => row.id === button.dataset.scheduleDelete);
       if (!(await confirmDialog({ title: t("delete"), body: t("delete_this_schedule", { name: item ? item.name : "" }), confirmLabel: t("delete"), danger: true }))) return;
       try {
-        await api("DELETE", `/api/schedules/${encodeURIComponent(button.dataset.scheduleDelete)}`);
+        await api("DELETE", `/api/v1/schedules/${encodeURIComponent(button.dataset.scheduleDelete)}`);
         await draw();
       } catch (error) {
         handle(error);
@@ -2629,7 +2629,7 @@ function bindScheduleActions(card, items, kind, target, draw, options = {}) {
       if (!item) return;
       const enabled = control.type === "checkbox" ? control.checked : !item.enabled;
       try {
-        await api("POST", `/api/schedules/${encodeURIComponent(item.id)}/enabled`, { enabled });
+        await api("POST", `/api/v1/schedules/${encodeURIComponent(item.id)}/enabled`, { enabled });
         await draw();
       } catch (error) {
         handle(error);
@@ -2643,7 +2643,7 @@ function bindScheduleActions(card, items, kind, target, draw, options = {}) {
     button.addEventListener("click", async () => {
       const id = button.dataset.scheduleAccept || button.dataset.scheduleDecline;
       try {
-        await api("POST", `/api/schedules/${encodeURIComponent(id)}/missed`, { accept: Boolean(button.dataset.scheduleAccept) });
+        await api("POST", `/api/v1/schedules/${encodeURIComponent(id)}/missed`, { accept: Boolean(button.dataset.scheduleAccept) });
         await draw();
       } catch (error) {
         handle(error);
@@ -2868,10 +2868,10 @@ function openScheduleForm(kind, target, existing, redraw, options) {
         return;
       }
       const body = { ...payload(), name: form.name.value };
-      if (existing) await api("PUT", `/api/schedules/${encodeURIComponent(existing.id)}`, body);
+      if (existing) await api("PUT", `/api/v1/schedules/${encodeURIComponent(existing.id)}`, body);
       else {
         const [postKind, postTarget] = form.target_ref ? form.target_ref.value.split(":") : [kind, target];
-        await api("POST", `/api/${postKind}s/${encodeURIComponent(postTarget)}/schedules`, body);
+        await api("POST", `/api/v1/${postKind}s/${encodeURIComponent(postTarget)}/schedules`, body);
       }
       leaveGuard = null;
       close();
@@ -2923,7 +2923,7 @@ function openScheduleForm(kind, target, existing, redraw, options) {
       dialog.overlay.querySelector("#schedule-sentence").textContent = sentence;
       dialog.overlay.querySelector("#schedule-pin").textContent = sentence;
       try {
-        const result = await api("POST", "/api/schedules/preview", body);
+        const result = await api("POST", "/api/v1/schedules/preview", body);
         const lines = (result.occurrences || []).map((at) => `<li>${esc(formatWhen(at, body.timezone))}</li>`).join("");
         dialog.overlay.querySelector("#schedule-next").innerHTML = lines || `<li>${h("schedule_no_upcoming")}</li>`;
       } catch (error) {
@@ -2985,12 +2985,12 @@ function jobsUrl(state) {
   if (state.tool) params.set("tool", state.tool);
   if (state.trigger) params.set("trigger", state.trigger);
   if (state.template) params.set("template_id", state.template);
-  return `/api/jobs?${params.toString()}`;
+  return `/api/v1/jobs?${params.toString()}`;
 }
 
 async function pageJobs() {
   if (!needTeam()) return;
-  const templates = await api("GET", "/api/templates");
+  const templates = await api("GET", "/api/v1/templates");
   const view = jobsState();
   const choices = (values, selected, label) => [
     `<option value=""${selected ? "" : " selected"}>${h("all")}</option>`,
@@ -3151,7 +3151,7 @@ async function pageJobs() {
     if (!(await confirmDialog({ title: t("relaunch"), body: relaunchPrompt(job, button.dataset.failed === "1"), confirmLabel: t("relaunch") }))) return;
     button.disabled = true;
     try {
-      const copy = await api("POST", `/api/jobs/${encodeURIComponent(button.dataset.relaunch)}/relaunch`, {
+      const copy = await api("POST", `/api/v1/jobs/${encodeURIComponent(button.dataset.relaunch)}/relaunch`, {
         only_failed_hosts: button.dataset.failed === "1",
       });
       go(`#/jobs/${copy.id}`);
@@ -3613,7 +3613,7 @@ function jobActions(job) {
 
 async function pageJob(id) {
   const live = generation;
-  const job = await api("GET", `/api/jobs/${encodeURIComponent(id)}`);
+  const job = await api("GET", `/api/v1/jobs/${encodeURIComponent(id)}`);
   const running = job.status === "pending" || job.status === "running";
   const actions = jobActions(job);
   shell(job.name, `
@@ -3659,7 +3659,7 @@ async function pageJob(id) {
       button.disabled = true;
     });
     try {
-      const copy = await api("POST", `/api/jobs/${encodeURIComponent(id)}/relaunch`, { only_failed_hosts: onlyFailed });
+      const copy = await api("POST", `/api/v1/jobs/${encodeURIComponent(id)}/relaunch`, { only_failed_hosts: onlyFailed });
       go(`#/jobs/${copy.id}`);
     } catch (error) {
       relaunchButtons().forEach((button) => {
@@ -3671,7 +3671,7 @@ async function pageJob(id) {
   document.querySelectorAll("[data-action=cancel]").forEach((cancel) => {
     cancel.addEventListener("click", async () => {
       try {
-        await api("POST", `/api/jobs/${encodeURIComponent(id)}/cancel`, {});
+        await api("POST", `/api/v1/jobs/${encodeURIComponent(id)}/cancel`, {});
         if (badge) {
           badge.className = "pill canceled";
           badge.textContent = statusLabel("canceled");
@@ -3705,7 +3705,7 @@ async function pageJob(id) {
     try {
       const headers = {};
       if (teamId) headers["X-Team-Id"] = teamId;
-      const response = await fetch(`/api/jobs/${encodeURIComponent(id)}/output`, { headers, credentials: "same-origin" });
+      const response = await fetch(`/api/v1/jobs/${encodeURIComponent(id)}/output`, { headers, credentials: "same-origin" });
       const blob = await response.blob();
       if (!response.ok) {
         const text = await blob.text();
@@ -3749,7 +3749,7 @@ async function pageJob(id) {
   };
   const durationTimer = setInterval(tickDuration, 1000);
   const last = (job.events || []).reduce((max, event) => Math.max(max, event.id), 0);
-  source = new EventSource(`/api/jobs/${encodeURIComponent(id)}/events?after=${last}`);
+  source = new EventSource(`/api/v1/jobs/${encodeURIComponent(id)}/events?after=${last}`);
   source.addEventListener("log", (event) => {
     if (live !== generation) return;
     appendLog(JSON.parse(event.data));
@@ -3775,8 +3775,8 @@ async function pageJob(id) {
 async function pageWorkflows() {
   if (!needTeam()) return;
   const [items, templates] = await Promise.all([
-    api("GET", "/api/workflows"),
-    api("GET", "/api/templates"),
+    api("GET", "/api/v1/workflows"),
+    api("GET", "/api/v1/templates"),
   ]);
   shell(t("workflows"), `
     <section class="card">
@@ -3807,7 +3807,7 @@ async function pageWorkflows() {
         if (item && workflowTofuApply(item.graph, templates) && !(await confirmTofuApply(item))) return;
         button.disabled = true;
         try {
-          const run = await api("POST", `/api/workflows/${encodeURIComponent(button.dataset.launch)}/launch`, { extra_vars: {} });
+          const run = await api("POST", `/api/v1/workflows/${encodeURIComponent(button.dataset.launch)}/launch`, { extra_vars: {} });
           go(`#/runs/${run.id}`);
         } catch (error) {
           button.disabled = false;
@@ -3834,7 +3834,7 @@ function openWorkflowDialog() {
       <label class="field"><span>${h("description")}</span><input name="description" maxlength="1000"></label>`,
     submit: t("create_and_open"),
     onSubmit: async ({ form, close }) => {
-      const created = await api("POST", "/api/workflows", {
+      const created = await api("POST", "/api/v1/workflows", {
         name: form.name.value,
         description: form.description.value,
         graph: { nodes: [], edges: [] },
@@ -3871,10 +3871,10 @@ function workflowAddress(tab, id) {
 async function pageWorkflow(id) {
   if (!needTeam()) return;
   const [workflow, templates, inventories, credentials] = await Promise.all([
-    api("GET", `/api/workflows/${encodeURIComponent(id)}`),
-    api("GET", "/api/templates"),
-    api("GET", "/api/inventories"),
-    api("GET", "/api/credentials"),
+    api("GET", `/api/v1/workflows/${encodeURIComponent(id)}`),
+    api("GET", "/api/v1/templates"),
+    api("GET", "/api/v1/inventories"),
+    api("GET", "/api/v1/credentials"),
   ]);
   mountEditor(workflow, templates, false, {}, { inventories, credentials });
 }
@@ -4902,7 +4902,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
     save.addEventListener("click", async () => {
       if (!flushNode()) return;
       try {
-        await api("PUT", `/api/workflows/${encodeURIComponent(workflow.id)}`, {
+        await api("PUT", `/api/v1/workflows/${encodeURIComponent(workflow.id)}`, {
           name: document.querySelector("#wf-name").value,
           description: document.querySelector("#wf-description").value,
           graph,
@@ -4920,12 +4920,12 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
       const name = document.querySelector("#wf-name").value;
       if (workflowTofuApply(graph, templates) && !(await confirmTofuApply({ name }))) return;
       try {
-        await api("PUT", `/api/workflows/${encodeURIComponent(workflow.id)}`, {
+        await api("PUT", `/api/v1/workflows/${encodeURIComponent(workflow.id)}`, {
           name: document.querySelector("#wf-name").value,
           description: document.querySelector("#wf-description").value,
           graph,
         });
-        const run = await api("POST", `/api/workflows/${encodeURIComponent(workflow.id)}/launch`, { extra_vars: {} });
+        const run = await api("POST", `/api/v1/workflows/${encodeURIComponent(workflow.id)}/launch`, { extra_vars: {} });
         go(`#/runs/${run.id}`);
       } catch (error) {
         handle(error);
@@ -4937,7 +4937,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
     remove.addEventListener("click", async () => {
       if (!(await confirmDialog({ title: t("delete"), body: t("delete_this_workflow", { name: workflow.name }), confirmLabel: t("delete"), danger: true }))) return;
       try {
-        await api("DELETE", `/api/workflows/${encodeURIComponent(workflow.id)}`);
+        await api("DELETE", `/api/v1/workflows/${encodeURIComponent(workflow.id)}`);
         go("#/workflows");
       } catch (error) {
         handle(error);
@@ -5090,14 +5090,14 @@ async function pageRun(id) {
       return;
     }
     try {
-      const job = await api("GET", `/api/jobs/${encodeURIComponent(jobId)}`);
+      const job = await api("GET", `/api/v1/jobs/${encodeURIComponent(jobId)}`);
       if (token !== outputToken || live !== generation) return;
       (job.events || []).forEach(appendLog);
       if (!log.childNodes.length) note(t("this_node_has_no_output_yet"));
       const running = job.status === "pending" || job.status === "running";
       if (!running) return;
       const last = (job.events || []).reduce((max, event) => Math.max(max, event.id), 0);
-      source = new EventSource(`/api/jobs/${encodeURIComponent(jobId)}/events?after=${last}`);
+      source = new EventSource(`/api/v1/jobs/${encodeURIComponent(jobId)}/events?after=${last}`);
       source.addEventListener("log", (event) => {
         if (token !== outputToken || live !== generation) return;
         appendLog(JSON.parse(event.data));
@@ -5143,14 +5143,14 @@ async function pageRun(id) {
     }
   }
 
-  const run = await api("GET", `/api/workflow-jobs/${encodeURIComponent(id)}`);
+  const run = await api("GET", `/api/v1/workflow-jobs/${encodeURIComponent(id)}`);
   if (live !== generation) return;
   paint(run);
   if (["successful", "failed", "canceled"].includes(run.status)) return;
   pollTimer = setInterval(async () => {
     if (live !== generation) return;
     try {
-      const next = await api("GET", `/api/workflow-jobs/${encodeURIComponent(id)}`);
+      const next = await api("GET", `/api/v1/workflow-jobs/${encodeURIComponent(id)}`);
       if (live !== generation) return;
       paint(next);
       if (["successful", "failed", "canceled"].includes(next.status)) {
@@ -5173,9 +5173,9 @@ function hookStatusLabel(value) {
 
 async function pageHooks() {
   if (!needTeam()) return;
-  const hooks = await api("GET", "/api/hooks");
+  const hooks = await api("GET", "/api/v1/hooks");
   const deliveryRows = hooks.length
-    ? await api("GET", `/api/hooks/${encodeURIComponent(hooks[0].id)}/deliveries`)
+    ? await api("GET", `/api/v1/hooks/${encodeURIComponent(hooks[0].id)}/deliveries`)
     : [];
   const origin = location.origin;
   const incoming = deliveryRows.map((item) =>
@@ -5203,7 +5203,7 @@ async function pageHooks() {
     document.querySelectorAll("[data-test]").forEach((button) => {
       button.addEventListener("click", async () => {
         try {
-          const result = await api("POST", `/api/hooks/${encodeURIComponent(button.dataset.test)}/test`);
+          const result = await api("POST", `/api/v1/hooks/${encodeURIComponent(button.dataset.test)}/test`);
           if (result.workflow_job_id) go(`#/runs/${result.workflow_job_id}`);
           else if (result.job_id) go(`#/jobs/${result.job_id}`);
           else route();
@@ -5217,7 +5217,7 @@ async function pageHooks() {
         const hook = hooks.find((row) => row.id === button.dataset.delete);
         if (!(await confirmDialog({ title: t("delete"), body: t("delete_this_webhook", { name: hook ? hook.name : "" }), confirmLabel: t("delete"), danger: true }))) return;
         try {
-          await api("DELETE", `/api/hooks/${encodeURIComponent(button.dataset.delete)}`);
+          await api("DELETE", `/api/v1/hooks/${encodeURIComponent(button.dataset.delete)}`);
           route();
         } catch (error) {
           handle(error);
@@ -5244,8 +5244,8 @@ async function pageHooks() {
 async function openHookDialog(item) {
   const editing = Boolean(item);
   const [templates, workflows] = await Promise.all([
-    api("GET", "/api/templates"),
-    api("GET", "/api/workflows"),
+    api("GET", "/api/v1/templates"),
+    api("GET", "/api/v1/workflows"),
   ]);
   const targetId = editing ? (item.workflow_id || item.template_id || "") : "";
   const option = (value, label, selected) =>
@@ -5287,8 +5287,8 @@ async function openHookDialog(item) {
         template_id: kind === "template" ? id : null,
         workflow_id: kind === "workflow" ? id : null,
       };
-      if (editing) await api("PUT", `/api/hooks/${encodeURIComponent(item.id)}`, payload);
-      else await api("POST", "/api/hooks", payload);
+      if (editing) await api("PUT", `/api/v1/hooks/${encodeURIComponent(item.id)}`, payload);
+      else await api("POST", "/api/v1/hooks", payload);
       markSaved();
       close();
       await route();
@@ -5299,10 +5299,10 @@ async function openHookDialog(item) {
 async function pageRuntime() {
   if (!needTeam()) return;
   const [cache, plugins, environments, runner] = await Promise.all([
-    api("GET", "/api/cache"),
-    api("GET", "/api/plugins"),
-    api("GET", "/api/environments"),
-    api("GET", "/api/runner"),
+    api("GET", "/api/v1/cache"),
+    api("GET", "/api/v1/plugins"),
+    api("GET", "/api/v1/environments"),
+    api("GET", "/api/v1/runner"),
   ]);
   const collectionRows = (cache.collections || []).map((item) => `<tr><td>${esc(item.name)}</td><td>${esc(item.version)}</td></tr>`);
   const roleRows = (cache.roles || []).map((item) => `<tr><td>${esc(item.name)}</td><td>${esc(item.version)}</td></tr>`);
@@ -5333,7 +5333,7 @@ async function pageRuntime() {
     document.querySelectorAll("[data-env]").forEach((button) => {
       button.addEventListener("click", async () => {
         try {
-          await api("DELETE", `/api/environments/${encodeURIComponent(button.dataset.env)}`);
+          await api("DELETE", `/api/v1/environments/${encodeURIComponent(button.dataset.env)}`);
           route();
         } catch (error) {
           handle(error);
@@ -5421,8 +5421,8 @@ function openEnvironmentDialog(item) {
         description: form.description.value,
         scope: form.scope.value,
       };
-      if (editing) await api("PUT", `/api/environments/${encodeURIComponent(item.id)}`, payload);
-      else await api("POST", "/api/environments", payload);
+      if (editing) await api("PUT", `/api/v1/environments/${encodeURIComponent(item.id)}`, payload);
+      else await api("POST", "/api/v1/environments", payload);
       markSaved();
       close();
       await route();
@@ -5437,7 +5437,7 @@ function openEnvironmentDialog(item) {
 
 async function pageEnvironment(id) {
   if (!needTeam()) return;
-  const item = await api("GET", `/api/environments/${encodeURIComponent(id)}`);
+  const item = await api("GET", `/api/v1/environments/${encodeURIComponent(id)}`);
   const manage = canManageEnvironment(item);
   shell(item.name, `<section class="card"><dl class="kv">
       ${paramRow("name", item.name)}
@@ -5453,7 +5453,7 @@ async function pageEnvironment(id) {
   if (!remove) return;
   remove.addEventListener("click", async () => {
     try {
-      await api("DELETE", `/api/environments/${encodeURIComponent(id)}`);
+      await api("DELETE", `/api/v1/environments/${encodeURIComponent(id)}`);
       go("#/runtime");
     } catch (error) {
       handle(error);
@@ -5520,7 +5520,7 @@ function bindProjectCredential(form, credentials) {
 
 async function pageProjects() {
   if (!needTeam()) return;
-  const projects = await api("GET", "/api/projects");
+  const projects = await api("GET", "/api/v1/projects");
   shell(t("projects"), `
     <section class="card">
       <input class="search" id="project-search" placeholder="${h("search_projects")}" autocomplete="off">
@@ -5561,11 +5561,11 @@ async function pageProjects() {
 async function openProjectDialog(item, initialTab = "") {
   const editing = Boolean(item);
   const [organizations, credentials] = await Promise.all([
-    editing || me.is_admin ? api("GET", "/api/organizations") : Promise.resolve([]),
-    api("GET", "/api/credentials"),
+    editing || me.is_admin ? api("GET", "/api/v1/organizations") : Promise.resolve([]),
+    api("GET", "/api/v1/credentials"),
   ]);
   const current = (me.teams || []).find((team) => team.id === teamId);
-  const organization = editing ? await api("GET", `/api/organizations/${encodeURIComponent(item.organization_id)}`) : null;
+  const organization = editing ? await api("GET", `/api/v1/organizations/${encodeURIComponent(item.organization_id)}`) : null;
   const organizationField = editing || me.is_admin
     ? `<label class="field"><span>${h("organization")}</span><select name="organization_id"${me.is_admin ? "" : " disabled"}>${orgOptions(organizations, editing ? item.organization_id : (current && current.organization_id))}</select></label>`
     : "";
@@ -5607,7 +5607,7 @@ async function openProjectDialog(item, initialTab = "") {
       if (form.organization_id) payload.organization_id = form.organization_id.value;
       if (editing) {
         payload.team_ids = [...form.querySelectorAll("input[name=team_ids]:checked")].map((input) => input.value).sort();
-        const saved = await api("PUT", `/api/projects/${encodeURIComponent(item.id)}`, payload);
+        const saved = await api("PUT", `/api/v1/projects/${encodeURIComponent(item.id)}`, payload);
         markSaved();
         close();
         await route();
@@ -5616,7 +5616,7 @@ async function openProjectDialog(item, initialTab = "") {
         }
       } else {
         payload.team_ids = [];
-        const created = await api("POST", "/api/projects", payload);
+        const created = await api("POST", "/api/v1/projects", payload);
         markSaved();
         close();
         go(`#/projects/${created.id}`);
@@ -5630,7 +5630,7 @@ async function openProjectDialog(item, initialTab = "") {
       const box = dialog.overlay.querySelector("#team-boxes");
       box.innerHTML = `<p class="small muted">${h("loading_teams")}</p>`;
       try {
-        const next = await api("GET", `/api/organizations/${encodeURIComponent(dialog.form.organization_id.value)}`);
+        const next = await api("GET", `/api/v1/organizations/${encodeURIComponent(dialog.form.organization_id.value)}`);
         box.innerHTML = teamBoxes(next.teams || [], []);
       } catch (error) { handle(error); }
     });
@@ -5648,7 +5648,7 @@ function projectSyncText(project) {
 
 async function pageProject(id) {
   if (!needTeam()) return;
-  const project = await api("GET", `/api/projects/${encodeURIComponent(id)}`);
+  const project = await api("GET", `/api/v1/projects/${encodeURIComponent(id)}`);
   shell(project.name, `
     <section class="card">
       <dl class="kv">
@@ -5672,13 +5672,13 @@ async function pageProject(id) {
     sync.addEventListener("click", async () => {
       sync.disabled = true;
       try {
-        await api("POST", `/api/projects/${encodeURIComponent(id)}/sync`, {});
-        const fresh = await api("GET", `/api/projects/${encodeURIComponent(id)}`);
+        await api("POST", `/api/v1/projects/${encodeURIComponent(id)}/sync`, {});
+        const fresh = await api("GET", `/api/v1/projects/${encodeURIComponent(id)}`);
         const note = document.querySelector("#last-sync");
         if (note) note.textContent = projectSyncText(fresh);
         sync.textContent = t("synced");
       } catch (error) {
-        const fresh = await api("GET", `/api/projects/${encodeURIComponent(id)}`).catch(() => null);
+        const fresh = await api("GET", `/api/v1/projects/${encodeURIComponent(id)}`).catch(() => null);
         const note = document.querySelector("#last-sync");
         if (note && fresh) note.textContent = projectSyncText(fresh);
         sync.disabled = false;
@@ -5691,7 +5691,7 @@ async function pageProject(id) {
     remove.addEventListener("click", async () => {
       if (!(await confirmDialog({ title: t("delete"), body: t("delete_this_project", { name: project.name }), confirmLabel: t("delete"), danger: true }))) return;
       try {
-        await api("DELETE", `/api/projects/${encodeURIComponent(id)}`);
+        await api("DELETE", `/api/v1/projects/${encodeURIComponent(id)}`);
         leaveGuard = null;
         go("#/projects");
       } catch (error) { handle(error); }
@@ -5860,7 +5860,7 @@ function mountSourceDraft(container, projects, kind, preset, options = {}) {
         return;
       }
       try {
-        const item = await api("GET", `/api/credentials/${encodeURIComponent(selected)}`);
+        const item = await api("GET", `/api/v1/credentials/${encodeURIComponent(selected)}`);
         if (token !== addressToken) return;
         address.textContent = item.fields && item.fields.url
           ? item.fields.url
@@ -5917,7 +5917,7 @@ function mountSourceDraft(container, projects, kind, preset, options = {}) {
       test.disabled = true;
       status.textContent = t("testing");
       try {
-        const result = await api("POST", "/api/inventories/netbox/test", {
+        const result = await api("POST", "/api/v1/inventories/netbox/test", {
           credential_id: draft.credential_id,
           validate_certs: draft.validate_certs,
         });
@@ -5938,7 +5938,7 @@ function mountSourceDraft(container, projects, kind, preset, options = {}) {
       status.textContent = t("previewing");
       resultBox.hidden = true;
       try {
-        const result = await api("POST", "/api/inventories/netbox/preview", {
+        const result = await api("POST", "/api/v1/inventories/netbox/preview", {
           credential_id: draft.credential_id,
           validate_certs: draft.validate_certs,
           group_by: draft.group_by,
@@ -5976,7 +5976,7 @@ function mountSourceDraft(container, projects, kind, preset, options = {}) {
       note.textContent = "";
       if (!select.value) return;
       try {
-        const contents = await api("GET", `/api/projects/${encodeURIComponent(select.value)}/contents`);
+        const contents = await api("GET", `/api/v1/projects/${encodeURIComponent(select.value)}/contents`);
         const inventories = contents.inventories || [];
         const staticFiles = inventories.filter((file) => file.format !== "plugin");
         files.innerHTML = `<option value="">—</option>${staticFiles.map((file) => `<option value="${esc(file.path)}">${esc(file.path)}</option>`).join("")}`;
@@ -6053,8 +6053,8 @@ function bindSourcePicks(projects, credentials) {
 async function pageInventories() {
   if (!needTeam()) return;
   const [items, credentials] = await Promise.all([
-    api("GET", "/api/inventories"),
-    api("GET", "/api/credentials"),
+    api("GET", "/api/v1/inventories"),
+    api("GET", "/api/v1/credentials"),
   ]);
   shell(t("inventories"), `
     <section class="card">
@@ -6105,7 +6105,7 @@ async function openInventoryDialog(item) {
   const editing = Boolean(item);
   const [projects, credentials] = editing
     ? [[], []]
-    : await Promise.all([api("GET", "/api/projects"), api("GET", "/api/credentials")]);
+    : await Promise.all([api("GET", "/api/v1/projects"), api("GET", "/api/v1/credentials")]);
   const sources = `
     <div>
       <h2>${h("sources")}</h2>
@@ -6124,13 +6124,13 @@ async function openInventoryDialog(item) {
     submit: editing ? t("save") : t("create"),
     onSubmit: async ({ form, close }) => {
       if (editing) {
-        await api("PUT", `/api/inventories/${encodeURIComponent(item.id)}`, { name: form.name.value });
+        await api("PUT", `/api/v1/inventories/${encodeURIComponent(item.id)}`, { name: form.name.value });
         markSaved();
         close();
         await route();
       } else {
         const drafts = [...dialog.overlay.querySelectorAll("#source-drafts [data-kind]")].map(readSourceDraft);
-        const created = await api("POST", "/api/inventories", { name: form.name.value, sources: drafts });
+        const created = await api("POST", "/api/v1/inventories", { name: form.name.value, sources: drafts });
         markSaved();
         close();
         go(`#/inventories/${created.id}`);
@@ -6173,7 +6173,7 @@ function inventoryHostUrl(id, state) {
   if (state.search) params.set("search", state.search);
   if (state.group) params.set("group", state.group);
   if (state.sort) params.set("sort", state.sort);
-  return `/api/inventories/${encodeURIComponent(id)}/hosts?${params}`;
+  return `/api/v1/inventories/${encodeURIComponent(id)}/hosts?${params}`;
 }
 
 function inventoryHostTable(hosts, state, id) {
@@ -6205,11 +6205,11 @@ async function pageInventory(id) {
   if (!needTeam()) return;
   const view = inventoryHostState();
   const [item, projects, credentials, firstPage, groupPage] = await Promise.all([
-    api("GET", `/api/inventories/${encodeURIComponent(id)}`),
-    can("operator") ? api("GET", "/api/projects") : Promise.resolve([]),
-    api("GET", "/api/credentials"),
+    api("GET", `/api/v1/inventories/${encodeURIComponent(id)}`),
+    can("operator") ? api("GET", "/api/v1/projects") : Promise.resolve([]),
+    api("GET", "/api/v1/credentials"),
     api("GET", inventoryHostUrl(id, view)),
-    api("GET", `/api/inventories/${encodeURIComponent(id)}/groups`),
+    api("GET", `/api/v1/inventories/${encodeURIComponent(id)}/groups`),
   ]);
   let page = firstPage;
   const pages = () => Math.max(1, Math.ceil(Number(page.total) / view.size));
@@ -6427,7 +6427,7 @@ async function pageInventory(id) {
       if (show && !button.dataset.loaded) {
         button.disabled = true;
         try {
-          const source = await api("GET", `/api/inventories/${encodeURIComponent(id)}/sources/${encodeURIComponent(button.dataset.rawSource)}`);
+          const source = await api("GET", `/api/v1/inventories/${encodeURIComponent(id)}/sources/${encodeURIComponent(button.dataset.rawSource)}`);
           panel.querySelector("[data-raw-body]").textContent = source.body || "";
           button.dataset.loaded = "1";
         } catch (error) {
@@ -6447,7 +6447,7 @@ async function pageInventory(id) {
     sync.addEventListener("click", async () => {
       sync.disabled = true;
       try {
-        await api("POST", `/api/inventories/${encodeURIComponent(id)}/sync`);
+        await api("POST", `/api/v1/inventories/${encodeURIComponent(id)}/sync`);
         route();
       } catch (error) {
         sync.disabled = false;
@@ -6462,7 +6462,7 @@ async function pageInventory(id) {
       if (!target || !summary) return;
       target.innerHTML = `<p class="small muted">${h("loading")}</p>`;
       try {
-        const source = await api("GET", `/api/inventories/${encodeURIComponent(id)}/sources/${encodeURIComponent(summary.id)}`);
+        const source = await api("GET", `/api/v1/inventories/${encodeURIComponent(id)}/sources/${encodeURIComponent(summary.id)}`);
         target.innerHTML = "";
         const card = mountSourceDraft(target, projects, source.kind, {
           ...(source.source || {}),
@@ -6481,7 +6481,7 @@ async function pageInventory(id) {
           const save = card.querySelector("[data-save-draft]");
           save.disabled = true;
           try {
-            const saved = await api("PUT", `/api/inventories/${encodeURIComponent(id)}/sources/${encodeURIComponent(source.id)}`, readSourceUpdate(card));
+            const saved = await api("PUT", `/api/v1/inventories/${encodeURIComponent(id)}/sources/${encodeURIComponent(source.id)}`, readSourceUpdate(card));
             const collisions = saved.collisions || [];
             sourceNotice = saved.sync && saved.sync.ok
               ? {
@@ -6513,7 +6513,7 @@ async function pageInventory(id) {
       button.textContent = t("refreshing");
       if (status) status.textContent = t("refreshing");
       try {
-        const item = await api("POST", `/api/inventories/${encodeURIComponent(id)}/sources/${encodeURIComponent(button.dataset.syncSource)}/sync`);
+        const item = await api("POST", `/api/v1/inventories/${encodeURIComponent(id)}/sources/${encodeURIComponent(button.dataset.syncSource)}/sync`);
         const collisions = item.collisions || [];
         await route();
         const fresh = document.querySelector(`[data-source-status="${button.dataset.syncSource}"]`);
@@ -6536,7 +6536,7 @@ async function pageInventory(id) {
       const source = (item.sources || []).find((row) => row.id === button.dataset.dropSource);
       if (!(await confirmDialog({ title: t("remove"), body: t("remove_this_source", { name: source ? sourceTitle(source) : "" }), confirmLabel: t("remove"), danger: true }))) return;
       try {
-        await api("DELETE", `/api/inventories/${encodeURIComponent(id)}/sources/${encodeURIComponent(button.dataset.dropSource)}`);
+        await api("DELETE", `/api/v1/inventories/${encodeURIComponent(id)}/sources/${encodeURIComponent(button.dataset.dropSource)}`);
         route();
       } catch (error) { handle(error); }
     });
@@ -6548,7 +6548,7 @@ async function pageInventory(id) {
       if (!drafts.length) return;
       try {
         for (const source of drafts) {
-          await api("POST", `/api/inventories/${encodeURIComponent(id)}/sources`, source);
+          await api("POST", `/api/v1/inventories/${encodeURIComponent(id)}/sources`, source);
         }
         markSaved();
         route();
@@ -6557,7 +6557,7 @@ async function pageInventory(id) {
     document.querySelector("#delete-inventory").addEventListener("click", async () => {
       if (!(await confirmDialog({ title: t("delete_inventory"), body: t("delete_this_inventory", { name: item.name }), confirmLabel: t("delete"), danger: true }))) return;
       try {
-        await api("DELETE", `/api/inventories/${encodeURIComponent(id)}`);
+        await api("DELETE", `/api/v1/inventories/${encodeURIComponent(id)}`);
         go("#/inventories");
       } catch (error) { handle(error); }
     });
@@ -6706,9 +6706,9 @@ function bindInventoryLaunch(buttonId, selectId, templates, preset) {
 async function pageInventoryHost(id, name) {
   if (!needTeam()) return;
   const [item, host, templates] = await Promise.all([
-    api("GET", `/api/inventories/${encodeURIComponent(id)}`),
-    api("GET", `/api/inventories/${encodeURIComponent(id)}/hosts/${encodeURIComponent(name)}`),
-    can("operator") ? api("GET", "/api/templates") : Promise.resolve([]),
+    api("GET", `/api/v1/inventories/${encodeURIComponent(id)}`),
+    api("GET", `/api/v1/inventories/${encodeURIComponent(id)}/hosts/${encodeURIComponent(name)}`),
+    can("operator") ? api("GET", "/api/v1/templates") : Promise.resolve([]),
   ]);
   const ansibleTemplates = (templates || []).filter((item) => item.tool === "ansible");
   const groupLinks = (host.groups || []).map((group) => `<a href="#/inventories/${encodeURIComponent(id)}/groups/${encodeURIComponent(group)}">${esc(group)}</a>`).join(", ");
@@ -6742,9 +6742,9 @@ async function pageInventoryGroup(id, name) {
   const page = Math.max(1, Number(params.get("page")) || 1);
   const size = 50;
   const [item, group, templates] = await Promise.all([
-    api("GET", `/api/inventories/${encodeURIComponent(id)}`),
-    api("GET", `/api/inventories/${encodeURIComponent(id)}/groups/${encodeURIComponent(name)}?page=${page}&page_size=${size}`),
-    can("operator") ? api("GET", "/api/templates") : Promise.resolve([]),
+    api("GET", `/api/v1/inventories/${encodeURIComponent(id)}`),
+    api("GET", `/api/v1/inventories/${encodeURIComponent(id)}/groups/${encodeURIComponent(name)}?page=${page}&page_size=${size}`),
+    can("operator") ? api("GET", "/api/v1/templates") : Promise.resolve([]),
   ]);
   const ansibleTemplates = (templates || []).filter((item) => item.tool === "ansible");
   const link = (groupName) => `<a href="#/inventories/${encodeURIComponent(id)}/groups/${encodeURIComponent(groupName)}">${esc(groupName)}</a>`;
@@ -7253,7 +7253,7 @@ function openCredentialCreator(kind, onCreated) {
       <div>${credentialFields(kind)}</div>`,
     submit: t("create"),
     onSubmit: async ({ form, close }) => {
-      const created = await api("POST", "/api/credentials", {
+      const created = await api("POST", "/api/v1/credentials", {
         name: form.name.value,
         kind: form.kind.value,
         secret: credentialSecret(form),
@@ -7266,7 +7266,7 @@ function openCredentialCreator(kind, onCreated) {
 
 async function pageCredentials() {
   if (!needTeam()) return;
-  const credentials = await api("GET", "/api/credentials");
+  const credentials = await api("GET", "/api/v1/credentials");
   shell(t("credentials"), `
     <section class="card">
       <p class="small muted">${h("secrets_are_stored_encrypted_and_are_not_shown")}</p>
@@ -7292,7 +7292,7 @@ async function pageCredentials() {
       button.addEventListener("click", async () => {
         if (!(await confirmDialog({ title: t("delete"), body: t("delete_this_credential", { name: button.dataset.credentialName }), confirmLabel: t("delete"), danger: true }))) return;
         try {
-          await api("DELETE", `/api/credentials/${encodeURIComponent(button.dataset.credential)}`);
+          await api("DELETE", `/api/v1/credentials/${encodeURIComponent(button.dataset.credential)}`);
           route();
         } catch (error) { handle(error); }
       });
@@ -7307,7 +7307,7 @@ async function pageCredentials() {
   }
   if (!request.edit) return;
   try {
-    const item = await api("GET", `/api/credentials/${encodeURIComponent(request.edit)}`);
+    const item = await api("GET", `/api/v1/credentials/${encodeURIComponent(request.edit)}`);
     openCredentialDialog(item, !can("owner"), request.tab);
   } catch (error) {
     handle(error);
@@ -7415,13 +7415,13 @@ function openCredentialDialog(item, readOnly = false, initialTab = "") {
     onSubmit: async ({ form, close }) => {
       if (editing) {
         const body = credentialUpdateBody(form, item.kind);
-        await api("PUT", `/api/credentials/${encodeURIComponent(item.id)}`, {
+        await api("PUT", `/api/v1/credentials/${encodeURIComponent(item.id)}`, {
           name: form.name.value,
           secret: body.secret,
           clear: body.clear,
         });
       } else {
-        await api("POST", "/api/credentials", {
+        await api("POST", "/api/v1/credentials", {
           name: form.name.value,
           kind: form.kind.value,
           secret: credentialSecret(form),
@@ -7447,7 +7447,7 @@ function openCredentialDialog(item, readOnly = false, initialTab = "") {
     remove.addEventListener("click", async () => {
       if (!(await confirmDialog({ title: t("delete"), body: t("delete_this_credential", { name: item.name }), confirmLabel: t("delete"), danger: true }))) return;
       try {
-        await api("DELETE", `/api/credentials/${encodeURIComponent(item.id)}`);
+        await api("DELETE", `/api/v1/credentials/${encodeURIComponent(item.id)}`);
         markSaved();
         dialog.close();
         await route();
@@ -7459,7 +7459,7 @@ function openCredentialDialog(item, readOnly = false, initialTab = "") {
 }
 
 async function pageOrganizations() {
-  const items = await api("GET", "/api/organizations");
+  const items = await api("GET", "/api/v1/organizations");
   shell(t("organizations"), `
     <section class="card">
       <input class="search" id="organization-search" placeholder="${h("search_organizations")}" autocomplete="off">
@@ -7482,7 +7482,7 @@ async function pageOrganizations() {
   }
   if (!request.edit) return;
   try {
-    const item = await api("GET", `/api/organizations/${encodeURIComponent(request.edit)}`);
+    const item = await api("GET", `/api/v1/organizations/${encodeURIComponent(request.edit)}`);
     openOrganizationDialog(item, !me.is_admin, request.tab);
   } catch (error) {
     handle(error);
@@ -7511,13 +7511,13 @@ function openOrganizationDialog(item, readOnly = false, initialTab = "") {
     actions: !readOnly,
     onSubmit: readOnly ? undefined : async ({ form, close }) => {
       if (editing) {
-        await api("PUT", `/api/organizations/${encodeURIComponent(item.id)}`, {
+        await api("PUT", `/api/v1/organizations/${encodeURIComponent(item.id)}`, {
           name: form.name.value,
           description: form.description.value,
         });
-        me = await api("GET", "/api/me");
+        me = await api("GET", "/api/v1/me");
       } else {
-        await api("POST", "/api/organizations", { name: form.name.value, description: form.description.value });
+        await api("POST", "/api/v1/organizations", { name: form.name.value, description: form.description.value });
       }
       markSaved();
       close();
@@ -7531,9 +7531,9 @@ function openOrganizationDialog(item, readOnly = false, initialTab = "") {
 async function pageTeam() {
   const teams = me.teams || [];
   const current = teams.find((team) => team.id === teamId);
-  const organizations = me.is_admin ? await api("GET", "/api/organizations") : [];
+  const organizations = me.is_admin ? await api("GET", "/api/v1/organizations") : [];
   let members = [];
-  if (teamId) members = await api("GET", `/api/teams/${encodeURIComponent(teamId)}/members`);
+  if (teamId) members = await api("GET", `/api/v1/teams/${encodeURIComponent(teamId)}/members`);
   const memberRows = members.map((member) => {
     const name = me.is_admin
       ? `<a href="#/users?edit=${esc(member.user_id)}">${esc(member.display_name)}</a>`
@@ -7580,7 +7580,7 @@ async function pageTeam() {
     select.addEventListener("change", async () => {
       const next = select.value;
       try {
-        await api("POST", `/api/teams/${encodeURIComponent(teamId)}/members`, {
+        await api("POST", `/api/v1/teams/${encodeURIComponent(teamId)}/members`, {
           username: select.dataset.memberRole,
           role: next,
         });
@@ -7594,7 +7594,7 @@ async function pageTeam() {
   document.querySelectorAll("[data-member]").forEach((button) => {
     button.addEventListener("click", async () => {
       try {
-        await api("DELETE", `/api/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(button.dataset.member)}`);
+        await api("DELETE", `/api/v1/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(button.dataset.member)}`);
         route();
       } catch (error) { handle(error); }
     });
@@ -7623,13 +7623,13 @@ function openTeamDialog(item, organizations, defaultOrganizationId) {
       };
       if (form.organization_id && form.organization_id.value) payload.organization_id = form.organization_id.value;
       if (editing) {
-        await api("PUT", `/api/teams/${encodeURIComponent(item.id)}`, payload);
+        await api("PUT", `/api/v1/teams/${encodeURIComponent(item.id)}`, payload);
       } else {
-        const created = await api("POST", "/api/teams", payload);
+        const created = await api("POST", "/api/v1/teams", payload);
         teamId = created.id;
         localStorage.setItem("koreograf.team", teamId);
       }
-      me = await api("GET", "/api/me");
+      me = await api("GET", "/api/v1/me");
       markSaved();
       close();
       await route();
@@ -7650,7 +7650,7 @@ function openMemberDialog() {
       </div>`,
     submit: t("add"),
     onSubmit: async ({ form, close }) => {
-      await api("POST", `/api/teams/${encodeURIComponent(teamId)}/members`, {
+      await api("POST", `/api/v1/teams/${encodeURIComponent(teamId)}/members`, {
         username: form.username.value,
         role: form.role.value,
       });
@@ -7666,8 +7666,8 @@ function emailLine(email) {
 }
 
 async function pageAccount() {
-  me = await api("GET", "/api/me");
-  const tokens = await api("GET", "/api/me/tokens");
+  me = await api("GET", "/api/v1/me");
+  const tokens = await api("GET", "/api/v1/me/tokens");
   const revealed = revealToken;
   revealToken = null;
   const rows = (me.memberships || []).map((row) => {
@@ -7736,7 +7736,7 @@ async function pageAccount() {
           email: form.email.value,
         };
         if (form.password.value) payload.password = form.password.value;
-        me = await api("PUT", "/api/me", payload);
+        me = await api("PUT", "/api/v1/me", payload);
         markSaved();
         route();
       } catch (error) { handle(error); }
@@ -7747,7 +7747,7 @@ async function pageAccount() {
     tokenForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       try {
-        const created = await api("POST", "/api/me/tokens", { name: tokenForm.name.value });
+        const created = await api("POST", "/api/v1/me/tokens", { name: tokenForm.name.value });
         revealToken = created.secret;
         await route();
       } catch (error) { handle(error); }
@@ -7765,7 +7765,7 @@ async function pageAccount() {
     button.addEventListener("click", async () => {
       if (!(await confirmDialog({ title: t("revoke"), body: t("delete_this_token", { name: button.dataset.name }), confirmLabel: t("revoke"), danger: true }))) return;
       try {
-        await api("DELETE", `/api/me/tokens/${encodeURIComponent(button.dataset.revoke)}`);
+        await api("DELETE", `/api/v1/me/tokens/${encodeURIComponent(button.dataset.revoke)}`);
         await route();
       } catch (error) { handle(error); }
     });
@@ -7777,7 +7777,7 @@ async function pageUsers() {
     deny("users", "admin");
     return;
   }
-  const items = await api("GET", "/api/users");
+  const items = await api("GET", "/api/v1/users");
   shell(t("users"), `
     <section class="card">
       <input class="search" id="user-search" placeholder="${h("search_users")}" autocomplete="off">
@@ -7819,8 +7819,8 @@ async function pageUsers() {
   if (!request.edit) return;
   try {
     const [item, teams] = await Promise.all([
-      api("GET", `/api/users/${encodeURIComponent(request.edit)}`),
-      api("GET", "/api/teams"),
+      api("GET", `/api/v1/users/${encodeURIComponent(request.edit)}`),
+      api("GET", "/api/v1/teams"),
     ]);
     openUserDialog(item, teams, request.tab);
   } catch (error) {
@@ -7840,7 +7840,7 @@ function openUserCreateDialog() {
       <label class="row"><input name="is_admin" type="checkbox"> ${h("administrator")}</label>`,
     submit: t("create"),
     onSubmit: async ({ form, close }) => {
-      await api("POST", "/api/users", {
+      await api("POST", "/api/v1/users", {
         username: form.username.value,
         display_name: form.display_name.value,
         password: form.password.value,
@@ -7912,8 +7912,8 @@ function openUserDialog(item, teams, initialTab = "") {
         disabled: form.account_disabled.checked,
       };
       if (form.password && form.password.value) payload.password = form.password.value;
-      await api("PUT", `/api/users/${encodeURIComponent(item.id)}`, payload);
-      if (self) me = await api("GET", "/api/me");
+      await api("PUT", `/api/v1/users/${encodeURIComponent(item.id)}`, payload);
+      if (self) me = await api("GET", "/api/v1/me");
       markSaved();
       close();
       await route();
@@ -7925,7 +7925,7 @@ function openUserDialog(item, teams, initialTab = "") {
     remove.addEventListener("click", async () => {
       if (!(await confirmDialog({ title: t("delete"), body: t("delete_this_account", { name: item.display_name }), confirmLabel: t("delete"), danger: true }))) return;
       try {
-        await api("DELETE", `/api/users/${encodeURIComponent(item.id)}`);
+        await api("DELETE", `/api/v1/users/${encodeURIComponent(item.id)}`);
         markSaved();
         dialog.close();
         await route();
@@ -7942,7 +7942,7 @@ function openUserDialog(item, teams, initialTab = "") {
         return;
       }
       try {
-        await api("POST", `/api/teams/${encodeURIComponent(select.dataset.role)}/members`, {
+        await api("POST", `/api/v1/teams/${encodeURIComponent(select.dataset.role)}/members`, {
           username: item.username,
           role: next,
         });
@@ -7959,7 +7959,7 @@ function openUserDialog(item, teams, initialTab = "") {
     button.addEventListener("click", async () => {
       if (dialog.dirty() && !(await confirmDialog({ title: t("discard_unsaved_changes"), confirmLabel: t("ok") }))) return;
       try {
-        await api("DELETE", `/api/teams/${encodeURIComponent(button.dataset.leave)}/members/${encodeURIComponent(item.id)}`);
+        await api("DELETE", `/api/v1/teams/${encodeURIComponent(button.dataset.leave)}/members/${encodeURIComponent(item.id)}`);
         dialog.clean();
         await route();
       } catch (error) { handle(error); }
@@ -7976,7 +7976,7 @@ function openUserDialog(item, teams, initialTab = "") {
       const role = dialog.overlay.querySelector("[name=grant_role]");
       if (dialog.dirty() && !(await confirmDialog({ title: t("discard_unsaved_changes"), confirmLabel: t("ok") }))) return;
       try {
-        await api("POST", `/api/teams/${encodeURIComponent(team.value)}/members`, {
+        await api("POST", `/api/v1/teams/${encodeURIComponent(team.value)}/members`, {
           username: item.username,
           role: role.value,
         });
@@ -8037,7 +8037,7 @@ function bindAssistantAction() {
       confirm.disabled = true;
       if (cancel) cancel.disabled = true;
       try {
-        await api("POST", "/api/assistant/confirm", { id: action.id });
+        await api("POST", "/api/v1/assistant/confirm", { id: action.id });
         finish(t("assistant_action_done"));
       } catch (error) {
         if (cancel) cancel.disabled = false;
@@ -8053,7 +8053,7 @@ function bindAssistantAction() {
       confirm.disabled = true;
       cancel.disabled = true;
       try {
-        await api("POST", "/api/assistant/cancel", { id: action.id });
+        await api("POST", "/api/v1/assistant/cancel", { id: action.id });
       } catch (error) {
         handle(error);
       }
@@ -8104,7 +8104,7 @@ async function pageAssistant() {
     try {
       const body = { message: text, history: assistantTranscript.slice(0, -1).slice(-20) };
       if (jobId) body.job_id = jobId;
-      const result = await api("POST", "/api/assistant/chat", body);
+      const result = await api("POST", "/api/v1/assistant/chat", body);
       if (result && result.answer) {
         assistantTranscript.push({ role: "assistant", content: String(result.answer) });
       }
@@ -8264,8 +8264,8 @@ async function pageSettings(notice) {
     return;
   }
   databaseCheckId = null;
-  const item = await api("GET", "/api/settings");
-  const environments = teamId ? await api("GET", "/api/environments") : [];
+  const item = await api("GET", "/api/v1/settings");
+  const environments = teamId ? await api("GET", "/api/v1/environments") : [];
   const ldap = item.ldap || {};
   const proxy = item.proxy || {};
   const llm = item.llm || {};
@@ -8478,7 +8478,7 @@ async function pageSettings(notice) {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     try {
-      await api("PUT", "/api/settings", settingsBody(form));
+      await api("PUT", "/api/v1/settings", settingsBody(form));
       await pageSettings("settings_saved");
     } catch (error) {
       handle(error);
@@ -8488,7 +8488,7 @@ async function pageSettings(notice) {
     const button = event.currentTarget;
     button.disabled = true;
     try {
-      const report = await api("GET", "/api/runner/preflight");
+      const report = await api("GET", "/api/v1/runner/preflight");
       document.querySelector("#preflight-result").innerHTML = preflightReportHtml(report);
     } catch (error) {
       handle(error);
@@ -8499,7 +8499,7 @@ async function pageSettings(notice) {
   document.querySelector("#settings-reset").addEventListener("click", async () => {
     if (!(await confirmDialog({ title: t("discard_the_saved_settings_and_use_the_environment"), confirmLabel: t("ok") }))) return;
     try {
-      await api("PUT", "/api/settings", { reset: true });
+      await api("PUT", "/api/v1/settings", { reset: true });
       await pageSettings();
     } catch (error) {
       handle(error);
@@ -8526,7 +8526,7 @@ async function pageSettings(notice) {
   const refreshDatabaseStatus = async (render) => {
     if (!document.querySelector("#database-progress")) return null;
     try {
-      const data = await api("GET", "/api/admin/database/status");
+      const data = await api("GET", "/api/v1/admin/database/status");
       render(data);
       return data;
     } catch (error) {
@@ -8539,7 +8539,7 @@ async function pageSettings(notice) {
     databaseCheckId = null;
     databaseStart.disabled = true;
     try {
-      const result = await api("POST", "/api/admin/database/check", databaseTargetBody(form));
+      const result = await api("POST", "/api/v1/admin/database/check", databaseTargetBody(form));
       databaseCheckId = result && result.id ? String(result.id) : null;
       document.querySelector("#database-checks").innerHTML = databaseChecksHtml(result);
       databaseStart.disabled = !databaseCheckId;
@@ -8554,7 +8554,7 @@ async function pageSettings(notice) {
     if (!(await confirmDialog({ title: t("start_migration"), body: t("migration_starts_maintenance"), confirmLabel: t("start_migration"), danger: true }))) return;
     databaseStart.disabled = true;
     try {
-      await api("POST", "/api/admin/database/migrate", { id: databaseCheckId });
+      await api("POST", "/api/v1/admin/database/migrate", { id: databaseCheckId });
       databaseCheckId = null;
       await loadMaintenance();
       await refreshDatabaseStatus(renderDatabaseStatus);
@@ -8566,7 +8566,7 @@ async function pageSettings(notice) {
 }
 
 function backupDownloadUrl(includeTofuState) {
-  return includeTofuState ? "/api/admin/backup?tofu_state=true" : "/api/admin/backup";
+  return includeTofuState ? "/api/v1/admin/backup?tofu_state=true" : "/api/v1/admin/backup";
 }
 
 async function pageBackup() {
@@ -8634,7 +8634,7 @@ async function pageBackup() {
     try {
       const headers = { "X-Restore-Confirm": "ERSETZEN" };
       if (teamId) headers["X-Team-Id"] = teamId;
-      const response = await fetch("/api/admin/backup", {
+      const response = await fetch("/api/v1/admin/backup", {
         method: "POST",
         headers,
         body: file,
@@ -8820,14 +8820,14 @@ async function boot() {
   const catalogs = lang === "de" ? ["de"] : ["de", lang];
   await Promise.all(catalogs.map(loadCatalog));
   try {
-    me = await api("GET", "/api/me");
+    me = await api("GET", "/api/v1/me");
     const known = (me.teams || []).some((team) => team.id === teamId);
     if (!known) {
       teamId = preferredTeam();
       localStorage.setItem("koreograf.team", teamId);
     }
     try {
-      const assistant = await api("GET", "/api/assistant");
+      const assistant = await api("GET", "/api/v1/assistant");
       assistantEnabled = Boolean(assistant && assistant.enabled);
       assistantModel = assistant && assistant.model ? String(assistant.model) : "";
     } catch {

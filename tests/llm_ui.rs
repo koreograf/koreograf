@@ -31,15 +31,15 @@ check(Array.isArray(items) && items.length === 1, "the assistant entry is missin
 check(items[0][0] === "#/assistant", "the assistant entry does not point at the chat page");
 check(items[0][1] === "Assistant", "the assistant entry has no label");
 check(js.includes("...assistantNavItem(assistantEnabled)"), "the navigation does not use the enabled flag");
-check(js.includes('api("GET", "/api/assistant")'), "the UI does not read the assistant status");
+check(js.includes('api("GET", "/api/v1/assistant")'), "the UI does not read the assistant status");
 const page = extractFunction("pageAssistant");
 check(page.includes("if (!assistantEnabled)"), "the chat page does not check the enabled flag");
-check(page.includes('api("POST", "/api/assistant/chat"'), "the chat page does not call the assistant route");
+check(page.includes('api("POST", "/api/v1/assistant/chat"'), "the chat page does not call the assistant route");
 const turn = extractFunction("assistantTurnHtml");
 check(turn.includes("esc(turn.content)"), "the chat page does not escape answers");
 check(js.includes("data-assistant-confirm"), "a write has no confirmation card");
 check(js.includes("data-assistant-cancel"), "a confirmation card cannot be canceled");
-check(js.includes('/api/assistant/confirm'), "the confirmation card does not call the confirm route");
+check(js.includes('/api/v1/assistant/confirm'), "the confirmation card does not call the confirm route");
 check(js.includes('href="#/assistant?explain='), "a failed job has no explain entry");
 "##;
 
