@@ -115,15 +115,37 @@ fn message_catalogs_match_and_cover_the_ui() {
     leftover_german(&root.join("src"), &mut german_src);
     assert!(german_src.is_empty(), "German left in src: {german_src:?}");
 
+    let api_keys = rust_message_keys(&root.join("src"));
     let mut api_missing = BTreeSet::new();
-    for key in rust_message_keys(&root.join("src")) {
-        if !de.contains_key(&key) {
-            api_missing.insert(key);
+    for key in &api_keys {
+        if !de.contains_key(key) {
+            api_missing.insert(key.clone());
         }
     }
     assert!(
         api_missing.is_empty(),
         "API keys missing from the catalogs: {api_missing:?}"
+    );
+
+    let dynamic_prefixes = ["schedule.day.", "schedule.short."];
+    let index = std::fs::read_to_string(root.join("web/index.html")).expect("index.html");
+    let web = format!("{script}\n{index}");
+    let rust = rust_sources(&root.join("src"));
+    let mut unused = BTreeSet::new();
+    for key in de.keys() {
+        if quoted_literal(&web, key)
+            || rust.contains(key)
+            || dynamic_prefixes
+                .iter()
+                .any(|prefix| key.starts_with(prefix))
+        {
+            continue;
+        }
+        unused.insert(key.clone());
+    }
+    assert!(
+        unused.is_empty(),
+        "catalog keys used by neither the UI nor the API: {unused:?}"
     );
     for catalog in [&de, &en] {
         let hint = catalog
@@ -145,6 +167,34 @@ fn message_catalogs_match_and_cover_the_ui() {
         runner.contains("konnte den remote-verweis"),
         "git still reports a missing remote ref in German"
     );
+}
+
+fn quoted_literal(source: &str, key: &str) -> bool {
+    ["\"", "'", "`"]
+        .iter()
+        .any(|quote| source.contains(&format!("{quote}{key}{quote}")))
+}
+
+fn rust_sources(dir: &Path) -> String {
+    let mut text = String::new();
+    for entry in
+        std::fs::read_dir(dir).unwrap_or_else(|err| panic!("read {}: {err}", dir.display()))
+    {
+        let entry = entry.unwrap_or_else(|err| panic!("{err}"));
+        let path = entry.path();
+        if path.is_dir() {
+            text.push_str(&rust_sources(&path));
+            continue;
+        }
+        if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
+            text.push_str(
+                &std::fs::read_to_string(&path)
+                    .unwrap_or_else(|err| panic!("read {}: {err}", path.display())),
+            );
+            text.push('\n');
+        }
+    }
+    text
 }
 
 #[test]
