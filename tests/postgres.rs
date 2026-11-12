@@ -1,122 +1,22 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod common;
+
 use std::path::Path;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use chrono::{Duration, SecondsFormat, Utc};
+use common::{
+    call, call_bearer, call_cookie, call_raw, config, create_database, drop_database,
+    postgres_client, postgres_guard, postgres_test_url, Options,
+};
 use http_body_util::BodyExt;
-use koreograf::{Config, CookieSecure, LdapConfig, LocalJobs, RunnerMode};
+use koreograf::LdapConfig;
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tower::ServiceExt;
-
-fn config(dir: &Path) -> Config {
-    Config {
-        bind: "127.0.0.1:0".into(),
-        data_dir: dir.to_path_buf(),
-        web_dir: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web"),
-        examples_dir: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples"),
-        admin_user: "admin".into(),
-        admin_password: Some("test-admin-pass".into()),
-        runner: RunnerMode::Local,
-        container_image: false,
-        job_timeout_secs: 60,
-        job_output_lines: 8_000,
-        local_jobs: LocalJobs::All,
-        project_roots: vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples")],
-        hsts: false,
-        cookie_secure: CookieSecure::Auto,
-        trusted_proxy: false,
-        mcp: false,
-        public_url: Vec::new(),
-        data_host: None,
-        ldap: None,
-    }
-}
-
-async fn call(
-    app: &axum::Router,
-    method: &str,
-    uri: &str,
-    cookie: Option<&str>,
-    body: Option<Value>,
-) -> (StatusCode, Value, Option<String>) {
-    call_team(app, method, uri, cookie, None, body).await
-}
-
-async fn call_team(
-    app: &axum::Router,
-    method: &str,
-    uri: &str,
-    cookie: Option<&str>,
-    team: Option<&str>,
-    body: Option<Value>,
-) -> (StatusCode, Value, Option<String>) {
-    let mut builder = Request::builder().method(method).uri(uri);
-    if let Some(cookie) = cookie {
-        builder = builder.header("cookie", cookie);
-    }
-    if let Some(team) = team {
-        builder = builder.header("x-team-id", team);
-    }
-    let request = if let Some(body) = body {
-        builder
-            .header("content-type", "application/json")
-            .body(Body::from(body.to_string()))
-            .unwrap()
-    } else {
-        builder.body(Body::empty()).unwrap()
-    };
-    let response = app.clone().oneshot(request).await.unwrap();
-    let status = response.status();
-    let cookie = response
-        .headers()
-        .get("set-cookie")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
-        .map(str::to_string);
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    let parsed = if bytes.is_empty() {
-        Value::Null
-    } else {
-        serde_json::from_slice(&bytes)
-            .unwrap_or(Value::String(String::from_utf8_lossy(&bytes).to_string()))
-    };
-    (status, parsed, cookie)
-}
-
-async fn call_bearer(
-    app: &axum::Router,
-    method: &str,
-    uri: &str,
-    token: &str,
-    body: Option<Value>,
-) -> (StatusCode, Value) {
-    let builder = Request::builder()
-        .method(method)
-        .uri(uri)
-        .header("authorization", format!("Bearer {token}"));
-    let request = if let Some(body) = body {
-        builder
-            .header("content-type", "application/json")
-            .body(Body::from(body.to_string()))
-            .unwrap()
-    } else {
-        builder.body(Body::empty()).unwrap()
-    };
-    let response = app.clone().oneshot(request).await.unwrap();
-    let status = response.status();
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    let parsed = if bytes.is_empty() {
-        Value::Null
-    } else {
-        serde_json::from_slice(&bytes)
-            .unwrap_or(Value::String(String::from_utf8_lossy(&bytes).to_string()))
-    };
-    (status, parsed)
-}
 
 async fn postgres_session(
     url: &str,
@@ -275,15 +175,6 @@ fn git(dir: &Path, args: &[&str]) {
     assert!(status.success(), "git {args:?} in {}", dir.display());
 }
 
-static POSTGRES_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
-
-async fn postgres_guard() -> tokio::sync::MutexGuard<'static, ()> {
-    POSTGRES_LOCK
-        .get_or_init(|| tokio::sync::Mutex::new(()))
-        .lock()
-        .await
-}
-
 const PORTABLE_TABLES: &[&str] = &[
     "users",
     "organizations",
@@ -310,86 +201,6 @@ const PORTABLE_TABLES: &[&str] = &[
     "api_tokens",
     "sessions",
 ];
-
-async fn postgres_client(url: &str) -> tokio_postgres::Client {
-    let (client, connection) = tokio_postgres::connect(url, tokio_postgres::NoTls)
-        .await
-        .expect("postgres connection");
-    tokio::spawn(async move {
-        let _ = connection.await;
-    });
-    client
-}
-
-fn postgres_test_url() -> Option<String> {
-    let Ok(url) = std::env::var("KOREOGRAF_TEST_POSTGRES_URL") else {
-        eprintln!("skipping PostgreSQL test: KOREOGRAF_TEST_POSTGRES_URL is not set");
-        return None;
-    };
-    if url.trim().is_empty() {
-        eprintln!("skipping PostgreSQL test: KOREOGRAF_TEST_POSTGRES_URL is empty");
-        return None;
-    }
-    Some(url)
-}
-
-fn database_url(base: &str, name: &str) -> String {
-    let mut url = url::Url::parse(base).expect("postgres url");
-    url.set_path(&format!("/{name}"));
-    url.to_string()
-}
-
-async fn create_database(base: &str, name: &str) -> String {
-    let client = postgres_client(base).await;
-    client
-        .batch_execute(&format!("CREATE DATABASE \"{name}\""))
-        .await
-        .expect("create database");
-    database_url(base, name)
-}
-
-async fn drop_database(base: &str, name: &str) {
-    let client = postgres_client(base).await;
-    let _ = client
-        .batch_execute(&format!("DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)"))
-        .await;
-}
-
-async fn call_raw(
-    app: &axum::Router,
-    method: &str,
-    uri: &str,
-    cookie: Option<&str>,
-    headers: &[(&str, &str)],
-    body: Option<Vec<u8>>,
-) -> (StatusCode, Vec<u8>, Option<String>) {
-    let mut builder = Request::builder().method(method).uri(uri);
-    if let Some(cookie) = cookie {
-        builder = builder.header("cookie", cookie);
-    }
-    for (name, value) in headers {
-        builder = builder.header(*name, *value);
-    }
-    let request = builder
-        .body(Body::from(body.unwrap_or_default()))
-        .expect("request");
-    let response = app.clone().oneshot(request).await.expect("response");
-    let status = response.status();
-    let cookie = response
-        .headers()
-        .get("set-cookie")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
-        .map(str::to_string);
-    let bytes = response
-        .into_body()
-        .collect()
-        .await
-        .expect("body")
-        .to_bytes()
-        .to_vec();
-    (status, bytes, cookie)
-}
 
 fn zip_entries(bytes: &[u8]) -> Vec<String> {
     let mut archive =
@@ -435,7 +246,14 @@ fn sqlite_counts(path: &Path) -> Vec<(&'static str, i64)> {
 }
 
 fn seed_sqlite_source(dir: &Path) -> std::sync::Arc<koreograf::AppState> {
-    let state = koreograf::boot(config(dir)).expect("sqlite boot");
+    let state = koreograf::boot(config(
+        dir,
+        &Options {
+            mcp: false,
+            ..Options::default()
+        },
+    ))
+    .expect("sqlite boot");
     {
         let conn = state.db().expect("sqlite database");
         for line in ["first", "second"] {
@@ -469,17 +287,24 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     let dir = std::env::temp_dir().join(format!("koreograf-postgres-workflows-{nanos}"));
     let origin = std::env::temp_dir().join(format!("koreograf-postgres-origin-{nanos}"));
     std::fs::create_dir_all(&origin).expect("origin");
-    let mut cfg = config(&dir);
+    let mut cfg = config(
+        &dir,
+        &Options {
+            mcp: false,
+            ..Options::default()
+        },
+    );
     cfg.admin_user = format!("wfadmin{nanos}");
     cfg.project_roots.push(origin.clone());
     let state = koreograf::boot_with(cfg, database).expect("boot");
     assert_eq!(state.engine(), "postgresql");
     let app = koreograf::router(state);
 
-    let (status, _, cookie) = call(
+    let (status, _, cookie) = call_cookie(
         &app,
         "POST",
         "/api/login",
+        None,
         None,
         Some(json!({
             "username": format!("wfadmin{nanos}"),
@@ -490,11 +315,12 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     assert_eq!(status, StatusCode::OK);
     let cookie = cookie.expect("session cookie");
 
-    let (status, org, _) = call(
+    let (status, org) = call(
         &app,
         "POST",
         "/api/organizations",
         Some(&cookie),
+        None,
         Some(json!({
             "name": format!("Workflow org {nanos}"),
             "description": "Postgres workflow organization"
@@ -504,11 +330,12 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     assert_eq!(status, StatusCode::CREATED, "{org}");
     let org_id = org["id"].as_str().expect("organization id").to_string();
 
-    let (status, team, _) = call(
+    let (status, team) = call(
         &app,
         "POST",
         "/api/teams",
         Some(&cookie),
+        None,
         Some(json!({
             "name": format!("Workflow team {nanos}"),
             "description": "Postgres workflow team",
@@ -519,7 +346,7 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     assert_eq!(status, StatusCode::CREATED, "{team}");
     let team_id = team["id"].as_str().expect("team id").to_string();
 
-    let (status, template, _) = call_team(
+    let (status, template) = call(
         &app,
         "POST",
         "/api/templates",
@@ -545,7 +372,7 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
         })
     };
 
-    let (status, workflow, _) = call_team(
+    let (status, workflow) = call(
         &app,
         "POST",
         "/api/workflows",
@@ -568,7 +395,7 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     let workflow_id = workflow["id"].as_str().expect("workflow id").to_string();
     assert_eq!(workflow["graph"]["nodes"].as_array().map(Vec::len), Some(1));
 
-    let (status, workflows, _) = call_team(
+    let (status, workflows) = call(
         &app,
         "GET",
         "/api/workflows",
@@ -582,7 +409,7 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
         .as_array()
         .is_some_and(|items| items.iter().any(|item| item["id"] == workflow_id)));
 
-    let (status, fetched, _) = call_team(
+    let (status, fetched) = call(
         &app,
         "GET",
         &format!("/api/workflows/{workflow_id}"),
@@ -594,7 +421,7 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(fetched["name"], format!("Workflow {nanos}"));
 
-    let (status, updated, _) = call_team(
+    let (status, updated) = call(
         &app,
         "PUT",
         &format!("/api/workflows/{workflow_id}"),
@@ -615,7 +442,7 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     assert_eq!(status, StatusCode::OK, "{updated}");
     assert_eq!(updated["graph"]["edges"].as_array().map(Vec::len), Some(1));
 
-    let (status, cycle, _) = call_team(
+    let (status, cycle) = call(
         &app,
         "POST",
         "/api/workflows",
@@ -639,7 +466,7 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(cycle["error"], "the_workflow_contains_a_cycle");
 
-    let (status, missing, _) = call_team(
+    let (status, missing) = call(
         &app,
         "POST",
         "/api/workflows",
@@ -661,7 +488,7 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(missing["error"], "template.missing_named");
 
-    let (status, hook, _) = call_team(
+    let (status, hook) = call(
         &app,
         "POST",
         "/api/hooks",
@@ -679,10 +506,11 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     let hook_id = hook["id"].as_str().expect("hook id").to_string();
     let token = hook["token"].as_str().expect("hook token").to_string();
 
-    let (status, wrong_token, _) = call(
+    let (status, wrong_token) = call(
         &app,
         "POST",
         &format!("/hooks/{hook_id}/wrong-token"),
+        None,
         None,
         Some(json!({
             "status": "firing",
@@ -693,10 +521,11 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(wrong_token["error"], "sign_in_is_required");
 
-    let (status, ignored, _) = call(
+    let (status, ignored) = call(
         &app,
         "POST",
         &format!("/hooks/{hook_id}/{token}"),
+        None,
         None,
         Some(json!({
             "status": "firing",
@@ -707,7 +536,7 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     assert_eq!(status, StatusCode::OK, "{ignored}");
     assert_eq!(ignored["status"], "ignored");
 
-    let (status, test_hook, _) = call_team(
+    let (status, test_hook) = call(
         &app,
         "POST",
         "/api/hooks",
@@ -724,18 +553,19 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     assert_eq!(status, StatusCode::CREATED, "{test_hook}");
     let test_hook_id = test_hook["id"].as_str().expect("test hook id").to_string();
 
-    let (status, tested, _) = call(
+    let (status, tested) = call(
         &app,
         "POST",
         &format!("/api/hooks/{test_hook_id}/test"),
         Some(&cookie),
+        None,
         None,
     )
     .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{tested}");
     assert_eq!(tested["status"], "ignored");
 
-    let (status, deliveries, _) = call_team(
+    let (status, deliveries) = call(
         &app,
         "GET",
         &format!("/api/hooks/{hook_id}/deliveries"),
@@ -772,7 +602,7 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     let nonmember_cookie = format!("koreograf_session={nonmember_token}");
     let viewer_cookie = format!("koreograf_session={viewer_token}");
 
-    let (status, denied, _) = call_team(
+    let (status, denied) = call(
         &app,
         "POST",
         "/api/workflows",
@@ -786,27 +616,29 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
 
-    let (status, denied, _) = call(
+    let (status, denied) = call(
         &app,
         "GET",
         &format!("/api/workflows/{workflow_id}"),
         Some(&nonmember_cookie),
         None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
-
-    let (status, denied, _) = call(
-        &app,
-        "POST",
-        &format!("/api/hooks/{test_hook_id}/test"),
-        Some(&viewer_cookie),
         None,
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
 
-    let (status, hooks, _) = call_team(
+    let (status, denied) = call(
+        &app,
+        "POST",
+        &format!("/api/hooks/{test_hook_id}/test"),
+        Some(&viewer_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+
+    let (status, hooks) = call(
         &app,
         "GET",
         "/api/hooks",
@@ -828,7 +660,7 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     git(&origin, &["commit", "-m", "one"]);
     let source = format!("file://{}", origin.display());
 
-    let (status, project, _) = call_team(
+    let (status, project) = call(
         &app,
         "POST",
         "/api/projects",
@@ -844,7 +676,7 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     assert_eq!(status, StatusCode::CREATED, "{project}");
     let project_id = project["id"].as_str().expect("project id").to_string();
 
-    let (status, synced, _) = call_team(
+    let (status, synced) = call(
         &app,
         "POST",
         &format!("/api/projects/{project_id}/sync"),
@@ -855,7 +687,7 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     .await;
     assert_eq!(status, StatusCode::OK, "{synced}");
 
-    let (status, stored, _) = call_team(
+    let (status, stored) = call(
         &app,
         "GET",
         &format!("/api/projects/{project_id}"),
@@ -873,7 +705,7 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
         .as_str()
         .is_some_and(|value| !value.is_empty()));
 
-    let (status, broken, _) = call_team(
+    let (status, broken) = call(
         &app,
         "POST",
         "/api/projects",
@@ -892,7 +724,7 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
         .expect("broken project id")
         .to_string();
 
-    let (status, failed, _) = call_team(
+    let (status, failed) = call(
         &app,
         "POST",
         &format!("/api/projects/{broken_id}/sync"),
@@ -903,7 +735,7 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{failed}");
 
-    let (status, broken_stored, _) = call_team(
+    let (status, broken_stored) = call(
         &app,
         "GET",
         &format!("/api/projects/{broken_id}"),
@@ -915,7 +747,7 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(broken_stored["last_sync_status"], "failed");
 
-    let (status, _, _) = call_team(
+    let (status, _) = call(
         &app,
         "GET",
         &format!("/api/projects/{project_id}"),
@@ -926,7 +758,7 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    let (status, denied, _) = call_team(
+    let (status, denied) = call(
         &app,
         "POST",
         &format!("/api/projects/{project_id}/sync"),
@@ -937,7 +769,7 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
 
-    let (status, _, _) = call_team(
+    let (status, _) = call(
         &app,
         "DELETE",
         &format!("/api/workflows/{workflow_id}"),
@@ -948,7 +780,7 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
-    let (status, _, _) = call_team(
+    let (status, _) = call(
         &app,
         "GET",
         &format!("/api/workflows/{workflow_id}"),
@@ -959,7 +791,7 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
-    let (status, _, _) = call_team(
+    let (status, _) = call(
         &app,
         "DELETE",
         &format!("/api/hooks/{hook_id}"),
@@ -970,7 +802,7 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
-    let (status, _, _) = call_team(
+    let (status, _) = call(
         &app,
         "DELETE",
         &format!("/api/hooks/{test_hook_id}"),
@@ -981,7 +813,7 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
-    let (status, _, _) = call_team(
+    let (status, _) = call(
         &app,
         "DELETE",
         &format!("/api/projects/{project_id}"),
@@ -992,7 +824,7 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
-    let (status, _, _) = call_team(
+    let (status, _) = call(
         &app,
         "DELETE",
         &format!("/api/projects/{broken_id}"),
@@ -1003,7 +835,7 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
-    let (status, _, _) = call_team(
+    let (status, _) = call(
         &app,
         "DELETE",
         &format!("/api/templates/{template_id}"),
@@ -1031,7 +863,13 @@ async fn postgres_first_run_seeds_the_demo_and_curated_environments() {
     let name = format!("koreograf_seed_{nanos}");
     let target = create_database(&url, &name).await;
     let dir = std::env::temp_dir().join(format!("koreograf-postgres-seed-{nanos}"));
-    let mut cfg = config(&dir);
+    let mut cfg = config(
+        &dir,
+        &Options {
+            mcp: false,
+            ..Options::default()
+        },
+    );
     cfg.admin_user = format!("seedadmin{nanos}");
     let database = koreograf::parse_database_config(&target, None, None).expect("postgres url");
 
@@ -1160,24 +998,31 @@ async fn postgres_serves_the_auth_and_resource_slice() {
         .expect("clock")
         .as_nanos();
     let dir = std::env::temp_dir().join(format!("koreograf-postgres-{nanos}"));
-    let mut cfg = config(&dir);
+    let mut cfg = config(
+        &dir,
+        &Options {
+            mcp: false,
+            ..Options::default()
+        },
+    );
     cfg.admin_user = format!("koro{nanos}");
     let state = koreograf::boot_with(cfg, database).expect("boot");
     assert_eq!(state.engine(), "postgresql");
     let app = koreograf::router(state);
 
-    let (status, health, _) = call(&app, "GET", "/healthz", None, None).await;
+    let (status, health) = call(&app, "GET", "/healthz", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(health, Value::String("ok (postgresql)".into()));
 
-    let (status, version, _) = call(&app, "GET", "/api/version", None, None).await;
+    let (status, version) = call(&app, "GET", "/api/version", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(version["version"], env!("CARGO_PKG_VERSION"));
 
-    let (status, _, cookie) = call(
+    let (status, _, cookie) = call_cookie(
         &app,
         "POST",
         "/api/login",
+        None,
         None,
         Some(json!({"username": format!("koro{nanos}"), "password": "test-admin-pass"})),
     )
@@ -1185,20 +1030,21 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     assert_eq!(status, StatusCode::OK);
     let cookie = cookie.expect("session cookie");
 
-    let (status, me, _) = call(&app, "GET", "/api/me", Some(&cookie), None).await;
+    let (status, me) = call(&app, "GET", "/api/me", Some(&cookie), None, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(me["username"], format!("koro{nanos}"));
     assert_eq!(me["is_admin"], true);
 
-    let (status, settings, _) = call(&app, "GET", "/api/settings", Some(&cookie), None).await;
+    let (status, settings) = call(&app, "GET", "/api/settings", Some(&cookie), None, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(settings["runner"], "local");
 
-    let (status, saved, _) = call(
+    let (status, saved) = call(
         &app,
         "PUT",
         "/api/settings",
         Some(&cookie),
+        None,
         Some(json!({
             "ldap": {},
             "proxy": {},
@@ -1211,14 +1057,15 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(saved["source"], "saved");
 
-    let (status, _, _) = call(&app, "GET", "/api/teams", Some(&cookie), None).await;
+    let (status, _) = call(&app, "GET", "/api/teams", Some(&cookie), None, None).await;
     assert_eq!(status, StatusCode::OK);
 
-    let (status, org, _) = call(
+    let (status, org) = call(
         &app,
         "POST",
         "/api/organizations",
         Some(&cookie),
+        None,
         Some(json!({
             "name": format!("Org {nanos}"),
             "description": "Postgres organization"
@@ -1228,22 +1075,24 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     assert_eq!(status, StatusCode::CREATED, "{org}");
     let org_id = org["id"].as_str().expect("organization id").to_string();
 
-    let (status, created_org, _) = call(
+    let (status, created_org) = call(
         &app,
         "GET",
         &format!("/api/organizations/{org_id}"),
         Some(&cookie),
+        None,
         None,
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(created_org["name"], format!("Org {nanos}"));
 
-    let (status, updated_org, _) = call(
+    let (status, updated_org) = call(
         &app,
         "PUT",
         &format!("/api/organizations/{org_id}"),
         Some(&cookie),
+        None,
         Some(json!({
             "name": format!("Org {nanos} renamed"),
             "description": "Updated"
@@ -1253,15 +1102,16 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(updated_org["description"], "Updated");
 
-    let (status, list, _) = call(&app, "GET", "/api/organizations", Some(&cookie), None).await;
+    let (status, list) = call(&app, "GET", "/api/organizations", Some(&cookie), None, None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(list.as_array().is_some_and(|items| !items.is_empty()));
 
-    let (status, team, _) = call(
+    let (status, team) = call(
         &app,
         "POST",
         "/api/teams",
         Some(&cookie),
+        None,
         Some(json!({
             "name": format!("Team {nanos}"),
             "description": "Postgres team",
@@ -1272,11 +1122,12 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     assert_eq!(status, StatusCode::CREATED, "{team}");
     let team_id = team["id"].as_str().expect("team id").to_string();
 
-    let (status, updated_team, _) = call(
+    let (status, updated_team) = call(
         &app,
         "PUT",
         &format!("/api/teams/{team_id}"),
         Some(&cookie),
+        None,
         Some(json!({
             "name": format!("Team {nanos} renamed"),
             "description": "Updated team",
@@ -1287,18 +1138,19 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(updated_team["description"], "Updated team");
 
-    let (status, members, _) = call(
+    let (status, members) = call(
         &app,
         "GET",
         &format!("/api/teams/{team_id}/members"),
         Some(&cookie),
+        None,
         None,
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(members.as_array().is_some_and(|items| !items.is_empty()));
 
-    let (status, credential, _) = call_team(
+    let (status, credential) = call(
         &app,
         "POST",
         "/api/credentials",
@@ -1317,7 +1169,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
         .expect("credential id")
         .to_string();
 
-    let (status, credentials, _) = call_team(
+    let (status, credentials) = call(
         &app,
         "GET",
         "/api/credentials",
@@ -1331,7 +1183,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
         .as_array()
         .is_some_and(|items| items.iter().any(|item| item["id"] == credential_id)));
 
-    let (status, opened, _) = call_team(
+    let (status, opened) = call(
         &app,
         "GET",
         &format!("/api/credentials/{credential_id}"),
@@ -1343,7 +1195,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(opened["kind"], "scm");
 
-    let (status, saved, _) = call_team(
+    let (status, saved) = call(
         &app,
         "PUT",
         &format!("/api/credentials/{credential_id}"),
@@ -1359,7 +1211,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     assert_eq!(saved["name"], format!("Credential {nanos} renamed"));
 
     let project_source = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples");
-    let (status, project, _) = call_team(
+    let (status, project) = call(
         &app,
         "POST",
         "/api/projects",
@@ -1377,7 +1229,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     assert_eq!(status, StatusCode::CREATED, "{project}");
     let project_id = project["id"].as_str().expect("project id").to_string();
 
-    let (status, projects, _) = call_team(
+    let (status, projects) = call(
         &app,
         "GET",
         "/api/projects",
@@ -1391,7 +1243,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
         .as_array()
         .is_some_and(|items| items.iter().any(|item| item["id"] == project_id)));
 
-    let (status, fetched, _) = call_team(
+    let (status, fetched) = call(
         &app,
         "GET",
         &format!("/api/projects/{project_id}"),
@@ -1403,7 +1255,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(fetched["organization_id"], org_id);
 
-    let (status, updated, _) = call_team(
+    let (status, updated) = call(
         &app,
         "PUT",
         &format!("/api/projects/{project_id}"),
@@ -1415,11 +1267,12 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     assert_eq!(status, StatusCode::OK, "{updated}");
     assert_eq!(updated["name"], format!("Project {nanos} renamed"));
 
-    let (status, second_team, _) = call(
+    let (status, second_team) = call(
         &app,
         "POST",
         "/api/teams",
         Some(&cookie),
+        None,
         Some(json!({
             "name": format!("Second team {nanos}"),
             "description": "Postgres second team",
@@ -1460,7 +1313,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
         ("non-member", &nonmember_cookie),
         ("viewer", &viewer_cookie),
     ] {
-        let (status, denied, _) = call_team(
+        let (status, denied) = call(
             &app,
             "POST",
             "/api/credentials",
@@ -1475,7 +1328,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
         .await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{actor} create: {denied}");
 
-        let (status, denied, _) = call_team(
+        let (status, denied) = call(
             &app,
             "GET",
             &format!("/api/credentials/{credential_id}"),
@@ -1486,7 +1339,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
         .await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{actor} get: {denied}");
 
-        let (status, denied, _) = call_team(
+        let (status, denied) = call(
             &app,
             "DELETE",
             &format!("/api/projects/{project_id}"),
@@ -1502,7 +1355,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
         );
     }
 
-    let (status, _, _) = call_team(
+    let (status, _) = call(
         &app,
         "GET",
         &format!("/api/credentials/{credential_id}"),
@@ -1513,7 +1366,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
-    let (status, conflict, _) = call_team(
+    let (status, conflict) = call(
         &app,
         "DELETE",
         &format!("/api/credentials/{credential_id}"),
@@ -1525,7 +1378,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(conflict["error"], "credential_is_in_use");
 
-    let (status, _, _) = call_team(
+    let (status, _) = call(
         &app,
         "DELETE",
         &format!("/api/projects/{project_id}"),
@@ -1536,7 +1389,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
-    let (status, _, _) = call_team(
+    let (status, _) = call(
         &app,
         "DELETE",
         &format!("/api/credentials/{credential_id}"),
@@ -1547,7 +1400,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
-    let (status, inventory, _) = call_team(
+    let (status, inventory) = call(
         &app,
         "POST",
         "/api/inventories",
@@ -1562,7 +1415,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     assert_eq!(status, StatusCode::CREATED, "{inventory}");
     let inventory_id = inventory["id"].as_str().expect("inventory id").to_string();
 
-    let (status, inventories, _) = call_team(
+    let (status, inventories) = call(
         &app,
         "GET",
         "/api/inventories",
@@ -1576,7 +1429,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
         .as_array()
         .is_some_and(|items| items.iter().any(|item| item["id"] == inventory_id)));
 
-    let (status, updated, _) = call_team(
+    let (status, updated) = call(
         &app,
         "PUT",
         &format!("/api/inventories/{inventory_id}"),
@@ -1591,7 +1444,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     assert_eq!(status, StatusCode::OK, "{updated}");
     assert_eq!(updated["host_count"], 2);
 
-    let (status, with_source, _) = call_team(
+    let (status, with_source) = call(
         &app,
         "POST",
         &format!("/api/inventories/{inventory_id}/sources"),
@@ -1612,7 +1465,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
         .expect("source id")
         .to_string();
 
-    let (status, source, _) = call_team(
+    let (status, source) = call(
         &app,
         "GET",
         &format!("/api/inventories/{inventory_id}/sources/{source_id}"),
@@ -1624,7 +1477,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(source["kind"], "ini");
 
-    let (status, updated_source, _) = call_team(
+    let (status, updated_source) = call(
         &app,
         "PUT",
         &format!("/api/inventories/{inventory_id}/sources/{source_id}"),
@@ -1636,7 +1489,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     assert_eq!(status, StatusCode::OK, "{updated_source}");
     assert_eq!(updated_source["name"], format!("Inventory {nanos} renamed"));
 
-    let (status, after_delete, _) = call_team(
+    let (status, after_delete) = call(
         &app,
         "DELETE",
         &format!("/api/inventories/{inventory_id}/sources/{source_id}"),
@@ -1648,7 +1501,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(after_delete["source_count"], 1);
 
-    let (status, _, _) = call_team(
+    let (status, _) = call(
         &app,
         "DELETE",
         &format!("/api/inventories/{inventory_id}"),
@@ -1659,7 +1512,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
-    let (status, environment, _) = call_team(
+    let (status, environment) = call(
         &app,
         "POST",
         "/api/environments",
@@ -1682,7 +1535,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
         .expect("environment id")
         .to_string();
 
-    let (status, environments, _) = call_team(
+    let (status, environments) = call(
         &app,
         "GET",
         "/api/environments",
@@ -1696,7 +1549,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
         .as_array()
         .is_some_and(|items| items.iter().any(|item| item["id"] == environment_id)));
 
-    let (status, opened_environment, _) = call_team(
+    let (status, opened_environment) = call(
         &app,
         "GET",
         &format!("/api/environments/{environment_id}"),
@@ -1708,7 +1561,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(opened_environment["tool"], "ansible");
 
-    let (status, updated_environment, _) = call_team(
+    let (status, updated_environment) = call(
         &app,
         "PUT",
         &format!("/api/environments/{environment_id}"),
@@ -1728,7 +1581,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     assert_eq!(status, StatusCode::OK, "{updated_environment}");
     assert_eq!(updated_environment["pull_policy"], "always");
 
-    let (status, invalid_environment, _) = call_team(
+    let (status, invalid_environment) = call(
         &app,
         "POST",
         "/api/environments",
@@ -1747,7 +1600,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
         "choose_a_tool_for_the_environment"
     );
 
-    let (status, invalid_network, _) = call_team(
+    let (status, invalid_network) = call(
         &app,
         "POST",
         "/api/environments",
@@ -1794,7 +1647,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
             json!({"username": "git", "password": "secret"}),
         ),
     ] {
-        let (status, credential, _) = call_team(
+        let (status, credential) = call(
             &app,
             "POST",
             "/api/credentials",
@@ -1838,7 +1691,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
         })
     };
 
-    let (status, duplicate_vault, _) = call_team(
+    let (status, duplicate_vault) = call(
         &app,
         "POST",
         "/api/templates",
@@ -1857,7 +1710,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
         "this_vault_id_is_already_selected"
     );
 
-    let (status, duplicate_default, _) = call_team(
+    let (status, duplicate_default) = call(
         &app,
         "POST",
         "/api/templates",
@@ -1876,7 +1729,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
         "only_one_vault_credential_may_omit_the_vault"
     );
 
-    let (status, template, _) = call_team(
+    let (status, template) = call(
         &app,
         "POST",
         "/api/templates",
@@ -1896,7 +1749,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     assert_eq!(template["prompt_on_launch"], true);
     assert_eq!(template["no_environment"], false);
 
-    let (status, templates, _) = call_team(
+    let (status, templates) = call(
         &app,
         "GET",
         "/api/templates",
@@ -1910,7 +1763,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
         .as_array()
         .is_some_and(|items| items.iter().any(|item| item["id"] == template_id)));
 
-    let (status, updated_template, _) = call_team(
+    let (status, updated_template) = call(
         &app,
         "PUT",
         &format!("/api/templates/{template_id}"),
@@ -1932,7 +1785,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     assert_eq!(updated_template["no_environment"], true);
     assert_eq!(updated_template["prompt_on_launch"], false);
 
-    let (status, wrong_kind, _) = call_team(
+    let (status, wrong_kind) = call(
         &app,
         "PUT",
         &format!("/api/templates/{template_id}"),
@@ -1965,7 +1818,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
         })
     };
 
-    let (status, invalid_schedule, _) = call_team(
+    let (status, invalid_schedule) = call(
         &app,
         "POST",
         &format!("/api/templates/{template_id}/schedules"),
@@ -1984,7 +1837,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(invalid_schedule["error"], "schedule_repeat_is_invalid");
 
-    let (status, schedule, _) = call_team(
+    let (status, schedule) = call(
         &app,
         "POST",
         &format!("/api/templates/{template_id}/schedules"),
@@ -1997,7 +1850,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     let schedule_id = schedule["id"].as_str().expect("schedule id").to_string();
     assert!(schedule["next_run_at"].is_string());
 
-    let (status, schedules, _) = call_team(
+    let (status, schedules) = call(
         &app,
         "GET",
         &format!("/api/templates/{template_id}/schedules"),
@@ -2011,7 +1864,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
         .as_array()
         .is_some_and(|items| items.iter().any(|item| item["id"] == schedule_id)));
 
-    let (status, team_schedules, _) = call_team(
+    let (status, team_schedules) = call(
         &app,
         "GET",
         "/api/schedules",
@@ -2026,7 +1879,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
         .is_some_and(|items| items.iter().any(|item| item["id"] == schedule_id
             && item["target_name"] == format!("Template {nanos} renamed"))));
 
-    let (status, updated_schedule, _) = call_team(
+    let (status, updated_schedule) = call(
         &app,
         "PUT",
         &format!("/api/schedules/{schedule_id}"),
@@ -2041,7 +1894,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
         format!("Schedule {nanos} renamed")
     );
 
-    let (status, disabled, _) = call_team(
+    let (status, disabled) = call(
         &app,
         "POST",
         &format!("/api/schedules/{schedule_id}/enabled"),
@@ -2053,7 +1906,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     assert_eq!(status, StatusCode::OK, "{disabled}");
     assert_eq!(disabled["enabled"], false);
 
-    let (status, hook, _) = call_team(
+    let (status, hook) = call(
         &app,
         "POST",
         "/api/hooks",
@@ -2073,7 +1926,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
         .as_str()
         .is_some_and(|token| !token.is_empty()));
 
-    let (status, hooks, _) = call_team(
+    let (status, hooks) = call(
         &app,
         "GET",
         "/api/hooks",
@@ -2087,7 +1940,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
         .as_array()
         .is_some_and(|items| items.iter().any(|item| item["id"] == hook_id)));
 
-    let (status, updated_hook, _) = call_team(
+    let (status, updated_hook) = call(
         &app,
         "PUT",
         &format!("/api/hooks/{hook_id}"),
@@ -2104,7 +1957,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     assert_eq!(status, StatusCode::OK, "{updated_hook}");
     assert_eq!(updated_hook["match_status"], "resolved");
 
-    let (status, invalid_hook, _) = call_team(
+    let (status, invalid_hook) = call(
         &app,
         "PUT",
         &format!("/api/hooks/{hook_id}"),
@@ -2159,7 +2012,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
             })),
         ),
     ] {
-        let (status, denied, _) = call_team(
+        let (status, denied) = call(
             &app,
             method,
             &uri,
@@ -2171,7 +2024,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
         assert_eq!(status, StatusCode::FORBIDDEN, "{label}: {denied}");
     }
 
-    let (status, _, _) = call_team(
+    let (status, _) = call(
         &app,
         "DELETE",
         &format!("/api/hooks/{hook_id}"),
@@ -2182,7 +2035,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
-    let (status, _, _) = call_team(
+    let (status, _) = call(
         &app,
         "DELETE",
         &format!("/api/schedules/{schedule_id}"),
@@ -2193,7 +2046,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
-    let (status, _, _) = call_team(
+    let (status, _) = call(
         &app,
         "DELETE",
         &format!("/api/templates/{template_id}"),
@@ -2204,7 +2057,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
-    let (status, _, _) = call_team(
+    let (status, _) = call(
         &app,
         "DELETE",
         &format!("/api/environments/{environment_id}"),
@@ -2216,7 +2069,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
     assert_eq!(status, StatusCode::NO_CONTENT);
 
     for credential_id in &credential_ids {
-        let (status, _, _) = call_team(
+        let (status, _) = call(
             &app,
             "DELETE",
             &format!("/api/credentials/{credential_id}"),
@@ -2228,7 +2081,7 @@ async fn postgres_serves_the_auth_and_resource_slice() {
         assert_eq!(status, StatusCode::NO_CONTENT, "{credential_id}");
     }
 
-    let (status, users, _) = call(&app, "GET", "/api/users", Some(&cookie), None).await;
+    let (status, users) = call(&app, "GET", "/api/users", Some(&cookie), None, None).await;
     assert_eq!(status, StatusCode::OK, "{users}");
     assert!(users.as_array().is_some_and(|items| items
         .iter()
@@ -2254,32 +2107,40 @@ async fn postgres_serves_users_tokens_and_overview() {
         .expect("clock")
         .as_nanos();
     let dir = std::env::temp_dir().join(format!("koreograf-postgres-users-{nanos}"));
-    let mut cfg = config(&dir);
+    let mut cfg = config(
+        &dir,
+        &Options {
+            mcp: false,
+            ..Options::default()
+        },
+    );
     cfg.admin_user = format!("adm{nanos}");
     let state = koreograf::boot_with(cfg, database).expect("boot");
     assert_eq!(state.engine(), "postgresql");
     let app = koreograf::router(state);
 
     let admin_name = format!("adm{nanos}");
-    let (status, _, cookie) = call(
+    let (status, _, cookie) = call_cookie(
         &app,
         "POST",
         "/api/login",
+        None,
         None,
         Some(json!({"username": admin_name, "password": "test-admin-pass"})),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     let cookie = cookie.expect("session cookie");
-    let (status, admin, _) = call(&app, "GET", "/api/me", Some(&cookie), None).await;
+    let (status, admin) = call(&app, "GET", "/api/me", Some(&cookie), None, None).await;
     assert_eq!(status, StatusCode::OK);
     let admin_id = admin["id"].as_str().expect("admin id").to_string();
 
-    let (status, org, _) = call(
+    let (status, org) = call(
         &app,
         "POST",
         "/api/organizations",
         Some(&cookie),
+        None,
         Some(json!({
             "name": format!("Users org {nanos}"),
             "description": "Postgres users organization"
@@ -2289,11 +2150,12 @@ async fn postgres_serves_users_tokens_and_overview() {
     assert_eq!(status, StatusCode::CREATED, "{org}");
     let org_id = org["id"].as_str().expect("organization id").to_string();
 
-    let (status, team, _) = call(
+    let (status, team) = call(
         &app,
         "POST",
         "/api/teams",
         Some(&cookie),
+        None,
         Some(json!({
             "name": format!("Users team {nanos}"),
             "description": "Postgres users team",
@@ -2304,11 +2166,12 @@ async fn postgres_serves_users_tokens_and_overview() {
     assert_eq!(status, StatusCode::CREATED, "{team}");
     let team_id = team["id"].as_str().expect("team id").to_string();
 
-    let (status, other_team, _) = call(
+    let (status, other_team) = call(
         &app,
         "POST",
         "/api/teams",
         Some(&cookie),
+        None,
         Some(json!({
             "name": format!("Other team {nanos}"),
             "description": "Second Postgres team",
@@ -2322,7 +2185,7 @@ async fn postgres_serves_users_tokens_and_overview() {
         .expect("other team id")
         .to_string();
 
-    let (status, overview, _) = call_team(
+    let (status, overview) = call(
         &app,
         "GET",
         "/api/overview",
@@ -2338,7 +2201,7 @@ async fn postgres_serves_users_tokens_and_overview() {
     assert!(overview["hook_name"].is_null());
     assert!(overview["cache_bytes"].is_u64());
 
-    let (status, empty_dashboard, _) = call_team(
+    let (status, empty_dashboard) = call(
         &app,
         "GET",
         "/api/dashboard?days=5&tz=UTC",
@@ -2397,7 +2260,7 @@ async fn postgres_serves_users_tokens_and_overview() {
     )
     .await;
 
-    let (status, dashboard, _) = call_team(
+    let (status, dashboard) = call(
         &app,
         "GET",
         "/api/dashboard?days=5&tz=UTC",
@@ -2426,7 +2289,7 @@ async fn postgres_serves_users_tokens_and_overview() {
     assert_eq!(series[two_days_bucket]["canceled"], 1);
     assert_eq!(dashboard["cache"]["roles"], 0);
 
-    let (status, scoped_dashboard, _) = call_team(
+    let (status, scoped_dashboard) = call(
         &app,
         "GET",
         "/api/dashboard?days=5&tz=UTC",
@@ -2440,7 +2303,7 @@ async fn postgres_serves_users_tokens_and_overview() {
         .as_array()
         .is_some_and(|items| items.iter().all(|item| item["started"] == 0)));
 
-    let (status, scoped_overview, _) = call_team(
+    let (status, scoped_overview) = call(
         &app,
         "GET",
         "/api/overview",
@@ -2452,7 +2315,7 @@ async fn postgres_serves_users_tokens_and_overview() {
     assert_eq!(status, StatusCode::OK, "{scoped_overview}");
     assert_eq!(scoped_overview["jobs"].as_array().map(Vec::len), Some(0));
 
-    let (status, listed_overview, _) = call_team(
+    let (status, listed_overview) = call(
         &app,
         "GET",
         "/api/overview",
@@ -2465,11 +2328,12 @@ async fn postgres_serves_users_tokens_and_overview() {
     assert_eq!(listed_overview["jobs"].as_array().map(Vec::len), Some(3));
 
     let username = format!("user{nanos}");
-    let (status, created, _) = call(
+    let (status, created) = call(
         &app,
         "POST",
         "/api/users",
         Some(&cookie),
+        None,
         Some(json!({
             "username": username,
             "password": "user-password",
@@ -2483,17 +2347,18 @@ async fn postgres_serves_users_tokens_and_overview() {
     assert_eq!(created["username"], username);
     assert_eq!(created["team_count"], 0);
 
-    let (status, users, _) = call(&app, "GET", "/api/users", Some(&cookie), None).await;
+    let (status, users) = call(&app, "GET", "/api/users", Some(&cookie), None, None).await;
     assert_eq!(status, StatusCode::OK, "{users}");
     assert!(users
         .as_array()
         .is_some_and(|items| items.iter().any(|item| item["id"] == user_id)));
 
-    let (status, detail, _) = call(
+    let (status, detail) = call(
         &app,
         "GET",
         &format!("/api/users/{user_id}"),
         Some(&cookie),
+        None,
         None,
     )
     .await;
@@ -2501,10 +2366,11 @@ async fn postgres_serves_users_tokens_and_overview() {
     assert_eq!(detail["display_name"], "Ada");
     assert_eq!(detail["memberships"].as_array().map(Vec::len), Some(0));
 
-    let (status, _, user_cookie) = call(
+    let (status, _, user_cookie) = call_cookie(
         &app,
         "POST",
         "/api/login",
+        None,
         None,
         Some(json!({"username": username, "password": "user-password"})),
     )
@@ -2512,11 +2378,12 @@ async fn postgres_serves_users_tokens_and_overview() {
     assert_eq!(status, StatusCode::OK);
     let user_cookie = user_cookie.expect("user session cookie");
 
-    let (status, profile, _) = call(
+    let (status, profile) = call(
         &app,
         "PUT",
         "/api/me",
         Some(&user_cookie),
+        None,
         Some(json!({
             "display_name": "Ada Lovelace",
             "email": "ada@example.com",
@@ -2528,19 +2395,21 @@ async fn postgres_serves_users_tokens_and_overview() {
     assert_eq!(profile["display_name"], "Ada Lovelace");
     assert_eq!(profile["email"], "ada@example.com");
 
-    let (status, old_password, _) = call(
+    let (status, old_password) = call(
         &app,
         "POST",
         "/api/login",
+        None,
         None,
         Some(json!({"username": username, "password": "user-password"})),
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{old_password}");
-    let (status, _, user_cookie) = call(
+    let (status, _, user_cookie) = call_cookie(
         &app,
         "POST",
         "/api/login",
+        None,
         None,
         Some(json!({"username": username, "password": "new-user-password"})),
     )
@@ -2548,13 +2417,14 @@ async fn postgres_serves_users_tokens_and_overview() {
     assert_eq!(status, StatusCode::OK);
     let user_cookie = user_cookie.expect("user session cookie");
 
-    let (status, denied, _) = call(&app, "GET", "/api/users", Some(&user_cookie), None).await;
+    let (status, denied) = call(&app, "GET", "/api/users", Some(&user_cookie), None, None).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
-    let (status, denied, _) = call(
+    let (status, denied) = call(
         &app,
         "POST",
         "/api/users",
         Some(&user_cookie),
+        None,
         Some(json!({
             "username": format!("other{nanos}"),
             "password": "user-password",
@@ -2564,11 +2434,12 @@ async fn postgres_serves_users_tokens_and_overview() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
-    let (status, denied, _) = call(
+    let (status, denied) = call(
         &app,
         "PUT",
         &format!("/api/users/{admin_id}"),
         Some(&user_cookie),
+        None,
         Some(json!({
             "display_name": "Hijacked",
             "is_admin": true,
@@ -2578,21 +2449,23 @@ async fn postgres_serves_users_tokens_and_overview() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
-    let (status, denied, _) = call(
+    let (status, denied) = call(
         &app,
         "DELETE",
         &format!("/api/users/{user_id}"),
         Some(&user_cookie),
         None,
+        None,
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
 
-    let (status, updated, _) = call(
+    let (status, updated) = call(
         &app,
         "PUT",
         &format!("/api/users/{user_id}"),
         Some(&cookie),
+        None,
         Some(json!({
             "display_name": "Ada Lovelace",
             "is_admin": false,
@@ -2604,11 +2477,12 @@ async fn postgres_serves_users_tokens_and_overview() {
     assert_eq!(status, StatusCode::OK, "{updated}");
     assert_eq!(updated["display_name"], "Ada Lovelace");
 
-    let (status, token, _) = call(
+    let (status, token) = call(
         &app,
         "POST",
         "/api/me/tokens",
         Some(&user_cookie),
+        None,
         Some(json!({"name": "automation"})),
     )
     .await;
@@ -2617,7 +2491,15 @@ async fn postgres_serves_users_tokens_and_overview() {
     let secret = token["secret"].as_str().expect("token secret").to_string();
     assert!(token.get("token_hash").is_none());
 
-    let (status, tokens, _) = call(&app, "GET", "/api/me/tokens", Some(&user_cookie), None).await;
+    let (status, tokens) = call(
+        &app,
+        "GET",
+        "/api/me/tokens",
+        Some(&user_cookie),
+        None,
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{tokens}");
     assert!(tokens
         .as_array()
@@ -2627,21 +2509,23 @@ async fn postgres_serves_users_tokens_and_overview() {
     assert_eq!(status, StatusCode::OK, "{via_token}");
     assert_eq!(via_token["username"], username);
 
-    let (status, foreign, _) = call(
+    let (status, foreign) = call(
         &app,
         "DELETE",
         &format!("/api/me/tokens/{token_id}"),
         Some(&cookie),
         None,
+        None,
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{foreign}");
 
-    let (status, _, _) = call(
+    let (status, _) = call(
         &app,
         "DELETE",
         &format!("/api/me/tokens/{token_id}"),
         Some(&user_cookie),
+        None,
         None,
     )
     .await;
@@ -2650,11 +2534,12 @@ async fn postgres_serves_users_tokens_and_overview() {
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{revoked}");
     assert_eq!(revoked["error"], "sign_in_is_required");
 
-    let (status, disabled, _) = call(
+    let (status, disabled) = call(
         &app,
         "PUT",
         &format!("/api/users/{user_id}"),
         Some(&cookie),
+        None,
         Some(json!({
             "display_name": "Ada Lovelace",
             "is_admin": false,
@@ -2666,12 +2551,13 @@ async fn postgres_serves_users_tokens_and_overview() {
     assert_eq!(status, StatusCode::OK, "{disabled}");
     assert_eq!(disabled["disabled"], true);
 
-    let (status, _, _) = call(&app, "GET", "/api/me", Some(&user_cookie), None).await;
+    let (status, _) = call(&app, "GET", "/api/me", Some(&user_cookie), None, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    let (status, disabled_login, _) = call(
+    let (status, disabled_login) = call(
         &app,
         "POST",
         "/api/login",
+        None,
         None,
         Some(json!({"username": username, "password": "new-user-password"})),
     )
@@ -2679,11 +2565,12 @@ async fn postgres_serves_users_tokens_and_overview() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(disabled_login["error"], "invalid_username_or_password");
 
-    let (status, self_disable, _) = call(
+    let (status, self_disable) = call(
         &app,
         "PUT",
         &format!("/api/users/{admin_id}"),
         Some(&cookie),
+        None,
         Some(json!({
             "display_name": "Administrator",
             "is_admin": true,
@@ -2695,32 +2582,35 @@ async fn postgres_serves_users_tokens_and_overview() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{self_disable}");
     assert_eq!(self_disable["error"], "you_cannot_disable_your_own_account");
 
-    let (status, self_delete, _) = call(
+    let (status, self_delete) = call(
         &app,
         "DELETE",
         &format!("/api/users/{admin_id}"),
         Some(&cookie),
+        None,
         None,
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{self_delete}");
     assert_eq!(self_delete["error"], "you_cannot_delete_your_own_account");
 
-    let (status, _, _) = call(
+    let (status, _) = call(
         &app,
         "DELETE",
         &format!("/api/users/{user_id}"),
         Some(&cookie),
         None,
+        None,
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
-    let (status, gone, _) = call(
+    let (status, gone) = call(
         &app,
         "GET",
         &format!("/api/users/{user_id}"),
         Some(&cookie),
+        None,
         None,
     )
     .await;
@@ -2746,17 +2636,24 @@ async fn postgres_serves_jobs_and_their_output() {
         .expect("clock")
         .as_nanos();
     let dir = std::env::temp_dir().join(format!("koreograf-postgres-jobs-{nanos}"));
-    let mut cfg = config(&dir);
+    let mut cfg = config(
+        &dir,
+        &Options {
+            mcp: false,
+            ..Options::default()
+        },
+    );
     let admin_name = format!("jobadm{nanos}");
     cfg.admin_user = admin_name.clone();
     let state = koreograf::boot_with(cfg, database).expect("boot");
     assert_eq!(state.engine(), "postgresql");
     let app = koreograf::router(state);
 
-    let (status, _, cookie) = call(
+    let (status, _, cookie) = call_cookie(
         &app,
         "POST",
         "/api/login",
+        None,
         None,
         Some(json!({"username": admin_name, "password": "test-admin-pass"})),
     )
@@ -2764,11 +2661,12 @@ async fn postgres_serves_jobs_and_their_output() {
     assert_eq!(status, StatusCode::OK);
     let cookie = cookie.expect("session cookie");
 
-    let (status, org, _) = call(
+    let (status, org) = call(
         &app,
         "POST",
         "/api/organizations",
         Some(&cookie),
+        None,
         Some(json!({
             "name": format!("Jobs org {nanos}"),
             "description": "Postgres jobs organization"
@@ -2778,11 +2676,12 @@ async fn postgres_serves_jobs_and_their_output() {
     assert_eq!(status, StatusCode::CREATED, "{org}");
     let org_id = org["id"].as_str().expect("organization id").to_string();
 
-    let (status, team, _) = call(
+    let (status, team) = call(
         &app,
         "POST",
         "/api/teams",
         Some(&cookie),
+        None,
         Some(json!({
             "name": format!("Jobs team {nanos}"),
             "description": "Postgres jobs team",
@@ -2798,7 +2697,7 @@ async fn postgres_serves_jobs_and_their_output() {
         let cookie = cookie.clone();
         let team = team_id.clone();
         async move {
-            let (status, body, _) = call_team(
+            let (status, body) = call(
                 &app,
                 "POST",
                 "/api/templates",
@@ -2831,7 +2730,7 @@ async fn postgres_serves_jobs_and_their_output() {
     let sleep_template =
         create_template(format!("Postgres sleep {nanos}"), "sleep 30; echo done").await;
 
-    let (status, launched, _) = call_team(
+    let (status, launched) = call(
         &app,
         "POST",
         &format!("/api/templates/{success_template}/launch"),
@@ -2852,7 +2751,7 @@ async fn postgres_serves_jobs_and_their_output() {
     let mut successful = Value::Null;
     for _ in 0..80 {
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-        let (status, body, _) = call_team(
+        let (status, body) = call(
             &app,
             "GET",
             &format!("/api/jobs/{success_job}"),
@@ -2885,7 +2784,7 @@ async fn postgres_serves_jobs_and_their_output() {
     let output_body = output.into_body().collect().await.unwrap().to_bytes();
     assert!(String::from_utf8_lossy(&output_body).contains("postgres-job-line"));
 
-    let (status, denied, _) = call_team(
+    let (status, denied) = call(
         &app,
         "POST",
         &format!("/api/jobs/{success_job}/relaunch"),
@@ -2900,7 +2799,7 @@ async fn postgres_serves_jobs_and_their_output() {
         "only_a_failed_or_canceled_job_can_be_relaunched"
     );
 
-    let (status, failed_launch, _) = call_team(
+    let (status, failed_launch) = call(
         &app,
         "POST",
         &format!("/api/templates/{fail_template}/launch"),
@@ -2914,7 +2813,7 @@ async fn postgres_serves_jobs_and_their_output() {
     let mut failed = Value::Null;
     for _ in 0..80 {
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-        let (status, body, _) = call_team(
+        let (status, body) = call(
             &app,
             "GET",
             &format!("/api/jobs/{failed_job}"),
@@ -2931,7 +2830,7 @@ async fn postgres_serves_jobs_and_their_output() {
     }
     assert_eq!(failed["status"], "failed", "{failed}");
 
-    let (status, relaunched, _) = call_team(
+    let (status, relaunched) = call(
         &app,
         "POST",
         &format!("/api/jobs/{failed_job}/relaunch"),
@@ -2944,7 +2843,7 @@ async fn postgres_serves_jobs_and_their_output() {
     assert_eq!(relaunched["trigger"], "relaunch");
     assert_ne!(relaunched["id"], failed["id"]);
     let relaunched_id = relaunched["id"].as_str().expect("job id").to_string();
-    let _ = call_team(
+    let _ = call(
         &app,
         "POST",
         &format!("/api/jobs/{relaunched_id}/cancel"),
@@ -2954,7 +2853,7 @@ async fn postgres_serves_jobs_and_their_output() {
     )
     .await;
 
-    let (status, canceled_launch, _) = call_team(
+    let (status, canceled_launch) = call(
         &app,
         "POST",
         &format!("/api/templates/{sleep_template}/launch"),
@@ -2965,7 +2864,7 @@ async fn postgres_serves_jobs_and_their_output() {
     .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{canceled_launch}");
     let sleep_job = canceled_launch["id"].as_str().expect("job id").to_string();
-    let (status, canceled, _) = call_team(
+    let (status, canceled) = call(
         &app,
         "POST",
         &format!("/api/jobs/{sleep_job}/cancel"),
@@ -2977,7 +2876,7 @@ async fn postgres_serves_jobs_and_their_output() {
     assert_eq!(status, StatusCode::OK, "{canceled}");
     assert_eq!(canceled["status"], "canceled");
 
-    let (status, relaunched_sleep, _) = call_team(
+    let (status, relaunched_sleep) = call(
         &app,
         "POST",
         &format!("/api/jobs/{sleep_job}/relaunch"),
@@ -2989,7 +2888,7 @@ async fn postgres_serves_jobs_and_their_output() {
     assert_eq!(status, StatusCode::ACCEPTED, "{relaunched_sleep}");
     assert_eq!(relaunched_sleep["trigger"], "relaunch");
     let relaunched_sleep_id = relaunched_sleep["id"].as_str().expect("job id").to_string();
-    let _ = call_team(
+    let _ = call(
         &app,
         "POST",
         &format!("/api/jobs/{relaunched_sleep_id}/cancel"),
@@ -2999,7 +2898,7 @@ async fn postgres_serves_jobs_and_their_output() {
     )
     .await;
 
-    let (status, workflow, _) = call_team(
+    let (status, workflow) = call(
         &app,
         "POST",
         "/api/workflows",
@@ -3021,7 +2920,7 @@ async fn postgres_serves_jobs_and_their_output() {
     .await;
     assert_eq!(status, StatusCode::CREATED, "{workflow}");
     let workflow_id = workflow["id"].as_str().expect("workflow id").to_string();
-    let (status, run, _) = call_team(
+    let (status, run) = call(
         &app,
         "POST",
         &format!("/api/workflows/{workflow_id}/launch"),
@@ -3036,7 +2935,7 @@ async fn postgres_serves_jobs_and_their_output() {
     let mut finished = Value::Null;
     for _ in 0..80 {
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-        let (status, body, _) = call_team(
+        let (status, body) = call(
             &app,
             "GET",
             &format!("/api/workflow-jobs/{run_id}"),
@@ -3088,7 +2987,7 @@ async fn postgres_serves_jobs_and_their_output() {
         let cookie = cookie.clone();
         let team_id = team_id.clone();
         async move {
-            call_team(
+            call(
                 &app,
                 "GET",
                 &format!("/api/jobs?{query}"),
@@ -3099,24 +2998,24 @@ async fn postgres_serves_jobs_and_their_output() {
             .await
         }
     };
-    let (status, listed, _) = list_call(format!("q={token}&limit=2")).await;
+    let (status, listed) = list_call(format!("q={token}&limit=2")).await;
     assert_eq!(status, StatusCode::OK, "{listed}");
     assert_eq!(listed["total"], 3);
     assert_eq!(listed["items"].as_array().map(Vec::len), Some(2));
-    let (status, second_page, _) = list_call(format!("q={token}&limit=2&offset=2")).await;
+    let (status, second_page) = list_call(format!("q={token}&limit=2&offset=2")).await;
     assert_eq!(status, StatusCode::OK, "{second_page}");
     assert_eq!(second_page["total"], 3);
     assert_eq!(second_page["items"].as_array().map(Vec::len), Some(1));
-    let (_, filtered, _) = list_call(format!("q={token}&status=failed")).await;
+    let (_, filtered) = list_call(format!("q={token}&status=failed")).await;
     assert_eq!(filtered["total"], 1);
     assert_eq!(filtered["items"][0]["status"], "failed");
-    let (_, by_tool, _) = list_call(format!("q={token}&tool=shell")).await;
+    let (_, by_tool) = list_call(format!("q={token}&tool=shell")).await;
     assert_eq!(by_tool["total"], 3);
-    let (_, by_trigger, _) = list_call(format!("q={token}&trigger=workflow")).await;
+    let (_, by_trigger) = list_call(format!("q={token}&trigger=workflow")).await;
     assert_eq!(by_trigger["total"], 1);
-    let (_, by_template, _) = list_call(format!("q={token}&template_id={success_template}")).await;
+    let (_, by_template) = list_call(format!("q={token}&template_id={success_template}")).await;
     assert_eq!(by_template["total"], 3);
-    let (_, by_date, _) = list_call(format!(
+    let (_, by_date) = list_call(format!(
         "q={token}&since=2026-01-02T00:00:00Z&until=2026-01-02T23:59:59Z"
     ))
     .await;
@@ -3138,7 +3037,7 @@ async fn postgres_serves_jobs_and_their_output() {
     )
     .await;
     postgres_job_lines(&url, &gap_job, "gap", 2_500).await;
-    let (status, gap_detail, _) = call_team(
+    let (status, gap_detail) = call(
         &app,
         "GET",
         &format!("/api/jobs/{gap_job}"),
@@ -3187,7 +3086,7 @@ async fn postgres_serves_jobs_and_their_output() {
     )
     .await;
     postgres_job_bulk_lines(&url, &capped_job, 9, 1_000_000).await;
-    let (status, capped_detail, _) = call_team(
+    let (status, capped_detail) = call(
         &app,
         "GET",
         &format!("/api/jobs/{capped_job}"),
@@ -3226,7 +3125,7 @@ async fn postgres_serves_jobs_and_their_output() {
     )
     .await;
     let viewer_cookie = format!("koreograf_session={viewer_token}");
-    let (status, denied, _) = call_team(
+    let (status, denied) = call(
         &app,
         "POST",
         &format!("/api/templates/{success_template}/launch"),
@@ -3236,7 +3135,7 @@ async fn postgres_serves_jobs_and_their_output() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
-    let (status, denied, _) = call_team(
+    let (status, denied) = call(
         &app,
         "POST",
         &format!("/api/jobs/{success_job}/cancel"),
@@ -3246,7 +3145,7 @@ async fn postgres_serves_jobs_and_their_output() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
-    let (status, denied, _) = call_team(
+    let (status, denied) = call(
         &app,
         "POST",
         &format!("/api/jobs/{failed_job}/relaunch"),
@@ -3262,16 +3161,17 @@ async fn postgres_serves_jobs_and_their_output() {
     let outsider_token = format!("outsider-session-{nanos}");
     postgres_session(&url, &outsider_id, &outsider_name, &[], &outsider_token).await;
     let outsider_cookie = format!("koreograf_session={outsider_token}");
-    let (status, denied, _) = call(
+    let (status, denied) = call(
         &app,
         "GET",
         &format!("/api/jobs/{success_job}"),
         Some(&outsider_cookie),
         None,
+        None,
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
-    let (status, denied, _) = call_team(
+    let (status, denied) = call(
         &app,
         "GET",
         "/api/jobs",
@@ -3281,11 +3181,12 @@ async fn postgres_serves_jobs_and_their_output() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
-    let (status, denied, _) = call(
+    let (status, denied) = call(
         &app,
         "GET",
         &format!("/api/jobs/{success_job}/output"),
         Some(&outsider_cookie),
+        None,
         None,
     )
     .await;
@@ -3306,16 +3207,23 @@ async fn postgres_backup_restore_round_trip_keeps_the_previous_archive() {
         .expect("clock")
         .as_nanos();
     let dir = std::env::temp_dir().join(format!("koreograf-postgres-backup-{nanos}"));
-    let mut cfg = config(&dir);
+    let mut cfg = config(
+        &dir,
+        &Options {
+            mcp: false,
+            ..Options::default()
+        },
+    );
     cfg.admin_user = format!("pgbackupadmin{nanos}");
     let state = koreograf::boot_with(cfg, database).expect("boot");
     assert_eq!(state.engine(), "postgresql");
     let app = koreograf::router(state);
 
-    let (status, _, cookie) = call(
+    let (status, _, cookie) = call_cookie(
         &app,
         "POST",
         "/api/login",
+        None,
         None,
         Some(json!({
             "username": format!("pgbackupadmin{nanos}"),
@@ -3327,11 +3235,12 @@ async fn postgres_backup_restore_round_trip_keeps_the_previous_archive() {
     let cookie = cookie.expect("session cookie");
 
     let before = format!("Before backup {nanos}");
-    let (status, created, _) = call(
+    let (status, created) = call(
         &app,
         "POST",
         "/api/organizations",
         Some(&cookie),
+        None,
         Some(json!({ "name": before, "description": "Portable backup" })),
     )
     .await;
@@ -3355,11 +3264,12 @@ async fn postgres_backup_restore_round_trip_keeps_the_previous_archive() {
     );
 
     let after = format!("After backup {nanos}");
-    let (status, created, _) = call(
+    let (status, created) = call(
         &app,
         "POST",
         "/api/organizations",
         Some(&cookie),
+        None,
         Some(json!({ "name": after, "description": "After the backup" })),
     )
     .await;
@@ -3381,8 +3291,8 @@ async fn postgres_backup_restore_round_trip_keeps_the_previous_archive() {
     let restored: Value = serde_json::from_slice(&body).expect("restore body");
     assert_eq!(restored["engine"], "postgresql");
 
-    let (status, organizations, _) =
-        call(&app, "GET", "/api/organizations", Some(&cookie), None).await;
+    let (status, organizations) =
+        call(&app, "GET", "/api/organizations", Some(&cookie), None, None).await;
     assert_eq!(status, StatusCode::OK, "{organizations}");
     let names: Vec<&str> = organizations
         .as_array()
@@ -3412,8 +3322,8 @@ async fn postgres_backup_restore_round_trip_keeps_the_previous_archive() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
-    let (status, organizations, _) =
-        call(&app, "GET", "/api/organizations", Some(&cookie), None).await;
+    let (status, organizations) =
+        call(&app, "GET", "/api/organizations", Some(&cookie), None, None).await;
     assert_eq!(status, StatusCode::OK, "{organizations}");
     let names: Vec<&str> = organizations
         .as_array()
@@ -3617,23 +3527,30 @@ async fn postgres_answers_teams_while_another_request_holds_a_connection() {
         .expect("clock")
         .as_nanos();
     let dir = std::env::temp_dir().join(format!("koreograf-postgres-pool-{nanos}"));
-    let mut cfg = config(&dir);
+    let mut cfg = config(
+        &dir,
+        &Options {
+            mcp: false,
+            ..Options::default()
+        },
+    );
     let admin = format!("pgpooladmin{nanos}");
     cfg.admin_user = admin.clone();
     let state = koreograf::boot_with(cfg, database).expect("boot");
     let app = koreograf::router(state);
 
-    let (status, _, cookie) = call(
+    let (status, _, cookie) = call_cookie(
         &app,
         "POST",
         "/api/login",
+        None,
         None,
         Some(json!({"username": admin, "password": "test-admin-pass"})),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     let cookie = cookie.expect("session cookie");
-    let (status, teams, _) = call(&app, "GET", "/api/teams", Some(&cookie), None).await;
+    let (status, teams) = call(&app, "GET", "/api/teams", Some(&cookie), None, None).await;
     assert_eq!(status, StatusCode::OK, "{teams}");
     let team_id = teams
         .as_array()
@@ -3658,6 +3575,7 @@ async fn postgres_answers_teams_while_another_request_holds_a_connection() {
             "PUT",
             &format!("/api/teams/{put_team}"),
             Some(&put_cookie),
+            None,
             Some(json!({"name": format!("Locked {nanos}"), "description": "pool test"})),
         )
         .await
@@ -3667,14 +3585,14 @@ async fn postgres_answers_teams_while_another_request_holds_a_connection() {
     let started = Instant::now();
     let response = tokio::time::timeout(
         std::time::Duration::from_secs(2),
-        call(&app, "GET", "/api/teams", Some(&cookie), None),
+        call(&app, "GET", "/api/teams", Some(&cookie), None, None),
     )
     .await;
     let elapsed = started.elapsed();
     holder.batch_execute("ROLLBACK").await.expect("rollback");
     let update = put.await.expect("update task");
     assert_eq!(update.0, StatusCode::OK, "{}", update.1);
-    let (status, teams, _) = response.expect("GET /api/teams waited for the blocked request");
+    let (status, teams) = response.expect("GET /api/teams waited for the blocked request");
     assert_eq!(status, StatusCode::OK, "{teams}");
     assert!(
         elapsed < std::time::Duration::from_secs(1),
@@ -3700,7 +3618,13 @@ async fn postgres_ldap_sign_in_provisions_the_user_and_syncs_teams() {
     let ldap_username = format!("ldap{nanos}");
     let ldap_email = format!("{ldap_username}@example.com");
     let (ldap_url, ldap_server) = ldap_stub(ldap_username.clone()).await;
-    let mut cfg = config(&dir);
+    let mut cfg = config(
+        &dir,
+        &Options {
+            mcp: false,
+            ..Options::default()
+        },
+    );
     cfg.admin_user = format!("ldapadmin{nanos}");
     cfg.ldap = Some(LdapConfig {
         url: ldap_url,
@@ -3720,10 +3644,11 @@ async fn postgres_ldap_sign_in_provisions_the_user_and_syncs_teams() {
     assert_eq!(state.engine(), "postgresql");
     let app = koreograf::router(state);
 
-    let (status, _, cookie) = call(
+    let (status, _, cookie) = call_cookie(
         &app,
         "POST",
         "/api/login",
+        None,
         None,
         Some(json!({"username": format!("ldapadmin{nanos}"), "password": "test-admin-pass"})),
     )
@@ -3731,11 +3656,12 @@ async fn postgres_ldap_sign_in_provisions_the_user_and_syncs_teams() {
     assert_eq!(status, StatusCode::OK);
     let admin = cookie.expect("admin session");
 
-    let (status, org, _) = call(
+    let (status, org) = call(
         &app,
         "POST",
         "/api/organizations",
         Some(&admin),
+        None,
         Some(json!({
             "name": format!("LDAP org {nanos}"),
             "description": "Postgres LDAP organization"
@@ -3747,11 +3673,12 @@ async fn postgres_ldap_sign_in_provisions_the_user_and_syncs_teams() {
     let group = "cn=Plattform,ou=groups,dc=example,dc=com";
     let mut team_ids = Vec::new();
     for suffix in ["A", "B"] {
-        let (status, team, _) = call(
+        let (status, team) = call(
             &app,
             "POST",
             "/api/teams",
             Some(&admin),
+            None,
             Some(json!({
                 "name": format!("LDAP team {suffix} {nanos}"),
                 "description": "Postgres LDAP team",
@@ -3764,10 +3691,11 @@ async fn postgres_ldap_sign_in_provisions_the_user_and_syncs_teams() {
         team_ids.push(team["id"].as_str().expect("team id").to_string());
     }
 
-    let (status, profile, cookie) = call(
+    let (status, profile, cookie) = call_cookie(
         &app,
         "POST",
         "/api/login",
+        None,
         None,
         Some(json!({"username": ldap_username.clone(), "password": "correct horse"})),
     )
@@ -3790,11 +3718,12 @@ async fn postgres_ldap_sign_in_provisions_the_user_and_syncs_teams() {
         assert_eq!(membership["source"], "ldap");
     }
 
-    let (status, _, _) = call(
+    let (status, _) = call(
         &app,
         "PUT",
         &format!("/api/teams/{}", team_ids[1]),
         Some(&admin),
+        None,
         Some(json!({
             "name": format!("LDAP team B {nanos}"),
             "description": "Postgres LDAP team",
@@ -3805,16 +3734,17 @@ async fn postgres_ldap_sign_in_provisions_the_user_and_syncs_teams() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    let (status, _, _) = call(
+    let (status, _) = call(
         &app,
         "POST",
         "/api/login",
+        None,
         None,
         Some(json!({"username": ldap_username.clone(), "password": "correct horse"})),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let (status, profile, _) = call(&app, "GET", "/api/me", Some(&ldap_cookie), None).await;
+    let (status, profile) = call(&app, "GET", "/api/me", Some(&ldap_cookie), None, None).await;
     assert_eq!(status, StatusCode::OK);
     let memberships = profile["memberships"].as_array().expect("memberships");
     assert!(memberships

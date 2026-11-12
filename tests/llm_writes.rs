@@ -1,170 +1,61 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::time::{SystemTime, UNIX_EPOCH};
+mod common;
 
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
-use http_body_util::BodyExt;
-use koreograf::{Config, CookieSecure, LocalJobs, RunnerMode};
+use axum::http::StatusCode;
+use common::{Options, TestApp};
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
-use tower::ServiceExt;
 
-fn config(dir: &std::path::Path) -> Config {
-    Config {
-        bind: "127.0.0.1:0".into(),
-        data_dir: dir.to_path_buf(),
-        web_dir: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web"),
-        examples_dir: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples"),
-        admin_user: "admin".into(),
-        admin_password: Some("test-admin-pass".into()),
-        runner: RunnerMode::Local,
-        container_image: false,
-        job_timeout_secs: 60,
-        job_output_lines: 8_000,
-        local_jobs: LocalJobs::All,
-        project_roots: vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples")],
-        hsts: false,
-        cookie_secure: CookieSecure::Auto,
-        trusted_proxy: false,
-        mcp: true,
-        public_url: Vec::new(),
-        data_host: None,
-        ldap: None,
-    }
+async fn save_assistant(app: &TestApp, cookie: &str, endpoint: &str, enabled: bool) {
+    let body = json!({
+        "ldap": {},
+        "proxy": {},
+        "runner": "local",
+        "job_timeout_secs": 60,
+        "llm": {
+            "enabled": enabled,
+            "provider": "ollama",
+            "base_url": endpoint,
+            "model": "test-model",
+            "api_key": "sk-test-secret"
+        }
+    });
+    let (status, body) = app
+        .call("PUT", "/api/settings", Some(cookie), None, Some(body))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(!body.to_string().contains("sk-test-secret"));
+    assert_eq!(body["llm"]["api_key_set"], true);
 }
 
-struct Harness {
-    dir: std::path::PathBuf,
-    app: axum::Router,
+async fn team(app: &TestApp, cookie: &str) -> (String, String) {
+    let (status, body) = app
+        .call("GET", "/api/teams", Some(cookie), None, None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let team = body
+        .as_array()
+        .and_then(|items| items.first())
+        .expect("seeded team");
+    (
+        team["id"].as_str().unwrap().to_string(),
+        team["name"].as_str().unwrap().to_string(),
+    )
 }
 
-impl Harness {
-    fn boot(name: &str) -> Self {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("koreograf-llm-{name}-{nanos}"));
-        std::fs::create_dir_all(&dir).unwrap();
-        let state = koreograf::boot(config(&dir)).unwrap();
-        Self {
-            dir,
-            app: koreograf::router(state),
-        }
-    }
-
-    async fn call(
-        &self,
-        method: &str,
-        uri: &str,
-        cookie: Option<&str>,
-        team: Option<&str>,
-        body: Option<Value>,
-    ) -> (StatusCode, Value, Option<String>) {
-        let mut builder = Request::builder().method(method).uri(uri);
-        if let Some(cookie) = cookie {
-            builder = builder.header("cookie", cookie);
-        }
-        if let Some(team) = team {
-            builder = builder.header("x-team-id", team);
-        }
-        let request = if let Some(body) = body {
-            builder
-                .header("content-type", "application/json")
-                .body(Body::from(body.to_string()))
-                .unwrap()
-        } else {
-            builder.body(Body::empty()).unwrap()
-        };
-        let response = self.app.clone().oneshot(request).await.unwrap();
-        let status = response.status();
-        let cookie = response
-            .headers()
-            .get("set-cookie")
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.split(';').next())
-            .map(str::to_string);
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let parsed = if bytes.is_empty() {
-            Value::Null
-        } else {
-            serde_json::from_slice(&bytes)
-                .unwrap_or(Value::String(String::from_utf8_lossy(&bytes).to_string()))
-        };
-        (status, parsed, cookie)
-    }
-
-    async fn login(&self, username: &str, password: &str) -> String {
-        let (status, body, cookie) = self
-            .call(
-                "POST",
-                "/api/login",
-                None,
-                None,
-                Some(json!({"username": username, "password": password})),
-            )
-            .await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        cookie.expect("session cookie")
-    }
-
-    async fn save_assistant(&self, cookie: &str, endpoint: &str, enabled: bool) {
-        let body = json!({
-            "ldap": {},
-            "proxy": {},
-            "runner": "local",
-            "job_timeout_secs": 60,
-            "llm": {
-                "enabled": enabled,
-                "provider": "ollama",
-                "base_url": endpoint,
-                "model": "test-model",
-                "api_key": "sk-test-secret"
-            }
-        });
-        let (status, body, _) = self
-            .call("PUT", "/api/settings", Some(cookie), None, Some(body))
-            .await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        assert!(!body.to_string().contains("sk-test-secret"));
-        assert_eq!(body["llm"]["api_key_set"], true);
-    }
-
-    async fn team(&self, cookie: &str) -> (String, String) {
-        let (status, body, _) = self
-            .call("GET", "/api/teams", Some(cookie), None, None)
-            .await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        let team = body
-            .as_array()
-            .and_then(|items| items.first())
-            .expect("seeded team");
-        (
-            team["id"].as_str().unwrap().to_string(),
-            team["name"].as_str().unwrap().to_string(),
-        )
-    }
-
-    async fn demo_project(&self, cookie: &str, team: &str) -> String {
-        let (status, body, _) = self
-            .call("GET", "/api/projects", Some(cookie), Some(team), None)
-            .await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        body.as_array()
-            .and_then(|items| items.iter().find(|item| item["name"] == "Demo"))
-            .and_then(|item| item["id"].as_str())
-            .map(str::to_string)
-            .expect("seeded Demo project")
-    }
-}
-
-impl Drop for Harness {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
-    }
+async fn demo_project(app: &TestApp, cookie: &str, team: &str) -> String {
+    let (status, body) = app
+        .call("GET", "/api/projects", Some(cookie), Some(team), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    body.as_array()
+        .and_then(|items| items.iter().find(|item| item["name"] == "Demo"))
+        .and_then(|item| item["id"].as_str())
+        .map(str::to_string)
+        .expect("seeded Demo project")
 }
 
 async fn stub(body: Value) -> (String, JoinHandle<String>) {
@@ -231,10 +122,10 @@ fn tool_call(name: &str, arguments: Value) -> Value {
 
 #[tokio::test]
 async fn a_viewer_cannot_launch_through_chat() {
-    let harness = Harness::boot("viewer-launch");
+    let harness = TestApp::boot("viewer-launch", Options::default());
     let admin = harness.login("admin", "test-admin-pass").await;
-    let (team, _) = harness.team(&admin).await;
-    let (status, body, _) = harness
+    let (team, _) = team(&harness, &admin).await;
+    let (status, body) = harness
         .call(
             "POST",
             "/api/users",
@@ -249,7 +140,7 @@ async fn a_viewer_cannot_launch_through_chat() {
         )
         .await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
-    let (status, body, _) = harness
+    let (status, body) = harness
         .call(
             "POST",
             &format!("/api/teams/{team}/members"),
@@ -265,10 +156,10 @@ async fn a_viewer_cannot_launch_through_chat() {
         json!({"id": "template-1", "team_id": team}),
     ))
     .await;
-    harness.save_assistant(&admin, &endpoint, true).await;
+    save_assistant(&harness, &admin, &endpoint, true).await;
 
     let viewer = harness.login("viewer", "viewer-pass").await;
-    let (status, body, _) = harness
+    let (status, body) = harness
         .call(
             "POST",
             "/api/assistant/chat",
@@ -286,19 +177,17 @@ async fn a_viewer_cannot_launch_through_chat() {
 
 #[tokio::test]
 async fn the_saved_flag_turns_the_chat_routes_and_the_entry_off() {
-    let harness = Harness::boot("gate");
+    let harness = TestApp::boot("gate", Options::default());
     let admin = harness.login("admin", "test-admin-pass").await;
-    harness
-        .save_assistant(&admin, "http://127.0.0.1:9/v1", false)
-        .await;
+    save_assistant(&harness, &admin, "http://127.0.0.1:9/v1", false).await;
 
-    let (status, body, _) = harness
+    let (status, body) = harness
         .call("GET", "/api/assistant", Some(&admin), None, None)
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     assert_eq!(body["error"], "assistant_is_not_enabled");
 
-    let (status, body, _) = harness
+    let (status, body) = harness
         .call(
             "POST",
             "/api/assistant/chat",
@@ -310,7 +199,7 @@ async fn the_saved_flag_turns_the_chat_routes_and_the_entry_off() {
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     assert_eq!(body["error"], "assistant_is_not_enabled");
 
-    let (status, body, _) = harness
+    let (status, body) = harness
         .call("GET", "/api/settings", Some(&admin), None, None)
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -320,19 +209,19 @@ async fn the_saved_flag_turns_the_chat_routes_and_the_entry_off() {
 
 #[tokio::test]
 async fn a_write_round_trip_waits_for_confirmation_and_cancel_changes_nothing() {
-    let harness = Harness::boot("confirm");
+    let harness = TestApp::boot("confirm", Options::default());
     let admin = harness.login("admin", "test-admin-pass").await;
-    let (team, _) = harness.team(&admin).await;
-    let project = harness.demo_project(&admin, &team).await;
+    let (team, _) = team(&harness, &admin).await;
+    let project = demo_project(&harness, &admin, &team).await;
 
     let (endpoint, server) = stub(tool_call(
         "sync_project",
         json!({"id": project, "team_id": team}),
     ))
     .await;
-    harness.save_assistant(&admin, &endpoint, true).await;
+    save_assistant(&harness, &admin, &endpoint, true).await;
 
-    let (status, body, _) = harness
+    let (status, body) = harness
         .call(
             "POST",
             "/api/assistant/chat",
@@ -349,7 +238,7 @@ async fn a_write_round_trip_waits_for_confirmation_and_cancel_changes_nothing() 
     assert!(request.contains("sync_project"), "{request}");
     assert!(!wire_body(&request).contains("sk-test-secret"), "{request}");
 
-    let (status, body, _) = harness
+    let (status, body) = harness
         .call(
             "POST",
             "/api/assistant/confirm",
@@ -361,7 +250,7 @@ async fn a_write_round_trip_waits_for_confirmation_and_cancel_changes_nothing() 
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["ok"], true);
 
-    let (status, body, _) = harness
+    let (status, body) = harness
         .call(
             "POST",
             "/api/assistant/confirm",
@@ -378,8 +267,8 @@ async fn a_write_round_trip_waits_for_confirmation_and_cancel_changes_nothing() 
         json!({"id": project, "team_id": team}),
     ))
     .await;
-    harness.save_assistant(&admin, &endpoint, true).await;
-    let (status, body, _) = harness
+    save_assistant(&harness, &admin, &endpoint, true).await;
+    let (status, body) = harness
         .call(
             "POST",
             "/api/assistant/chat",
@@ -392,7 +281,7 @@ async fn a_write_round_trip_waits_for_confirmation_and_cancel_changes_nothing() 
     let canceled = body["pending_action"]["id"].as_str().unwrap().to_string();
     let _ = server.await;
 
-    let (status, body, _) = harness
+    let (status, body) = harness
         .call(
             "POST",
             "/api/assistant/cancel",
@@ -402,7 +291,7 @@ async fn a_write_round_trip_waits_for_confirmation_and_cancel_changes_nothing() 
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    let (status, body, _) = harness
+    let (status, body) = harness
         .call(
             "POST",
             "/api/assistant/confirm",
