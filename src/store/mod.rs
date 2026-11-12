@@ -1,3 +1,10 @@
 pub(crate) mod auth;
+pub(crate) mod credentials;
+pub(crate) mod environments;
+pub(crate) mod hooks;
+pub(crate) mod inventories;
+pub(crate) mod projects;
 pub(crate) mod settings;
 pub(crate) mod sql;
+pub(crate) mod teams;
+pub(crate) mod templates;

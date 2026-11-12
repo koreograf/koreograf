@@ -1103,7 +1103,7 @@ mod tests {
             )
             .expect("operator");
             let id = "operator-shell".to_string();
-            db::insert_template(
+            crate::store::templates::insert_template(
                 &db,
                 &db::Template {
                     id: id.clone(),
@@ -1252,11 +1252,16 @@ mod tests {
                 false,
             )
             .expect("operator");
-            db::grant_manual_membership(&db, &team_id, "operator-user", "operator")
-                .expect("member");
-            db::delete_membership(&db, &team_id, "operator-user").expect("remove");
+            crate::store::teams::grant_manual_membership(
+                &db,
+                &team_id,
+                "operator-user",
+                "operator",
+            )
+            .expect("member");
+            crate::store::teams::delete_membership(&db, &team_id, "operator-user").expect("remove");
             let id = "member-shell".to_string();
-            db::insert_template(
+            crate::store::templates::insert_template(
                 &db,
                 &db::Template {
                     id: id.clone(),
@@ -1345,7 +1350,8 @@ mod tests {
                 )
                 .expect("reason");
             assert_eq!(reason.as_deref(), Some("schedule_needs_a_new_owner"));
-            db::grant_manual_membership(&db, &team_id, "operator-user", "viewer").expect("viewer");
+            crate::store::teams::grant_manual_membership(&db, &team_id, "operator-user", "viewer")
+                .expect("viewer");
             db.execute(
                 "UPDATE schedules
                  SET occurrence_count = 0, missed_at = NULL

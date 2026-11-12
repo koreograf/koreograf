@@ -1694,7 +1694,7 @@ mod tests {
         script: &str,
     ) -> String {
         let id = Uuid::new_v4().to_string();
-        db::insert_template(
+        crate::store::templates::insert_template(
             db,
             &db::Template {
                 id: id.clone(),
@@ -1722,7 +1722,7 @@ mod tests {
 
     fn insert_inventory(db: &rusqlite::Connection, team_id: &str, admin_saved: bool) -> String {
         let id = Uuid::new_v4().to_string();
-        db::insert_inventory(
+        crate::store::inventories::insert_inventory(
             db,
             &db::Inventory {
                 id: id.clone(),

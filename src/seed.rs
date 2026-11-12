@@ -116,7 +116,7 @@ impl SeedStore for Connection {
     }
 
     fn count_teams(&self) -> AppResult<i64> {
-        db::count_teams(self)
+        store::teams::count_teams(self)
     }
 
     fn seed_state(&self, key: &str) -> AppResult<Option<String>> {
@@ -136,15 +136,15 @@ impl SeedStore for Connection {
     }
 
     fn environment_exists(&self, id: &str) -> AppResult<bool> {
-        Ok(db::environment(self, id)?.is_some())
+        Ok(store::environments::environment(self, id)?.is_some())
     }
 
     fn insert_environment(&self, item: &Environment) -> AppResult<()> {
-        db::insert_environment(self, item)
+        store::environments::insert_environment(self, item)
     }
 
     fn insert_organization(&self, id: &str, name: &str, description: &str) -> AppResult<()> {
-        db::insert_organization(self, id, name, description)
+        store::teams::insert_organization(self, id, name, description)
     }
 
     fn insert_team(
@@ -155,7 +155,7 @@ impl SeedStore for Connection {
         description: &str,
         ldap_group: Option<&str>,
     ) -> AppResult<()> {
-        db::insert_team(self, id, organization_id, name, description, ldap_group)
+        store::teams::insert_team(self, id, organization_id, name, description, ldap_group)
     }
 
     fn upsert_membership(
@@ -165,23 +165,23 @@ impl SeedStore for Connection {
         role: &str,
         source: &str,
     ) -> AppResult<()> {
-        db::upsert_membership(self, team_id, user_id, role, source)
+        store::teams::upsert_membership(self, team_id, user_id, role, source)
     }
 
     fn insert_project(&self, project: &Project) -> AppResult<()> {
-        db::insert_project(self, project)
+        store::projects::insert_project(self, project)
     }
 
     fn insert_inventory(&self, item: &Inventory, sources: &[InventorySource]) -> AppResult<()> {
-        db::insert_inventory(self, item)?;
+        store::inventories::insert_inventory(self, item)?;
         for source in sources {
-            db::insert_inventory_source(self, source)?;
+            store::inventories::insert_inventory_source(self, source)?;
         }
         Ok(())
     }
 
     fn insert_template(&self, item: &Template) -> AppResult<()> {
-        db::insert_template(self, item)
+        store::templates::insert_template(self, item)
     }
 
     fn insert_workflow(&self, item: &Workflow) -> AppResult<()> {
@@ -189,7 +189,7 @@ impl SeedStore for Connection {
     }
 
     fn insert_hook(&self, item: &Hook) -> AppResult<()> {
-        db::insert_hook(self, item)
+        store::hooks::insert_hook(self, item)
     }
 }
 
@@ -700,7 +700,7 @@ mod tests {
             [],
         )
         .expect("rename");
-        db::delete_environment(&conn, "seeded-opentofu").expect("delete");
+        store::environments::delete_environment(&conn, "seeded-opentofu").expect("delete");
         seed_environments(&conn).expect("second seed");
         let name: String = conn
             .query_row(

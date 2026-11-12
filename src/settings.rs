@@ -1219,12 +1219,21 @@ mod tests {
         let state = state();
         {
             let db = state.db().unwrap();
-            crate::db::insert_environment(&db, &environment("ansible-ee", "ansible", "global"))
-                .unwrap();
-            crate::db::insert_environment(&db, &environment("tofu-ee", "opentofu", "global"))
-                .unwrap();
-            crate::db::insert_environment(&db, &environment("team-ee", "ansible", "organization"))
-                .unwrap();
+            crate::store::environments::insert_environment(
+                &db,
+                &environment("ansible-ee", "ansible", "global"),
+            )
+            .unwrap();
+            crate::store::environments::insert_environment(
+                &db,
+                &environment("tofu-ee", "opentofu", "global"),
+            )
+            .unwrap();
+            crate::store::environments::insert_environment(
+                &db,
+                &environment("team-ee", "ansible", "organization"),
+            )
+            .unwrap();
         }
         let mut write = sample("bind-secret");
         write.default_environment_ansible = "ansible-ee".into();
@@ -1259,7 +1268,7 @@ mod tests {
 
         {
             let db = state.db().unwrap();
-            crate::db::delete_environment(&db, "ansible-ee").unwrap();
+            crate::store::environments::delete_environment(&db, "ansible-ee").unwrap();
         }
         assert_eq!(load(&state).unwrap().default_environment_ansible, "");
     }

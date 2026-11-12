@@ -181,6 +181,16 @@ impl Column for i64 {
     }
 }
 
+impl Column for i32 {
+    fn from_sqlite(row: &rusqlite::Row<'_>, index: usize) -> AppResult<Self> {
+        Ok(row.get(index)?)
+    }
+
+    fn from_postgres(row: &tokio_postgres::Row, index: usize) -> AppResult<Self> {
+        Ok(row.try_get(index)?)
+    }
+}
+
 impl Column for bool {
     fn from_sqlite(row: &rusqlite::Row<'_>, index: usize) -> AppResult<Self> {
         let value: i64 = row.get(index)?;

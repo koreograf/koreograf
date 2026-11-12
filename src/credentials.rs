@@ -614,8 +614,8 @@ pub(crate) fn backfill_netbox_urls(state: &crate::Shared) -> Result<(), crate::e
     let (credentials, sources) = {
         let db = state.db()?;
         (
-            crate::db::netbox_credentials(&db)?,
-            crate::db::netbox_credential_endpoints(&db)?,
+            crate::store::credentials::netbox_credentials(&db)?,
+            crate::store::credentials::netbox_credential_endpoints(&db)?,
         )
     };
     let mut endpoints = HashMap::new();
