@@ -344,7 +344,7 @@ impl Backend for SqliteBackend {
 
     fn count_teams(&self) -> AppResult<i64> {
         let conn = lock(&self.conn)?;
-        db::count_teams(&conn)
+        store::teams::count_teams(&conn)
     }
 
     fn seed_state(&self, key: &str) -> AppResult<Option<String>> {
@@ -486,12 +486,12 @@ impl Backend for SqliteBackend {
 
     fn list_teams_for_user(&self, user_id: &str, admin: bool) -> AppResult<Vec<(Team, String)>> {
         let conn = lock(&self.conn)?;
-        db::list_teams_for_user(&conn, user_id, admin)
+        store::teams::list_teams_for_user(&conn, user_id, admin)
     }
 
     fn list_user_memberships(&self, user_id: &str) -> AppResult<Vec<UserMembership>> {
         let conn = lock(&self.conn)?;
-        db::list_user_memberships(&conn, user_id)
+        store::teams::list_user_memberships(&conn, user_id)
     }
 
     fn replace_settings(&self, rows: &[(String, String)]) -> AppResult<()> {
@@ -501,17 +501,17 @@ impl Backend for SqliteBackend {
 
     fn environment(&self, id: &str) -> AppResult<Option<Environment>> {
         let conn = lock(&self.conn)?;
-        db::environment(&conn, id)
+        store::environments::environment(&conn, id)
     }
 
     fn team_by_id(&self, id: &str) -> AppResult<Option<Team>> {
         let conn = lock(&self.conn)?;
-        db::team_by_id(&conn, id)
+        store::teams::team_by_id(&conn, id)
     }
 
     fn role_of(&self, team_id: &str, user_id: &str) -> AppResult<Option<String>> {
         let conn = lock(&self.conn)?;
-        db::role_of(&conn, team_id, user_id)
+        store::teams::role_of(&conn, team_id, user_id)
     }
 
     fn insert_team(
@@ -523,7 +523,7 @@ impl Backend for SqliteBackend {
         ldap_group: Option<&str>,
     ) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::insert_team(&conn, id, organization_id, name, description, ldap_group)
+        store::teams::insert_team(&conn, id, organization_id, name, description, ldap_group)
     }
 
     fn update_team(
@@ -534,47 +534,47 @@ impl Backend for SqliteBackend {
         ldap_group: Option<&str>,
     ) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::update_team(&conn, id, name, description, ldap_group)
+        store::teams::update_team(&conn, id, name, description, ldap_group)
     }
 
     fn set_team_organization(&self, team_id: &str, organization_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::set_team_organization(&conn, team_id, organization_id)
+        store::teams::set_team_organization(&conn, team_id, organization_id)
     }
 
     fn insert_organization(&self, id: &str, name: &str, description: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::insert_organization(&conn, id, name, description)
+        store::teams::insert_organization(&conn, id, name, description)
     }
 
     fn update_organization(&self, id: &str, name: &str, description: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::update_organization(&conn, id, name, description)
+        store::teams::update_organization(&conn, id, name, description)
     }
 
     fn organization(&self, id: &str) -> AppResult<Option<Organization>> {
         let conn = lock(&self.conn)?;
-        db::organization(&conn, id)
+        store::teams::organization(&conn, id)
     }
 
     fn organization_by_name(&self, name: &str) -> AppResult<Option<Organization>> {
         let conn = lock(&self.conn)?;
-        db::organization_by_name(&conn, name)
+        store::teams::organization_by_name(&conn, name)
     }
 
     fn list_organizations(&self, user_id: &str, admin: bool) -> AppResult<Vec<Organization>> {
         let conn = lock(&self.conn)?;
-        db::list_organizations(&conn, user_id, admin)
+        store::teams::list_organizations(&conn, user_id, admin)
     }
 
     fn teams_in_organization(&self, organization_id: &str) -> AppResult<Vec<Team>> {
         let conn = lock(&self.conn)?;
-        db::teams_in_organization(&conn, organization_id)
+        store::teams::teams_in_organization(&conn, organization_id)
     }
 
     fn teams_with_ldap(&self) -> AppResult<Vec<Team>> {
         let conn = lock(&self.conn)?;
-        db::teams_with_ldap(&conn)
+        store::teams::teams_with_ldap(&conn)
     }
 
     fn upsert_membership(
@@ -585,52 +585,52 @@ impl Backend for SqliteBackend {
         source: &str,
     ) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::upsert_membership(&conn, team_id, user_id, role, source)
+        store::teams::upsert_membership(&conn, team_id, user_id, role, source)
     }
 
     fn grant_manual_membership(&self, team_id: &str, user_id: &str, role: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::grant_manual_membership(&conn, team_id, user_id, role)
+        store::teams::grant_manual_membership(&conn, team_id, user_id, role)
     }
 
     fn list_members(&self, team_id: &str) -> AppResult<Vec<Member>> {
         let conn = lock(&self.conn)?;
-        db::list_members(&conn, team_id)
+        store::teams::list_members(&conn, team_id)
     }
 
     fn delete_membership(&self, team_id: &str, user_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::delete_membership(&conn, team_id, user_id)
+        store::teams::delete_membership(&conn, team_id, user_id)
     }
 
     fn delete_ldap_membership(&self, team_id: &str, user_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::delete_ldap_membership(&conn, team_id, user_id)
+        store::teams::delete_ldap_membership(&conn, team_id, user_id)
     }
 
     fn list_projects(&self, team_id: &str) -> AppResult<Vec<Project>> {
         let conn = lock(&self.conn)?;
-        db::list_projects(&conn, team_id)
+        store::projects::list_projects(&conn, team_id)
     }
 
     fn project(&self, id: &str) -> AppResult<Option<Project>> {
         let conn = lock(&self.conn)?;
-        db::project(&conn, id)
+        store::projects::project(&conn, id)
     }
 
     fn project_visible(&self, id: &str, team_id: &str) -> AppResult<bool> {
         let conn = lock(&self.conn)?;
-        db::project_visible(&conn, id, team_id)
+        store::projects::project_visible(&conn, id, team_id)
     }
 
     fn insert_project(&self, project: &Project) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::insert_project(&conn, project)
+        store::projects::insert_project(&conn, project)
     }
 
     fn delete_project(&self, id: &str, team_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::delete_project(&conn, id, team_id)
+        store::projects::delete_project(&conn, id, team_id)
     }
 
     fn set_project_details(
@@ -642,47 +642,47 @@ impl Backend for SqliteBackend {
         revision: &str,
     ) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::set_project_details(&conn, id, name, source_type, source, revision)
+        store::projects::set_project_details(&conn, id, name, source_type, source, revision)
     }
 
     fn set_project_organization(&self, id: &str, organization_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::set_project_organization(&conn, id, organization_id)
+        store::projects::set_project_organization(&conn, id, organization_id)
     }
 
     fn replace_project_teams(&self, project_id: &str, team_ids: &[String]) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::replace_project_teams(&conn, project_id, team_ids)
+        store::projects::replace_project_teams(&conn, project_id, team_ids)
     }
 
     fn set_project_credential(&self, id: &str, credential_id: Option<&str>) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::set_project_credential(&conn, id, credential_id)
+        store::projects::set_project_credential(&conn, id, credential_id)
     }
 
     fn set_project_admin_saved(&self, id: &str, admin_saved: bool) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::set_project_admin_saved(&conn, id, admin_saved)
+        store::projects::set_project_admin_saved(&conn, id, admin_saved)
     }
 
     fn set_project_sync_success(&self, id: &str, at: &str, commit: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::set_project_sync_success(&conn, id, at, commit)
+        store::projects::set_project_sync_success(&conn, id, at, commit)
     }
 
     fn set_project_sync_failed(&self, id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::set_project_sync_failed(&conn, id)
+        store::projects::set_project_sync_failed(&conn, id)
     }
 
     fn list_inventories(&self, team_id: &str) -> AppResult<Vec<Inventory>> {
         let conn = lock(&self.conn)?;
-        db::list_inventories(&conn, team_id)
+        store::inventories::list_inventories(&conn, team_id)
     }
 
     fn inventory(&self, id: &str) -> AppResult<Option<Inventory>> {
         let conn = lock(&self.conn)?;
-        db::inventory(&conn, id)
+        store::inventories::inventory(&conn, id)
     }
 
     fn insert_inventory(
@@ -693,12 +693,12 @@ impl Backend for SqliteBackend {
     ) -> AppResult<()> {
         let mut conn = lock(&self.conn)?;
         let tx = conn.transaction()?;
-        db::insert_inventory(&tx, item)?;
+        store::inventories::insert_inventory(&tx, item)?;
         for source in sources {
-            db::insert_inventory_source(&tx, source)?;
+            store::inventories::insert_inventory_source(&tx, source)?;
         }
         if refresh {
-            db::refresh_inventory_summary(&tx, &item.id)?;
+            store::inventories::refresh_inventory_summary(&tx, &item.id)?;
         }
         tx.commit()?;
         Ok(())
@@ -706,27 +706,27 @@ impl Backend for SqliteBackend {
 
     fn update_inventory(&self, id: &str, team_id: &str, name: &str, body: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::update_inventory(&conn, id, team_id, name, body)
+        store::inventories::update_inventory(&conn, id, team_id, name, body)
     }
 
     fn set_inventory_admin_saved(&self, id: &str, admin_saved: bool) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::set_inventory_admin_saved(&conn, id, admin_saved)
+        store::inventories::set_inventory_admin_saved(&conn, id, admin_saved)
     }
 
     fn set_inventory_body(&self, id: &str, team_id: &str, body: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::set_inventory_body(&conn, id, team_id, body)
+        store::inventories::set_inventory_body(&conn, id, team_id, body)
     }
 
     fn list_inventory_sources(&self, inventory_id: &str) -> AppResult<Vec<InventorySource>> {
         let conn = lock(&self.conn)?;
-        db::list_inventory_sources(&conn, inventory_id)
+        store::inventories::list_inventory_sources(&conn, inventory_id)
     }
 
     fn inventory_source(&self, id: &str) -> AppResult<Option<InventorySource>> {
         let conn = lock(&self.conn)?;
-        db::inventory_source(&conn, id)
+        store::inventories::inventory_source(&conn, id)
     }
 
     fn add_inventory_source(
@@ -737,16 +737,16 @@ impl Backend for SqliteBackend {
     ) -> AppResult<()> {
         let mut conn = lock(&self.conn)?;
         let tx = conn.transaction()?;
-        db::insert_inventory_source(&tx, source)?;
-        db::refresh_inventory_summary(&tx, inventory_id)?;
-        db::set_inventory_admin_saved(&tx, inventory_id, admin_saved)?;
+        store::inventories::insert_inventory_source(&tx, source)?;
+        store::inventories::refresh_inventory_summary(&tx, inventory_id)?;
+        store::inventories::set_inventory_admin_saved(&tx, inventory_id, admin_saved)?;
         tx.commit()?;
         Ok(())
     }
 
     fn set_inventory_source_body(&self, id: &str, body: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::set_inventory_source_body(&conn, id, body)
+        store::inventories::set_inventory_source_body(&conn, id, body)
     }
 
     fn update_inventory_source(
@@ -756,7 +756,7 @@ impl Backend for SqliteBackend {
     ) -> AppResult<()> {
         let mut conn = lock(&self.conn)?;
         let tx = conn.transaction()?;
-        db::update_inventory_source(
+        store::inventories::update_inventory_source(
             &tx,
             &source.id,
             &source.name,
@@ -764,8 +764,8 @@ impl Backend for SqliteBackend {
             source.credential_id.as_deref(),
             &source.body,
         )?;
-        db::refresh_inventory_summary(&tx, &source.inventory_id)?;
-        db::set_inventory_admin_saved(&tx, &source.inventory_id, admin_saved)?;
+        store::inventories::refresh_inventory_summary(&tx, &source.inventory_id)?;
+        store::inventories::set_inventory_admin_saved(&tx, &source.inventory_id, admin_saved)?;
         tx.commit()?;
         Ok(())
     }
@@ -778,16 +778,16 @@ impl Backend for SqliteBackend {
     ) -> AppResult<()> {
         let mut conn = lock(&self.conn)?;
         let tx = conn.transaction()?;
-        db::delete_inventory_source(&tx, id, inventory_id)?;
-        db::refresh_inventory_summary(&tx, inventory_id)?;
-        db::set_inventory_admin_saved(&tx, inventory_id, admin_saved)?;
+        store::inventories::delete_inventory_source(&tx, id, inventory_id)?;
+        store::inventories::refresh_inventory_summary(&tx, inventory_id)?;
+        store::inventories::set_inventory_admin_saved(&tx, inventory_id, admin_saved)?;
         tx.commit()?;
         Ok(())
     }
 
     fn refresh_inventory_summary(&self, inventory_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::refresh_inventory_summary(&conn, inventory_id)
+        store::inventories::refresh_inventory_summary(&conn, inventory_id)
     }
 
     fn sync_inventory_sources(
@@ -799,17 +799,17 @@ impl Backend for SqliteBackend {
         let mut conn = lock(&self.conn)?;
         let tx = conn.transaction()?;
         for (source_id, body) in bodies {
-            db::set_inventory_source_body(&tx, source_id, body)?;
+            store::inventories::set_inventory_source_body(&tx, source_id, body)?;
         }
-        db::refresh_inventory_summary(&tx, inventory_id)?;
-        db::set_inventory_admin_saved(&tx, inventory_id, admin_saved)?;
+        store::inventories::refresh_inventory_summary(&tx, inventory_id)?;
+        store::inventories::set_inventory_admin_saved(&tx, inventory_id, admin_saved)?;
         tx.commit()?;
         Ok(())
     }
 
     fn delete_inventory(&self, id: &str, team_id: &str) -> AppResult<()> {
         let mut conn = lock(&self.conn)?;
-        db::delete_inventory(&mut conn, id, team_id)
+        store::inventories::delete_inventory(&mut conn, id, team_id)
     }
 
     fn templates_using_inventory(
@@ -818,7 +818,7 @@ impl Backend for SqliteBackend {
         team_id: &str,
     ) -> AppResult<Vec<String>> {
         let conn = lock(&self.conn)?;
-        db::templates_using_inventory(&conn, inventory_id, team_id)
+        store::inventories::templates_using_inventory(&conn, inventory_id, team_id)
     }
 
     fn workflows_using_inventory(
@@ -827,32 +827,32 @@ impl Backend for SqliteBackend {
         team_id: &str,
     ) -> AppResult<Vec<String>> {
         let conn = lock(&self.conn)?;
-        db::workflows_using_inventory(&conn, inventory_id, team_id)
+        store::inventories::workflows_using_inventory(&conn, inventory_id, team_id)
     }
 
     fn list_credentials(&self, team_id: &str) -> AppResult<Vec<Credential>> {
         let conn = lock(&self.conn)?;
-        db::list_credentials(&conn, team_id)
+        store::credentials::list_credentials(&conn, team_id)
     }
 
     fn credential(&self, id: &str) -> AppResult<Option<Credential>> {
         let conn = lock(&self.conn)?;
-        db::credential(&conn, id)
+        store::credentials::credential(&conn, id)
     }
 
     fn insert_credential(&self, item: &Credential) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::insert_credential(&conn, item)
+        store::credentials::insert_credential(&conn, item)
     }
 
     fn update_credential(&self, item: &Credential) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::update_credential(&conn, item)
+        store::credentials::update_credential(&conn, item)
     }
 
     fn delete_credential(&self, id: &str, team_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::delete_credential(&conn, id, team_id)
+        store::credentials::delete_credential(&conn, id, team_id)
     }
 
     fn credential_usages(
@@ -861,45 +861,45 @@ impl Backend for SqliteBackend {
         team_id: &str,
     ) -> AppResult<Vec<CredentialUsage>> {
         let conn = lock(&self.conn)?;
-        db::credential_usages(&conn, credential_id, team_id)
+        store::credentials::credential_usages(&conn, credential_id, team_id)
     }
 
     fn list_environments(&self, team_id: &str) -> AppResult<Vec<Environment>> {
         let conn = lock(&self.conn)?;
-        let team = db::team_by_id(&conn, team_id)?.ok_or(ApiError::NotFound)?;
-        db::list_environments(&conn, &team)
+        let team = store::teams::team_by_id(&conn, team_id)?.ok_or(ApiError::NotFound)?;
+        store::environments::list_environments(&conn, &team)
     }
 
     fn insert_environment(&self, item: &Environment) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::insert_environment(&conn, item)
+        store::environments::insert_environment(&conn, item)
     }
 
     fn update_environment(&self, item: &Environment) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::update_environment(&conn, item)
+        store::environments::update_environment(&conn, item)
     }
 
     fn delete_environment(&self, id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::delete_environment(&conn, id)
+        store::environments::delete_environment(&conn, id)
     }
 
     fn list_templates(&self, team_id: &str) -> AppResult<Vec<Template>> {
         let conn = lock(&self.conn)?;
-        db::list_templates(&conn, team_id)
+        store::templates::list_templates(&conn, team_id)
     }
 
     fn template(&self, id: &str) -> AppResult<Option<Template>> {
         let conn = lock(&self.conn)?;
-        db::template(&conn, id)
+        store::templates::template(&conn, id)
     }
 
     fn insert_template(&self, item: &Template, credential_ids: &[String]) -> AppResult<()> {
         let mut conn = lock(&self.conn)?;
         let tx = conn.transaction()?;
-        db::insert_template(&tx, item)?;
-        db::save_template_credentials(&tx, &item.id, credential_ids)?;
+        store::templates::insert_template(&tx, item)?;
+        store::templates::save_template_credentials(&tx, &item.id, credential_ids)?;
         tx.commit()?;
         Ok(())
     }
@@ -907,50 +907,50 @@ impl Backend for SqliteBackend {
     fn update_template(&self, item: &Template, credential_ids: &[String]) -> AppResult<()> {
         let mut conn = lock(&self.conn)?;
         let tx = conn.transaction()?;
-        db::update_template(&tx, item)?;
-        db::save_template_credentials(&tx, &item.id, credential_ids)?;
+        store::templates::update_template(&tx, item)?;
+        store::templates::save_template_credentials(&tx, &item.id, credential_ids)?;
         tx.commit()?;
         Ok(())
     }
 
     fn delete_template(&self, id: &str, team_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::delete_template(&conn, id, team_id)
+        store::templates::delete_template(&conn, id, team_id)
     }
 
     fn template_credential_ids(&self, template_id: &str) -> AppResult<Vec<String>> {
         let conn = lock(&self.conn)?;
-        db::template_credential_ids(&conn, template_id)
+        store::templates::template_credential_ids(&conn, template_id)
     }
 
     fn list_template_credential_links(&self, team_id: &str) -> AppResult<Vec<(String, String)>> {
         let conn = lock(&self.conn)?;
-        db::list_template_credential_links(&conn, team_id)
+        store::templates::list_template_credential_links(&conn, team_id)
     }
 
     fn list_hooks(&self, team_id: &str) -> AppResult<Vec<Hook>> {
         let conn = lock(&self.conn)?;
-        db::list_hooks(&conn, team_id)
+        store::hooks::list_hooks(&conn, team_id)
     }
 
     fn hook(&self, id: &str) -> AppResult<Option<Hook>> {
         let conn = lock(&self.conn)?;
-        db::hook(&conn, id)
+        store::hooks::hook(&conn, id)
     }
 
     fn insert_hook(&self, item: &Hook) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::insert_hook(&conn, item)
+        store::hooks::insert_hook(&conn, item)
     }
 
     fn update_hook(&self, item: &Hook) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::update_hook(&conn, item)
+        store::hooks::update_hook(&conn, item)
     }
 
     fn delete_hook(&self, id: &str, team_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        db::delete_hook(&conn, id, team_id)
+        store::hooks::delete_hook(&conn, id, team_id)
     }
 
     fn list_deliveries(&self, team_id: &str, limit: i64) -> AppResult<Vec<Delivery>> {
@@ -1089,7 +1089,7 @@ impl Backend for SqliteBackend {
 
     fn first_hook(&self, team_id: &str) -> AppResult<Option<Hook>> {
         let conn = lock(&self.conn)?;
-        db::first_hook(&conn, team_id)
+        store::hooks::first_hook(&conn, team_id)
     }
 
     fn list_workflows(&self, team_id: &str) -> AppResult<Vec<Workflow>> {
@@ -1433,66 +1433,6 @@ fn row_workflow_node(row: &tokio_postgres::Row) -> AppResult<WorkflowNodeRow> {
     })
 }
 
-fn row_team(row: &tokio_postgres::Row) -> AppResult<Team> {
-    Ok(Team {
-        id: row.try_get(0)?,
-        name: row.try_get(1)?,
-        description: row.try_get(2)?,
-        ldap_group: row.try_get(3)?,
-        created_at: row.try_get(4)?,
-        organization_id: row.try_get(5)?,
-        organization_name: row.try_get(6)?,
-    })
-}
-
-fn present(value: Option<String>) -> Option<String> {
-    value.and_then(|item| {
-        let item = item.trim().to_string();
-        if item.is_empty() {
-            None
-        } else {
-            Some(item)
-        }
-    })
-}
-
-fn row_environment(row: &tokio_postgres::Row) -> AppResult<Environment> {
-    let team_id = present(row.try_get(1)?);
-    let organization_id = present(row.try_get(2)?);
-    let organization_name: String = row.try_get(9)?;
-    let team_name: String = row.try_get(10)?;
-    let scope = if team_id.is_some() {
-        "team"
-    } else if organization_id.is_some() {
-        "organization"
-    } else {
-        "global"
-    };
-    Ok(Environment {
-        id: row.try_get(0)?,
-        team_id,
-        organization_id,
-        name: row.try_get(3)?,
-        tool: row.try_get(11)?,
-        image: row.try_get(4)?,
-        pull_policy: row.try_get(5)?,
-        network: row.try_get(6)?,
-        description: row.try_get(7)?,
-        created_at: row.try_get(8)?,
-        scope: scope.to_string(),
-        organization_name: if scope == "organization" {
-            organization_name
-        } else {
-            String::new()
-        },
-        team_name: if scope == "team" {
-            team_name
-        } else {
-            String::new()
-        },
-    })
-}
-
 const JOB_COLUMNS: &str = "id, team_id, template_id, workflow_job_id, workflow_node_id, name, \
      tool, status, extra_vars, launched_by, trigger, started_at, finished_at, created_at, \
      parameters, failed_hosts";
@@ -1510,30 +1450,6 @@ const JOB_FILTER: &str = "team_id = $1
   AND ($7 = '' OR created_at >= $7)
   AND ($8 = '' OR created_at <= $8)";
 
-const TEAM_COLUMNS: &str = "t.id, t.name, t.description, t.ldap_group, t.created_at, \
-     COALESCE(t.organization_id, ''), COALESCE(o.name, '')";
-
-const PROJECT_COLUMNS: &str =
-    "p.id, p.team_id, COALESCE(p.organization_id, ''), COALESCE(o.name, ''), \
-     p.name, p.source_type, p.source, p.revision, p.credential_id, p.created_at, p.admin_saved, \
-     p.last_sync_at, p.last_sync_commit, p.last_sync_status";
-
-const INVENTORY_COLUMNS: &str =
-    "id, team_id, name, body, created_at, source_kind, source_json, credential_id, admin_saved";
-
-const SOURCE_COLUMNS: &str = "id, inventory_id, name, kind, source_json, credential_id, body, \
-     position, created_at";
-
-const CREDENTIAL_COLUMNS: &str = "id, team_id, name, kind, secret_blob, created_at, auto, disabled";
-
-const TEMPLATE_COLUMNS: &str =
-    "id, team_id, name, description, tool, project_id, inventory_id, credential_id, \
-     environment_id, no_environment, entrypoint, extra_vars, spec, created_at, update_on_launch, \
-     admin_saved, prompt_on_launch";
-
-const HOOK_COLUMNS: &str = "id, team_id, name, token, match_alertname, match_status, template_id, \
-     workflow_id, extra_vars, enabled, created_at";
-
 const WORKFLOW_COLUMNS: &str = "id, team_id, name, description, graph, created_at, admin_saved";
 
 const DELIVERY_COLUMNS: &str =
@@ -1543,145 +1459,6 @@ const SCHEDULE_COLUMNS: &str =
     "id, team_id, name, target_kind, target_id, timezone, start_date, start_time, frequency, \
      weekdays, end_kind, end_count, end_date, enabled, next_run_at, missed_at, occurrence_count, \
      created_by, created_at, updated_at, updated_by, launch_block";
-
-fn row_organization(row: &tokio_postgres::Row) -> AppResult<Organization> {
-    Ok(Organization {
-        id: row.try_get(0)?,
-        name: row.try_get(1)?,
-        description: row.try_get(2)?,
-        created_at: row.try_get(3)?,
-    })
-}
-
-fn row_member(row: &tokio_postgres::Row) -> AppResult<Member> {
-    Ok(Member {
-        user_id: row.try_get(0)?,
-        username: row.try_get(1)?,
-        display_name: row.try_get(2)?,
-        role: row.try_get(3)?,
-        source: row.try_get(4)?,
-    })
-}
-
-fn row_project(row: &tokio_postgres::Row) -> AppResult<Project> {
-    let admin_saved: i32 = row.try_get(10)?;
-    Ok(Project {
-        id: row.try_get(0)?,
-        team_id: row.try_get(1)?,
-        organization_id: row.try_get(2)?,
-        organization_name: row.try_get(3)?,
-        name: row.try_get(4)?,
-        source_type: row.try_get(5)?,
-        source: row.try_get(6)?,
-        revision: row.try_get(7)?,
-        credential_id: row.try_get(8)?,
-        created_at: row.try_get(9)?,
-        team_ids: Vec::new(),
-        admin_saved: admin_saved != 0,
-        last_sync_at: row.try_get(11)?,
-        last_sync_commit: row.try_get(12)?,
-        last_sync_status: row.try_get(13)?,
-    })
-}
-
-fn row_inventory(row: &tokio_postgres::Row) -> AppResult<Inventory> {
-    let admin_saved: i32 = row.try_get(8)?;
-    Ok(Inventory {
-        id: row.try_get(0)?,
-        team_id: row.try_get(1)?,
-        name: row.try_get(2)?,
-        body: row.try_get(3)?,
-        created_at: row.try_get(4)?,
-        source_kind: row.try_get(5)?,
-        source_json: row.try_get(6)?,
-        credential_id: row.try_get(7)?,
-        admin_saved: admin_saved != 0,
-    })
-}
-
-fn row_inventory_source(row: &tokio_postgres::Row) -> AppResult<InventorySource> {
-    let position: i32 = row.try_get(7)?;
-    Ok(InventorySource {
-        id: row.try_get(0)?,
-        inventory_id: row.try_get(1)?,
-        name: row.try_get(2)?,
-        kind: row.try_get(3)?,
-        source_json: row.try_get(4)?,
-        credential_id: row.try_get(5)?,
-        body: row.try_get(6)?,
-        position: i64::from(position),
-        created_at: row.try_get(8)?,
-    })
-}
-
-fn row_credential(row: &tokio_postgres::Row) -> AppResult<Credential> {
-    let auto: i32 = row.try_get(6)?;
-    let disabled: i32 = row.try_get(7)?;
-    Ok(Credential {
-        id: row.try_get(0)?,
-        team_id: row.try_get(1)?,
-        name: row.try_get(2)?,
-        kind: row.try_get(3)?,
-        secret_blob: row.try_get(4)?,
-        created_at: row.try_get(5)?,
-        auto: auto != 0,
-        disabled: disabled != 0,
-    })
-}
-
-fn row_credential_usage(row: &tokio_postgres::Row) -> AppResult<CredentialUsage> {
-    Ok(CredentialUsage {
-        inventory_id: row.try_get(0)?,
-        inventory_name: row.try_get(1)?,
-        source_id: row.try_get(2)?,
-        source_name: row.try_get(3)?,
-        project_id: row.try_get(4)?,
-        project_name: row.try_get(5)?,
-    })
-}
-
-fn row_template(row: &tokio_postgres::Row) -> AppResult<Template> {
-    let no_environment: i32 = row.try_get(9)?;
-    let update_on_launch: i32 = row.try_get(14)?;
-    let admin_saved: i32 = row.try_get(15)?;
-    let prompt_on_launch: i32 = row.try_get(16)?;
-    Ok(Template {
-        id: row.try_get(0)?,
-        team_id: row.try_get(1)?,
-        name: row.try_get(2)?,
-        description: row.try_get(3)?,
-        tool: row.try_get(4)?,
-        project_id: row.try_get(5)?,
-        inventory_id: row.try_get(6)?,
-        credential_id: row.try_get(7)?,
-        environment_id: row.try_get(8)?,
-        no_environment: no_environment != 0,
-        entrypoint: row.try_get(10)?,
-        extra_vars: row.try_get(11)?,
-        spec: row.try_get(12)?,
-        created_at: row.try_get(13)?,
-        update_on_launch: update_on_launch != 0,
-        admin_saved: admin_saved != 0,
-        prompt_on_launch: prompt_on_launch != 0,
-    })
-}
-
-fn row_hook(row: &tokio_postgres::Row) -> AppResult<Hook> {
-    let enabled: i32 = row.try_get(9)?;
-    Ok(Hook {
-        id: row.try_get(0)?,
-        team_id: row.try_get(1)?,
-        name: row.try_get(2)?,
-        token: row.try_get(3)?,
-        match_alertname: row.try_get(4)?,
-        match_status: row.try_get(5)?,
-        template_id: row.try_get(6)?,
-        workflow_id: row.try_get(7)?,
-        extra_vars: row.try_get(8)?,
-        enabled: enabled != 0,
-        created_at: row.try_get(10)?,
-    })
-}
 
 fn row_workflow(row: &tokio_postgres::Row) -> AppResult<Workflow> {
     let admin_saved: i32 = row.try_get(6)?;
@@ -1737,185 +1514,6 @@ fn row_schedule(row: &tokio_postgres::Row) -> AppResult<Schedule> {
         updated_by: row.try_get(20)?,
         launch_block: row.try_get(21)?,
     })
-}
-
-async fn pg_project_team_ids<C>(client: &C, project_id: &str) -> AppResult<Vec<String>>
-where
-    C: deadpool_postgres::GenericClient,
-{
-    let rows = client
-        .query(
-            "SELECT team_id FROM project_teams WHERE project_id = $1 ORDER BY team_id",
-            &[&project_id],
-        )
-        .await?;
-    Ok(rows.iter().map(|row| row.get(0)).collect())
-}
-
-async fn pg_write_project_teams<C>(
-    client: &C,
-    project_id: &str,
-    team_ids: &[String],
-) -> AppResult<()>
-where
-    C: deadpool_postgres::GenericClient,
-{
-    client
-        .execute(
-            "DELETE FROM project_teams WHERE project_id = $1",
-            &[&project_id],
-        )
-        .await?;
-    let mut seen = std::collections::BTreeSet::new();
-    for team_id in team_ids {
-        if !seen.insert(team_id.as_str()) {
-            continue;
-        }
-        client
-            .execute(
-                "INSERT INTO project_teams (project_id, team_id) VALUES ($1, $2)",
-                &[&project_id, &team_id],
-            )
-            .await?;
-    }
-    Ok(())
-}
-
-async fn pg_write_template_credentials<C>(
-    client: &C,
-    template_id: &str,
-    credential_ids: &[String],
-) -> AppResult<()>
-where
-    C: deadpool_postgres::GenericClient,
-{
-    client
-        .execute(
-            "DELETE FROM template_credentials WHERE template_id = $1",
-            &[&template_id],
-        )
-        .await?;
-    for (position, credential_id) in credential_ids.iter().enumerate() {
-        client
-            .execute(
-                "INSERT INTO template_credentials (template_id, credential_id, position)
-                 VALUES ($1, $2, $3)",
-                &[&template_id, &credential_id, &(position as i32)],
-            )
-            .await?;
-    }
-    Ok(())
-}
-
-async fn pg_insert_source<C>(client: &C, source: &InventorySource) -> AppResult<()>
-where
-    C: deadpool_postgres::GenericClient,
-{
-    client
-        .execute(
-            "INSERT INTO inventory_sources (
-                id, inventory_id, name, kind, source_json, credential_id, body, position,
-                created_at
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-            &[
-                &source.id,
-                &source.inventory_id,
-                &source.name,
-                &source.kind,
-                &source.source_json,
-                &source.credential_id,
-                &source.body,
-                &(source.position as i32),
-                &source.created_at,
-            ],
-        )
-        .await?;
-    Ok(())
-}
-
-async fn pg_refresh_summary<C>(client: &C, inventory_id: &str) -> AppResult<()>
-where
-    C: deadpool_postgres::GenericClient,
-{
-    let rows = client
-        .query(
-            &format!(
-                "SELECT {SOURCE_COLUMNS} FROM inventory_sources
-                 WHERE inventory_id = $1 ORDER BY position, created_at"
-            ),
-            &[&inventory_id],
-        )
-        .await?;
-    let sources = rows
-        .iter()
-        .map(row_inventory_source)
-        .collect::<AppResult<Vec<_>>>()?;
-    let (kind, source_json, credential_id, body) = match sources.as_slice() {
-        [] => ("ini".to_string(), "{}".to_string(), None, String::new()),
-        [one] => (
-            one.kind.clone(),
-            one.source_json.clone(),
-            one.credential_id.clone(),
-            one.body.clone(),
-        ),
-        many => {
-            let body = many
-                .iter()
-                .map(|source| source.body.trim_end_matches(['\n', '\r']))
-                .filter(|text| !text.is_empty())
-                .collect::<Vec<_>>()
-                .join("\n");
-            ("mixed".to_string(), "{}".to_string(), None, body)
-        }
-    };
-    client
-        .execute(
-            "UPDATE inventories
-             SET body = $2, source_kind = $3, source_json = $4, credential_id = $5
-             WHERE id = $1",
-            &[&inventory_id, &body, &kind, &source_json, &credential_id],
-        )
-        .await?;
-    Ok(())
-}
-
-async fn pg_json_references_credential<C>(
-    client: &C,
-    team_id: &str,
-    credential_id: &str,
-) -> AppResult<bool>
-where
-    C: deadpool_postgres::GenericClient,
-{
-    let rows = client
-        .query(
-            "SELECT graph FROM workflows WHERE team_id = $1
-             UNION ALL SELECT parameters FROM jobs WHERE team_id = $1",
-            &[&team_id],
-        )
-        .await?;
-    for row in rows {
-        let raw: String = row.get(0);
-        match serde_json::from_str::<serde_json::Value>(&raw) {
-            Ok(value) if json_contains_string(&value, credential_id) => return Ok(true),
-            Ok(_) => {}
-            Err(_) => return Ok(true),
-        }
-    }
-    Ok(false)
-}
-
-fn json_contains_string(value: &serde_json::Value, needle: &str) -> bool {
-    match value {
-        serde_json::Value::String(text) => text == needle,
-        serde_json::Value::Array(items) => {
-            items.iter().any(|item| json_contains_string(item, needle))
-        }
-        serde_json::Value::Object(map) => {
-            map.values().any(|item| json_contains_string(item, needle))
-        }
-        _ => false,
-    }
 }
 
 impl Backend for PostgresBackend {
@@ -2009,7 +1607,9 @@ impl Backend for PostgresBackend {
     fn count_teams(&self) -> AppResult<i64> {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
-            let row = client.query_one("SELECT COUNT(*) FROM teams", &[]).await?;
+            let row = client
+                .query_one(&store::sql::postgres(store::teams::COUNT_TEAMS), &[])
+                .await?;
             Ok(row.get(0))
         })
     }
@@ -2348,25 +1948,12 @@ impl Backend for PostgresBackend {
     }
 
     fn list_teams_for_user(&self, user_id: &str, admin: bool) -> AppResult<Vec<(Team, String)>> {
-        let sql = if admin {
-            format!(
-                "SELECT {TEAM_COLUMNS},
-                        COALESCE((SELECT role FROM memberships m WHERE m.team_id = t.id AND m.user_id = $1), 'owner')
-                 FROM teams t LEFT JOIN organizations o ON o.id = t.organization_id ORDER BY t.name"
-            )
-        } else {
-            format!(
-                "SELECT {TEAM_COLUMNS}, m.role
-                 FROM teams t JOIN memberships m ON m.team_id = t.id
-                 LEFT JOIN organizations o ON o.id = t.organization_id
-                 WHERE m.user_id = $1 ORDER BY t.name"
-            )
-        };
+        let sql = store::sql::postgres(&store::teams::teams_for_user_sql(admin));
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client.query(&sql, &[&user_id]).await?;
             rows.iter()
-                .map(|row| Ok((row_team(row)?, row.try_get::<_, String>(7)?)))
+                .map(|row| Ok((store::teams::row_team(row)?, row.try_get::<_, String>(7)?)))
                 .collect()
         })
     }
@@ -2376,27 +1963,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    "SELECT t.id, t.name, COALESCE(t.organization_id, ''), COALESCE(o.name, ''), m.role, m.source
-                     FROM memberships m
-                     JOIN teams t ON t.id = m.team_id
-                     LEFT JOIN organizations o ON o.id = t.organization_id
-                     WHERE m.user_id = $1
-                     ORDER BY o.name, t.name",
+                    &store::sql::postgres(store::teams::MEMBERSHIPS_FOR_USER),
                     &[&user_id],
                 )
                 .await?;
-            rows.iter()
-                .map(|row| {
-                    Ok(UserMembership {
-                        team_id: row.try_get(0)?,
-                        team_name: row.try_get(1)?,
-                        organization_id: row.try_get(2)?,
-                        organization_name: row.try_get(3)?,
-                        role: row.try_get(4)?,
-                        source: row.try_get(5)?,
-                    })
-                })
-                .collect()
+            rows.iter().map(store::teams::row_user_membership).collect()
         })
     }
 
@@ -2425,17 +1996,13 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    "SELECT e.id, e.team_id, e.organization_id, e.name, e.image, e.pull_policy,
-                            e.network, e.description, e.created_at, COALESCE(o.name, ''),
-                            COALESCE(t.name, ''), e.tool
-                     FROM environments e
-                     LEFT JOIN organizations o ON o.id = e.organization_id
-                     LEFT JOIN teams t ON t.id = e.team_id
-                     WHERE e.id = $1",
+                    &store::sql::postgres(store::environments::ENVIRONMENT_BY_ID),
                     &[&id],
                 )
                 .await?;
-            row.as_ref().map(row_environment).transpose()
+            row.as_ref()
+                .map(store::environments::row_environment)
+                .transpose()
         })
     }
 
@@ -2443,15 +2010,9 @@ impl Backend for PostgresBackend {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
-                .query_opt(
-                    &format!(
-                        "SELECT {TEAM_COLUMNS} FROM teams t
-                         LEFT JOIN organizations o ON o.id = t.organization_id WHERE t.id = $1"
-                    ),
-                    &[&id],
-                )
+                .query_opt(&store::sql::postgres(store::teams::TEAM_BY_ID), &[&id])
                 .await?;
-            row.as_ref().map(row_team).transpose()
+            row.as_ref().map(store::teams::row_team).transpose()
         })
     }
 
@@ -2460,7 +2021,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    "SELECT role FROM memberships WHERE team_id = $1 AND user_id = $2",
+                    &store::sql::postgres(store::teams::ROLE_OF),
                     &[&team_id, &user_id],
                 )
                 .await?;
@@ -2480,8 +2041,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "INSERT INTO teams (id, organization_id, name, description, ldap_group, created_at)
-                     VALUES ($1, $2, $3, $4, $5, $6)",
+                    &store::sql::postgres(store::teams::INSERT_TEAM),
                     &[
                         &id,
                         &organization_id,
@@ -2507,7 +2067,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    "UPDATE teams SET name = $2, description = $3, ldap_group = $4 WHERE id = $1",
+                    &store::sql::postgres(store::teams::UPDATE_TEAM),
                     &[&id, &name, &description, &ldap_group],
                 )
                 .await?;
@@ -2523,7 +2083,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    "UPDATE teams SET organization_id = $2 WHERE id = $1",
+                    &store::sql::postgres(store::teams::SET_TEAM_ORGANIZATION),
                     &[&team_id, &organization_id],
                 )
                 .await?;
@@ -2539,8 +2099,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "INSERT INTO organizations (id, name, description, created_at)
-                     VALUES ($1, $2, $3, $4)",
+                    &store::sql::postgres(store::teams::INSERT_ORGANIZATION),
                     &[&id, &name, &description, &db::now()],
                 )
                 .await?;
@@ -2553,7 +2112,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    "UPDATE organizations SET name = $2, description = $3 WHERE id = $1",
+                    &store::sql::postgres(store::teams::UPDATE_ORGANIZATION),
                     &[&id, &name, &description],
                 )
                 .await?;
@@ -2569,11 +2128,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    "SELECT id, name, description, created_at FROM organizations WHERE id = $1",
+                    &store::sql::postgres(store::teams::ORGANIZATION_BY_ID),
                     &[&id],
                 )
                 .await?;
-            row.as_ref().map(row_organization).transpose()
+            row.as_ref().map(store::teams::row_organization).transpose()
         })
     }
 
@@ -2582,26 +2141,20 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    "SELECT id, name, description, created_at FROM organizations WHERE name = $1",
+                    &store::sql::postgres(store::teams::ORGANIZATION_BY_NAME),
                     &[&name],
                 )
                 .await?;
-            row.as_ref().map(row_organization).transpose()
+            row.as_ref().map(store::teams::row_organization).transpose()
         })
     }
 
     fn list_organizations(&self, user_id: &str, admin: bool) -> AppResult<Vec<Organization>> {
-        let sql = if admin {
-            "SELECT id, name, description, created_at FROM organizations ORDER BY name".to_string()
+        let sql = store::sql::postgres(if admin {
+            store::teams::ORGANIZATIONS_ALL
         } else {
-            "SELECT DISTINCT o.id, o.name, o.description, o.created_at
-             FROM organizations o
-             JOIN teams t ON t.organization_id = o.id
-             JOIN memberships m ON m.team_id = t.id
-             WHERE m.user_id = $1
-             ORDER BY o.name"
-                .to_string()
-        };
+            store::teams::ORGANIZATIONS_FOR_USER
+        });
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = if admin {
@@ -2609,7 +2162,7 @@ impl Backend for PostgresBackend {
             } else {
                 client.query(&sql, &[&user_id]).await?
             };
-            rows.iter().map(row_organization).collect()
+            rows.iter().map(store::teams::row_organization).collect()
         })
     }
 
@@ -2618,15 +2171,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &format!(
-                        "SELECT {TEAM_COLUMNS} FROM teams t
-                         LEFT JOIN organizations o ON o.id = t.organization_id
-                         WHERE t.organization_id = $1 ORDER BY t.name"
-                    ),
+                    &store::sql::postgres(store::teams::TEAMS_IN_ORGANIZATION),
                     &[&organization_id],
                 )
                 .await?;
-            rows.iter().map(row_team).collect()
+            rows.iter().map(store::teams::row_team).collect()
         })
     }
 
@@ -2634,16 +2183,9 @@ impl Backend for PostgresBackend {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
-                .query(
-                    &format!(
-                        "SELECT {TEAM_COLUMNS} FROM teams t
-                         LEFT JOIN organizations o ON o.id = t.organization_id
-                         WHERE t.ldap_group IS NOT NULL AND t.ldap_group != ''"
-                    ),
-                    &[],
-                )
+                .query(&store::sql::postgres(store::teams::TEAMS_WITH_LDAP), &[])
                 .await?;
-            rows.iter().map(row_team).collect()
+            rows.iter().map(store::teams::row_team).collect()
         })
     }
 
@@ -2658,11 +2200,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "INSERT INTO memberships (team_id, user_id, role, source)
-                     VALUES ($1, $2, $3, $4)
-                     ON CONFLICT (team_id, user_id) DO UPDATE
-                     SET role = excluded.role, source = excluded.source
-                     WHERE memberships.source = 'ldap' OR excluded.source = 'manual'",
+                    &store::sql::postgres(store::teams::UPSERT_MEMBERSHIP),
                     &[&team_id, &user_id, &role, &source],
                 )
                 .await?;
@@ -2675,7 +2213,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    "SELECT source FROM memberships WHERE team_id = $1 AND user_id = $2",
+                    &store::sql::postgres(store::teams::MEMBERSHIP_SOURCE),
                     &[&team_id, &user_id],
                 )
                 .await?;
@@ -2694,13 +2232,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    "SELECT u.id, u.username, u.display_name, m.role, m.source
-                     FROM memberships m JOIN users u ON u.id = m.user_id
-                     WHERE m.team_id = $1 ORDER BY u.username",
+                    &store::sql::postgres(store::teams::LIST_MEMBERS),
                     &[&team_id],
                 )
                 .await?;
-            rows.iter().map(row_member).collect()
+            rows.iter().map(store::teams::row_member).collect()
         })
     }
 
@@ -2709,7 +2245,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "DELETE FROM memberships WHERE team_id = $1 AND user_id = $2",
+                    &store::sql::postgres(store::teams::DELETE_MEMBERSHIP),
                     &[&team_id, &user_id],
                 )
                 .await?;
@@ -2722,7 +2258,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "DELETE FROM memberships WHERE team_id = $1 AND user_id = $2 AND source = 'ldap'",
+                    &store::sql::postgres(store::teams::DELETE_LDAP_MEMBERSHIP),
                     &[&team_id, &user_id],
                 )
                 .await?;
@@ -2735,30 +2271,17 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &format!(
-                        "SELECT {PROJECT_COLUMNS}
-                         FROM projects p
-                         JOIN teams t ON t.id = $1
-                         LEFT JOIN organizations o ON o.id = p.organization_id
-                         WHERE p.organization_id = t.organization_id
-                           AND (
-                             NOT EXISTS (SELECT 1 FROM project_teams pt WHERE pt.project_id = p.id)
-                             OR EXISTS (
-                               SELECT 1 FROM project_teams pt
-                               WHERE pt.project_id = p.id AND pt.team_id = t.id
-                             )
-                           )
-                         ORDER BY p.name"
-                    ),
+                    &store::sql::postgres(store::projects::LIST_PROJECTS),
                     &[&team_id],
                 )
                 .await?;
             let mut projects = rows
                 .iter()
-                .map(row_project)
+                .map(store::projects::row_project)
                 .collect::<AppResult<Vec<_>>>()?;
             for project in &mut projects {
-                project.team_ids = pg_project_team_ids(&client, &project.id).await?;
+                project.team_ids =
+                    store::projects::postgres_project_team_ids(&client, &project.id).await?;
             }
             Ok(projects)
         })
@@ -2769,18 +2292,16 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    &format!(
-                        "SELECT {PROJECT_COLUMNS} FROM projects p
-                         LEFT JOIN organizations o ON o.id = p.organization_id WHERE p.id = $1"
-                    ),
+                    &store::sql::postgres(store::projects::PROJECT_BY_ID),
                     &[&id],
                 )
                 .await?;
             let Some(row) = row else {
                 return Ok(None);
             };
-            let mut project = row_project(&row)?;
-            project.team_ids = pg_project_team_ids(&client, &project.id).await?;
+            let mut project = store::projects::row_project(&row)?;
+            project.team_ids =
+                store::projects::postgres_project_team_ids(&client, &project.id).await?;
             Ok(Some(project))
         })
     }
@@ -2790,16 +2311,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    "SELECT 1 FROM projects p
-                     JOIN teams t ON t.id = $2
-                     WHERE p.id = $1 AND p.organization_id = t.organization_id
-                       AND (
-                         NOT EXISTS (SELECT 1 FROM project_teams pt WHERE pt.project_id = p.id)
-                         OR EXISTS (
-                           SELECT 1 FROM project_teams pt
-                           WHERE pt.project_id = p.id AND pt.team_id = t.id
-                         )
-                       )",
+                    &store::sql::postgres(store::projects::PROJECT_VISIBLE),
                     &[&id, &team_id],
                 )
                 .await?;
@@ -2813,10 +2325,7 @@ impl Backend for PostgresBackend {
             let transaction = client.transaction().await?;
             transaction
                 .execute(
-                    "INSERT INTO projects (
-                        id, team_id, organization_id, name, source_type, source, revision,
-                        credential_id, created_at, admin_saved
-                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                    &store::sql::postgres(store::projects::INSERT_PROJECT),
                     &[
                         &project.id,
                         &project.team_id,
@@ -2831,7 +2340,12 @@ impl Backend for PostgresBackend {
                     ],
                 )
                 .await?;
-            pg_write_project_teams(&transaction, &project.id, &project.team_ids).await?;
+            store::projects::postgres_write_project_teams(
+                &transaction,
+                &project.id,
+                &project.team_ids,
+            )
+            .await?;
             transaction.commit().await?;
             Ok(())
         })
@@ -2842,21 +2356,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    "DELETE FROM projects p
-                     WHERE p.id = $1
-                       AND EXISTS (
-                         SELECT 1 FROM teams t
-                         WHERE t.id = $2 AND t.organization_id = p.organization_id
-                           AND (
-                             NOT EXISTS (
-                               SELECT 1 FROM project_teams pt WHERE pt.project_id = p.id
-                             )
-                             OR EXISTS (
-                               SELECT 1 FROM project_teams pt
-                               WHERE pt.project_id = p.id AND pt.team_id = t.id
-                             )
-                           )
-                       )",
+                    &store::sql::postgres(store::projects::DELETE_PROJECT),
                     &[&id, &team_id],
                 )
                 .await?;
@@ -2879,9 +2379,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    "UPDATE projects
-                     SET name = $2, source_type = $3, source = $4, revision = $5
-                     WHERE id = $1",
+                    &store::sql::postgres(store::projects::SET_PROJECT_DETAILS),
                     &[&id, &name, &source_type, &source, &revision],
                 )
                 .await?;
@@ -2897,7 +2395,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    "UPDATE projects SET organization_id = $2 WHERE id = $1",
+                    &store::sql::postgres(store::projects::SET_PROJECT_ORGANIZATION),
                     &[&id, &organization_id],
                 )
                 .await?;
@@ -2912,7 +2410,8 @@ impl Backend for PostgresBackend {
         self.run(async {
             let mut client = self.pool.get().await.map_err(pool_error)?;
             let transaction = client.transaction().await?;
-            pg_write_project_teams(&transaction, project_id, team_ids).await?;
+            store::projects::postgres_write_project_teams(&transaction, project_id, team_ids)
+                .await?;
             transaction.commit().await?;
             Ok(())
         })
@@ -2923,7 +2422,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    "UPDATE projects SET credential_id = $2 WHERE id = $1",
+                    &store::sql::postgres(store::projects::SET_PROJECT_CREDENTIAL),
                     &[&id, &credential_id],
                 )
                 .await?;
@@ -2939,7 +2438,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    "UPDATE projects SET admin_saved = $2 WHERE id = $1",
+                    &store::sql::postgres(store::projects::SET_PROJECT_ADMIN_SAVED),
                     &[&id, &(admin_saved as i32)],
                 )
                 .await?;
@@ -2955,9 +2454,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    "UPDATE projects
-                     SET last_sync_at = $2, last_sync_commit = $3, last_sync_status = 'success'
-                     WHERE id = $1",
+                    &store::sql::postgres(store::projects::SET_PROJECT_SYNC_SUCCESS),
                     &[&id, &at, &commit],
                 )
                 .await?;
@@ -2973,7 +2470,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    "UPDATE projects SET last_sync_status = 'failed' WHERE id = $1",
+                    &store::sql::postgres(store::projects::SET_PROJECT_SYNC_FAILED),
                     &[&id],
                 )
                 .await?;
@@ -2989,14 +2486,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &format!(
-                        "SELECT {INVENTORY_COLUMNS} FROM inventories
-                         WHERE team_id = $1 ORDER BY name"
-                    ),
+                    &store::sql::postgres(store::inventories::LIST_INVENTORIES),
                     &[&team_id],
                 )
                 .await?;
-            rows.iter().map(row_inventory).collect()
+            rows.iter().map(store::inventories::row_inventory).collect()
         })
     }
 
@@ -3005,11 +2499,13 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    &format!("SELECT {INVENTORY_COLUMNS} FROM inventories WHERE id = $1"),
+                    &store::sql::postgres(store::inventories::INVENTORY_BY_ID),
                     &[&id],
                 )
                 .await?;
-            row.as_ref().map(row_inventory).transpose()
+            row.as_ref()
+                .map(store::inventories::row_inventory)
+                .transpose()
         })
     }
 
@@ -3024,10 +2520,7 @@ impl Backend for PostgresBackend {
             let transaction = client.transaction().await?;
             transaction
                 .execute(
-                    "INSERT INTO inventories (
-                        id, team_id, name, body, created_at, source_kind, source_json,
-                        credential_id, admin_saved
-                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                    &store::sql::postgres(store::inventories::INSERT_INVENTORY),
                     &[
                         &item.id,
                         &item.team_id,
@@ -3042,10 +2535,10 @@ impl Backend for PostgresBackend {
                 )
                 .await?;
             for source in sources {
-                pg_insert_source(&transaction, source).await?;
+                store::inventories::postgres_insert_source(&transaction, source).await?;
             }
             if refresh {
-                pg_refresh_summary(&transaction, &item.id).await?;
+                store::inventories::postgres_refresh_summary(&transaction, &item.id).await?;
             }
             transaction.commit().await?;
             Ok(())
@@ -3057,8 +2550,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    "UPDATE inventories SET name = $3, body = $4
-                     WHERE id = $1 AND team_id = $2",
+                    &store::sql::postgres(store::inventories::UPDATE_INVENTORY),
                     &[&id, &team_id, &name, &body],
                 )
                 .await?;
@@ -3074,7 +2566,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "UPDATE inventories SET admin_saved = $2 WHERE id = $1",
+                    &store::sql::postgres(store::inventories::SET_INVENTORY_ADMIN_SAVED),
                     &[&id, &(admin_saved as i32)],
                 )
                 .await?;
@@ -3087,7 +2579,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    "UPDATE inventories SET body = $3 WHERE id = $1 AND team_id = $2",
+                    &store::sql::postgres(store::inventories::SET_INVENTORY_BODY),
                     &[&id, &team_id, &body],
                 )
                 .await?;
@@ -3103,14 +2595,13 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &format!(
-                        "SELECT {SOURCE_COLUMNS} FROM inventory_sources
-                         WHERE inventory_id = $1 ORDER BY position, created_at"
-                    ),
+                    &store::sql::postgres(store::inventories::LIST_SOURCES),
                     &[&inventory_id],
                 )
                 .await?;
-            rows.iter().map(row_inventory_source).collect()
+            rows.iter()
+                .map(store::inventories::row_inventory_source)
+                .collect()
         })
     }
 
@@ -3119,11 +2610,13 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    &format!("SELECT {SOURCE_COLUMNS} FROM inventory_sources WHERE id = $1"),
+                    &store::sql::postgres(store::inventories::SOURCE_BY_ID),
                     &[&id],
                 )
                 .await?;
-            row.as_ref().map(row_inventory_source).transpose()
+            row.as_ref()
+                .map(store::inventories::row_inventory_source)
+                .transpose()
         })
     }
 
@@ -3136,11 +2629,11 @@ impl Backend for PostgresBackend {
         self.run(async {
             let mut client = self.pool.get().await.map_err(pool_error)?;
             let transaction = client.transaction().await?;
-            pg_insert_source(&transaction, source).await?;
-            pg_refresh_summary(&transaction, inventory_id).await?;
+            store::inventories::postgres_insert_source(&transaction, source).await?;
+            store::inventories::postgres_refresh_summary(&transaction, inventory_id).await?;
             transaction
                 .execute(
-                    "UPDATE inventories SET admin_saved = $2 WHERE id = $1",
+                    &store::sql::postgres(store::inventories::SET_INVENTORY_ADMIN_SAVED),
                     &[&inventory_id, &(admin_saved as i32)],
                 )
                 .await?;
@@ -3154,7 +2647,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "UPDATE inventory_sources SET body = $2 WHERE id = $1",
+                    &store::sql::postgres(store::inventories::SET_SOURCE_BODY),
                     &[&id, &body],
                 )
                 .await?;
@@ -3172,9 +2665,7 @@ impl Backend for PostgresBackend {
             let transaction = client.transaction().await?;
             let changed = transaction
                 .execute(
-                    "UPDATE inventory_sources
-                     SET name = $2, source_json = $3, credential_id = $4, body = $5
-                     WHERE id = $1",
+                    &store::sql::postgres(store::inventories::UPDATE_SOURCE),
                     &[
                         &source.id,
                         &source.name,
@@ -3187,10 +2678,11 @@ impl Backend for PostgresBackend {
             if changed == 0 {
                 return Err(ApiError::NotFound);
             }
-            pg_refresh_summary(&transaction, &source.inventory_id).await?;
+            store::inventories::postgres_refresh_summary(&transaction, &source.inventory_id)
+                .await?;
             transaction
                 .execute(
-                    "UPDATE inventories SET admin_saved = $2 WHERE id = $1",
+                    &store::sql::postgres(store::inventories::SET_INVENTORY_ADMIN_SAVED),
                     &[&source.inventory_id, &(admin_saved as i32)],
                 )
                 .await?;
@@ -3210,17 +2702,17 @@ impl Backend for PostgresBackend {
             let transaction = client.transaction().await?;
             let changed = transaction
                 .execute(
-                    "DELETE FROM inventory_sources WHERE id = $1 AND inventory_id = $2",
+                    &store::sql::postgres(store::inventories::DELETE_SOURCE),
                     &[&id, &inventory_id],
                 )
                 .await?;
             if changed == 0 {
                 return Err(ApiError::NotFound);
             }
-            pg_refresh_summary(&transaction, inventory_id).await?;
+            store::inventories::postgres_refresh_summary(&transaction, inventory_id).await?;
             transaction
                 .execute(
-                    "UPDATE inventories SET admin_saved = $2 WHERE id = $1",
+                    &store::sql::postgres(store::inventories::SET_INVENTORY_ADMIN_SAVED),
                     &[&inventory_id, &(admin_saved as i32)],
                 )
                 .await?;
@@ -3232,7 +2724,7 @@ impl Backend for PostgresBackend {
     fn refresh_inventory_summary(&self, inventory_id: &str) -> AppResult<()> {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
-            pg_refresh_summary(&client, inventory_id).await
+            store::inventories::postgres_refresh_summary(&client, inventory_id).await
         })
     }
 
@@ -3248,15 +2740,15 @@ impl Backend for PostgresBackend {
             for (source_id, body) in bodies {
                 transaction
                     .execute(
-                        "UPDATE inventory_sources SET body = $2 WHERE id = $1",
+                        &store::sql::postgres(store::inventories::SET_SOURCE_BODY),
                         &[source_id, body],
                     )
                     .await?;
             }
-            pg_refresh_summary(&transaction, inventory_id).await?;
+            store::inventories::postgres_refresh_summary(&transaction, inventory_id).await?;
             transaction
                 .execute(
-                    "UPDATE inventories SET admin_saved = $2 WHERE id = $1",
+                    &store::sql::postgres(store::inventories::SET_INVENTORY_ADMIN_SAVED),
                     &[&inventory_id, &(admin_saved as i32)],
                 )
                 .await?;
@@ -3271,15 +2763,14 @@ impl Backend for PostgresBackend {
             let transaction = client.transaction().await?;
             let rows = transaction
                 .query(
-                    "SELECT credential_id FROM inventory_sources
-                     WHERE inventory_id = $1 AND credential_id IS NOT NULL",
+                    &store::sql::postgres(store::inventories::SOURCE_CREDENTIALS),
                     &[&id],
                 )
                 .await?;
             let credential_ids: Vec<String> = rows.iter().map(|row| row.get(0)).collect();
             let changed = transaction
                 .execute(
-                    "DELETE FROM inventories WHERE id = $1 AND team_id = $2",
+                    &store::sql::postgres(store::inventories::DELETE_INVENTORY),
                     &[&id, &team_id],
                 )
                 .await?;
@@ -3287,25 +2778,18 @@ impl Backend for PostgresBackend {
                 return Err(ApiError::NotFound);
             }
             for credential_id in credential_ids {
-                if pg_json_references_credential(&transaction, team_id, &credential_id).await? {
+                if store::inventories::postgres_json_references_credential(
+                    &transaction,
+                    team_id,
+                    &credential_id,
+                )
+                .await?
+                {
                     continue;
                 }
                 transaction
                     .execute(
-                        "DELETE FROM credentials
-                         WHERE id = $1 AND team_id = $2 AND auto = 1
-                           AND NOT EXISTS (
-                             SELECT 1 FROM inventory_sources s WHERE s.credential_id = $1
-                           )
-                           AND NOT EXISTS (
-                             SELECT 1 FROM inventories i WHERE i.credential_id = $1
-                           )
-                           AND NOT EXISTS (
-                             SELECT 1 FROM templates t WHERE t.credential_id = $1
-                           )
-                           AND NOT EXISTS (
-                             SELECT 1 FROM template_credentials tc WHERE tc.credential_id = $1
-                           )",
+                        &store::sql::postgres(store::inventories::DELETE_AUTO_CREDENTIAL),
                         &[&credential_id, &team_id],
                     )
                     .await?;
@@ -3324,8 +2808,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    "SELECT name FROM templates
-                     WHERE inventory_id = $1 AND team_id = $2 ORDER BY name",
+                    &store::sql::postgres(store::inventories::TEMPLATES_USING_INVENTORY),
                     &[&inventory_id, &team_id],
                 )
                 .await?;
@@ -3342,7 +2825,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    "SELECT name, graph FROM workflows WHERE team_id = $1",
+                    &store::sql::postgres(store::inventories::WORKFLOW_GRAPHS),
                     &[&team_id],
                 )
                 .await?;
@@ -3350,14 +2833,7 @@ impl Backend for PostgresBackend {
             for row in rows {
                 let name: String = row.get(0);
                 let graph: String = row.get(1);
-                let referenced = match serde_json::from_str::<crate::workflow::Graph>(&graph) {
-                    Ok(graph) => graph
-                        .nodes
-                        .iter()
-                        .any(|node| node.overrides.inventory_id.as_deref() == Some(inventory_id)),
-                    Err(_) => true,
-                };
-                if referenced {
+                if store::inventories::workflow_references_inventory(&graph, inventory_id) {
                     names.push(name);
                 }
             }
@@ -3370,12 +2846,13 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    "SELECT id, team_id, name, kind, '' AS secret_blob, created_at, auto, disabled
-                     FROM credentials WHERE team_id = $1 AND disabled = 0 ORDER BY name",
+                    &store::sql::postgres(store::credentials::LIST_CREDENTIALS),
                     &[&team_id],
                 )
                 .await?;
-            rows.iter().map(row_credential).collect()
+            rows.iter()
+                .map(store::credentials::row_credential)
+                .collect()
         })
     }
 
@@ -3384,11 +2861,13 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    &format!("SELECT {CREDENTIAL_COLUMNS} FROM credentials WHERE id = $1"),
+                    &store::sql::postgres(store::credentials::CREDENTIAL_BY_ID),
                     &[&id],
                 )
                 .await?;
-            row.as_ref().map(row_credential).transpose()
+            row.as_ref()
+                .map(store::credentials::row_credential)
+                .transpose()
         })
     }
 
@@ -3397,9 +2876,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "INSERT INTO credentials
-                        (id, team_id, name, kind, secret_blob, created_at, auto, disabled)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                    &store::sql::postgres(store::credentials::INSERT_CREDENTIAL),
                     &[
                         &item.id,
                         &item.team_id,
@@ -3421,8 +2898,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    "UPDATE credentials SET name = $3, secret_blob = $4, disabled = $5
-                     WHERE id = $1 AND team_id = $2",
+                    &store::sql::postgres(store::credentials::UPDATE_CREDENTIAL),
                     &[
                         &item.id,
                         &item.team_id,
@@ -3444,7 +2920,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    "DELETE FROM credentials WHERE id = $1 AND team_id = $2",
+                    &store::sql::postgres(store::credentials::DELETE_CREDENTIAL),
                     &[&id, &team_id],
                 )
                 .await?;
@@ -3464,26 +2940,13 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    "SELECT i.id, i.name, s.id, s.name, NULL::TEXT, NULL::TEXT
-                     FROM inventory_sources s
-                     JOIN inventories i ON i.id = s.inventory_id
-                     WHERE s.credential_id = $1 AND i.team_id = $2
-                     UNION ALL
-                     SELECT NULL::TEXT, NULL::TEXT, NULL::TEXT, NULL::TEXT, p.id, p.name
-                     FROM projects p
-                     WHERE p.credential_id = $1
-                       AND (
-                         p.team_id = $2
-                         OR EXISTS (
-                           SELECT 1 FROM project_teams pt
-                           WHERE pt.project_id = p.id AND pt.team_id = $2
-                         )
-                       )
-                     ORDER BY 2, 4, 6",
+                    &store::sql::postgres(store::credentials::CREDENTIAL_USAGES),
                     &[&credential_id, &team_id],
                 )
                 .await?;
-            rows.iter().map(row_credential_usage).collect()
+            rows.iter()
+                .map(store::credentials::row_credential_usage)
+                .collect()
         })
     }
 
@@ -3493,31 +2956,13 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    "SELECT e.id, e.team_id, e.organization_id, e.name, e.image, e.pull_policy,
-                            e.network, e.description, e.created_at, COALESCE(o.name, ''),
-                            COALESCE(t.name, ''), e.tool
-                     FROM environments e
-                     LEFT JOIN organizations o ON o.id = e.organization_id
-                     LEFT JOIN teams t ON t.id = e.team_id
-                     WHERE (
-                         (e.team_id IS NULL OR e.team_id = '')
-                         AND (e.organization_id IS NULL OR e.organization_id = '')
-                     ) OR (
-                         (e.team_id IS NULL OR e.team_id = '')
-                         AND e.organization_id = $1
-                         AND $1 != ''
-                     ) OR e.team_id = $2
-                     ORDER BY
-                       CASE
-                         WHEN e.team_id IS NOT NULL AND e.team_id != '' THEN 2
-                         WHEN e.organization_id IS NOT NULL AND e.organization_id != '' THEN 1
-                         ELSE 0
-                       END,
-                       e.name",
+                    &store::sql::postgres(store::environments::LIST_ENVIRONMENTS),
                     &[&team.organization_id, &team.id],
                 )
                 .await?;
-            rows.iter().map(row_environment).collect()
+            rows.iter()
+                .map(store::environments::row_environment)
+                .collect()
         })
     }
 
@@ -3526,10 +2971,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "INSERT INTO environments (
-                        id, team_id, organization_id, name, tool, image, pull_policy, network,
-                        description, created_at
-                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                    &store::sql::postgres(store::environments::INSERT_ENVIRONMENT),
                     &[
                         &item.id,
                         &item.team_id,
@@ -3555,10 +2997,7 @@ impl Backend for PostgresBackend {
             let transaction = client.transaction().await?;
             let changed = transaction
                 .execute(
-                    "UPDATE environments
-                     SET team_id = $2, organization_id = $3, name = $4, tool = $5, image = $6,
-                         pull_policy = $7, network = $8, description = $9
-                     WHERE id = $1",
+                    &store::sql::postgres(store::environments::UPDATE_ENVIRONMENT),
                     &[
                         &item.id,
                         &item.team_id,
@@ -3582,7 +3021,7 @@ impl Backend for PostgresBackend {
                 }
                 transaction
                     .execute(
-                        "DELETE FROM settings WHERE key = $1 AND value = $2",
+                        &store::sql::postgres(store::environments::DELETE_DEFAULT_SETTING),
                         &[&key, &item.id],
                     )
                     .await?;
@@ -3597,7 +3036,10 @@ impl Backend for PostgresBackend {
             let mut client = self.pool.get().await.map_err(pool_error)?;
             let transaction = client.transaction().await?;
             let changed = transaction
-                .execute("DELETE FROM environments WHERE id = $1", &[&id])
+                .execute(
+                    &store::sql::postgres(store::environments::DELETE_ENVIRONMENT),
+                    &[&id],
+                )
                 .await?;
             if changed == 0 {
                 return Err(ApiError::NotFound);
@@ -3605,7 +3047,7 @@ impl Backend for PostgresBackend {
             for key in crate::settings::DEFAULT_ENVIRONMENT_KEYS {
                 transaction
                     .execute(
-                        "DELETE FROM settings WHERE key = $1 AND value = $2",
+                        &store::sql::postgres(store::environments::DELETE_DEFAULT_SETTING),
                         &[&key, &id],
                     )
                     .await?;
@@ -3620,13 +3062,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &format!(
-                        "SELECT {TEMPLATE_COLUMNS} FROM templates WHERE team_id = $1 ORDER BY name"
-                    ),
+                    &store::sql::postgres(store::templates::LIST_TEMPLATES),
                     &[&team_id],
                 )
                 .await?;
-            rows.iter().map(row_template).collect()
+            rows.iter().map(store::templates::row_template).collect()
         })
     }
 
@@ -3635,11 +3075,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    &format!("SELECT {TEMPLATE_COLUMNS} FROM templates WHERE id = $1"),
+                    &store::sql::postgres(store::templates::TEMPLATE_BY_ID),
                     &[&id],
                 )
                 .await?;
-            row.as_ref().map(row_template).transpose()
+            row.as_ref().map(store::templates::row_template).transpose()
         })
     }
 
@@ -3649,12 +3089,7 @@ impl Backend for PostgresBackend {
             let transaction = client.transaction().await?;
             transaction
                 .execute(
-                    "INSERT INTO templates (
-                        id, team_id, name, description, tool, project_id, inventory_id,
-                        credential_id, environment_id, no_environment, entrypoint, extra_vars,
-                        spec, created_at, update_on_launch, admin_saved, prompt_on_launch
-                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-                        $15, $16, $17)",
+                    &store::sql::postgres(store::templates::INSERT_TEMPLATE),
                     &[
                         &item.id,
                         &item.team_id,
@@ -3676,7 +3111,12 @@ impl Backend for PostgresBackend {
                     ],
                 )
                 .await?;
-            pg_write_template_credentials(&transaction, &item.id, credential_ids).await?;
+            store::templates::postgres_write_template_credentials(
+                &transaction,
+                &item.id,
+                credential_ids,
+            )
+            .await?;
             transaction.commit().await?;
             Ok(())
         })
@@ -3688,12 +3128,7 @@ impl Backend for PostgresBackend {
             let transaction = client.transaction().await?;
             let changed = transaction
                 .execute(
-                    "UPDATE templates SET name = $3, description = $4, tool = $5,
-                        project_id = $6, inventory_id = $7, credential_id = $8,
-                        environment_id = $9, no_environment = $10, entrypoint = $11,
-                        extra_vars = $12, spec = $13, update_on_launch = $14, admin_saved = $15,
-                        prompt_on_launch = $16
-                     WHERE id = $1 AND team_id = $2",
+                    &store::sql::postgres(store::templates::UPDATE_TEMPLATE),
                     &[
                         &item.id,
                         &item.team_id,
@@ -3717,7 +3152,12 @@ impl Backend for PostgresBackend {
             if changed == 0 {
                 return Err(ApiError::NotFound);
             }
-            pg_write_template_credentials(&transaction, &item.id, credential_ids).await?;
+            store::templates::postgres_write_template_credentials(
+                &transaction,
+                &item.id,
+                credential_ids,
+            )
+            .await?;
             transaction.commit().await?;
             Ok(())
         })
@@ -3729,7 +3169,7 @@ impl Backend for PostgresBackend {
             let transaction = client.transaction().await?;
             let changed = transaction
                 .execute(
-                    "DELETE FROM templates WHERE id = $1 AND team_id = $2",
+                    &store::sql::postgres(store::templates::DELETE_TEMPLATE),
                     &[&id, &team_id],
                 )
                 .await?;
@@ -3738,7 +3178,7 @@ impl Backend for PostgresBackend {
             }
             transaction
                 .execute(
-                    "DELETE FROM schedules WHERE target_kind = 'template' AND target_id = $1",
+                    &store::sql::postgres(store::templates::DELETE_TEMPLATE_SCHEDULES),
                     &[&id],
                 )
                 .await?;
@@ -3752,8 +3192,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    "SELECT credential_id FROM template_credentials
-                     WHERE template_id = $1 ORDER BY position, credential_id",
+                    &store::sql::postgres(store::templates::TEMPLATE_CREDENTIAL_IDS),
                     &[&template_id],
                 )
                 .await?;
@@ -3766,11 +3205,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    "SELECT tc.template_id, tc.credential_id
-                     FROM template_credentials tc
-                     JOIN templates t ON t.id = tc.template_id
-                     WHERE t.team_id = $1
-                     ORDER BY tc.template_id, tc.position, tc.credential_id",
+                    &store::sql::postgres(store::templates::LIST_TEMPLATE_CREDENTIAL_LINKS),
                     &[&team_id],
                 )
                 .await?;
@@ -3782,12 +3217,9 @@ impl Backend for PostgresBackend {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
-                .query(
-                    &format!("SELECT {HOOK_COLUMNS} FROM hooks WHERE team_id = $1 ORDER BY name"),
-                    &[&team_id],
-                )
+                .query(&store::sql::postgres(store::hooks::LIST_HOOKS), &[&team_id])
                 .await?;
-            rows.iter().map(row_hook).collect()
+            rows.iter().map(store::hooks::row_hook).collect()
         })
     }
 
@@ -3795,12 +3227,9 @@ impl Backend for PostgresBackend {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
-                .query_opt(
-                    &format!("SELECT {HOOK_COLUMNS} FROM hooks WHERE id = $1"),
-                    &[&id],
-                )
+                .query_opt(&store::sql::postgres(store::hooks::HOOK_BY_ID), &[&id])
                 .await?;
-            row.as_ref().map(row_hook).transpose()
+            row.as_ref().map(store::hooks::row_hook).transpose()
         })
     }
 
@@ -3809,10 +3238,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    "INSERT INTO hooks (
-                        id, team_id, name, token, match_alertname, match_status, template_id,
-                        workflow_id, extra_vars, enabled, created_at
-                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+                    &store::sql::postgres(store::hooks::INSERT_HOOK),
                     &[
                         &item.id,
                         &item.team_id,
@@ -3837,9 +3263,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    "UPDATE hooks SET name = $3, match_alertname = $4, match_status = $5,
-                        template_id = $6, workflow_id = $7, extra_vars = $8
-                     WHERE id = $1 AND team_id = $2",
+                    &store::sql::postgres(store::hooks::UPDATE_HOOK),
                     &[
                         &item.id,
                         &item.team_id,
@@ -3864,7 +3288,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    "DELETE FROM hooks WHERE id = $1 AND team_id = $2",
+                    &store::sql::postgres(store::hooks::DELETE_HOOK),
                     &[&id, &team_id],
                 )
                 .await?;
@@ -4323,15 +3747,9 @@ impl Backend for PostgresBackend {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
-                .query_opt(
-                    &format!(
-                        "SELECT {HOOK_COLUMNS} FROM hooks
-                         WHERE team_id = $1 ORDER BY created_at LIMIT 1"
-                    ),
-                    &[&team_id],
-                )
+                .query_opt(&store::sql::postgres(store::hooks::FIRST_HOOK), &[&team_id])
                 .await?;
-            row.as_ref().map(row_hook).transpose()
+            row.as_ref().map(store::hooks::row_hook).transpose()
         })
     }
 
