@@ -23,11 +23,13 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 node --check web/app.js
+node --test web/tests/
+npx playwright test --config web/e2e/playwright.config.js
 ```
 
-Tests must not need Ansible, Docker, or Helm. The admin password inside a test is `test-admin-pass` and nowhere else.
+Tests must not need Ansible, Docker, or Helm. The admin password inside a test is `test-admin-pass` and nowhere else. The Node unit tests use built-ins only. The Playwright smoke test needs `npm ci`, `npx playwright install --with-deps chromium`, and a debug `cargo build`; it starts its own SQLite server with the demo seed.
 
-Every push to a branch and every pull request starts GitHub Actions. The runs check formatting and Clippy, the Rust tests, the Rust docs, the syntax of `web/app.js`, Shellcheck, Hadolint, the pre-commit hooks, the Helm chart (`helm lint`, `helm template`, and kubeconform), `renovate.json`, and the pull request title. The `msrv` job runs `cargo +1.89.0 check`, because `rust-toolchain.toml` overrides the rustup default. That version is the minimum in `Cargo.toml`. Pull requests and branch pushes build the image with Rust 1.96, like the Dockerfile, and do not push it. A tag `v*` publishes `ghcr.io/koreograf/koreograf` for `linux/amd64` and `linux/arm64` after that same CI workflow succeeds. The image carries provenance, an SBOM, and a keyless signature. Nothing is deployed.
+Every push to a branch and every pull request starts GitHub Actions. The runs check formatting and Clippy, the Rust tests, the Rust docs, the syntax of `web/app.js`, the Node unit tests, the browser smoke test, Shellcheck, Hadolint, the pre-commit hooks, the Helm chart (`helm lint`, `helm template`, and kubeconform), `renovate.json`, and the pull request title. The `msrv` job runs `cargo +1.89.0 check`, because `rust-toolchain.toml` overrides the rustup default. That version is the minimum in `Cargo.toml`. Pull requests and branch pushes build the image with Rust 1.96, like the Dockerfile, and do not push it. A tag `v*` publishes `ghcr.io/koreograf/koreograf` for `linux/amd64` and `linux/arm64` after that same CI workflow succeeds. The image carries provenance, an SBOM, and a keyless signature. Nothing is deployed.
 
 ## Releases
 

@@ -1,8 +1,13 @@
 {
   "private": true,
   "description": "Commit message checks. The application itself is the Rust package.",
+  "scripts": {
+    "test:unit": "node --test web/tests/",
+    "test:e2e": "playwright test --config web/e2e/playwright.config.js"
+  },
   "devDependencies": {
     "@commitlint/cli": "21.2.4",
-    "@commitlint/config-conventional": "21.2.4"
+    "@commitlint/config-conventional": "21.2.4",
+    "@playwright/test": "1.65.0"
   }
 }
