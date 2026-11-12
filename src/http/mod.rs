@@ -6,16 +6,18 @@ mod settings;
 mod sources;
 mod work;
 
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
-use axum::extract::{Request, State};
+use axum::extract::{Path as UrlPath, Request, State};
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{any, get, post};
 use axum::Json;
 use axum::Router;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
+use tower_http::compression::CompressionLayer;
 use tower_http::set_header::response::SetMultipleResponseHeadersLayer;
 use tower_http::trace::TraceLayer;
 
@@ -197,10 +199,7 @@ pub fn router(state: Shared) -> Router {
         .route("/metrics", get(metrics))
         .route("/favicon.svg", get(favicon))
         .route("/", get(index))
-        .route("/app.js", get(script))
-        .route("/app.css", get(style))
-        .route("/i18n/de.json", get(messages_de))
-        .route("/i18n/en.json", get(messages_en))
+        .route("/{*path}", any(asset))
         .route("/hooks/{id}/{token}", post(work::ingest))
         .nest(
             "/api",
@@ -218,6 +217,7 @@ pub fn router(state: Shared) -> Router {
     ));
     app.layer(TraceLayer::new_for_http())
         .layer(response_headers(state.cfg.hsts))
+        .layer(CompressionLayer::new())
         .with_state(state)
 }
 
@@ -310,55 +310,99 @@ async fn favicon() -> impl IntoResponse {
     )
 }
 
-async fn index(State(state): State<Shared>) -> Response {
-    file(
-        &state.cfg.web_dir.join("index.html"),
-        "text/html; charset=utf-8",
-    )
-    .await
+async fn index(State(state): State<Shared>, headers: HeaderMap) -> Response {
+    asset_response(&state.cfg.web_dir, "index.html", &headers).await
 }
 
-async fn script(State(state): State<Shared>) -> Response {
-    file(
-        &state.cfg.web_dir.join("app.js"),
-        "text/javascript; charset=utf-8",
-    )
-    .await
-}
-
-async fn style(State(state): State<Shared>) -> Response {
-    file(
-        &state.cfg.web_dir.join("app.css"),
-        "text/css; charset=utf-8",
-    )
-    .await
-}
-
-async fn messages_de(State(state): State<Shared>) -> Response {
-    file(
-        &state.cfg.web_dir.join("i18n/de.json"),
-        "application/json; charset=utf-8",
-    )
-    .await
-}
-
-async fn messages_en(State(state): State<Shared>) -> Response {
-    file(
-        &state.cfg.web_dir.join("i18n/en.json"),
-        "application/json; charset=utf-8",
-    )
-    .await
-}
-
-async fn file(path: &Path, content_type: &'static str) -> Response {
-    match tokio::fs::read(path).await {
-        Ok(bytes) => (
-            [(header::CONTENT_TYPE, HeaderValue::from_static(content_type))],
-            bytes,
-        )
-            .into_response(),
-        Err(_) => (StatusCode::NOT_FOUND, "Not found.").into_response(),
+async fn asset(
+    State(state): State<Shared>,
+    method: Method,
+    UrlPath(path): UrlPath<String>,
+    headers: HeaderMap,
+) -> Response {
+    if !matches!(method, Method::GET | Method::HEAD) {
+        return asset_not_found();
     }
+    asset_response(&state.cfg.web_dir, &path, &headers).await
+}
+
+fn asset_not_found() -> Response {
+    (StatusCode::NOT_FOUND, "Not found.").into_response()
+}
+
+async fn asset_response(web_dir: &Path, requested: &str, request_headers: &HeaderMap) -> Response {
+    let Some(path) = asset_path(web_dir, requested).await else {
+        return asset_not_found();
+    };
+    let Some(content_type) = asset_content_type(&path) else {
+        return asset_not_found();
+    };
+    let bytes = match tokio::fs::read(&path).await {
+        Ok(bytes) => bytes,
+        Err(_) => return asset_not_found(),
+    };
+    let etag = format!("\"{}\"", hex::encode(Sha256::digest(&bytes)));
+    let Ok(etag_header) = HeaderValue::from_str(&etag) else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    let headers = [
+        (header::CONTENT_TYPE, HeaderValue::from_static(content_type)),
+        (header::CACHE_CONTROL, HeaderValue::from_static("no-cache")),
+        (header::ETAG, etag_header),
+    ];
+    if if_none_match(request_headers, &etag) {
+        return (StatusCode::NOT_MODIFIED, headers).into_response();
+    }
+    (headers, bytes).into_response()
+}
+
+async fn asset_path(web_dir: &Path, requested: &str) -> Option<PathBuf> {
+    let relative = Path::new(requested);
+    if requested.is_empty() || requested.starts_with('/') {
+        return None;
+    }
+    if relative
+        .components()
+        .any(|part| !matches!(part, Component::Normal(_)))
+    {
+        return None;
+    }
+    asset_content_type(relative)?;
+    let root = tokio::fs::canonicalize(web_dir).await.ok()?;
+    let path = tokio::fs::canonicalize(root.join(relative)).await.ok()?;
+    if !path.starts_with(&root) || !path.is_file() {
+        return None;
+    }
+    asset_content_type(&path)?;
+    Some(path)
+}
+
+fn asset_content_type(path: &Path) -> Option<&'static str> {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())?
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "js" => Some("text/javascript; charset=utf-8"),
+        "css" => Some("text/css; charset=utf-8"),
+        "json" => Some("application/json; charset=utf-8"),
+        "svg" => Some("image/svg+xml"),
+        "html" => Some("text/html; charset=utf-8"),
+        _ => None,
+    }
+}
+
+fn if_none_match(headers: &HeaderMap, etag: &str) -> bool {
+    headers
+        .get_all(header::IF_NONE_MATCH)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .any(|candidate| {
+            let candidate = candidate.trim();
+            candidate == "*" || candidate == etag || candidate.strip_prefix("W/") == Some(etag)
+        })
 }
 
 pub fn team_header(headers: &HeaderMap) -> AppResult<String> {

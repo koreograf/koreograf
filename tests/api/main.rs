@@ -15,5 +15,6 @@ mod schedules;
 mod settings;
 mod teams;
 mod templates;
+mod web_assets;
 mod web_source;
 mod workflows;
