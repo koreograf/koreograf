@@ -2,7 +2,8 @@ use std::path::PathBuf;
 
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
-use axum::Json;
+use axum::routing::{get, post};
+use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -18,6 +19,25 @@ use crate::Shared;
 
 use super::catalog::inventory_json;
 use super::{blank, check_static_ini, created, gate, require_name, team_header};
+
+pub(super) fn routes() -> Router<Shared> {
+    Router::new()
+        .route("/projects/{id}/contents", get(project_contents))
+        .route("/inventories/import", post(import_inventory))
+        .route("/inventories/netbox", post(create_netbox))
+        .route("/inventories/netbox/test", post(test_netbox))
+        .route("/inventories/netbox/preview", post(preview_netbox))
+        .route("/inventories/{id}/sync", post(sync_inventory))
+        .route("/inventories/{id}/sources", post(add_source))
+        .route(
+            "/inventories/{id}/sources/{source_id}",
+            get(get_source).put(update_source).delete(delete_source),
+        )
+        .route(
+            "/inventories/{id}/sources/{source_id}/sync",
+            post(sync_source),
+        )
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

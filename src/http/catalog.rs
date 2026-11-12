@@ -2,7 +2,8 @@ use std::collections::BTreeSet;
 
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
-use axum::Json;
+use axum::routing::{delete, get, post, put};
+use axum::{Json, Router};
 use chrono::{DateTime, Duration as ChronoDuration, NaiveDate, SecondsFormat, TimeZone, Utc};
 use chrono_tz::Tz;
 use serde::Deserialize;
@@ -23,6 +24,65 @@ use super::{
     blank, check_static_ini, created, gate, no_content, require_description, require_name,
     team_header,
 };
+
+pub(super) fn routes() -> Router<Shared> {
+    Router::new()
+        .route("/overview", get(overview))
+        .route("/dashboard", get(dashboard))
+        .route("/runner", get(runner_status))
+        .route("/runner/preflight", get(runner_preflight))
+        .route("/teams", get(list_teams).post(create_team))
+        .route("/teams/{id}", put(update_team))
+        .route("/teams/{id}/members", get(list_members).post(add_member))
+        .route("/teams/{id}/members/{user_id}", delete(remove_member))
+        .route("/projects", get(list_projects).post(create_project))
+        .route(
+            "/projects/{id}",
+            get(get_project).put(update_project).delete(delete_project),
+        )
+        .route("/projects/{id}/sync", post(sync_project))
+        .route("/inventories", get(list_inventories).post(create_inventory))
+        .route("/inventories/{id}/hosts", get(list_inventory_hosts))
+        .route("/inventories/{id}/hosts/{name}", get(get_inventory_host))
+        .route("/inventories/{id}/groups", get(list_inventory_groups))
+        .route("/inventories/{id}/groups/{name}", get(get_inventory_group))
+        .route(
+            "/inventories/{id}",
+            get(get_inventory)
+                .put(update_inventory)
+                .delete(delete_inventory),
+        )
+        .route(
+            "/organizations",
+            get(list_organizations).post(create_organization),
+        )
+        .route(
+            "/organizations/{id}",
+            get(get_organization).put(update_organization),
+        )
+        .route(
+            "/credentials",
+            get(list_credentials).post(create_credential),
+        )
+        .route(
+            "/credentials/{id}",
+            get(get_credential)
+                .put(update_credential)
+                .delete(delete_credential),
+        )
+        .route(
+            "/environments",
+            get(list_environments).post(create_environment),
+        )
+        .route(
+            "/environments/{id}",
+            get(get_environment)
+                .put(update_environment)
+                .delete(delete_environment),
+        )
+        .route("/cache", get(cache))
+        .route("/plugins", get(plugins))
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

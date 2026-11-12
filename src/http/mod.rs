@@ -8,11 +8,11 @@ mod work;
 
 use std::path::Path;
 
-use axum::extract::{DefaultBodyLimit, Request, State};
+use axum::extract::{Request, State};
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put};
+use axum::routing::{get, post};
 use axum::Json;
 use axum::Router;
 use serde_json::Value;
@@ -145,195 +145,14 @@ async fn origin_guard(State(state): State<Shared>, req: Request, next: Next) -> 
 fn api_routes() -> Router<Shared> {
     Router::new()
         .route("/version", get(version))
-        .route("/maintenance", get(admin::maintenance_status))
-        .route("/login", post(session::login))
-        .route("/logout", post(session::logout))
-        .route("/me", get(session::me).put(session::update_me))
-        .route(
-            "/me/tokens",
-            get(session::list_tokens).post(session::create_token),
-        )
-        .route(
-            "/me/tokens/{id}",
-            axum::routing::delete(session::delete_token),
-        )
-        .route(
-            "/users",
-            get(session::list_users).post(session::create_user),
-        )
-        .route(
-            "/users/{id}",
-            get(session::get_user)
-                .put(session::update_user)
-                .delete(session::delete_user),
-        )
-        .route("/assistant", get(llm::status))
-        .route("/assistant/chat", post(llm::chat))
-        .route("/assistant/confirm", post(llm::confirm))
-        .route("/assistant/cancel", post(llm::cancel))
-        .route("/overview", get(catalog::overview))
-        .route("/dashboard", get(catalog::dashboard))
-        .route("/runner", get(catalog::runner_status))
-        .route("/runner/preflight", get(catalog::runner_preflight))
-        .route(
-            "/teams",
-            get(catalog::list_teams).post(catalog::create_team),
-        )
-        .route("/teams/{id}", axum::routing::put(catalog::update_team))
-        .route(
-            "/teams/{id}/members",
-            get(catalog::list_members).post(catalog::add_member),
-        )
-        .route(
-            "/teams/{id}/members/{user_id}",
-            axum::routing::delete(catalog::remove_member),
-        )
-        .route(
-            "/projects",
-            get(catalog::list_projects).post(catalog::create_project),
-        )
-        .route(
-            "/projects/{id}",
-            get(catalog::get_project)
-                .put(catalog::update_project)
-                .delete(catalog::delete_project),
-        )
-        .route("/projects/{id}/sync", post(catalog::sync_project))
-        .route("/projects/{id}/contents", get(sources::project_contents))
-        .route(
-            "/inventories",
-            get(catalog::list_inventories).post(catalog::create_inventory),
-        )
-        .route("/inventories/import", post(sources::import_inventory))
-        .route("/inventories/netbox", post(sources::create_netbox))
-        .route("/inventories/netbox/test", post(sources::test_netbox))
-        .route("/inventories/netbox/preview", post(sources::preview_netbox))
-        .route("/inventories/{id}/sync", post(sources::sync_inventory))
-        .route(
-            "/inventories/{id}/hosts",
-            get(catalog::list_inventory_hosts),
-        )
-        .route(
-            "/inventories/{id}/hosts/{name}",
-            get(catalog::get_inventory_host),
-        )
-        .route(
-            "/inventories/{id}/groups",
-            get(catalog::list_inventory_groups),
-        )
-        .route(
-            "/inventories/{id}/groups/{name}",
-            get(catalog::get_inventory_group),
-        )
-        .route("/inventories/{id}/sources", post(sources::add_source))
-        .route(
-            "/inventories/{id}/sources/{source_id}",
-            get(sources::get_source)
-                .put(sources::update_source)
-                .delete(sources::delete_source),
-        )
-        .route(
-            "/inventories/{id}/sources/{source_id}/sync",
-            post(sources::sync_source),
-        )
-        .route(
-            "/inventories/{id}",
-            get(catalog::get_inventory)
-                .put(catalog::update_inventory)
-                .delete(catalog::delete_inventory),
-        )
-        .route(
-            "/organizations",
-            get(catalog::list_organizations).post(catalog::create_organization),
-        )
-        .route(
-            "/organizations/{id}",
-            get(catalog::get_organization).put(catalog::update_organization),
-        )
-        .route(
-            "/credentials",
-            get(catalog::list_credentials).post(catalog::create_credential),
-        )
-        .route(
-            "/credentials/{id}",
-            get(catalog::get_credential)
-                .put(catalog::update_credential)
-                .delete(catalog::delete_credential),
-        )
-        .route(
-            "/environments",
-            get(catalog::list_environments).post(catalog::create_environment),
-        )
-        .route(
-            "/environments/{id}",
-            get(catalog::get_environment)
-                .put(catalog::update_environment)
-                .delete(catalog::delete_environment),
-        )
-        .route("/cache", get(catalog::cache))
-        .route("/plugins", get(catalog::plugins))
-        .route(
-            "/templates",
-            get(work::list_templates).post(work::create_template),
-        )
-        .route(
-            "/templates/{id}",
-            axum::routing::put(work::update_template).delete(work::delete_template),
-        )
-        .route("/templates/{id}/launch", post(work::launch_template))
-        .route(
-            "/templates/{id}/schedules",
-            get(schedules::list_for_template).post(schedules::create_for_template),
-        )
-        .route(
-            "/workflows/{id}/schedules",
-            get(schedules::list_for_workflow).post(schedules::create_for_workflow),
-        )
-        .route("/schedules", get(schedules::list_for_team))
-        .route("/schedules/preview", post(schedules::preview))
-        .route(
-            "/schedules/{id}",
-            put(schedules::update).delete(schedules::remove),
-        )
-        .route("/schedules/{id}/enabled", post(schedules::set_enabled))
-        .route("/schedules/{id}/missed", post(schedules::answer_missed))
-        .route("/jobs", get(work::list_jobs))
-        .route("/jobs/{id}", get(work::get_job))
-        .route("/jobs/{id}/cancel", post(work::cancel_job))
-        .route("/jobs/{id}/relaunch", post(work::relaunch_job))
-        .route("/jobs/{id}/output", get(work::job_output))
-        .route("/jobs/{id}/events", get(work::job_events))
-        .route(
-            "/workflows",
-            get(work::list_workflows).post(work::create_workflow),
-        )
-        .route(
-            "/workflows/{id}",
-            get(work::get_workflow)
-                .put(work::update_workflow)
-                .delete(work::delete_workflow),
-        )
-        .route("/workflows/{id}/launch", post(work::launch_workflow))
-        .route("/workflow-jobs/{id}", get(work::get_workflow_job))
-        .route("/hooks", get(work::list_hooks).post(work::create_hook))
-        .route(
-            "/hooks/{id}",
-            axum::routing::delete(work::delete_hook).put(work::update_hook),
-        )
-        .route("/hooks/{id}/test", post(work::test_hook))
-        .route("/hooks/{id}/deliveries", get(work::list_deliveries))
-        .route(
-            "/settings",
-            get(settings::get_settings).put(settings::put_settings),
-        )
-        .merge(
-            Router::new()
-                .route("/admin/backup", get(admin::download).post(admin::restore))
-                .route("/admin/database/status", get(admin::database_status))
-                .route("/admin/database/check", post(admin::database_check))
-                .route("/admin/database/migrate", post(admin::database_migrate))
-                .layer(DefaultBodyLimit::max(256 * 1024 * 1024)),
-        )
+        .merge(admin::routes())
+        .merge(catalog::routes())
+        .merge(llm::routes())
+        .merge(schedules::routes())
+        .merge(session::routes())
+        .merge(settings::routes())
+        .merge(sources::routes())
+        .merge(work::routes())
         .fallback(not_found)
 }
 
