@@ -3540,7 +3540,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    &store::sql::postgres(store::settings::MIGRATION_REPORT),
+                    &store::sql::postgres(store::settings::SETTING),
                     &[&crate::migration::REPORT_KEY],
                 )
                 .await?;

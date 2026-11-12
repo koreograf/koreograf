@@ -7,7 +7,6 @@ use crate::store::sql;
 
 pub(crate) const SETTINGS_ROWS: &str = "SELECT key, value FROM settings";
 pub(crate) const SETTING: &str = "SELECT value FROM settings WHERE key = ?1";
-pub(crate) const MIGRATION_REPORT: &str = "SELECT value FROM settings WHERE key = ?1";
 pub(crate) const DELETE_SETTINGS: &str = "DELETE FROM settings";
 pub(crate) const INSERT_SETTING: &str = "INSERT INTO settings (key, value) VALUES (?1, ?2)
      ON CONFLICT (key) DO UPDATE SET value = excluded.value";
