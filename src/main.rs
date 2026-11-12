@@ -1,13 +1,12 @@
 #![forbid(unsafe_code)]
 
-use std::env;
 use std::process;
 
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let args: Vec<String> = env::args().collect();
+    let args: Vec<String> = std::env::args().collect();
     if let Some(kind) = koreograf::askpass_kind(&args) {
         let prompt = args.get(1).map(String::as_str).unwrap_or_default();
         match koreograf::askpass(kind, prompt) {
@@ -65,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
     }
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("koreograf=info,tower_http=info"));
-    let json = env::var("KOREOGRAF_LOG_FORMAT")
+    let json = std::env::var("KOREOGRAF_LOG_FORMAT")
         .map(|value| value.eq_ignore_ascii_case("json"))
         .unwrap_or(false);
     if json {
