@@ -1092,7 +1092,7 @@ mod tests {
             .to_string();
         let template_id = {
             let db = state.db().expect("db");
-            db::insert_user(
+            crate::store::auth::insert_user(
                 &db,
                 "operator-user",
                 "operator",
@@ -1242,7 +1242,7 @@ mod tests {
             .to_string();
         let template_id = {
             let db = state.db().expect("db");
-            db::insert_user(
+            crate::store::auth::insert_user(
                 &db,
                 "operator-user",
                 "operator",

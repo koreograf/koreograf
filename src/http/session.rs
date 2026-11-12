@@ -772,7 +772,6 @@ mod tests {
     #[test]
     fn ldap_sign_in_does_not_take_over_a_local_account() {
         use crate::config::{Config, CookieSecure, LocalJobs, RunnerMode};
-        use crate::db;
         use crate::error::ApiError;
         use std::path::PathBuf;
 
@@ -815,7 +814,7 @@ mod tests {
         .expect_err("local account");
         assert!(matches!(err, ApiError::SignInFailed));
         let db = state.db().expect("db");
-        let user = db::user_by_username(&db, "admin")
+        let user = crate::store::auth::user_by_username(&db, "admin")
             .expect("read")
             .expect("admin");
         assert_eq!(user.auth_source, "local");

@@ -843,56 +843,6 @@ fn flag(value: i64) -> bool {
     value != 0
 }
 
-pub fn insert_user(
-    c: &Connection,
-    id: &str,
-    username: &str,
-    display_name: &str,
-    password_hash: Option<&str>,
-    auth_source: &str,
-    is_admin: bool,
-) -> AppResult<()> {
-    c.execute(
-        "INSERT INTO users (id, username, display_name, password_hash, auth_source, is_admin, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![id, username, display_name, password_hash, auth_source, is_admin as i64, now()],
-    )?;
-    Ok(())
-}
-
-const USER_SELECT: &str =
-    "id, username, display_name, password_hash, auth_source, is_admin, disabled, created_at, email";
-
-pub fn user_by_username(c: &Connection, username: &str) -> AppResult<Option<User>> {
-    c.query_row(
-        &format!("SELECT {USER_SELECT} FROM users WHERE username = ?1 COLLATE NOCASE"),
-        [username],
-        map_user,
-    )
-    .optional()
-    .map_err(Into::into)
-}
-
-pub fn user_by_id(c: &Connection, id: &str) -> AppResult<Option<User>> {
-    c.query_row(
-        &format!("SELECT {USER_SELECT} FROM users WHERE id = ?1"),
-        [id],
-        map_user,
-    )
-    .optional()
-    .map_err(Into::into)
-}
-
-pub fn list_users(c: &Connection) -> AppResult<Vec<(User, i64)>> {
-    let mut stmt = c.prepare(&format!(
-        "SELECT {USER_SELECT},
-                (SELECT COUNT(*) FROM memberships m WHERE m.user_id = users.id)
-         FROM users ORDER BY username COLLATE NOCASE"
-    ))?;
-    let rows = stmt.query_map([], |row| Ok((map_user(row)?, row.get::<_, i64>(9)?)))?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
-}
-
 pub fn list_user_memberships(c: &Connection, user_id: &str) -> AppResult<Vec<UserMembership>> {
     let mut stmt = c.prepare(
         "SELECT t.id, t.name, COALESCE(t.organization_id, ''), COALESCE(o.name, ''), m.role, m.source
@@ -913,75 +863,6 @@ pub fn list_user_memberships(c: &Connection, user_id: &str) -> AppResult<Vec<Use
         })
     })?;
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
-}
-
-pub fn update_profile(
-    c: &Connection,
-    id: &str,
-    display_name: &str,
-    email: Option<&str>,
-    password_hash: Option<&str>,
-) -> AppResult<()> {
-    if let Some(password_hash) = password_hash {
-        c.execute(
-            "UPDATE users SET display_name = ?2, email = ?3, password_hash = ?4 WHERE id = ?1",
-            params![id, display_name, email, password_hash],
-        )?;
-    } else {
-        c.execute(
-            "UPDATE users SET display_name = ?2, email = ?3 WHERE id = ?1",
-            params![id, display_name, email],
-        )?;
-    }
-    Ok(())
-}
-
-pub fn set_user_email(c: &Connection, id: &str, email: Option<&str>) -> AppResult<()> {
-    c.execute(
-        "UPDATE users SET email = ?2 WHERE id = ?1",
-        params![id, email],
-    )?;
-    Ok(())
-}
-
-pub fn update_user(
-    c: &Connection,
-    id: &str,
-    display_name: &str,
-    is_admin: bool,
-    disabled: bool,
-    password_hash: Option<&str>,
-) -> AppResult<()> {
-    if let Some(password_hash) = password_hash {
-        c.execute(
-            "UPDATE users SET display_name = ?2, is_admin = ?3, disabled = ?4, password_hash = ?5 WHERE id = ?1",
-            params![id, display_name, is_admin as i64, disabled as i64, password_hash],
-        )?;
-    } else {
-        c.execute(
-            "UPDATE users SET display_name = ?2, is_admin = ?3, disabled = ?4 WHERE id = ?1",
-            params![id, display_name, is_admin as i64, disabled as i64],
-        )?;
-    }
-    Ok(())
-}
-
-pub fn delete_user_sessions(c: &Connection, user_id: &str) -> AppResult<()> {
-    c.execute("DELETE FROM sessions WHERE user_id = ?1", [user_id])?;
-    Ok(())
-}
-
-pub fn delete_user(c: &Connection, id: &str) -> AppResult<bool> {
-    Ok(c.execute("DELETE FROM users WHERE id = ?1", [id])? > 0)
-}
-
-pub fn other_active_admins(c: &Connection, user_id: &str) -> AppResult<i64> {
-    c.query_row(
-        "SELECT COUNT(*) FROM users WHERE is_admin != 0 AND disabled = 0 AND id != ?1",
-        [user_id],
-        |row| row.get(0),
-    )
-    .map_err(Into::into)
 }
 
 pub fn membership_source(
@@ -1010,120 +891,6 @@ pub fn grant_manual_membership(
         ));
     }
     upsert_membership(c, team_id, user_id, role, "manual")
-}
-
-fn map_user(row: &rusqlite::Row<'_>) -> rusqlite::Result<User> {
-    Ok(User {
-        id: row.get(0)?,
-        username: row.get(1)?,
-        display_name: row.get(2)?,
-        password_hash: row.get(3)?,
-        auth_source: row.get(4)?,
-        is_admin: flag(row.get(5)?),
-        disabled: flag(row.get(6)?),
-        created_at: row.get(7)?,
-        email: row.get(8)?,
-    })
-}
-
-pub fn create_session(c: &Connection, token: &str, user_id: &str) -> AppResult<()> {
-    c.execute(
-        "INSERT INTO sessions (token, user_id, expires_at) VALUES (?1, ?2, ?3)",
-        params![token, user_id, plus_secs(7 * 24 * 3600)],
-    )?;
-    Ok(())
-}
-
-pub fn delete_session(c: &Connection, token: &str) -> AppResult<()> {
-    c.execute("DELETE FROM sessions WHERE token = ?1", [token])?;
-    Ok(())
-}
-
-pub fn purge_sessions(c: &Connection) -> AppResult<()> {
-    c.execute("DELETE FROM sessions WHERE expires_at < ?1", [now()])?;
-    Ok(())
-}
-
-pub fn user_by_session(c: &Connection, token: &str) -> AppResult<Option<User>> {
-    let found = c
-        .query_row(
-            "SELECT u.id, u.username, u.display_name, u.password_hash, u.auth_source, u.is_admin, u.disabled, u.created_at, u.email, s.expires_at
-             FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?1",
-            [token],
-            |row| {
-                let expires: String = row.get(9)?;
-                Ok((map_user(row)?, expires))
-            },
-        )
-        .optional()?;
-    let Some((user, expires)) = found else {
-        return Ok(None);
-    };
-    if expires < now() {
-        delete_session(c, token)?;
-        return Ok(None);
-    }
-    Ok(Some(user))
-}
-
-pub fn create_api_token(
-    c: &Connection,
-    id: &str,
-    user_id: &str,
-    name: &str,
-    prefix: &str,
-    token_hash: &str,
-    created_at: &str,
-) -> AppResult<()> {
-    c.execute(
-        "INSERT INTO api_tokens (id, user_id, name, prefix, token_hash, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![id, user_id, name, prefix, token_hash, created_at],
-    )?;
-    Ok(())
-}
-
-pub fn list_api_tokens(c: &Connection, user_id: &str) -> AppResult<Vec<ApiToken>> {
-    let mut stmt = c.prepare(
-        "SELECT id, name, prefix, created_at, last_used_at
-         FROM api_tokens WHERE user_id = ?1 ORDER BY created_at, name",
-    )?;
-    let rows = stmt.query_map([user_id], |row| {
-        Ok(ApiToken {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            prefix: row.get(2)?,
-            created_at: row.get(3)?,
-            last_used_at: row.get(4)?,
-        })
-    })?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
-}
-
-pub fn delete_api_token(c: &Connection, id: &str, user_id: &str) -> AppResult<bool> {
-    Ok(c.execute(
-        "DELETE FROM api_tokens WHERE id = ?1 AND user_id = ?2",
-        params![id, user_id],
-    )? > 0)
-}
-
-pub fn user_by_api_token(c: &Connection, token_hash: &str) -> AppResult<Option<User>> {
-    let found = c
-        .query_row(
-            "SELECT u.id, u.username, u.display_name, u.password_hash, u.auth_source, u.is_admin, u.disabled, u.created_at, u.email, t.id
-             FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?1",
-            [token_hash],
-            |row| Ok((map_user(row)?, row.get::<_, String>(9)?)),
-        )
-        .optional()?;
-    let Some((user, token_id)) = found else {
-        return Ok(None);
-    };
-    c.execute(
-        "UPDATE api_tokens SET last_used_at = ?2 WHERE id = ?1",
-        params![token_id, now()],
-    )?;
-    Ok(Some(user))
 }
 
 pub fn insert_team(
@@ -1292,42 +1059,6 @@ pub fn team_by_id(c: &Connection, id: &str) -> AppResult<Option<Team>> {
 pub fn count_teams(c: &Connection) -> AppResult<i64> {
     c.query_row("SELECT COUNT(*) FROM teams", [], |row| row.get(0))
         .map_err(Into::into)
-}
-
-pub fn seed_state(c: &Connection, key: &str) -> AppResult<Option<String>> {
-    c.query_row(
-        "SELECT value FROM seed_state WHERE key = ?1",
-        [key],
-        |row| row.get(0),
-    )
-    .optional()
-    .map_err(Into::into)
-}
-
-pub fn set_seed_state(c: &Connection, key: &str, value: &str) -> AppResult<()> {
-    c.execute(
-        "INSERT INTO seed_state (key, value) VALUES (?1, ?2)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        params![key, value],
-    )?;
-    Ok(())
-}
-
-pub fn setting(c: &Connection, key: &str) -> AppResult<Option<String>> {
-    c.query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
-        row.get(0)
-    })
-    .optional()
-    .map_err(Into::into)
-}
-
-pub fn set_setting(c: &Connection, key: &str, value: &str) -> AppResult<()> {
-    c.execute(
-        "INSERT INTO settings (key, value) VALUES (?1, ?2)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        params![key, value],
-    )?;
-    Ok(())
 }
 
 fn map_team(row: &rusqlite::Row<'_>) -> rusqlite::Result<Team> {
@@ -3855,7 +3586,7 @@ mod tests {
         let conn = open(&dir.join("koreograf.db")).unwrap();
         insert_organization(&conn, "org", "Plattform", "").unwrap();
         insert_team(&conn, "team", "org", "Plattform", "", None).unwrap();
-        insert_user(&conn, "user", "ada", "Ada", None, "ldap", false).unwrap();
+        crate::store::auth::insert_user(&conn, "user", "ada", "Ada", None, "ldap", false).unwrap();
         upsert_membership(&conn, "team", "user", "operator", "ldap").unwrap();
         let err = grant_manual_membership(&conn, "team", "user", "owner").unwrap_err();
         assert_eq!(

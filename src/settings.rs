@@ -799,17 +799,6 @@ fn decrypt_secret(state: &Shared, raw: Option<&String>) -> AppResult<String> {
         .map_err(|_| ApiError::bad("the_saved_setting_cannot_be_read"))
 }
 
-pub(crate) fn read_rows(db: &Connection) -> AppResult<HashMap<String, String>> {
-    let mut stmt = db.prepare("SELECT key, value FROM settings")?;
-    let mapped = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
-    let mut rows = HashMap::new();
-    for item in mapped {
-        let (key, value) = item?;
-        rows.insert(key, value);
-    }
-    Ok(rows)
-}
-
 fn proxy_from_env() -> (ProxySettings, bool) {
     let raw = first_env(&["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"]);
     let no_proxy = first_env(&["no_proxy", "NO_PROXY"]).unwrap_or_default();
