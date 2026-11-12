@@ -12,13 +12,22 @@ RUN apk add --no-cache build-base cmake perl pkgconf
 SHELL ["/bin/ash", "-o", "pipefail", "-c"]
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
-COPY src ./src
 ARG TARGETARCH
 RUN case "$TARGETARCH" in \
         amd64) target=x86_64-unknown-linux-musl ;; \
         arm64) target=aarch64-unknown-linux-musl ;; \
         *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
     esac \
+    && mkdir src \
+    && printf 'fn main() {}\n' > src/main.rs \
+    && cargo build --release --locked --target "$target"
+COPY src ./src
+RUN case "$TARGETARCH" in \
+        amd64) target=x86_64-unknown-linux-musl ;; \
+        arm64) target=aarch64-unknown-linux-musl ;; \
+        *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+    && touch src/main.rs src/lib.rs \
     && cargo build --release --locked --target "$target" \
     && cp "target/$target/release/koreograf" /koreograf
 
