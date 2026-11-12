@@ -120,6 +120,12 @@ pub fn message(key: &str, vars: &[(&str, &str)]) -> String {
     }
 }
 
+impl From<crate::runner::RunnerError> for ApiError {
+    fn from(err: crate::runner::RunnerError) -> Self {
+        Self::bad(err.to_string())
+    }
+}
+
 impl From<rusqlite::Error> for ApiError {
     fn from(err: rusqlite::Error) -> Self {
         let msg = err.to_string();

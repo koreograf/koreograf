@@ -202,7 +202,7 @@ pub async fn import_inventory(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let path = body.path.trim();
-    runner::check_relative(path).map_err(ApiError::bad)?;
+    runner::check_relative(path).map_err(ApiError::from)?;
     if path.is_empty() {
         return Err(ApiError::bad("path_is_missing"));
     }
@@ -703,7 +703,7 @@ fn project_dir(state: &Shared, project: &Project) -> AppResult<PathBuf> {
             &state.cfg.data_dir,
             &state.cfg.project_roots,
         )
-        .map_err(ApiError::bad),
+        .map_err(ApiError::from),
         "git" => {
             let dest = state.cfg.data_dir.join("checkouts").join(&project.id);
             if dest.join(".git").is_dir() {
@@ -1099,7 +1099,7 @@ fn resolve_project_update(
         .unwrap_or(&current_project_id)
         .trim();
     let path = body.path.as_deref().unwrap_or(&current_path).trim();
-    runner::check_relative(path).map_err(ApiError::bad)?;
+    runner::check_relative(path).map_err(ApiError::from)?;
     if path.is_empty() {
         return Err(ApiError::bad("path_is_missing"));
     }
@@ -1216,7 +1216,7 @@ async fn resolve_source(
         }
         "project" => {
             let path = input.path.trim();
-            runner::check_relative(path).map_err(ApiError::bad)?;
+            runner::check_relative(path).map_err(ApiError::from)?;
             if path.is_empty() {
                 return Err(ApiError::bad("path_is_missing"));
             }
