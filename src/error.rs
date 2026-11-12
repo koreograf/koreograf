@@ -6,9 +6,26 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::de::DeserializeOwned;
-use serde_json::{json, Value};
+use serde::Serialize;
+use serde_json::Value;
 
 pub type AppResult<T> = Result<T, ApiError>;
+
+#[derive(Serialize)]
+pub struct ErrorBody {
+    error: String,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    vars: BTreeMap<String, String>,
+}
+
+impl ErrorBody {
+    pub fn key(key: impl Into<String>) -> Self {
+        Self {
+            error: key.into(),
+            vars: BTreeMap::new(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserMessage {
@@ -207,11 +224,7 @@ impl IntoResponse for ApiError {
                 )
             }
         };
-        let body = if vars.is_empty() {
-            json!({ "error": key })
-        } else {
-            json!({ "error": key, "vars": vars })
-        };
+        let body = ErrorBody { error: key, vars };
         (status, Json(body)).into_response()
     }
 }

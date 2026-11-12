@@ -8,14 +8,13 @@ use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
-use serde::Deserialize;
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::{self, AuthUser};
 use crate::crypto::{self, hash_password};
 use crate::db::{self, User};
-use crate::error::{ApiError, ApiJson, AppResult};
+use crate::error::{ApiError, ApiJson, AppResult, ErrorBody};
 use crate::ldap;
 use crate::Shared;
 
@@ -88,6 +87,76 @@ pub(super) struct UserUpdate {
     disabled: bool,
     #[serde(default)]
     password: String,
+}
+
+#[derive(Serialize)]
+pub(super) struct TeamResponse {
+    id: String,
+    name: String,
+    description: String,
+    ldap_group: Option<String>,
+    organization_id: String,
+    organization_name: String,
+    role: String,
+}
+
+#[derive(Serialize)]
+pub(super) struct ProfileResponse {
+    id: String,
+    username: String,
+    display_name: String,
+    auth_source: String,
+    email: Option<String>,
+    is_admin: bool,
+    teams: Vec<TeamResponse>,
+    memberships: Vec<db::UserMembership>,
+}
+
+#[derive(Serialize)]
+pub(super) struct AccountResponse {
+    id: String,
+    username: String,
+    display_name: String,
+    auth_source: String,
+    email: Option<String>,
+    is_admin: bool,
+    disabled: bool,
+    created_at: String,
+    team_count: i64,
+}
+
+#[derive(Serialize)]
+pub(super) struct AccountDetailResponse {
+    #[serde(flatten)]
+    account: AccountResponse,
+    memberships: Vec<db::UserMembership>,
+}
+
+#[derive(Serialize)]
+#[serde(transparent)]
+pub(super) struct AccountListResponse(Vec<AccountResponse>);
+
+#[derive(Serialize)]
+pub(super) struct TokenResponse {
+    id: String,
+    name: String,
+    prefix: String,
+    created_at: String,
+    last_used_at: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(transparent)]
+pub(super) struct TokenListResponse(Vec<TokenResponse>);
+
+#[derive(Serialize)]
+pub(super) struct CreatedTokenResponse {
+    id: String,
+    name: String,
+    prefix: String,
+    secret: String,
+    created_at: String,
+    last_used_at: Option<String>,
 }
 
 pub async fn login(
@@ -177,7 +246,7 @@ fn throttled(retry: Duration) -> Response {
     let seconds = retry.as_secs().max(1);
     let mut response = (
         StatusCode::TOO_MANY_REQUESTS,
-        Json(json!({ "error": "invalid_username_or_password" })),
+        Json(ErrorBody::key("invalid_username_or_password")),
     )
         .into_response();
     if let Ok(value) = HeaderValue::from_str(&seconds.to_string()) {
@@ -204,7 +273,10 @@ pub async fn logout(
     Ok(response)
 }
 
-pub async fn me(State(state): State<Shared>, user: AuthUser) -> Result<Json<Value>, ApiError> {
+pub async fn me(
+    State(state): State<Shared>,
+    user: AuthUser,
+) -> Result<Json<ProfileResponse>, ApiError> {
     Ok(Json(profile_json(&state, &user)?))
 }
 
@@ -212,7 +284,7 @@ pub async fn update_me(
     State(state): State<Shared>,
     user: AuthUser,
     ApiJson(body): ApiJson<MeUpdate>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<ProfileResponse>> {
     let display = trimmed_display(&body.display_name)?;
     let existing = state
         .store()
@@ -242,16 +314,21 @@ pub async fn update_me(
     Ok(Json(profile_json(&state, &updated.into())?))
 }
 
-pub async fn list_tokens(State(state): State<Shared>, user: AuthUser) -> AppResult<Json<Value>> {
+pub async fn list_tokens(
+    State(state): State<Shared>,
+    user: AuthUser,
+) -> AppResult<Json<TokenListResponse>> {
     let tokens = state.store().list_api_tokens(&user.id)?;
-    Ok(Json(json!(tokens)))
+    Ok(Json(TokenListResponse(
+        tokens.iter().map(TokenResponse::new).collect(),
+    )))
 }
 
 pub async fn create_token(
     State(state): State<Shared>,
     user: AuthUser,
     ApiJson(body): ApiJson<TokenBody>,
-) -> Result<Response, ApiError> {
+) -> Result<(StatusCode, Json<CreatedTokenResponse>), ApiError> {
     let name = super::require_name(&body.name)?;
     let secret = crypto::api_token();
     let prefix = crypto::token_prefix(&secret);
@@ -265,14 +342,17 @@ pub async fn create_token(
         &crypto::hash_api_token(&secret),
         &created_at,
     )?;
-    Ok(super::created(json!({
-        "id": id,
-        "name": name,
-        "prefix": prefix,
-        "secret": secret,
-        "created_at": created_at,
-        "last_used_at": null,
-    })))
+    Ok((
+        StatusCode::CREATED,
+        Json(CreatedTokenResponse {
+            id,
+            name,
+            prefix,
+            secret,
+            created_at,
+            last_used_at: None,
+        }),
+    ))
 }
 
 pub async fn delete_token(
@@ -286,13 +366,16 @@ pub async fn delete_token(
     Ok(super::no_content())
 }
 
-pub async fn list_users(State(state): State<Shared>, user: AuthUser) -> AppResult<Json<Value>> {
+pub async fn list_users(
+    State(state): State<Shared>,
+    user: AuthUser,
+) -> AppResult<Json<AccountListResponse>> {
     require_admin(&user)?;
     let users = state.store().list_users()?;
-    Ok(Json(Value::Array(
+    Ok(Json(AccountListResponse(
         users
             .iter()
-            .map(|(item, team_count)| account_json(item, *team_count))
+            .map(|(item, team_count)| AccountResponse::new(item, *team_count))
             .collect(),
     )))
 }
@@ -301,18 +384,18 @@ pub async fn get_user(
     State(state): State<Shared>,
     user: AuthUser,
     Path(id): Path<String>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<AccountDetailResponse>> {
     require_admin(&user)?;
     let found = state.store().user_by_id(&id)?.ok_or(ApiError::NotFound)?;
     let memberships = state.store().list_user_memberships(&id)?;
-    Ok(Json(account_detail(&found, &memberships)))
+    Ok(Json(AccountDetailResponse::new(&found, &memberships)))
 }
 
 pub async fn create_user(
     State(state): State<Shared>,
     user: AuthUser,
     ApiJson(body): ApiJson<UserBody>,
-) -> Result<Response, ApiError> {
+) -> Result<(StatusCode, Json<AccountResponse>), ApiError> {
     require_admin(&user)?;
     let username = body.username.trim().to_ascii_lowercase();
     if !username
@@ -341,7 +424,7 @@ pub async fn create_user(
         .store()
         .user_by_username(&username)?
         .ok_or(ApiError::NotFound)?;
-    Ok(super::created(account_json(&created, 0)))
+    Ok((StatusCode::CREATED, Json(AccountResponse::new(&created, 0))))
 }
 
 pub async fn update_user(
@@ -349,7 +432,7 @@ pub async fn update_user(
     user: AuthUser,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<UserUpdate>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<AccountDetailResponse>> {
     require_admin(&user)?;
     let display = trimmed_display(&body.display_name)?;
     let existing = state.store().user_by_id(&id)?.ok_or(ApiError::NotFound)?;
@@ -375,7 +458,7 @@ pub async fn update_user(
     }
     let updated = state.store().user_by_id(&id)?.ok_or(ApiError::NotFound)?;
     let memberships = state.store().list_user_memberships(&id)?;
-    Ok(Json(account_detail(&updated, &memberships)))
+    Ok(Json(AccountDetailResponse::new(&updated, &memberships)))
 }
 
 pub async fn delete_user(
@@ -455,35 +538,40 @@ fn session_response(state: &Shared, headers: &HeaderMap, user: &User) -> AppResu
     Ok(response)
 }
 
-fn profile_json(state: &Shared, user: &AuthUser) -> AppResult<Value> {
+fn profile_json(state: &Shared, user: &AuthUser) -> AppResult<ProfileResponse> {
     let teams = state.store().list_teams_for_user(&user.id, user.is_admin)?;
     let memberships = state.store().list_user_memberships(&user.id)?;
-    Ok(user_payload(user, &teams, &memberships))
+    Ok(ProfileResponse::new(user, &teams, &memberships))
 }
 
-fn user_payload(
-    user: &AuthUser,
-    teams: &[(db::Team, String)],
-    memberships: &[db::UserMembership],
-) -> Value {
-    json!({
-        "id": user.id,
-        "username": user.username,
-        "display_name": user.display_name,
-        "auth_source": user.auth_source,
-        "email": user.email,
-        "is_admin": user.is_admin,
-        "teams": teams.iter().map(|(team, role)| json!({
-            "id": team.id,
-            "name": team.name,
-            "description": team.description,
-            "ldap_group": team.ldap_group,
-            "organization_id": team.organization_id,
-            "organization_name": team.organization_name,
-            "role": role,
-        })).collect::<Vec<_>>(),
-        "memberships": memberships,
-    })
+impl ProfileResponse {
+    fn new(
+        user: &AuthUser,
+        teams: &[(db::Team, String)],
+        memberships: &[db::UserMembership],
+    ) -> Self {
+        Self {
+            id: user.id.clone(),
+            username: user.username.clone(),
+            display_name: user.display_name.clone(),
+            auth_source: user.auth_source.clone(),
+            email: user.email.clone(),
+            is_admin: user.is_admin,
+            teams: teams
+                .iter()
+                .map(|(team, role)| TeamResponse {
+                    id: team.id.clone(),
+                    name: team.name.clone(),
+                    description: team.description.clone(),
+                    ldap_group: team.ldap_group.clone(),
+                    organization_id: team.organization_id.clone(),
+                    organization_name: team.organization_name.clone(),
+                    role: role.clone(),
+                })
+                .collect(),
+            memberships: memberships.to_vec(),
+        }
+    }
 }
 
 fn require_admin(user: &AuthUser) -> AppResult<()> {
@@ -533,24 +621,42 @@ fn new_password(existing: &User, password: &str) -> AppResult<Option<String>> {
     Ok(Some(hash_password(password)))
 }
 
-fn account_json(user: &User, team_count: i64) -> Value {
-    json!({
-        "id": user.id,
-        "username": user.username,
-        "display_name": user.display_name,
-        "auth_source": user.auth_source,
-        "email": user.email,
-        "is_admin": user.is_admin,
-        "disabled": user.disabled,
-        "created_at": user.created_at,
-        "team_count": team_count,
-    })
+impl AccountResponse {
+    fn new(user: &User, team_count: i64) -> Self {
+        Self {
+            id: user.id.clone(),
+            username: user.username.clone(),
+            display_name: user.display_name.clone(),
+            auth_source: user.auth_source.clone(),
+            email: user.email.clone(),
+            is_admin: user.is_admin,
+            disabled: user.disabled,
+            created_at: user.created_at.clone(),
+            team_count,
+        }
+    }
 }
 
-fn account_detail(user: &User, memberships: &[db::UserMembership]) -> Value {
-    let mut value = account_json(user, i64::try_from(memberships.len()).unwrap_or(i64::MAX));
-    value["memberships"] = json!(memberships);
-    value
+impl AccountDetailResponse {
+    fn new(user: &User, memberships: &[db::UserMembership]) -> Self {
+        let team_count = i64::try_from(memberships.len()).unwrap_or(i64::MAX);
+        Self {
+            account: AccountResponse::new(user, team_count),
+            memberships: memberships.to_vec(),
+        }
+    }
+}
+
+impl TokenResponse {
+    fn new(token: &db::ApiToken) -> Self {
+        Self {
+            id: token.id.clone(),
+            name: token.name.clone(),
+            prefix: token.prefix.clone(),
+            created_at: token.created_at.clone(),
+            last_used_at: token.last_used_at.clone(),
+        }
+    }
 }
 
 fn profile_email(
