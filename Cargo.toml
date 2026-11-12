@@ -47,5 +47,18 @@ uuid = { version = "1", features = ["v4"] }
 zip = { version = "9", default-features = false }
 deadpool-postgres = "0.14.2"
 
-[dev-dependencies]
-tower = { version = "0.5", features = ["util"] }
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+dbg_macro = "deny"
+await_holding_lock = "deny"
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
