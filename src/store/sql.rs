@@ -16,30 +16,114 @@ impl Dialect {
 }
 
 pub(crate) fn rewrite(sql: &str) -> String {
+    let bytes = sql.as_bytes();
     let mut out = String::with_capacity(sql.len());
-    let mut chars = sql.chars().peekable();
-    let mut quoted = false;
-    while let Some(ch) = chars.next() {
-        match ch {
-            '\'' => {
-                out.push('\'');
-                if quoted && chars.peek() == Some(&'\'') {
-                    out.push('\'');
-                    chars.next();
-                } else {
-                    quoted = !quoted;
-                }
-            }
-            '?' if !quoted && chars.peek().is_some_and(char::is_ascii_digit) => {
-                out.push('$');
-                while let Some(next) = chars.next_if(char::is_ascii_digit) {
-                    out.push(next);
-                }
-            }
-            _ => out.push(ch),
+    let mut i = 0;
+    while i < bytes.len() {
+        let Some(ch) = sql[i..].chars().next() else {
+            break;
+        };
+        if ch == '\'' || ch == '"' {
+            let end = quoted_end(bytes, i);
+            out.push_str(&sql[i..end]);
+            i = end;
+            continue;
         }
+        if sql[i..].starts_with("--") {
+            let end = sql[i..]
+                .find('\n')
+                .map_or(sql.len(), |offset| i + offset + 1);
+            out.push_str(&sql[i..end]);
+            i = end;
+            continue;
+        }
+        if sql[i..].starts_with("/*") {
+            let end = block_comment_end(bytes, i);
+            out.push_str(&sql[i..end]);
+            i = end;
+            continue;
+        }
+        if ch == '$' {
+            if let Some(tag) = dollar_tag(sql, i) {
+                let content = i + tag.len();
+                if let Some(offset) = sql[content..].find(tag) {
+                    let end = content + offset + tag.len();
+                    out.push_str(&sql[i..end]);
+                    i = end;
+                    continue;
+                }
+            }
+        }
+        if ch == '?' && bytes.get(i + 1).is_some_and(u8::is_ascii_digit) {
+            out.push('$');
+            i += 1;
+            while let Some(next) = sql[i..].chars().next() {
+                if !next.is_ascii_digit() {
+                    break;
+                }
+                out.push(next);
+                i += next.len_utf8();
+            }
+            continue;
+        }
+        out.push(ch);
+        i += ch.len_utf8();
     }
     out
+}
+
+fn quoted_end(bytes: &[u8], start: usize) -> usize {
+    let quote = bytes[start];
+    let mut i = start + 1;
+    while i < bytes.len() {
+        if bytes[i] == quote {
+            if bytes.get(i + 1) == Some(&quote) {
+                i += 2;
+            } else {
+                return i + 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    bytes.len()
+}
+
+fn block_comment_end(bytes: &[u8], start: usize) -> usize {
+    let mut depth = 0;
+    let mut i = start;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"/*") {
+            depth += 1;
+            i += 2;
+        } else if bytes[i..].starts_with(b"*/") {
+            depth -= 1;
+            i += 2;
+            if depth == 0 {
+                return i;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    bytes.len()
+}
+
+fn dollar_tag(sql: &str, start: usize) -> Option<&str> {
+    let rest = &sql[start..];
+    let mut end = None;
+    for (offset, ch) in rest.char_indices().skip(1) {
+        if ch == '$' {
+            end = Some(offset + 1);
+            break;
+        }
+        let first = offset == 1;
+        if !(ch.is_ascii_alphabetic() || ch == '_' || (!first && ch.is_ascii_digit())) {
+            return None;
+        }
+    }
+    let end = end?;
+    Some(&rest[..end])
 }
 
 pub(crate) fn postgres(sql: &str) -> String {
@@ -166,6 +250,39 @@ mod tests {
         assert_eq!(
             rewrite("SELECT '?10' AS literal, ?1"),
             "SELECT '?10' AS literal, $1"
+        );
+    }
+
+    #[test]
+    fn leaves_question_marks_in_other_quoted_regions_alone() {
+        assert_eq!(
+            rewrite("SELECT \"?1\" AS name, ?2"),
+            "SELECT \"?1\" AS name, $2"
+        );
+        assert_eq!(
+            rewrite("SELECT ?1 -- ?2\nFROM users"),
+            "SELECT $1 -- ?2\nFROM users"
+        );
+        assert_eq!(
+            rewrite("SELECT ?1 /* ?2 /* ?3 */ ?4 */ FROM users"),
+            "SELECT $1 /* ?2 /* ?3 */ ?4 */ FROM users"
+        );
+    }
+
+    #[test]
+    fn leaves_question_marks_in_dollar_quoted_bodies_alone() {
+        assert_eq!(rewrite("SELECT $$?1$$, ?2"), "SELECT $$?1$$, $2");
+        assert_eq!(
+            rewrite("SELECT $tag$?1 $2$tag$, ?3"),
+            "SELECT $tag$?1 $2$tag$, $3"
+        );
+    }
+
+    #[test]
+    fn keeps_non_ascii_text_intact() {
+        assert_eq!(
+            rewrite("SELECT 'café ?1' AS text, ?2"),
+            "SELECT 'café ?1' AS text, $2"
         );
     }
 

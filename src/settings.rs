@@ -253,11 +253,9 @@ pub fn configured_mode(cfg: &crate::Config) -> RunnerMode {
     else {
         return cfg.runner.in_container(cfg.container_image);
     };
-    conn.query_row(
-        "SELECT value FROM settings WHERE key = 'runner'",
-        [],
-        |row| row.get::<_, String>(0),
-    )
+    conn.query_row(crate::store::settings::SETTING, ["runner"], |row| {
+        row.get::<_, String>(0)
+    })
     .ok()
     .map(|value| parse_runner_stored(&value, cfg.runner).in_container(cfg.container_image))
     .unwrap_or(cfg.runner.in_container(cfg.container_image))
