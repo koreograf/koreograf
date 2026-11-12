@@ -12,12 +12,13 @@ use crate::auth::{AuthUser, Role};
 use crate::backend::Backend;
 use crate::db::{self, Schedule};
 use crate::error::{ApiError, ApiJson, AppResult};
-use crate::schedule::{self, Input, Rule};
+use crate::http::{created, gate, no_content, require_name, team_header};
 use crate::Shared;
 
-use super::{created, gate, no_content, require_name, team_header};
+use super::model::{End, Frequency, Input, Rule};
+use super::service;
 
-pub(super) fn routes() -> Router<Shared> {
+pub(crate) fn routes() -> Router<Shared> {
     Router::new()
         .route(
             "/templates/{id}/schedules",
@@ -152,11 +153,11 @@ pub async fn preview(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let rule = rule_from_preview(&body)?;
-    let times = schedule::preview_blocking(rule, Utc::now(), 5)
+    let times = service::preview_blocking(rule, Utc::now(), 5)
         .await
         .map_err(ApiError::bad)?;
     Ok(Json(json!({
-        "occurrences": times.into_iter().map(schedule::format_utc).collect::<Vec<_>>()
+        "occurrences": times.into_iter().map(service::format_utc).collect::<Vec<_>>()
     })))
 }
 
@@ -176,11 +177,11 @@ pub async fn update(
         let existing = load(db, &id, &team)?;
         let stored = rule.start_date.format("%Y-%m-%d").to_string();
         if existing.start_date != stored {
-            schedule::ensure_start_is_recent(rule.start_date, rule.timezone)
+            service::ensure_start_is_recent(rule.start_date, rule.timezone)
                 .map_err(ApiError::bad)?;
         }
     }
-    let (count, next) = schedule::first_from_blocking(rule.clone(), Utc::now())
+    let (count, next) = service::first_from_blocking(rule.clone(), Utc::now())
         .await
         .map_err(ApiError::bad)?;
     let db = state.store();
@@ -224,15 +225,15 @@ pub async fn set_enabled(
     };
     let now = Utc::now();
     if body.enabled {
-        if let Some(next) = item.next_run_at.as_deref().and_then(schedule::parse_utc) {
+        if let Some(next) = item.next_run_at.as_deref().and_then(service::parse_utc) {
             if next <= now {
-                let rule = schedule::rule_from(&item).map_err(ApiError::bad)?;
+                let rule = service::rule_from(&item).map_err(ApiError::bad)?;
                 let count = u32::try_from(item.occurrence_count).unwrap_or(0);
-                let decided = schedule::step_blocking(rule, count, now, true)
+                let decided = service::step_blocking(rule, count, now, true)
                     .await
                     .map_err(ApiError::bad)?;
                 item.occurrence_count = i64::from(decided.occurrence_count);
-                item.next_run_at = decided.next_run.map(schedule::format_utc);
+                item.next_run_at = decided.next_run.map(service::format_utc);
             }
         }
     }
@@ -267,7 +268,7 @@ pub async fn answer_missed(
         (item, missed_at)
     };
     if body.accept {
-        if let Err(err) = schedule::start(&state, &item, &user.username) {
+        if let Err(err) = service::start(&state, &item, &user.username) {
             let db = state.store();
             if let Err(restore) = db.restore_missed(&id, &team, &missed_at) {
                 tracing::error!(
@@ -314,7 +315,7 @@ async fn create(
     gate(state, user, &team, Role::Operator)?;
     let name = require_name(&body.name)?;
     let rule = rule_from_body(&body)?;
-    let (count, next) = schedule::first_from_blocking(rule.clone(), Utc::now())
+    let (count, next) = service::first_from_blocking(rule.clone(), Utc::now())
         .await
         .map_err(ApiError::bad)?;
     let db = state.store();
@@ -330,12 +331,12 @@ async fn create(
         start_date: rule.start_date.format("%Y-%m-%d").to_string(),
         start_time: clock(rule.start_time),
         frequency: frequency_name(rule.frequency),
-        weekdays: schedule::weekday_codes(&rule.weekdays),
+        weekdays: service::weekday_codes(&rule.weekdays),
         end_kind: end_name(rule.end),
         end_count: end_count(rule.end),
         end_date: end_date(rule.end),
         enabled: true,
-        next_run_at: Some(schedule::format_utc(next)),
+        next_run_at: Some(service::format_utc(next)),
         missed_at: None,
         occurrence_count: i64::from(count),
         created_by: user.username.clone(),
@@ -365,12 +366,12 @@ fn stored(
         start_date: rule.start_date.format("%Y-%m-%d").to_string(),
         start_time: clock(rule.start_time),
         frequency: frequency_name(rule.frequency),
-        weekdays: schedule::weekday_codes(&rule.weekdays),
+        weekdays: service::weekday_codes(&rule.weekdays),
         end_kind: end_name(rule.end),
         end_count: end_count(rule.end),
         end_date: end_date(rule.end),
         enabled: existing.enabled,
-        next_run_at: Some(schedule::format_utc(*next)),
+        next_run_at: Some(service::format_utc(*next)),
         missed_at: None,
         occurrence_count: i64::from(count),
         created_by: existing.created_by.clone(),
@@ -404,12 +405,12 @@ fn target_team(db: &dyn Backend, kind: &str, id: &str, team: &str) -> AppResult<
 
 fn rule_from_body(body: &ScheduleBody) -> AppResult<Rule> {
     let rule = rule_from_fields(body)?;
-    schedule::ensure_start_is_recent(rule.start_date, rule.timezone).map_err(ApiError::bad)?;
+    service::ensure_start_is_recent(rule.start_date, rule.timezone).map_err(ApiError::bad)?;
     Ok(rule)
 }
 
 fn rule_from_fields(body: &ScheduleBody) -> AppResult<Rule> {
-    schedule::parse(&Input {
+    service::parse(&Input {
         timezone: &body.timezone,
         start_date: &body.start_date,
         start_time: &body.start_time,
@@ -423,7 +424,7 @@ fn rule_from_fields(body: &ScheduleBody) -> AppResult<Rule> {
 }
 
 fn rule_from_preview(body: &PreviewBody) -> AppResult<Rule> {
-    let rule = schedule::parse(&Input {
+    let rule = service::parse(&Input {
         timezone: &body.timezone,
         start_date: &body.start_date,
         start_time: &body.start_time,
@@ -434,7 +435,7 @@ fn rule_from_preview(body: &PreviewBody) -> AppResult<Rule> {
         end_date: body.end_date.as_deref(),
     })
     .map_err(ApiError::bad)?;
-    schedule::ensure_start_is_recent(rule.start_date, rule.timezone).map_err(ApiError::bad)?;
+    service::ensure_start_is_recent(rule.start_date, rule.timezone).map_err(ApiError::bad)?;
     Ok(rule)
 }
 
@@ -470,36 +471,36 @@ fn clock(time: chrono::NaiveTime) -> String {
     format!("{:02}:{:02}", time.hour(), time.minute())
 }
 
-fn frequency_name(frequency: schedule::Frequency) -> String {
+fn frequency_name(frequency: Frequency) -> String {
     match frequency {
-        schedule::Frequency::Once => "once",
-        schedule::Frequency::Hourly => "hourly",
-        schedule::Frequency::Daily => "daily",
-        schedule::Frequency::Weekly => "weekly",
-        schedule::Frequency::Monthly => "monthly",
+        Frequency::Once => "once",
+        Frequency::Hourly => "hourly",
+        Frequency::Daily => "daily",
+        Frequency::Weekly => "weekly",
+        Frequency::Monthly => "monthly",
     }
     .to_string()
 }
 
-fn end_name(end: schedule::End) -> String {
+fn end_name(end: End) -> String {
     match end {
-        schedule::End::Never => "never",
-        schedule::End::After(_) => "after",
-        schedule::End::OnDate(_) => "on_date",
+        End::Never => "never",
+        End::After(_) => "after",
+        End::OnDate(_) => "on_date",
     }
     .to_string()
 }
 
-fn end_count(end: schedule::End) -> Option<i64> {
+fn end_count(end: End) -> Option<i64> {
     match end {
-        schedule::End::After(count) => Some(i64::from(count)),
+        End::After(count) => Some(i64::from(count)),
         _ => None,
     }
 }
 
-fn end_date(end: schedule::End) -> Option<String> {
+fn end_date(end: End) -> Option<String> {
     match end {
-        schedule::End::OnDate(date) => Some(date.format("%Y-%m-%d").to_string()),
+        End::OnDate(date) => Some(date.format("%Y-%m-%d").to_string()),
         _ => None,
     }
 }

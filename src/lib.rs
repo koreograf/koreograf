@@ -19,6 +19,7 @@ mod db;
 mod dbmigrate;
 mod entrypoint;
 mod error;
+mod features;
 mod health;
 mod hooks;
 mod http;
@@ -34,7 +35,6 @@ mod portable;
 mod preflight;
 mod runner;
 mod scan;
-mod schedule;
 mod seed;
 mod settings;
 mod store;
@@ -280,7 +280,7 @@ pub async fn serve(cfg: Config) -> anyhow::Result<()> {
     tracing::info!("{}", report.log_block());
     state.set_preflight_report(report);
     if state.engine() == "sqlite" {
-        schedule::spawn(state.clone());
+        features::schedules::spawn(state.clone());
     }
     let bind = state.cfg.bind.clone();
     let data_dir = state.cfg.data_dir.display().to_string();

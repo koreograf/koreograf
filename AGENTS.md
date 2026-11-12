@@ -12,6 +12,10 @@ Koreograf is a Rust prototype: one binary with an HTTP API, a browser UI, and a 
 - API errors are `{ "error": "<key>" }` plus optional `vars`. Build one that includes user data with `error::message` or `ApiError::bad_vars`. Logs and job output stay English prose. Do not put a catalog key in a line the job view shows raw.
 - Comments in `.env.example` are English. Comments in the Helm chart are still German. Leave the chart comments unless asked to translate them.
 
+## Layout
+
+Domain code lives in `src/features/<domain>/` as `mod.rs`, `routes.rs`, `model.rs`, `service.rs`, `store.rs`, and `tests.rs`; shared infrastructure stays in `src/core/`. `src/features/mod.rs` lists the domains in one sorted list, and a new domain adds one line there.
+
 ## Git
 
 - This repository has no remote. Do not push unless asked.
