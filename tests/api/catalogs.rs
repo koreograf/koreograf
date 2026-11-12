@@ -8,6 +8,50 @@ use crate::common::{call_cookie as call, call_raw_headers as call_raw};
 
 use crate::common::*;
 
+const DYNAMIC_PREFIX_KEYS: [(&str, &[&str]); 4] = [
+    (
+        "check_",
+        &[
+            "check_reachable",
+            "check_rights",
+            "check_server_version",
+            "check_tls",
+        ],
+    ),
+    (
+        "preflight_runtime_",
+        &[
+            "preflight_runtime_missing",
+            "preflight_runtime_not_answering",
+            "preflight_runtime_timeout",
+        ],
+    ),
+    (
+        "schedule.day.",
+        &[
+            "schedule.day.fr",
+            "schedule.day.mo",
+            "schedule.day.sa",
+            "schedule.day.su",
+            "schedule.day.th",
+            "schedule.day.tu",
+            "schedule.day.we",
+        ],
+    ),
+    (
+        "schedule.short.",
+        &[
+            "schedule.short.fr",
+            "schedule.short.mo",
+            "schedule.short.sa",
+            "schedule.short.su",
+            "schedule.short.th",
+            "schedule.short.tu",
+            "schedule.short.we",
+        ],
+    ),
+];
+
 #[tokio::test]
 async fn a_request_without_json_returns_a_catalog_error() {
     let harness = TestApp::boot("json", Options::default());
@@ -115,15 +159,37 @@ fn message_catalogs_match_and_cover_the_ui() {
     leftover_german(&root.join("src"), &mut german_src);
     assert!(german_src.is_empty(), "German left in src: {german_src:?}");
 
+    let api_keys = rust_message_keys(&root.join("src"));
     let mut api_missing = BTreeSet::new();
-    for key in rust_message_keys(&root.join("src")) {
-        if !de.contains_key(&key) {
-            api_missing.insert(key);
+    for key in &api_keys {
+        if !de.contains_key(key) {
+            api_missing.insert(key.clone());
         }
     }
     assert!(
         api_missing.is_empty(),
         "API keys missing from the catalogs: {api_missing:?}"
+    );
+
+    let dynamic_prefixes = DYNAMIC_PREFIX_KEYS.map(|(prefix, _)| prefix);
+    let index = std::fs::read_to_string(root.join("web/index.html")).expect("index.html");
+    let web = format!("{script}\n{index}");
+    let rust = rust_sources(&root.join("src"));
+    let mut unused = BTreeSet::new();
+    for key in de.keys() {
+        if quoted_literal(&web, key)
+            || quoted_literal(&rust, key)
+            || dynamic_prefixes
+                .iter()
+                .any(|prefix| key.starts_with(*prefix))
+        {
+            continue;
+        }
+        unused.insert(key.clone());
+    }
+    assert!(
+        unused.is_empty(),
+        "catalog keys used by neither the UI nor the API: {unused:?}"
     );
     for catalog in [&de, &en] {
         let hint = catalog
@@ -145,6 +211,57 @@ fn message_catalogs_match_and_cover_the_ui() {
         runner.contains("konnte den remote-verweis"),
         "git still reports a missing remote ref in German"
     );
+}
+
+#[test]
+fn dynamic_catalog_prefixes_have_their_keys() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let de = load_catalog(&root.join("web/i18n/de.json"));
+    let en = load_catalog(&root.join("web/i18n/en.json"));
+    for (prefix, keys) in DYNAMIC_PREFIX_KEYS {
+        assert!(!keys.is_empty(), "{prefix} has no expected keys");
+        for key in keys {
+            assert!(
+                key.starts_with(prefix),
+                "{key} does not start with {prefix}"
+            );
+            assert!(de.contains_key(*key), "de is missing {key}");
+            assert!(en.contains_key(*key), "en is missing {key}");
+        }
+    }
+    for id in koreograf::DATABASE_CHECK_IDS {
+        let key = format!("check_{id}");
+        assert!(de.contains_key(&key), "de is missing {key}");
+        assert!(en.contains_key(&key), "en is missing {key}");
+    }
+}
+
+fn quoted_literal(source: &str, key: &str) -> bool {
+    ["\"", "'", "`"]
+        .iter()
+        .any(|quote| source.contains(&format!("{quote}{key}{quote}")))
+}
+
+fn rust_sources(dir: &Path) -> String {
+    let mut text = String::new();
+    for entry in
+        std::fs::read_dir(dir).unwrap_or_else(|err| panic!("read {}: {err}", dir.display()))
+    {
+        let entry = entry.unwrap_or_else(|err| panic!("{err}"));
+        let path = entry.path();
+        if path.is_dir() {
+            text.push_str(&rust_sources(&path));
+            continue;
+        }
+        if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
+            text.push_str(
+                &std::fs::read_to_string(&path)
+                    .unwrap_or_else(|err| panic!("read {}: {err}", path.display())),
+            );
+            text.push('\n');
+        }
+    }
+    text
 }
 
 #[test]

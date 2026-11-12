@@ -12,6 +12,8 @@ use crate::portable;
 
 const MIN_SERVER_VERSION: u32 = 130_000;
 
+pub const DATABASE_CHECK_IDS: [&str; 4] = ["reachable", "tls", "server_version", "rights"];
+
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct CheckResult {
     pub id: &'static str,
@@ -135,15 +137,15 @@ pub(crate) async fn run_checks(target: &PostgresConfig, source: &Path) -> Vec<Ch
     match crate::backend::connect_client(target).await {
         Err(err) => {
             tracing::warn!(error = %redact(&err.to_string(), target), "database target is unreachable");
-            for (id, key) in [
-                ("reachable", "database_check_unreachable"),
-                ("tls", "database_check_not_run"),
-                ("server_version", "database_check_not_run"),
-                ("rights", "database_check_not_run"),
-                ("empty", "database_check_not_run"),
-            ] {
+            for id in DATABASE_CHECK_IDS {
+                let key = if id == "reachable" {
+                    "database_check_unreachable"
+                } else {
+                    "database_check_not_run"
+                };
                 checks.push(check(id, false, key));
             }
+            checks.push(check("empty", false, "database_check_not_run"));
         }
         Ok(client) => {
             checks.push(check("reachable", true, "database_check_reachable_ok"));

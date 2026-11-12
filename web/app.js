@@ -448,7 +448,6 @@ const ERROR_FIELD = {
   path_projects_are_limited_to_administrators: "source",
   the_netbox_address_must_be_http_or_https: "credential_id",
   the_netbox_token_is_invalid: "credential_id",
-  the_netbox_token_is_missing: "credential_id",
   netbox_credential_has_the_wrong_kind: "credential_id",
   netbox_credential_is_required: "credential_id",
   netbox_endpoint_must_match_credential: "credential_id",
