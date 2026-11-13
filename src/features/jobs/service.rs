@@ -575,7 +575,7 @@ fn credentials_for_launch(
     team_id: &str,
     tool: &str,
     ids: &[String],
-) -> AppResult<crate::credentials::AssignedSet> {
+) -> AppResult<crate::features::credentials::AssignedSet> {
     let mut loaded = Vec::with_capacity(ids.len());
     for id in ids {
         let id = id.trim();
@@ -585,9 +585,9 @@ fn credentials_for_launch(
         let credential = db.credential(id)?.ok_or(ApiError::NotFound)?;
         loaded.push(credential);
     }
-    let chosen = crate::credentials::assign_loaded(state, team_id, &loaded)?;
+    let chosen = crate::features::credentials::assign_loaded(state, team_id, &loaded)?;
     for credential in &loaded {
-        if !crate::credentials::kind_fits_tool(tool, &credential.kind) {
+        if !crate::features::credentials::kind_fits_tool(tool, &credential.kind) {
             return Err(ApiError::bad("this_credential_kind_does_not_fit_the_tool"));
         }
     }

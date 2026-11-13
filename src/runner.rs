@@ -1661,7 +1661,7 @@ fn export_plain_vars(extra: &Value, env: &mut Vec<(String, String)>) {
         return;
     };
     for (key, value) in map {
-        if !safe_ident(key) || crate::credentials::reserved_env_name(key) {
+        if !safe_ident(key) || crate::features::credentials::reserved_env_name(key) {
             continue;
         }
         if let Some(text) = value.as_str() {
@@ -1724,9 +1724,13 @@ fn apply_credentials(
             .map_err(|_| RunnerError::credentials("Credentials cannot be read."))?;
         let secret: Value = serde_json::from_str(&plain)
             .map_err(|_| RunnerError::credentials("Credentials are not JSON."))?;
-        let prepared =
-            crate::credentials::prepare(credential.kind.as_str(), &secret, container, work)
-                .map_err(RunnerError::credentials)?;
+        let prepared = crate::features::credentials::prepare(
+            credential.kind.as_str(),
+            &secret,
+            container,
+            work,
+        )
+        .map_err(RunnerError::credentials)?;
         let mut part = prepared.env;
         if credential.kind == "vault" {
             part.retain(|(key, _)| key != "KOREOGRAF_VAULT_FILE" && key != "KOREOGRAF_VAULT_ID");
@@ -1777,7 +1781,7 @@ fn galaxy_credential_env(
     work: &Path,
     env: &mut Vec<(String, String)>,
 ) -> Result<(), RunnerError> {
-    crate::credentials::check("scm", secret).map_err(RunnerError::credentials)?;
+    crate::features::credentials::check("scm", secret).map_err(RunnerError::credentials)?;
     let username = auth_text(secret, "username");
     let password = auth_text(secret, "password");
     let key = auth_text(secret, "private_key");
@@ -6195,9 +6199,10 @@ exit 0
         std::fs::write(work.join("notes.txt"), "keep\n").unwrap();
         std::fs::write(work.join("future.secret"), "new-kind\n").unwrap();
         let mut written = std::collections::BTreeSet::new();
-        for kind in crate::credentials::KINDS {
-            let prepared = crate::credentials::prepare(kind, &sample_secret(kind), false, &work)
-                .unwrap_or_else(|err| panic!("{kind}: {err}"));
+        for kind in crate::features::credentials::KINDS {
+            let prepared =
+                crate::features::credentials::prepare(kind, &sample_secret(kind), false, &work)
+                    .unwrap_or_else(|err| panic!("{kind}: {err}"));
             for (name, body) in prepared.files {
                 write_secret(&work.join(&name), &body)
                     .unwrap_or_else(|err| panic!("{name}: {err}"));

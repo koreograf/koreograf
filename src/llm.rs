@@ -1101,7 +1101,7 @@ fn collect_secrets(
                 continue;
             };
             for (key, value) in fields {
-                if crate::credentials::is_secret_field(&item.kind, &key) {
+                if crate::features::credentials::is_secret_field(&item.kind, &key) {
                     collect_strings(&value, &mut secrets);
                 }
             }
