@@ -362,13 +362,13 @@ pub fn content_saved_by_admin(
         if !inventory.admin_saved {
             return Ok(false);
         }
-        if crate::netbox::loads_config_context(&inventory.source_json)
+        if crate::features::inventories::loads_config_context(&inventory.source_json)
             || store
                 .list_inventory_sources(inventory_id)?
                 .iter()
                 .any(|source| {
                     source.kind == "netbox"
-                        && crate::netbox::loads_config_context(&source.source_json)
+                        && crate::features::inventories::loads_config_context(&source.source_json)
                 })
         {
             return Ok(false);

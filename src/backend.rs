@@ -16,6 +16,7 @@ use crate::db::{
     WorkflowNodeRow,
 };
 use crate::error::{ApiError, AppResult};
+use crate::features::inventories;
 use crate::features::jobs;
 use crate::features::schedules;
 use crate::features::workflows;
@@ -680,12 +681,12 @@ impl Backend for SqliteBackend {
 
     fn list_inventories(&self, team_id: &str) -> AppResult<Vec<Inventory>> {
         let conn = lock(&self.conn)?;
-        store::inventories::list_inventories(&conn, team_id)
+        inventories::store::list_inventories(&conn, team_id)
     }
 
     fn inventory(&self, id: &str) -> AppResult<Option<Inventory>> {
         let conn = lock(&self.conn)?;
-        store::inventories::inventory(&conn, id)
+        inventories::store::inventory(&conn, id)
     }
 
     fn insert_inventory(
@@ -696,12 +697,12 @@ impl Backend for SqliteBackend {
     ) -> AppResult<()> {
         let mut conn = lock(&self.conn)?;
         let tx = conn.transaction()?;
-        store::inventories::insert_inventory(&tx, item)?;
+        inventories::store::insert_inventory(&tx, item)?;
         for source in sources {
-            store::inventories::insert_inventory_source(&tx, source)?;
+            inventories::store::insert_inventory_source(&tx, source)?;
         }
         if refresh {
-            store::inventories::refresh_inventory_summary(&tx, &item.id)?;
+            inventories::store::refresh_inventory_summary(&tx, &item.id)?;
         }
         tx.commit()?;
         Ok(())
@@ -709,27 +710,27 @@ impl Backend for SqliteBackend {
 
     fn update_inventory(&self, id: &str, team_id: &str, name: &str, body: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::inventories::update_inventory(&conn, id, team_id, name, body)
+        inventories::store::update_inventory(&conn, id, team_id, name, body)
     }
 
     fn set_inventory_admin_saved(&self, id: &str, admin_saved: bool) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::inventories::set_inventory_admin_saved(&conn, id, admin_saved)
+        inventories::store::set_inventory_admin_saved(&conn, id, admin_saved)
     }
 
     fn set_inventory_body(&self, id: &str, team_id: &str, body: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::inventories::set_inventory_body(&conn, id, team_id, body)
+        inventories::store::set_inventory_body(&conn, id, team_id, body)
     }
 
     fn list_inventory_sources(&self, inventory_id: &str) -> AppResult<Vec<InventorySource>> {
         let conn = lock(&self.conn)?;
-        store::inventories::list_inventory_sources(&conn, inventory_id)
+        inventories::store::list_inventory_sources(&conn, inventory_id)
     }
 
     fn inventory_source(&self, id: &str) -> AppResult<Option<InventorySource>> {
         let conn = lock(&self.conn)?;
-        store::inventories::inventory_source(&conn, id)
+        inventories::store::inventory_source(&conn, id)
     }
 
     fn add_inventory_source(
@@ -740,16 +741,16 @@ impl Backend for SqliteBackend {
     ) -> AppResult<()> {
         let mut conn = lock(&self.conn)?;
         let tx = conn.transaction()?;
-        store::inventories::insert_inventory_source(&tx, source)?;
-        store::inventories::refresh_inventory_summary(&tx, inventory_id)?;
-        store::inventories::set_inventory_admin_saved(&tx, inventory_id, admin_saved)?;
+        inventories::store::insert_inventory_source(&tx, source)?;
+        inventories::store::refresh_inventory_summary(&tx, inventory_id)?;
+        inventories::store::set_inventory_admin_saved(&tx, inventory_id, admin_saved)?;
         tx.commit()?;
         Ok(())
     }
 
     fn set_inventory_source_body(&self, id: &str, body: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::inventories::set_inventory_source_body(&conn, id, body)
+        inventories::store::set_inventory_source_body(&conn, id, body)
     }
 
     fn update_inventory_source(
@@ -759,7 +760,7 @@ impl Backend for SqliteBackend {
     ) -> AppResult<()> {
         let mut conn = lock(&self.conn)?;
         let tx = conn.transaction()?;
-        store::inventories::update_inventory_source(
+        inventories::store::update_inventory_source(
             &tx,
             &source.id,
             &source.name,
@@ -767,8 +768,8 @@ impl Backend for SqliteBackend {
             source.credential_id.as_deref(),
             &source.body,
         )?;
-        store::inventories::refresh_inventory_summary(&tx, &source.inventory_id)?;
-        store::inventories::set_inventory_admin_saved(&tx, &source.inventory_id, admin_saved)?;
+        inventories::store::refresh_inventory_summary(&tx, &source.inventory_id)?;
+        inventories::store::set_inventory_admin_saved(&tx, &source.inventory_id, admin_saved)?;
         tx.commit()?;
         Ok(())
     }
@@ -781,16 +782,16 @@ impl Backend for SqliteBackend {
     ) -> AppResult<()> {
         let mut conn = lock(&self.conn)?;
         let tx = conn.transaction()?;
-        store::inventories::delete_inventory_source(&tx, id, inventory_id)?;
-        store::inventories::refresh_inventory_summary(&tx, inventory_id)?;
-        store::inventories::set_inventory_admin_saved(&tx, inventory_id, admin_saved)?;
+        inventories::store::delete_inventory_source(&tx, id, inventory_id)?;
+        inventories::store::refresh_inventory_summary(&tx, inventory_id)?;
+        inventories::store::set_inventory_admin_saved(&tx, inventory_id, admin_saved)?;
         tx.commit()?;
         Ok(())
     }
 
     fn refresh_inventory_summary(&self, inventory_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::inventories::refresh_inventory_summary(&conn, inventory_id)
+        inventories::store::refresh_inventory_summary(&conn, inventory_id)
     }
 
     fn sync_inventory_sources(
@@ -802,17 +803,17 @@ impl Backend for SqliteBackend {
         let mut conn = lock(&self.conn)?;
         let tx = conn.transaction()?;
         for (source_id, body) in bodies {
-            store::inventories::set_inventory_source_body(&tx, source_id, body)?;
+            inventories::store::set_inventory_source_body(&tx, source_id, body)?;
         }
-        store::inventories::refresh_inventory_summary(&tx, inventory_id)?;
-        store::inventories::set_inventory_admin_saved(&tx, inventory_id, admin_saved)?;
+        inventories::store::refresh_inventory_summary(&tx, inventory_id)?;
+        inventories::store::set_inventory_admin_saved(&tx, inventory_id, admin_saved)?;
         tx.commit()?;
         Ok(())
     }
 
     fn delete_inventory(&self, id: &str, team_id: &str) -> AppResult<()> {
         let mut conn = lock(&self.conn)?;
-        store::inventories::delete_inventory(&mut conn, id, team_id)
+        inventories::store::delete_inventory(&mut conn, id, team_id)
     }
 
     fn templates_using_inventory(
@@ -821,7 +822,7 @@ impl Backend for SqliteBackend {
         team_id: &str,
     ) -> AppResult<Vec<String>> {
         let conn = lock(&self.conn)?;
-        store::inventories::templates_using_inventory(&conn, inventory_id, team_id)
+        inventories::store::templates_using_inventory(&conn, inventory_id, team_id)
     }
 
     fn workflows_using_inventory(
@@ -830,7 +831,7 @@ impl Backend for SqliteBackend {
         team_id: &str,
     ) -> AppResult<Vec<String>> {
         let conn = lock(&self.conn)?;
-        store::inventories::workflows_using_inventory(&conn, inventory_id, team_id)
+        inventories::store::workflows_using_inventory(&conn, inventory_id, team_id)
     }
 
     fn list_credentials(&self, team_id: &str) -> AppResult<Vec<Credential>> {
@@ -2341,11 +2342,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &store::sql::postgres(store::inventories::LIST_INVENTORIES),
+                    &store::sql::postgres(inventories::store::LIST_INVENTORIES),
                     &[&team_id],
                 )
                 .await?;
-            rows.iter().map(store::inventories::row_inventory).collect()
+            rows.iter().map(inventories::store::row_inventory).collect()
         })
     }
 
@@ -2354,12 +2355,12 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    &store::sql::postgres(store::inventories::INVENTORY_BY_ID),
+                    &store::sql::postgres(inventories::store::INVENTORY_BY_ID),
                     &[&id],
                 )
                 .await?;
             row.as_ref()
-                .map(store::inventories::row_inventory)
+                .map(inventories::store::row_inventory)
                 .transpose()
         })
     }
@@ -2375,7 +2376,7 @@ impl Backend for PostgresBackend {
             let transaction = client.transaction().await?;
             transaction
                 .execute(
-                    &store::sql::postgres(store::inventories::INSERT_INVENTORY),
+                    &store::sql::postgres(inventories::store::INSERT_INVENTORY),
                     &[
                         &item.id,
                         &item.team_id,
@@ -2390,10 +2391,10 @@ impl Backend for PostgresBackend {
                 )
                 .await?;
             for source in sources {
-                store::inventories::postgres_insert_source(&transaction, source).await?;
+                inventories::store::postgres_insert_source(&transaction, source).await?;
             }
             if refresh {
-                store::inventories::postgres_refresh_summary(&transaction, &item.id).await?;
+                inventories::store::postgres_refresh_summary(&transaction, &item.id).await?;
             }
             transaction.commit().await?;
             Ok(())
@@ -2405,7 +2406,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    &store::sql::postgres(store::inventories::UPDATE_INVENTORY),
+                    &store::sql::postgres(inventories::store::UPDATE_INVENTORY),
                     &[&id, &team_id, &name, &body],
                 )
                 .await?;
@@ -2421,7 +2422,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::inventories::SET_INVENTORY_ADMIN_SAVED),
+                    &store::sql::postgres(inventories::store::SET_INVENTORY_ADMIN_SAVED),
                     &[&id, &(admin_saved as i32)],
                 )
                 .await?;
@@ -2434,7 +2435,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    &store::sql::postgres(store::inventories::SET_INVENTORY_BODY),
+                    &store::sql::postgres(inventories::store::SET_INVENTORY_BODY),
                     &[&id, &team_id, &body],
                 )
                 .await?;
@@ -2450,12 +2451,12 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &store::sql::postgres(store::inventories::LIST_SOURCES),
+                    &store::sql::postgres(inventories::store::LIST_SOURCES),
                     &[&inventory_id],
                 )
                 .await?;
             rows.iter()
-                .map(store::inventories::row_inventory_source)
+                .map(inventories::store::row_inventory_source)
                 .collect()
         })
     }
@@ -2465,12 +2466,12 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    &store::sql::postgres(store::inventories::SOURCE_BY_ID),
+                    &store::sql::postgres(inventories::store::SOURCE_BY_ID),
                     &[&id],
                 )
                 .await?;
             row.as_ref()
-                .map(store::inventories::row_inventory_source)
+                .map(inventories::store::row_inventory_source)
                 .transpose()
         })
     }
@@ -2484,11 +2485,11 @@ impl Backend for PostgresBackend {
         self.run(async {
             let mut client = self.pool.get().await.map_err(pool_error)?;
             let transaction = client.transaction().await?;
-            store::inventories::postgres_insert_source(&transaction, source).await?;
-            store::inventories::postgres_refresh_summary(&transaction, inventory_id).await?;
+            inventories::store::postgres_insert_source(&transaction, source).await?;
+            inventories::store::postgres_refresh_summary(&transaction, inventory_id).await?;
             transaction
                 .execute(
-                    &store::sql::postgres(store::inventories::SET_INVENTORY_ADMIN_SAVED),
+                    &store::sql::postgres(inventories::store::SET_INVENTORY_ADMIN_SAVED),
                     &[&inventory_id, &(admin_saved as i32)],
                 )
                 .await?;
@@ -2502,7 +2503,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::inventories::SET_SOURCE_BODY),
+                    &store::sql::postgres(inventories::store::SET_SOURCE_BODY),
                     &[&id, &body],
                 )
                 .await?;
@@ -2520,7 +2521,7 @@ impl Backend for PostgresBackend {
             let transaction = client.transaction().await?;
             let changed = transaction
                 .execute(
-                    &store::sql::postgres(store::inventories::UPDATE_SOURCE),
+                    &store::sql::postgres(inventories::store::UPDATE_SOURCE),
                     &[
                         &source.id,
                         &source.name,
@@ -2533,11 +2534,11 @@ impl Backend for PostgresBackend {
             if changed == 0 {
                 return Err(ApiError::NotFound);
             }
-            store::inventories::postgres_refresh_summary(&transaction, &source.inventory_id)
+            inventories::store::postgres_refresh_summary(&transaction, &source.inventory_id)
                 .await?;
             transaction
                 .execute(
-                    &store::sql::postgres(store::inventories::SET_INVENTORY_ADMIN_SAVED),
+                    &store::sql::postgres(inventories::store::SET_INVENTORY_ADMIN_SAVED),
                     &[&source.inventory_id, &(admin_saved as i32)],
                 )
                 .await?;
@@ -2557,17 +2558,17 @@ impl Backend for PostgresBackend {
             let transaction = client.transaction().await?;
             let changed = transaction
                 .execute(
-                    &store::sql::postgres(store::inventories::DELETE_SOURCE),
+                    &store::sql::postgres(inventories::store::DELETE_SOURCE),
                     &[&id, &inventory_id],
                 )
                 .await?;
             if changed == 0 {
                 return Err(ApiError::NotFound);
             }
-            store::inventories::postgres_refresh_summary(&transaction, inventory_id).await?;
+            inventories::store::postgres_refresh_summary(&transaction, inventory_id).await?;
             transaction
                 .execute(
-                    &store::sql::postgres(store::inventories::SET_INVENTORY_ADMIN_SAVED),
+                    &store::sql::postgres(inventories::store::SET_INVENTORY_ADMIN_SAVED),
                     &[&inventory_id, &(admin_saved as i32)],
                 )
                 .await?;
@@ -2579,7 +2580,7 @@ impl Backend for PostgresBackend {
     fn refresh_inventory_summary(&self, inventory_id: &str) -> AppResult<()> {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
-            store::inventories::postgres_refresh_summary(&client, inventory_id).await
+            inventories::store::postgres_refresh_summary(&client, inventory_id).await
         })
     }
 
@@ -2595,15 +2596,15 @@ impl Backend for PostgresBackend {
             for (source_id, body) in bodies {
                 transaction
                     .execute(
-                        &store::sql::postgres(store::inventories::SET_SOURCE_BODY),
+                        &store::sql::postgres(inventories::store::SET_SOURCE_BODY),
                         &[source_id, body],
                     )
                     .await?;
             }
-            store::inventories::postgres_refresh_summary(&transaction, inventory_id).await?;
+            inventories::store::postgres_refresh_summary(&transaction, inventory_id).await?;
             transaction
                 .execute(
-                    &store::sql::postgres(store::inventories::SET_INVENTORY_ADMIN_SAVED),
+                    &store::sql::postgres(inventories::store::SET_INVENTORY_ADMIN_SAVED),
                     &[&inventory_id, &(admin_saved as i32)],
                 )
                 .await?;
@@ -2618,14 +2619,14 @@ impl Backend for PostgresBackend {
             let transaction = client.transaction().await?;
             let rows = transaction
                 .query(
-                    &store::sql::postgres(store::inventories::SOURCE_CREDENTIALS),
+                    &store::sql::postgres(inventories::store::SOURCE_CREDENTIALS),
                     &[&id],
                 )
                 .await?;
             let credential_ids: Vec<String> = rows.iter().map(|row| row.get(0)).collect();
             let changed = transaction
                 .execute(
-                    &store::sql::postgres(store::inventories::DELETE_INVENTORY),
+                    &store::sql::postgres(inventories::store::DELETE_INVENTORY),
                     &[&id, &team_id],
                 )
                 .await?;
@@ -2633,7 +2634,7 @@ impl Backend for PostgresBackend {
                 return Err(ApiError::NotFound);
             }
             for credential_id in credential_ids {
-                if store::inventories::postgres_json_references_credential(
+                if inventories::store::postgres_json_references_credential(
                     &transaction,
                     team_id,
                     &credential_id,
@@ -2644,7 +2645,7 @@ impl Backend for PostgresBackend {
                 }
                 transaction
                     .execute(
-                        &store::sql::postgres(store::inventories::DELETE_AUTO_CREDENTIAL),
+                        &store::sql::postgres(inventories::store::DELETE_AUTO_CREDENTIAL),
                         &[&credential_id, &team_id],
                     )
                     .await?;
@@ -2663,7 +2664,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &store::sql::postgres(store::inventories::TEMPLATES_USING_INVENTORY),
+                    &store::sql::postgres(inventories::store::TEMPLATES_USING_INVENTORY),
                     &[&inventory_id, &team_id],
                 )
                 .await?;
@@ -2680,7 +2681,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &store::sql::postgres(store::inventories::WORKFLOW_GRAPHS),
+                    &store::sql::postgres(inventories::store::WORKFLOW_GRAPHS),
                     &[&team_id],
                 )
                 .await?;
@@ -2688,7 +2689,7 @@ impl Backend for PostgresBackend {
             for row in rows {
                 let name: String = row.get(0);
                 let graph: String = row.get(1);
-                if store::inventories::workflow_references_inventory(&graph, inventory_id) {
+                if inventories::store::workflow_references_inventory(&graph, inventory_id) {
                     names.push(name);
                 }
             }
