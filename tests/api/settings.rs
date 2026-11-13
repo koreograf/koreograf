@@ -1624,6 +1624,119 @@ async fn a_trusted_proxy_uses_the_forwarded_proto() {
 }
 
 #[tokio::test]
+async fn settings_responses_have_the_documented_shape() {
+    let harness = TestApp::boot("settings-shape", Options::default());
+    let app = harness.app.clone();
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/v1/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+
+    let body = json!({
+        "ldap": {
+            "url": "ldap://ldap.example.com",
+            "mode": "ad",
+            "bind_dn": "cn=svc,dc=example,dc=com",
+            "bind_password": "bind-secret-value",
+            "user_base": "ou=users,dc=example,dc=com",
+            "user_filter": "(sAMAccountName={username})",
+            "username_attr": "sAMAccountName",
+            "group_attr": "memberOf",
+            "group_base": "ou=groups,dc=example,dc=com",
+            "starttls": true,
+            "tls_insecure": false
+        },
+        "proxy": {
+            "url": "http://proxy.example:3128",
+            "username": "proxy-user",
+            "password": "proxy-secret-value",
+            "no_proxy": "localhost,127.0.0.1"
+        },
+        "runner": "docker",
+        "job_timeout_secs": 90,
+        "job_output_lines": 4000,
+        "default_environment_ansible": "",
+        "default_environment_opentofu": "",
+        "default_environment_shell": "",
+        "llm": {
+            "enabled": true,
+            "provider": "ollama",
+            "base_url": "http://127.0.0.1:11434/v1",
+            "model": "llama3",
+            "api_key": "llm-secret-value"
+        }
+    });
+    let expected = json!({
+        "source": "saved",
+        "ldap": {
+            "url": "ldap://ldap.example.com",
+            "mode": "ad",
+            "bind_dn": "cn=svc,dc=example,dc=com",
+            "bind_password_set": true,
+            "user_base": "ou=users,dc=example,dc=com",
+            "user_filter": "(sAMAccountName={username})",
+            "username_attr": "sAMAccountName",
+            "group_attr": "memberOf",
+            "group_base": "ou=groups,dc=example,dc=com",
+            "starttls": true,
+            "tls_insecure": false
+        },
+        "proxy": {
+            "url": "http://proxy.example:3128",
+            "username": "proxy-user",
+            "password_set": true,
+            "no_proxy": "localhost,127.0.0.1",
+            "unsupported_env": false
+        },
+        "runner": "docker",
+        "job_timeout_secs": 90,
+        "job_output_lines": 4000,
+        "default_environment_ansible": "",
+        "default_environment_opentofu": "",
+        "default_environment_shell": "",
+        "llm": {
+            "enabled": true,
+            "provider": "ollama",
+            "base_url": "http://127.0.0.1:11434/v1",
+            "model": "llama3",
+            "api_key_set": true
+        }
+    });
+
+    let (status, saved, _) = call(
+        &app,
+        "PUT",
+        "/api/v1/settings",
+        Some(&cookie),
+        None,
+        Some(body),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved, expected);
+    for secret in [
+        "bind-secret-value",
+        "proxy-secret-value",
+        "llm-secret-value",
+    ] {
+        assert!(!saved.to_string().contains(secret), "{saved}");
+    }
+
+    let (status, current, _) =
+        call(&app, "GET", "/api/v1/settings", Some(&cookie), None, None).await;
+    assert_eq!(status, StatusCode::OK, "{current}");
+    assert_eq!(current, expected);
+}
+
+#[tokio::test]
 async fn admin_settings_hide_secrets_and_apply_without_restart() {
     let harness = TestApp::boot("settings-smoke", Options::default());
     let app = harness.app.clone();

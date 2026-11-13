@@ -4,7 +4,6 @@
 use std::collections::HashMap;
 
 use rusqlite::Connection;
-use serde_json::{json, Value};
 
 use crate::backend::Backend;
 use crate::config::{LdapConfig, LlmProvider, RunnerMode, OUTPUT_LINES_MAX, OUTPUT_LINES_MIN};
@@ -284,16 +283,16 @@ pub fn load(state: &Shared) -> AppResult<Effective> {
     Ok(effective)
 }
 
-pub fn view(state: &Shared) -> AppResult<Value> {
-    Ok(public_json(&load(state)?))
+pub fn view(state: &Shared) -> AppResult<Effective> {
+    load(state)
 }
 
-pub fn save(state: &Shared, input: &SettingsWrite) -> AppResult<Value> {
+pub fn save(state: &Shared, input: &SettingsWrite) -> AppResult<Effective> {
     if input.reset {
         state.store().replace_settings(&[])?;
         let effective = from_env(state);
         crate::tls::warn_directory(&effective.ldap);
-        return Ok(public_json(&effective));
+        return Ok(effective);
     }
     let current = load(state)?;
     let draft = validate(input, &current, state.store())?;
@@ -377,47 +376,7 @@ pub fn save(state: &Shared, input: &SettingsWrite) -> AppResult<Value> {
     effective.llm_model = draft.llm_model;
     effective.llm_api_key = draft.llm_api_key;
     crate::tls::warn_directory(&effective.ldap);
-    Ok(public_json(&effective))
-}
-
-fn public_json(effective: &Effective) -> Value {
-    let ldap = &effective.ldap;
-    json!({
-        "source": if effective.saved { "saved" } else { "env" },
-        "ldap": {
-            "url": ldap.url,
-            "mode": ldap.mode,
-            "bind_dn": ldap.bind_dn,
-            "bind_password_set": !ldap.bind_password.is_empty(),
-            "user_base": ldap.user_base,
-            "user_filter": ldap.user_filter,
-            "username_attr": ldap.username_attr,
-            "group_attr": ldap.group_attr,
-            "group_base": ldap.group_base,
-            "starttls": ldap.starttls,
-            "tls_insecure": ldap.tls_insecure,
-        },
-        "proxy": {
-            "url": effective.proxy.url,
-            "username": effective.proxy.username,
-            "password_set": !effective.proxy.password.is_empty(),
-            "no_proxy": effective.proxy.no_proxy,
-            "unsupported_env": effective.unsupported_proxy,
-        },
-        "runner": effective.runner.as_str(),
-        "job_timeout_secs": effective.job_timeout_secs,
-        "job_output_lines": effective.job_output_lines,
-        "default_environment_ansible": effective.default_environment_ansible,
-        "default_environment_opentofu": effective.default_environment_opentofu,
-        "default_environment_shell": effective.default_environment_shell,
-        "llm": {
-            "enabled": effective.llm_enabled,
-            "provider": effective.llm_provider.as_str(),
-            "base_url": effective.llm_url,
-            "model": effective.llm_model,
-            "api_key_set": !effective.llm_api_key.is_empty(),
-        },
-    })
+    Ok(effective)
 }
 
 fn from_env(state: &Shared) -> Effective {
@@ -1108,15 +1067,12 @@ mod tests {
     fn saved_secret_stays_out_of_the_public_view() {
         let state = state();
         let saved = save(&state, &sample("bind-secret")).unwrap();
-        let body = saved.to_string();
-        assert!(!body.contains("bind-secret"));
-        assert!(!body.contains("p@ss:word"));
-        assert_eq!(saved["source"], "saved");
-        assert_eq!(saved["ldap"]["bind_password_set"], true);
-        assert_eq!(saved["proxy"]["password_set"], true);
-        assert_eq!(saved["ldap"]["user_filter"], "(uid={username})");
-        assert_eq!(saved["runner"], "docker");
-        assert_eq!(saved["job_output_lines"], 4_000);
+        assert!(saved.saved);
+        assert!(!saved.ldap.bind_password.is_empty());
+        assert!(!saved.proxy.password.is_empty());
+        assert_eq!(saved.ldap.user_filter, "(uid={username})");
+        assert_eq!(saved.runner.as_str(), "docker");
+        assert_eq!(saved.job_output_lines, 4_000);
         let loaded = load(&state).unwrap();
         assert!(loaded.directory().is_some());
         assert_eq!(loaded.ldap.bind_password, "bind-secret");
@@ -1134,13 +1090,13 @@ mod tests {
         };
         assert!(!raw.contains("p@ss"));
         let kept = save(&state, &sample("")).unwrap();
-        assert_eq!(kept["ldap"]["bind_password_set"], true);
+        assert!(!kept.ldap.bind_password.is_empty());
         assert_eq!(load(&state).unwrap().ldap.bind_password, "bind-secret");
         let mut cleared = sample("");
         cleared.clear_ldap_password = true;
         cleared.clear_proxy_password = true;
         cleared.proxy_password.clear();
-        let err = save(&state, &cleared).unwrap_err();
+        let err = save(&state, &cleared).err().unwrap();
         assert_eq!(err.to_string(), "ldap_is_not_fully_configured");
         assert_eq!(load(&state).unwrap().ldap.bind_password, "bind-secret");
         assert_eq!(load(&state).unwrap().proxy.password, "p@ss:word");
@@ -1148,8 +1104,8 @@ mod tests {
         proxy_only.clear_proxy_password = true;
         proxy_only.proxy_password.clear();
         let cleared = save(&state, &proxy_only).unwrap();
-        assert_eq!(cleared["ldap"]["bind_password_set"], true);
-        assert_eq!(cleared["proxy"]["password_set"], false);
+        assert!(!cleared.ldap.bind_password.is_empty());
+        assert!(cleared.proxy.password.is_empty());
         let reset = save(
             &state,
             &SettingsWrite {
@@ -1158,10 +1114,10 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(reset["source"], "env");
-        assert_eq!(reset["ldap"]["url"], "");
-        assert_eq!(reset["runner"], "local");
-        assert_eq!(reset["job_output_lines"], 8_000);
+        assert!(!reset.saved);
+        assert!(reset.ldap.url.is_empty());
+        assert_eq!(reset.runner.as_str(), "local");
+        assert_eq!(reset.job_output_lines, 8_000);
     }
 
     #[test]
@@ -1170,10 +1126,10 @@ mod tests {
         let mut keep = sample("bind-secret");
         keep.job_output_lines = 0;
         let saved = save(&state, &keep).unwrap();
-        assert_eq!(saved["job_output_lines"], 8_000);
+        assert_eq!(saved.job_output_lines, 8_000);
         let mut bad = sample("bind-secret");
         bad.job_output_lines = 50;
-        let err = save(&state, &bad).unwrap_err();
+        let err = save(&state, &bad).err().unwrap();
         assert_eq!(
             err.to_string(),
             "the_output_line_limit_must_be_between_100_and"
@@ -1188,7 +1144,7 @@ mod tests {
         save(&state, &sample("bind-secret")).unwrap();
         let mut bad = sample("bind-secret");
         bad.proxy_url = "http://user:secret@proxy.example".into();
-        let err = save(&state, &bad).unwrap_err();
+        let err = save(&state, &bad).err().unwrap();
         assert_eq!(
             err.to_string(),
             "put_the_credentials_in_their_own_fields_not"
@@ -1239,26 +1195,26 @@ mod tests {
         write.default_environment_ansible = "ansible-ee".into();
         write.default_environment_opentofu = "tofu-ee".into();
         let saved = save(&state, &write).unwrap();
-        assert_eq!(saved["default_environment_ansible"], "ansible-ee");
-        assert_eq!(saved["default_environment_opentofu"], "tofu-ee");
-        assert_eq!(saved["default_environment_shell"], "");
+        assert_eq!(saved.default_environment_ansible, "ansible-ee");
+        assert_eq!(saved.default_environment_opentofu, "tofu-ee");
+        assert_eq!(saved.default_environment_shell, "");
 
         let mut wrong_tool = write.clone();
         wrong_tool.default_environment_ansible = "tofu-ee".into();
         assert_eq!(
-            save(&state, &wrong_tool).unwrap_err().to_string(),
+            save(&state, &wrong_tool).err().unwrap().to_string(),
             "the_default_environment_is_for_another_tool"
         );
         let mut not_global = write.clone();
         not_global.default_environment_shell = "team-ee".into();
         assert_eq!(
-            save(&state, &not_global).unwrap_err().to_string(),
+            save(&state, &not_global).err().unwrap().to_string(),
             "the_default_environment_must_be_global"
         );
         let mut missing = write.clone();
         missing.default_environment_shell = "gone".into();
         assert_eq!(
-            save(&state, &missing).unwrap_err().to_string(),
+            save(&state, &missing).err().unwrap().to_string(),
             "the_default_environment_is_missing"
         );
         assert_eq!(
@@ -1286,10 +1242,9 @@ mod tests {
             clear_api_key: false,
         });
         let saved = save(&state, &write).unwrap();
-        assert!(!saved.to_string().contains("llm-secret-value"));
-        assert_eq!(saved["llm"]["enabled"], true);
-        assert_eq!(saved["llm"]["provider"], "ollama");
-        assert_eq!(saved["llm"]["api_key_set"], true);
+        assert!(saved.llm_enabled);
+        assert_eq!(saved.llm_provider, LlmProvider::Ollama);
+        assert!(!saved.llm_api_key.is_empty());
         let loaded = load(&state).unwrap();
         assert!(loaded.llm_enabled);
         assert_eq!(loaded.llm_provider, LlmProvider::Ollama);
@@ -1310,7 +1265,7 @@ mod tests {
             api_key: String::new(),
             ..write.llm.clone().unwrap()
         });
-        assert_eq!(save(&state, &kept).unwrap()["llm"]["api_key_set"], true);
+        assert!(!save(&state, &kept).unwrap().llm_api_key.is_empty());
         assert_eq!(load(&state).unwrap().llm_api_key, "llm-secret-value");
 
         let mut cleared = write.clone();
@@ -1319,7 +1274,7 @@ mod tests {
             api_key: String::new(),
             ..write.llm.clone().unwrap()
         });
-        assert_eq!(save(&state, &cleared).unwrap()["llm"]["api_key_set"], false);
+        assert!(save(&state, &cleared).unwrap().llm_api_key.is_empty());
         assert_eq!(load(&state).unwrap().llm_api_key, "");
 
         let mut invalid = write;
@@ -1328,7 +1283,7 @@ mod tests {
             ..invalid.llm.clone().unwrap()
         });
         assert_eq!(
-            save(&state, &invalid).unwrap_err().to_string(),
+            save(&state, &invalid).err().unwrap().to_string(),
             "the_assistant_address_must_be_http_or_https"
         );
     }
@@ -1339,8 +1294,7 @@ mod tests {
         let mut write = sample("bind-secret");
         write.ldap_tls_insecure = true;
         let saved = save(&state, &write).unwrap();
-        assert_eq!(saved["ldap"]["tls_insecure"], true);
-        assert!(saved["ldap"].get("ca_file").is_none());
+        assert!(saved.ldap.tls_insecure);
         let loaded = load(&state).unwrap();
         assert!(loaded.ldap.tls_insecure);
     }
