@@ -78,18 +78,6 @@ services:
       # - /srv/koreograf/restore:/restore
       # Import an old data directory on first start. Read-only, never written.
       # - /srv/koreograf/old-data:/import:ro
-      # Execution environments need the Docker socket.
-      # The socket is equivalent to root on the host.
-      # The job container uses the daemon's default bridge unless the
-      # environment sets network, for example koreograf_default or
-      # container:koreograf-koreograf-1.
-      # The published image can be older than this checkout.
-      # Use docker-compose.build.yml for that build.
-      # - /var/run/docker.sock:/var/run/docker.sock
-    # Without root the process cannot join the socket group itself. Add the
-    # host socket group when the socket line is enabled:
-    # group_add:
-    #   - "${KOREOGRAF_DOCKER_SOCKET_GID:-999}"
 
 volumes:
   koreograf-data:

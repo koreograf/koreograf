@@ -18,6 +18,7 @@ compose() {
     docker compose -p "$PROJECT" \
         -f "$ROOT/docker-compose.yml" \
         -f "$ROOT/docker-compose.build.yml" \
+        -f "$ROOT/docker-compose.socket.yml" \
         -f "$ROOT/tests/harness/image-smoke-compose.yml" "$@"
 }
 
@@ -42,8 +43,6 @@ export KOREOGRAF_SMOKE_SSH_PUBLIC_KEY
 KOREOGRAF_SMOKE_SSH_PRIVATE_KEY_FILE="$SSH_DIR/id_ed25519"
 export KOREOGRAF_SMOKE_SSH_PRIVATE_KEY_FILE
 
-KOREOGRAF_DOCKER_SOCKET_GID=$(stat -c '%g' /var/run/docker.sock)
-export KOREOGRAF_DOCKER_SOCKET_GID
 KOREOGRAF_PORT=${KOREOGRAF_PORT:-18084}
 export KOREOGRAF_PORT
 export KOREOGRAF_IMAGE_SMOKE_URL="http://127.0.0.1:$KOREOGRAF_PORT"

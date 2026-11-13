@@ -141,17 +141,17 @@ The local image is tagged `koreograf:local`. buildx is only for publishing a mul
 
 ### Upgrading from an earlier image
 
-An existing Docker install needs the Docker socket mounted and the socket's host group under `group_add` when a job should run in an image; without the group the container stops at start with one English line. The local runner mode is removed from the image, and a saved `local` mode is switched to `docker`. A job then needs a reachable socket and fails at start with a line that names `/var/run/docker.sock` when it is missing. An older root-owned data volume still needs the one-time ownership fix below.
+An existing Docker install needs the Docker socket mounted when a job should run in an image. Enable it with `docker-compose.socket.yml` as described under [Docker socket](#docker-socket); the override works with any host socket group and needs no `KOREOGRAF_DOCKER_SOCKET_GID`. The local runner mode is removed from the image, and a saved `local` mode is switched to `docker`. A job then needs a reachable socket and fails at start with a line that names `/var/run/docker.sock` when it is missing. An older root-owned data volume is fixed by the root start of that override; without it, use the one-time ownership fix below.
 
-The process starts as uid 10001. A fresh named volume inherits the ownership of `/var/lib/koreograf` from the image. An older volume that is still owned by root needs a one-time ownership fix, and that is the only step that needs root:
+The base `docker-compose.yml` starts the process as uid 10001. A fresh named volume inherits the ownership of `/var/lib/koreograf` from the image. An older volume that is still owned by root needs a one-time ownership fix, and without the socket override that is the only step that needs root:
 
 ```bash
 docker compose run --rm -T --user 0 koreograf koreograf --version
 ```
 
-`docker-compose.yml` sets `user: "10001:10001"`, so the entrypoint never starts as root and cannot fix an older root-owned volume on its own. Run the command above once after upgrading such a volume.
+`docker-compose.yml` sets `user: "10001:10001"`, so on its own the entrypoint never starts as root and cannot fix an older root-owned volume. Run the command above once after upgrading such a volume, or use the socket override, whose root start fixes it on every start.
 
-The entrypoint in the binary creates the data directory, gives an existing volume and its files to uid 10001, joins the Docker socket group, sets `no_new_privs`, and drops to uid 10001 before it starts the server. It needs no shell, `setpriv`, `find`, or `chown`. A mounted `/var/run/docker.sock` changes nothing about the volume ownership: the process still runs as uid 10001 and needs the socket's group through `group_add`.
+The entrypoint in the binary creates the data directory, gives an existing volume and its files to uid 10001, joins the Docker socket group, sets `no_new_privs`, and drops to uid 10001 before it starts the server. It needs no shell, `setpriv`, `find`, or `chown`. With `docker-compose.socket.yml` the entrypoint starts as root and joins the socket group itself; without it the process starts as uid 10001 and needs the socket's group through `group_add`.
 
 `/sbin/tini` is PID 1 and starts `/usr/local/bin/koreograf entrypoint`. It forwards SIGTERM, so `docker stop` returns promptly, and it reaps orphaned processes. The server runs as its child, and the container stops when the server exits. A custom image command, Compose `entrypoint`, or Helm `command` replaces the tini entrypoint; start the binary with `entrypoint` when a command should still fix the volume.
 
@@ -180,16 +180,35 @@ docker push registry.example.com/koreograf/ansible-ee:2.21.5-2
 
 Set `KOREOGRAF_SEED_ENVIRONMENTS=0` when the curated images are not available. Create the three global environments with the registry image names instead, then choose them as the defaults under **Settings → Jobs**. Image pulls use the Docker daemon, so sign in on the host with `docker login registry.example.com`. The `registry` credential in **Credentials** passes a host, user, and password to a job; Koreograf does not run `docker login` and does not pull with that credential.
 
-The socket line in `docker-compose.yml` is commented out. Uncomment it when a job should run in an image. The image has no local runner, so a job without a reachable socket fails at start with a line that names `/var/run/docker.sock` and points to this page. `auto` uses the container runtime; `local` is not available in the image.
+### Docker socket
 
-That line mounts `/var/run/docker.sock`. The socket is root on the Docker host. The process runs as uid 10001, so add the socket's host group under `group_add` as the comment in the Compose file shows, for example `KOREOGRAF_DOCKER_SOCKET_GID=$(stat -c '%g' /var/run/docker.sock) docker compose up -d`. A wrong or missing group stops the container with one English line that names the group and the mode to set. An owner creates an execution environment. A global environment needs an administrator. An operator can select an environment the team can see and store it on a template. A viewer cannot. Those people choose an image that the host daemon starts. The job container does not receive the socket. It does receive the job directory, which holds the decrypted credential files for that job at mode `0600`. The job can read them. They are removed when the job ends.
-
-The Compose service runs with a read-only root filesystem, a `tmpfs` on `/tmp`, `cap_drop: [ALL]`, `no-new-privileges`, and process and memory bounds. The data volume stays writable. A path that needs another writable directory needs its own volume or `tmpfs`.
-
-Uncomment the socket line, then build this checkout. The image tag in `docker-compose.yml` is the last published release and can be older than these steps:
+The Docker socket is off by default. Enable it with the socket override when a job should run in an image:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.build.yml up --build -d
+docker compose -f docker-compose.yml -f docker-compose.socket.yml up -d
+```
+
+The override mounts `/var/run/docker.sock`. The socket is root on the Docker host. It starts the entrypoint as root with only `CHOWN`, `DAC_OVERRIDE`, `SETUID`, and `SETGID`, reads the socket's group, adds that group as the only supplementary group, and drops to uid 10001 with `no_new_privs` before the server starts. It works with any host socket group, so no `KOREOGRAF_DOCKER_SOCKET_GID` is needed. A job then needs a reachable socket and fails at start with a line that names `/var/run/docker.sock` when it is missing. `auto` uses the container runtime; `local` is not available in the image.
+
+To keep the non-root start, keep the base file's `user` and add the socket and its host group in your own override:
+
+```yaml
+services:
+  koreograf:
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "${KOREOGRAF_DOCKER_SOCKET_GID:-999}"
+```
+
+Save it as `docker-compose.socket-group.yml` and pass the group from the host, for example `KOREOGRAF_DOCKER_SOCKET_GID=$(stat -c '%g' /var/run/docker.sock) docker compose -f docker-compose.yml -f docker-compose.socket-group.yml up -d`. A wrong or missing group stops the container with one English line that names the group and the mode to set. An owner creates an execution environment. A global environment needs an administrator. An operator can select an environment the team can see and store it on a template. A viewer cannot. Those people choose an image that the host daemon starts. The job container does not receive the socket. It does receive the job directory, which holds the decrypted credential files for that job at mode `0600`. The job can read them. They are removed when the job ends.
+
+The Compose service runs with a read-only root filesystem, a `tmpfs` on `/tmp`, `cap_drop: [ALL]`, `no-new-privileges`, and process and memory bounds. The socket override adds only the four capabilities the entrypoint uses before it drops. The data volume stays writable. A path that needs another writable directory needs its own volume or `tmpfs`.
+
+Use the socket override with the build file when a job should run in an image and the checkout is newer than the published image. The image tag in `docker-compose.yml` is the last published release and can be older than these steps:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml -f docker-compose.socket.yml up --build -d
 ```
 
 Leave `KOREOGRAF_DATA_HOST` empty. Koreograf reads the daemon path of the `koreograf-data` volume and uses that path as the mount source. A path inside this container is not a path the daemon can mount. Set `KOREOGRAF_DATA_HOST` only when the lookup is wrong. A path the daemon cannot see fails the job before a container starts, so the daemon does not create empty `jobs/` or `cache/` directories on the host.
