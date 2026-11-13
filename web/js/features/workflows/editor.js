@@ -501,6 +501,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       });
       element.addEventListener("pointerup", (event) => {
         if (connectDrag && connectDrag.id === node.id) {
+          connectDrag = null;
           clearConnectPreview();
           const target = document.elementFromPoint(event.clientX, event.clientY);
           const hit = target && target.closest(".wf-node");
