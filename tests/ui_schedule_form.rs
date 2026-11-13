@@ -1,5 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+#[path = "common/web_source.rs"]
+mod web_source;
+
 use std::path::Path;
 use std::process::Command;
 
@@ -60,7 +63,7 @@ const KEYS: &[&str] = &[
 #[test]
 fn schedules_can_be_created_from_the_schedules_page_and_a_template() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let js = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let js = web_source::source();
     let css = std::fs::read_to_string(root.join("web/app.css")).expect("app.css");
     let probe = SCHEDULE_PROBE
         .replace("__JS__", &serde_json::to_string(&js).expect("js json"))

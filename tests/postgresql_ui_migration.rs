@@ -247,7 +247,7 @@ async fn the_wizard_routes_need_an_administrator() {
 #[test]
 fn the_wizard_and_the_maintenance_banner_are_in_the_ui_and_catalogs() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = common::web_source();
     assert!(
         script.contains("id=\"settings-panel-database\""),
         "database panel"

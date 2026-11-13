@@ -1,5 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+#[path = "common/web_source.rs"]
+mod web_source;
+
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
@@ -110,14 +113,14 @@ fn contains_token(source: &str, token: &str) -> bool {
 fn guide_class_names_exist_in_the_ui() {
     let guide = read("docs/ui-style-guide.md");
     let css = read("web/app.css");
-    let script = read("web/app.js");
+    let script = web_source::source();
     let missing: Vec<String> = guide_classes(&guide)
         .into_iter()
         .filter(|token| !contains_token(&css, token) && !contains_token(&script, token))
         .collect();
     assert!(
         missing.is_empty(),
-        "class names in the style guide are missing from web/app.css or web/app.js: {missing:?}"
+        "class names in the style guide are missing from web/app.css or web/js: {missing:?}"
     );
 }
 

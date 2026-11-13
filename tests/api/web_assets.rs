@@ -45,7 +45,7 @@ fn temp_web_app(label: &str) -> (axum::Router, PathBuf) {
 async fn web_assets_send_types_etags_and_security_headers() {
     let harness = TestApp::boot("assets", Options::default());
     for (path, content_type) in [
-        ("/app.js", "text/javascript; charset=utf-8"),
+        ("/js/features/legacy.js", "text/javascript; charset=utf-8"),
         ("/app.css", "text/css; charset=utf-8"),
         ("/i18n/de.json", "application/json; charset=utf-8"),
         ("/i18n/en.json", "application/json; charset=utf-8"),
@@ -97,12 +97,12 @@ async fn web_assets_send_types_etags_and_security_headers() {
 }
 
 #[tokio::test]
-async fn app_js_is_compressed_with_gzip_and_brotli() {
+async fn legacy_js_is_compressed_with_gzip_and_brotli() {
     let harness = TestApp::boot("assets-compressed", Options::default());
     let (status, headers, body) = request(
         &harness.app,
         "GET",
-        "/app.js",
+        "/js/features/legacy.js",
         &[("accept-encoding", "gzip")],
         None,
     )
@@ -111,19 +111,19 @@ async fn app_js_is_compressed_with_gzip_and_brotli() {
     assert_eq!(header_value(&headers, header::CONTENT_ENCODING), "gzip");
     assert!(
         body.len() <= 90 * 1024,
-        "gzip app.js is {} bytes",
+        "gzip legacy.js is {} bytes",
         body.len()
     );
     assert!(
         header_value(&headers, header::VARY).contains("accept-encoding"),
         "missing vary header"
     );
-    assert_security_headers(&headers, "/app.js gzip");
+    assert_security_headers(&headers, "/js/features/legacy.js gzip");
 
     let (status, headers, body) = request(
         &harness.app,
         "GET",
-        "/app.js",
+        "/js/features/legacy.js",
         &[("accept-encoding", "br")],
         None,
     )
@@ -132,10 +132,10 @@ async fn app_js_is_compressed_with_gzip_and_brotli() {
     assert_eq!(header_value(&headers, header::CONTENT_ENCODING), "br");
     assert!(
         body.len() <= 90 * 1024,
-        "brotli app.js is {} bytes",
+        "brotli legacy.js is {} bytes",
         body.len()
     );
-    assert_security_headers(&headers, "/app.js brotli");
+    assert_security_headers(&headers, "/js/features/legacy.js brotli");
 }
 
 #[tokio::test]

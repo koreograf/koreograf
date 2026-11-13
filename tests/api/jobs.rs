@@ -17,9 +17,9 @@ async fn the_job_log_marks_a_fatal_line_and_keeps_galaxy_as_a_warning() {
     let app = harness.app.clone();
     let dir = harness.dir.clone();
 
-    let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = script.as_str().unwrap_or("");
+    let script = web_source();
     assert!(script.contains("function classifyLogLine"));
     assert!(script.contains("fatal:\\s*\\["));
     assert!(script.contains("UNREACHABLE!"));
@@ -65,7 +65,7 @@ async fn login_shell_job_and_webhook() {
 
     let (status, index, _) = call(&app, "GET", "/", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    assert!(index.as_str().unwrap_or("").contains("app.js"));
+    assert!(index.as_str().unwrap_or("").contains("/js/main.js"));
     let (status, icon, _) = call(&app, "GET", "/favicon.svg", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(icon.as_str().unwrap_or("").contains("<svg"));
@@ -256,9 +256,9 @@ async fn failed_job_shows_parameters_and_can_be_relaunched() {
     let app = harness.app.clone();
     let dir = harness.dir.clone();
 
-    let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = script.as_str().unwrap_or("");
+    let script = web_source();
     assert!(script.contains("output"));
     assert!(script.contains("download_output"));
     assert!(script.contains("data-relaunch"));
@@ -414,9 +414,9 @@ async fn prompt_on_launch_overrides_the_job_and_keeps_the_template() {
     let state = koreograf::boot(cfg).unwrap();
     let app = koreograf::router(state);
 
-    let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = script.as_str().unwrap_or("");
+    let script = web_source();
     assert!(script.contains("prompt_on_launch"));
     assert!(script.contains("launch-prompt"));
 

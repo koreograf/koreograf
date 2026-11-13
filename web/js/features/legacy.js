@@ -1,115 +1,17 @@
 "use strict";
 
-const LANGUAGES = [
-  { id: "de", code: "GER", name: "Deutsch", country: "de" },
-  { id: "en", code: "ENG", name: "English", country: "gb" },
-];
-
-const FLAG_SVG = {
-  de: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 5 3"><rect width="5" height="3" fill="#000"/><rect width="5" y="1" height="2" fill="#DE0000"/><rect width="5" y="2" height="1" fill="#FFCE00"/></svg>`,
-  gb: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 60 30"><clipPath id="a"><path d="M0 0v30h60V0z"/></clipPath><clipPath id="b"><path d="M30 15h30v15zv15H0zH0V0zV0h30z"/></clipPath><g clip-path="url(#a)"><path d="M0 0v30h60V0z" fill="#012169"/><path d="M0 0l60 30m0-30L0 30" stroke="#fff" stroke-width="6"/><path d="M0 0l60 30m0-30L0 30" clip-path="url(#b)" stroke="#C8102E" stroke-width="4"/><path d="M30 0v30M0 15h60" stroke="#fff" stroke-width="10"/><path d="M30 0v30M0 15h60" stroke="#C8102E" stroke-width="6"/></g></svg>`,
-};
-
-function languageId(value) {
-  return LANGUAGES.some((item) => item.id === value) ? value : "de";
-}
-
-const app = document.querySelector("#app");
-let me = null;
-let teamId = localStorage.getItem("koreograf.team") || "";
-let lang = languageId(localStorage.getItem("koreograf.lang"));
-let source = null;
-let pollTimer = null;
-let generation = 0;
-let navOpen = false;
-let navKey = null;
-let navToken = null;
-let leaveGuard = null;
-let sourceNotice = null;
-let revealToken = null;
-let shownHash = null;
-const routeScroll = new Map();
-let historyIndex = 0;
-let buildVersion = "";
-let buildCommit = "";
-let versionRequested = false;
-let assistantEnabled = false;
-let assistantModel = "";
-let assistantTranscript = [];
-let assistantPending = false;
-let assistantPendingAction = null;
-let maintenanceActive = false;
-let maintenanceSince = "";
-let maintenanceTimer = null;
-let databaseCheckId = null;
+import * as appState from "../core/state.js";
+import { api } from "../core/api.js";
+import { confirmDialog, configureDialogs, openDialog } from "../core/dialog.js";
+import { addLink, emptyState, esc, h, table } from "../core/dom.js";
+import { FLAG_SVG, LANGUAGES, configureLanguage, currentLanguage, loadCatalog, setLang, t } from "../core/i18n.js";
+import { matchRoute, registerRedirect, registerRoute } from "../core/router.js";
 
 window.addEventListener("beforeunload", (event) => {
-  if (!leaveGuard || !leaveGuard()) return;
+  if (!appState.leaveGuard || !appState.leaveGuard()) return;
   event.preventDefault();
   event.returnValue = "";
 });
-document.documentElement.lang = lang;
-
-
-
-function esc(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;",
-  }[ch]));
-}
-
-let messages = {};
-
-async function loadCatalog(id) {
-  if (messages[id]) return;
-  try {
-    messages[id] = await fetch(`/i18n/${id}.json`).then((response) => response.json());
-  } catch {
-    messages[id] = {};
-  }
-}
-
-function lookup(language, key) {
-  const table = messages[language] || {};
-  if (Object.prototype.hasOwnProperty.call(table, key)) return table[key];
-  if (language !== "de" && Object.prototype.hasOwnProperty.call(messages.de || {}, key)) {
-    return messages.de[key];
-  }
-  return key;
-}
-
-function t(key, vars) {
-  let out = lookup(lang, key);
-  if (vars) {
-    Object.entries(vars).forEach(([name, value]) => {
-      const raw = String(value ?? "");
-      const text = name === "field" || name === "label" ? lookup(lang, raw) : raw;
-      out = out.replaceAll(`{${name}}`, () => text);
-    });
-  }
-  return out;
-}
-
-function h(text, vars) {
-  return esc(t(text, vars));
-}
-
-async function setLang(next) {
-  if (leaveGuard && leaveGuard() && !(await confirmDialog({ title: t("discard_unsaved_changes"), confirmLabel: t("ok") }))) return;
-  leaveGuard = null;
-  lang = languageId(next);
-  await loadCatalog(lang);
-  localStorage.setItem("koreograf.lang", lang);
-  document.documentElement.lang = lang;
-  if (!me) renderLogin("");
-  else await route();
-  const button = document.querySelector("[data-lang-button]");
-  if (button) button.focus();
-}
 
 function flagMarkup(country) {
   const svg = FLAG_SVG[country];
@@ -118,12 +20,12 @@ function flagMarkup(country) {
 }
 
 function langOption(item) {
-  const selected = item.id === lang ? "true" : "false";
+  const selected = item.id === currentLanguage() ? "true" : "false";
   return `<li role="option" tabindex="-1" lang="${esc(item.id)}" data-lang-option="${esc(item.id)}" aria-selected="${selected}">${flagMarkup(item.country)}<span class="lang-code">${esc(item.code)}</span><span class="lang-name">${esc(item.name)}</span></li>`;
 }
 
 function langSwitch() {
-  const current = LANGUAGES.find((item) => item.id === lang) || LANGUAGES[0];
+  const current = LANGUAGES.find((item) => item.id === currentLanguage()) || LANGUAGES[0];
   const options = LANGUAGES.map(langOption).join("");
   return `<div class="lang-switch" data-lang-select>
     <button class="lang-button" type="button" data-lang-button aria-haspopup="listbox" aria-expanded="false" aria-controls="lang-menu" aria-label="${h("language")}">${flagMarkup(current.country)}<span class="lang-code">${esc(current.code)}</span><span class="lang-caret" aria-hidden="true"></span></button>
@@ -149,7 +51,7 @@ function bindLangSwitch() {
       closeLangMenus();
       menu.hidden = false;
       button.setAttribute("aria-expanded", "true");
-      const current = options().find((item) => item.dataset.langOption === lang) || options()[0];
+      const current = options().find((item) => item.dataset.langOption === currentLanguage()) || options()[0];
       if (current) current.focus();
     };
     button.addEventListener("click", (event) => {
@@ -165,7 +67,7 @@ function bindLangSwitch() {
     });
     options().forEach((option, index, list) => {
       option.addEventListener("click", () => {
-        if (option.dataset.langOption !== lang) setLang(option.dataset.langOption);
+        if (option.dataset.langOption !== currentLanguage()) setLang(option.dataset.langOption);
         else closeLangMenus();
       });
       option.addEventListener("keydown", (event) => {
@@ -183,7 +85,7 @@ function bindLangSwitch() {
           list[list.length - 1].focus();
         } else if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          if (option.dataset.langOption !== lang) setLang(option.dataset.langOption);
+          if (option.dataset.langOption !== currentLanguage()) setLang(option.dataset.langOption);
           else closeLangMenus();
         } else if (event.key === "Escape") {
           event.preventDefault();
@@ -199,15 +101,6 @@ function bindLangSwitch() {
     });
     bindLangSwitch.outside = true;
   }
-}
-
-function addLink(href, label) {
-  return `<a class="btn pill primary" href="${href}">${h(label)}</a>`;
-}
-
-function emptyState(message, href, label) {
-  const action = href && label ? `<a class="btn primary" href="${href}">${h(label)}</a>` : "";
-  return `<div class="empty-state"><p>${h(message)}</p>${action}</div>`;
 }
 
 function onboardingCard() {
@@ -238,15 +131,15 @@ function deny(title, min) {
 }
 
 function roleOf() {
-  if (!me) return "viewer";
-  if (me.is_admin) return "owner";
-  const team = (me.teams || []).find((item) => item.id === teamId);
+  if (!appState.me) return "viewer";
+  if (appState.me.is_admin) return "owner";
+  const team = (appState.me.teams || []).find((item) => item.id === appState.teamId);
   return team ? team.role : "viewer";
 }
 
 // Prefer the first local team over an LDAP-mapped team, which often has no content, then fall back to the first team.
 function preferredTeam() {
-  const teams = me.teams || [];
+  const teams = appState.me.teams || [];
   const local = teams.find((team) => !team.ldap_group);
   return (local || teams[0] || {}).id || "";
 }
@@ -316,7 +209,7 @@ function clock(value) {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleTimeString(lang === "en" ? "en-GB" : "de-DE", {
+  return date.toLocaleTimeString(currentLanguage() === "en" ? "en-GB" : "de-DE", {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
@@ -328,7 +221,7 @@ function when(value) {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleString(lang === "en" ? "en-GB" : "de-DE", {
+  return date.toLocaleString(currentLanguage() === "en" ? "en-GB" : "de-DE", {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -374,50 +267,22 @@ function bytes(value) {
 }
 
 function closeLive() {
-  generation += 1;
+  appState.setGeneration(appState.generation + 1);
   document.querySelector("#schedule-form")?.remove();
   document.querySelectorAll("[data-edit-overlay]").forEach((node) => node.remove());
   document.querySelectorAll(".node-menu-pop").forEach((node) => node.remove());
-  if (source) {
-    source.close();
-    source = null;
+  if (appState.source) {
+    appState.source.close();
+    appState.setSource(null);
   }
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
+  if (appState.pollTimer) {
+    clearInterval(appState.pollTimer);
+    appState.setPollTimer(null);
   }
-  if (navKey) {
-    document.removeEventListener("keydown", navKey);
-    navKey = null;
+  if (appState.navKey) {
+    document.removeEventListener("keydown", appState.navKey);
+    appState.setNavKey(null);
   }
-}
-
-async function api(method, path, body) {
-  const headers = {};
-  if (teamId) headers["X-Team-Id"] = teamId;
-  const init = { method, headers, credentials: "same-origin" };
-  if (method === "GET" && navToken) init.signal = navToken.signal;
-  if (body !== undefined) {
-    headers["Content-Type"] = "application/json";
-    init.body = JSON.stringify(body);
-  }
-  const response = await fetch(path, init);
-  const text = await response.text();
-  let data = null;
-  if (text) {
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = { error: text };
-    }
-  }
-  if (!response.ok) {
-    const error = new Error((data && data.error) || "request.failed");
-    error.status = response.status;
-    error.vars = (data && data.vars) || null;
-    throw error;
-  }
-  return data;
 }
 
 const FIELD_ALIAS = {
@@ -478,16 +343,14 @@ const ERROR_FIELD = {
   schedule_needs_a_weekday: "weekday",
 };
 
-let flashKey = "";
-
 function markSaved() {
-  flashKey = "saved";
+  appState.setFlashKey("saved");
 }
 
 function savedBanner() {
-  if (!flashKey) return "";
-  const key = flashKey;
-  flashKey = "";
+  if (!appState.flashKey) return "";
+  const key = appState.flashKey;
+  appState.setFlashKey("");
   return `<div class="banner good">${h(key)}</div>`;
 }
 
@@ -543,10 +406,8 @@ function clearControlError(control) {
   control.removeAttribute("aria-invalid");
 }
 
-let notedInvalid = false;
-
 document.addEventListener("submit", () => {
-  notedInvalid = false;
+  appState.setNotedInvalid(false);
 }, true);
 
 document.addEventListener("invalid", (event) => {
@@ -556,8 +417,8 @@ document.addEventListener("invalid", (event) => {
   if (existing && existing.textContent.trim()) return;
   event.preventDefault();
   showFieldError(control, t("this_field_needs_a_valid_value"));
-  if (!notedInvalid) {
-    notedInvalid = true;
+  if (!appState.notedInvalid) {
+    appState.setNotedInvalid(true);
     control.focus();
   }
 }, true);
@@ -579,7 +440,7 @@ function topmostCard() {
 function handle(error) {
   if (error && error.name === "AbortError") return;
   if (error && error.status === 401) {
-    me = null;
+    appState.setMe(null);
     renderLogin("session.expired");
     return;
   }
@@ -602,7 +463,7 @@ function handle(error) {
 function renderRouteError(error) {
   if (error && error.name === "AbortError") return;
   if (error && error.status === 401) {
-    me = null;
+    appState.setMe(null);
     renderLogin("session.expired");
     return;
   }
@@ -637,40 +498,40 @@ function versionSlot() {
 }
 
 function fillVersion() {
-  if (!buildVersion) return;
-  const version = [buildVersion, buildCommit.slice(0, 7)].filter(Boolean).join(" ");
+  if (!appState.buildVersion) return;
+  const version = [appState.buildVersion, appState.buildCommit.slice(0, 7)].filter(Boolean).join(" ");
   document.querySelectorAll("[data-version]").forEach((line) => {
     const link = line.querySelector("a");
     if (link) {
       link.textContent = t("build_version", { version });
-      link.title = buildCommit;
+      link.title = appState.buildCommit;
     }
     line.hidden = false;
   });
 }
 
 async function loadVersion() {
-  if (!versionRequested) {
-    versionRequested = true;
+  if (!appState.versionRequested) {
+    appState.setVersionRequested(true);
     try {
       const response = await fetch("/api/v1/version", { credentials: "same-origin" });
       if (response.ok) {
         const data = await response.json();
         const version = String(data.version || "");
         const commit = data.commit && data.commit !== "unknown" ? String(data.commit) : "";
-        if (version) buildVersion = version;
-        buildCommit = commit;
+        if (version) appState.setBuildVersion(version);
+        appState.setBuildCommit(commit);
       }
     } catch {
-      buildVersion = "";
-      buildCommit = "";
+      appState.setBuildVersion("");
+      appState.setBuildCommit("");
     }
   }
   fillVersion();
 }
 
 function maintenanceBanner() {
-  return `<div class="banner warn" id="maintenance-banner"${maintenanceActive ? "" : " hidden"}><p>${h("maintenance_mode_banner")}</p><p class="small">${h("no_new_jobs_during_maintenance")}${maintenanceSince ? ` <span class="mono">${esc(maintenanceSince)}</span>` : ""}</p></div>`;
+  return `<div class="banner warn" id="maintenance-banner"${appState.maintenanceActive ? "" : " hidden"}><p>${h("maintenance_mode_banner")}</p><p class="small">${h("no_new_jobs_during_maintenance")}${appState.maintenanceSince ? ` <span class="mono">${esc(appState.maintenanceSince)}</span>` : ""}</p></div>`;
 }
 
 async function loadMaintenance() {
@@ -678,20 +539,20 @@ async function loadMaintenance() {
     const response = await fetch("/api/v1/maintenance", { credentials: "same-origin" });
     if (response.ok) {
       const data = await response.json();
-      maintenanceActive = Boolean(data && data.active);
-      maintenanceSince = data && data.since ? String(data.since) : "";
+      appState.setMaintenanceActive(Boolean(data && data.active));
+      appState.setMaintenanceSince(data && data.since ? String(data.since) : "");
     }
   } catch {
     return;
   }
   const node = document.querySelector("#maintenance-banner");
   if (node) {
-    node.hidden = !maintenanceActive;
+    node.hidden = !appState.maintenanceActive;
     const detail = node.querySelector(".small");
-    if (detail) detail.innerHTML = `${h("no_new_jobs_during_maintenance")}${maintenanceSince ? ` <span class="mono">${esc(maintenanceSince)}</span>` : ""}`;
+    if (detail) detail.innerHTML = `${h("no_new_jobs_during_maintenance")}${appState.maintenanceSince ? ` <span class="mono">${esc(appState.maintenanceSince)}</span>` : ""}`;
   }
-  if (!maintenanceTimer) {
-    maintenanceTimer = window.setInterval(() => { loadMaintenance(); }, 15000);
+  if (!appState.maintenanceTimer) {
+    appState.setMaintenanceTimer(window.setInterval(() => { loadMaintenance(); }, 15000));
   }
 }
 
@@ -702,7 +563,7 @@ function shell(title, body, actions) {
       ["#/", t("overview")],
       ["#/jobs", t("jobs")],
       ["#/schedules", t("schedules")],
-      ...assistantNavItem(assistantEnabled),
+      ...assistantNavItem(appState.assistantEnabled),
     ]],
     [t("automation"), [
       ["#/templates", t("templates")],
@@ -719,7 +580,7 @@ function shell(title, body, actions) {
       ["#/team", t("team")],
       ["#/organizations", t("organizations")],
     ]],
-    ...(me.is_admin ? [[t("nav.administration"), [
+    ...(appState.me.is_admin ? [[t("nav.administration"), [
       ["#/settings", t("settings")],
       ["#/users", t("users")],
       ["#/backup", t("backup")],
@@ -730,12 +591,12 @@ function shell(title, body, actions) {
       <div class="nav-label">${label}</div>
       ${links.map(([href, text]) => `<a href="${href}" class="${navActive(here, href) ? "active" : ""}">${text}</a>`).join("")}
     </div>`).join("");
-  const options = (me.teams || []).map((team) => {
+  const options = (appState.me.teams || []).map((team) => {
     const label = team.organization_name ? `${team.organization_name} · ${team.name}` : team.name;
-    return `<option value="${esc(team.id)}"${team.id === teamId ? " selected" : ""}>${esc(label)}</option>`;
+    return `<option value="${esc(team.id)}"${team.id === appState.teamId ? " selected" : ""}>${esc(label)}</option>`;
   }).join("");
-  navOpen = false;
-  app.innerHTML = `
+  appState.setNavOpen(false);
+  appState.app.innerHTML = `
     <div class="shell">
       <a class="skip-link" href="#main">${h("skip_to_content")}</a>
       <div class="scrim" id="nav-scrim"></div>
@@ -744,7 +605,7 @@ function shell(title, body, actions) {
         <label class="field"><span class="small">${h("organization_team")}</span><select id="team-select">${options || `<option value="">${h("no_team")}</option>`}</select></label>
         <nav class="nav">${nav}</nav>
         <div class="side-foot">
-          <a class="account-link" href="#/account">${esc(me.display_name)} · ${esc(roleLabel(roleOf()))}${me.auth_source === "ldap" ? " · LDAP" : ""}</a>
+          <a class="account-link" href="#/account">${esc(appState.me.display_name)} · ${esc(roleLabel(roleOf()))}${appState.me.auth_source === "ldap" ? " · LDAP" : ""}</a>
           ${versionSlot()}
           ${langSwitch()}
           <button class="btn ghost" id="logout" type="button">${h("sign_out")}</button>
@@ -759,13 +620,13 @@ function shell(title, body, actions) {
     </div>`;
   const select = document.querySelector("#team-select");
   select.addEventListener("change", async () => {
-    if (leaveGuard && leaveGuard() && !(await confirmDialog({ title: t("discard_unsaved_changes"), confirmLabel: t("ok") }))) {
-      select.value = teamId;
+    if (appState.leaveGuard && appState.leaveGuard() && !(await confirmDialog({ title: t("discard_unsaved_changes"), confirmLabel: t("ok") }))) {
+      select.value = appState.teamId;
       return;
     }
-    leaveGuard = null;
-    teamId = select.value;
-    localStorage.setItem("koreograf.team", teamId);
+    appState.setLeaveGuard(null);
+    appState.setTeamId(select.value);
+    localStorage.setItem("koreograf.team", appState.teamId);
     route();
   });
   bindLangSwitch();
@@ -775,37 +636,30 @@ function shell(title, body, actions) {
   });
   document.querySelector("#logout").addEventListener("click", async () => {
     try { await api("POST", "/api/v1/logout"); } catch { /* session ended locally */ }
-    me = null;
+    appState.setMe(null);
     go("#/login");
   });
   const navToggle = document.querySelector("#nav-toggle");
   const sidePanel = document.querySelector(".side");
   const navScrim = document.querySelector("#nav-scrim");
   const setNavOpen = (open) => {
-    navOpen = open;
+    appState.setNavOpen(open);
     navToggle.setAttribute("aria-expanded", String(open));
     sidePanel.classList.toggle("open", open);
     navScrim.classList.toggle("open", open);
   };
-  navToggle.addEventListener("click", () => setNavOpen(!navOpen));
+  navToggle.addEventListener("click", () => setNavOpen(!appState.navOpen));
   navScrim.addEventListener("click", () => setNavOpen(false));
-  navKey = (event) => { if (event.key === "Escape") setNavOpen(false); };
-  document.addEventListener("keydown", navKey);
+  appState.setNavKey((event) => { if (event.key === "Escape") setNavOpen(false); });
+  document.addEventListener("keydown", appState.navKey);
   loadVersion();
   loadMaintenance();
 }
 
 function needTeam() {
-  if (teamId) return true;
+  if (appState.teamId) return true;
   shell(t("team"), `<div class="card"><p>${h("this_account_has_no_team_an_administrator_creates")}</p><p><a href="#/team">${h("open_team")}</a></p></div>`);
   return false;
-}
-
-function table(headers, rows) {
-  const body = rows.length
-    ? rows.join("")
-    : `<tr><td class="muted" colspan="${headers.length}">${h("nothing_here")}</td></tr>`;
-  return `<div class="table-wrap"><table class="table"><thead><tr>${headers.map((item) => `<th>${esc(item)}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 function jsonObject(text, label) {
@@ -827,7 +681,7 @@ function jsonObject(text, label) {
 
 function renderLogin(message, tone, vars, username) {
   const kind = tone === "good" ? "good" : "bad";
-  app.innerHTML = `
+  appState.app.innerHTML = `
     <div class="login-wrap">
       <div class="login-stack">
         <form class="login-card" id="login-form">
@@ -861,13 +715,13 @@ function renderLogin(message, tone, vars, username) {
     button.disabled = true;
     const entered = form.username.value;
     try {
-      me = await api("POST", "/api/v1/login", {
+      appState.setMe(await api("POST", "/api/v1/login", {
         username: entered,
         password: form.password.value,
-      });
-      const known = (me.teams || []).some((team) => team.id === teamId);
-      if (!known) teamId = preferredTeam();
-      localStorage.setItem("koreograf.team", teamId);
+      }));
+      const known = (appState.me.teams || []).some((team) => team.id === appState.teamId);
+      if (!known) appState.setTeamId(preferredTeam());
+      localStorage.setItem("koreograf.team", appState.teamId);
       go("#/");
     } catch (error) {
       renderLogin(error.message || "invalid_username_or_password", "bad", error.vars, entered);
@@ -967,7 +821,7 @@ function dashboardAddress(tab, range) {
 function shortDay(value) {
   const date = new Date(`${value}T00:00:00`);
   if (Number.isNaN(date.getTime())) return String(value || "");
-  return date.toLocaleDateString(lang === "en" ? "en-GB" : "de-DE", {
+  return date.toLocaleDateString(currentLanguage() === "en" ? "en-GB" : "de-DE", {
     day: "2-digit",
     month: "2-digit",
   });
@@ -1081,7 +935,7 @@ async function pageDashboard() {
     ${dashboardTabs("overview")}
     <div id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
       ${data.preflight ? preflightNoticeHtml(data.preflight) : ""}
-      ${me.is_admin && data.import ? importNoticeHtml(data.import) : ""}
+      ${appState.me.is_admin && data.import ? importNoticeHtml(data.import) : ""}
       ${jobs.length ? "" : onboardingCard()}
       <div class="grid-3" style="margin-top:${jobs.length ? "0" : "14px"}">
         <article class="card stat"><span class="small muted">${h("dependency_cache")}</span><strong>${esc(bytes(data.cache_bytes))}</strong><p class="small muted">${h("collections_roles_and_opentofu_providers_stay_between_runs")}</p></article>
@@ -1354,159 +1208,6 @@ function confirmTofuApply(item) {
   });
 }
 
-let focusTrigger = null;
-
-document.addEventListener("click", (event) => {
-  const target = event.target instanceof Element ? event.target.closest("a[href], button") : null;
-  if (target) focusTrigger = target;
-}, true);
-
-function focusOpener() {
-  const active = document.activeElement;
-  if (active && active !== document.body && active !== document.documentElement && !active.classList.contains("skip-link")) return active;
-  return focusTrigger || document.getElementById("main");
-}
-
-function focusReturn(node) {
-  if (!node) return;
-  if (document.contains(node)) {
-    node.focus();
-  } else if (node.getAttribute && node.getAttribute("href")) {
-    const href = node.getAttribute("href");
-    const match = [...document.querySelectorAll("a[href]")].find((item) => item.getAttribute("href") === href);
-    if (match) match.focus();
-  } else if (node.id) {
-    const match = document.getElementById(node.id);
-    if (match) match.focus();
-  }
-}
-
-function makeModal(overlay, close) {
-  const opener = focusOpener();
-  const dismiss = async () => {
-    if (await close() === false) return;
-    focusReturn(opener);
-    focusTrigger = null;
-  };
-  const card = overlay.querySelector(".overlay-card");
-  const focusables = () => [...card.querySelectorAll("input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], button:not([disabled])")].filter((node) => node.offsetParent !== null);
-  const initial = focusables().find((node) => node.matches("input, select, textarea")) || focusables()[0];
-  if (initial) initial.focus();
-  overlay.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-      dismiss();
-      return;
-    }
-    if (event.key !== "Tab") return;
-    const items = focusables();
-    if (!items.length) return;
-    const active = document.activeElement;
-    const outside = !overlay.contains(active);
-    if (event.shiftKey && (outside || active === items[0])) {
-      event.preventDefault();
-      items[items.length - 1].focus();
-    } else if (!event.shiftKey && (outside || active === items[items.length - 1])) {
-      event.preventDefault();
-      items[0].focus();
-    }
-  });
-  return dismiss;
-}
-
-let dialogSerial = 0;
-
-function openDialog({ id, formId, title, body, submit, onSubmit, danger, form = Boolean(onSubmit), actions = true, wide = false, bodyClass = "", footer = "", tabs = "", onClose, onError }) {
-  const serial = ++dialogSerial;
-  const titleId = `dialog-title-${serial}`;
-  const shellTag = form ? "form" : "div";
-  const overlay = document.createElement("div");
-  overlay.className = tabs ? "overlay tabbed" : "overlay";
-  if (id) overlay.id = id;
-  overlay.innerHTML = `
-    <div class="overlay-card dialog${wide ? " wide" : ""}${tabs ? " tabbed" : ""}" role="dialog" aria-modal="true" aria-labelledby="${titleId}">
-      <div class="dialog-head">
-        <h2 id="${titleId}">${esc(title)}</h2>
-        <button class="btn ghost dialog-close" type="button" aria-label="${h("close")}">×</button>
-      </div>
-      ${tabs}
-      <${shellTag} class="dialog-form">
-        <div class="dialog-body${bodyClass ? ` ${bodyClass}` : ""}">${body}</div>
-        ${footer ? `<div class="dialog-footer">${footer}</div>` : ""}
-        ${actions ? `<div class="dialog-actions">
-          <div class="dialog-danger">${danger || ""}</div>
-          <div class="dialog-buttons">
-            <button class="btn" type="button" data-dialog-cancel>${h("cancel")}</button>
-            ${onSubmit ? `<button class="btn pill primary" type="submit">${esc(submit || t("save"))}</button>` : ""}
-          </div>
-        </div>` : ""}
-      </${shellTag}>
-    </div>`;
-  document.body.appendChild(overlay);
-  const card = overlay.querySelector(".overlay-card");
-  const shell = overlay.querySelector(".dialog-form");
-  if (formId && form) shell.id = formId;
-  let dirty = false;
-  shell.addEventListener("input", () => { dirty = true; });
-  shell.addEventListener("change", () => { dirty = true; });
-  const remove = () => {
-    if (!overlay.isConnected) return true;
-    if (onClose) onClose();
-    overlay.remove();
-    return true;
-  };
-  const requestClose = async () => {
-    if (dirty && !(await confirmDialog({ title: t("discard_unsaved_changes"), confirmLabel: t("ok") }))) return false;
-    return remove();
-  };
-  const dismiss = makeModal(overlay, requestClose);
-  overlay.querySelector(".dialog-close").addEventListener("click", dismiss);
-  const cancel = overlay.querySelector("[data-dialog-cancel]");
-  if (cancel) cancel.addEventListener("click", dismiss);
-  overlay.addEventListener("click", (event) => {
-    if (event.target === overlay) dismiss();
-  });
-  if (onSubmit) {
-    shell.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      try {
-        await onSubmit({ form: shell, close: () => { dirty = false; dismiss(); } });
-      } catch (error) {
-        handle(error);
-        if (onError) onError(error);
-      }
-    });
-  }
-  return { overlay, card, form: shell, close: () => { dirty = false; dismiss(); }, clean: () => { dirty = false; }, dirty: () => dirty };
-}
-
-function confirmDialog({ title = t("confirm"), body = "", confirmLabel = t("ok"), danger = false } = {}) {
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (value) => {
-      if (settled) return;
-      settled = true;
-      resolve(value);
-    };
-    const dialog = openDialog({
-      id: "confirm-dialog",
-      title,
-      body: body ? `<p>${esc(body)}</p>` : "",
-      submit: confirmLabel,
-      onSubmit: ({ close }) => {
-        finish(true);
-        close();
-      },
-      onClose: () => finish(false),
-    });
-    const button = dialog.form.querySelector('button[type="submit"]');
-    if (danger) {
-      button.classList.remove("primary");
-      button.classList.add("danger");
-    }
-    button.focus();
-  });
-}
-
 function editQuery(hash = location.hash || "#/") {
   const params = new URLSearchParams((hash || "").split("?")[1] || "");
   return {
@@ -1532,17 +1233,15 @@ function rememberEditHash(params, push = true) {
   const next = editAddress(params);
   if (push) history.pushState({ idx: ((history.state && history.state.idx) || 0) + 1 }, "", next);
   else history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", next);
-  shownHash = next;
+  appState.setShownHash(next);
 }
 
 function clearEditHash() {
   const next = editAddress({});
   if ((location.hash || "#/") === next) return;
   history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", next);
-  shownHash = next;
+  appState.setShownHash(next);
 }
-
-let editSerial = 0;
 
 function openEditDialog({
   id,
@@ -1562,7 +1261,7 @@ function openEditDialog({
 }) {
   const entries = tabs || [];
   const tabbed = entries.length > 0;
-  const serial = ++editSerial;
+  const serial = appState.setEditSerial(appState.editSerial + 1);
   const selected = entries.some((entry) => entry.id === initialTab) ? initialTab : (entries[0] || {}).id;
   const tabBar = tabbed
     ? `<div class="dialog-tabs" role="tablist" aria-label="${h("sections")}">${entries.map((entry) => {
@@ -1586,7 +1285,7 @@ function openEditDialog({
     actions,
     wide,
     onClose: () => {
-      leaveGuard = null;
+      appState.setLeaveGuard(null);
       clearEditHash();
       if (onClose) onClose();
     },
@@ -1602,7 +1301,7 @@ function openEditDialog({
     },
   });
   dialog.overlay.setAttribute("data-edit-overlay", "");
-  leaveGuard = () => dialog.dirty();
+  appState.setLeaveGuard(() => dialog.dirty());
   if (!tabbed) return dialog;
   const buttons = [...dialog.overlay.querySelectorAll("[data-dialog-tab]")];
   const panelNodes = [...dialog.overlay.querySelectorAll("[data-dialog-panel]")];
@@ -2391,14 +2090,14 @@ function rememberScheduleHash(params, push = true) {
   const next = scheduleAddress(params);
   if (push) history.pushState({ idx: ((history.state && history.state.idx) || 0) + 1 }, "", next);
   else history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", next);
-  shownHash = next;
+  appState.setShownHash(next);
 }
 
 function clearScheduleHash() {
   const next = scheduleAddress();
   if ((location.hash || "#/") === next) return;
   history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", next);
-  shownHash = next;
+  appState.setShownHash(next);
 }
 
 function browserZone() {
@@ -2449,7 +2148,7 @@ function latestStartDate(date) {
 function formatLocalDate(isoDate) {
   const [year, month, day] = String(isoDate || "").split("-");
   if (!year || !month || !day) return isoDate || "";
-  return lang === "de" ? `${day}.${month}.${year}` : `${year}-${month}-${day}`;
+  return currentLanguage() === "de" ? `${day}.${month}.${year}` : `${year}-${month}-${day}`;
 }
 
 function dayList(days) {
@@ -2473,7 +2172,7 @@ function scheduleSentence(item) {
 
 function formatWhen(iso, zone) {
   if (!iso) return "";
-  return new Intl.DateTimeFormat(lang === "de" ? "de-DE" : "en-GB", {
+  return new Intl.DateTimeFormat(currentLanguage() === "de" ? "de-DE" : "en-GB", {
     dateStyle: "medium",
     timeStyle: "short",
     timeZone: zone || "UTC",
@@ -2777,7 +2476,7 @@ function scheduleTarget(item) {
 function openScheduleForm(kind, target, existing, redraw, options) {
   options = options || {};
   document.querySelector("#schedule-form")?.remove();
-  const outerGuard = leaveGuard;
+  const outerGuard = appState.leaveGuard;
   const zone = existing?.timezone || browserZone();
   const local = localParts(zone);
   const item = existing || {
@@ -2873,7 +2572,7 @@ function openScheduleForm(kind, target, existing, redraw, options) {
         const [postKind, postTarget] = form.target_ref ? form.target_ref.value.split(":") : [kind, target];
         await api("POST", `/api/v1/${postKind}s/${encodeURIComponent(postTarget)}/schedules`, body);
       }
-      leaveGuard = null;
+      appState.setLeaveGuard(null);
       close();
       await redraw();
       const card = document.querySelector("#schedule-card");
@@ -2883,12 +2582,12 @@ function openScheduleForm(kind, target, existing, redraw, options) {
       }
     },
     onClose: () => {
-      leaveGuard = null;
-      if (outerGuard) leaveGuard = outerGuard;
+      appState.setLeaveGuard(null);
+      if (outerGuard) appState.setLeaveGuard(outerGuard);
       if (options.hash !== false) clearScheduleHash();
     },
   });
-  leaveGuard = () => dialog.dirty();
+  appState.setLeaveGuard(() => dialog.dirty());
   const form = dialog.form;
   const showParts = () => {
     const weekly = form.frequency.value === "weekly";
@@ -3030,7 +2729,7 @@ async function pageJobs() {
     const next = jobsHash(view);
     if (push) history.pushState({ idx: ((history.state && history.state.idx) || 0) + 1 }, "", next);
     else history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", next);
-    shownHash = next;
+    appState.setShownHash(next);
   };
   const load = async (focus) => {
     jobTotal.textContent = t("loading");
@@ -3612,7 +3311,7 @@ function jobActions(job) {
 }
 
 async function pageJob(id) {
-  const live = generation;
+  const live = appState.generation;
   const job = await api("GET", `/api/v1/jobs/${encodeURIComponent(id)}`);
   const running = job.status === "pending" || job.status === "running";
   const actions = jobActions(job);
@@ -3628,7 +3327,7 @@ async function pageJob(id) {
         </div>
         <div class="row">
           ${actions}
-          ${assistantEnabled && job.status === "failed" ? `<a class="btn" href="#/assistant?explain=${encodeURIComponent(job.id)}">${h("assistant_explain_failure")}</a>` : ""}
+          ${appState.assistantEnabled && job.status === "failed" ? `<a class="btn" href="#/assistant?explain=${encodeURIComponent(job.id)}">${h("assistant_explain_failure")}</a>` : ""}
           <button class="btn" type="button" id="download-output">${h("download_output")}</button>
           ${job.output_capped ? `<span class="small muted" id="output-capped">${h("output_download_is_incomplete")}</span>` : ""}
         </div>
@@ -3704,7 +3403,7 @@ async function pageJob(id) {
     button.disabled = true;
     try {
       const headers = {};
-      if (teamId) headers["X-Team-Id"] = teamId;
+      if (appState.teamId) headers["X-Team-Id"] = appState.teamId;
       const response = await fetch(`/api/v1/jobs/${encodeURIComponent(id)}/output`, { headers, credentials: "same-origin" });
       const blob = await response.blob();
       if (!response.ok) {
@@ -3736,12 +3435,12 @@ async function pageJob(id) {
       button.disabled = false;
     }
   });
-  if (!running || live !== generation) return;
+  if (!running || live !== appState.generation) return;
   const duration = document.querySelector("#job-duration");
   let durationEnd = job.finished_at;
   let durationStatus = job.status;
   const tickDuration = () => {
-    if (live !== generation) {
+    if (live !== appState.generation) {
       clearInterval(durationTimer);
       return;
     }
@@ -3749,13 +3448,13 @@ async function pageJob(id) {
   };
   const durationTimer = setInterval(tickDuration, 1000);
   const last = (job.events || []).reduce((max, event) => Math.max(max, event.id), 0);
-  source = new EventSource(`/api/v1/jobs/${encodeURIComponent(id)}/events?after=${last}`);
-  source.addEventListener("log", (event) => {
-    if (live !== generation) return;
+  appState.setSource(new EventSource(`/api/v1/jobs/${encodeURIComponent(id)}/events?after=${last}`));
+  appState.source.addEventListener("log", (event) => {
+    if (live !== appState.generation) return;
     appendLog(JSON.parse(event.data));
   });
-  source.addEventListener("end", (event) => {
-    if (live !== generation) return;
+  appState.source.addEventListener("end", (event) => {
+    if (live !== appState.generation) return;
     const payload = JSON.parse(event.data);
     if (badge) {
       badge.className = `pill ${payload.status}`;
@@ -3766,8 +3465,8 @@ async function pageJob(id) {
     durationEnd = payload.finished_at || new Date().toISOString();
     if (duration) duration.textContent = spanText(job.started_at, durationEnd, durationStatus);
     document.querySelectorAll("[data-action=cancel]").forEach((button) => button.remove());
-    source.close();
-    source = null;
+    appState.source.close();
+    appState.setSource(null);
     if (payload.status === "failed" || payload.status === "canceled") pageJob(id);
   });
 }
@@ -4864,7 +4563,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
         if (panel) panel.hidden = id !== next;
       });
       history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", workflowAddress(next, workflow.id));
-      shownHash = location.hash;
+      appState.setShownHash(location.hash);
       if (next === "editor") drawEdges();
       if (focus) {
         const active = buttons.find((button) => button.dataset.workflowTab === next);
@@ -4957,7 +4656,7 @@ function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
 }
 
 async function pageRun(id) {
-  const live = generation;
+  const live = appState.generation;
   const phases = {};
   let editor = null;
   let openNodeId = null;
@@ -5044,21 +4743,21 @@ async function pageRun(id) {
     shownJob = "";
     const overlay = document.querySelector("#node-output");
     if (overlay) overlay.remove();
-    if (source) {
-      source.close();
-      source = null;
+    if (appState.source) {
+      appState.source.close();
+      appState.setSource(null);
     }
   }
 
   async function openOutput(node, phase) {
-    if (live !== generation) return;
+    if (live !== appState.generation) return;
     const token = ++outputToken;
     openNodeId = node.id;
     const jobId = phase && phase.job_id ? phase.job_id : "";
     shownJob = jobId;
-    if (source) {
-      source.close();
-      source = null;
+    if (appState.source) {
+      appState.source.close();
+      appState.setSource(null);
     }
     let overlay = document.querySelector("#node-output");
     if (!overlay) {
@@ -5091,30 +4790,30 @@ async function pageRun(id) {
     }
     try {
       const job = await api("GET", `/api/v1/jobs/${encodeURIComponent(jobId)}`);
-      if (token !== outputToken || live !== generation) return;
+      if (token !== outputToken || live !== appState.generation) return;
       (job.events || []).forEach(appendLog);
       if (!log.childNodes.length) note(t("this_node_has_no_output_yet"));
       const running = job.status === "pending" || job.status === "running";
       if (!running) return;
       const last = (job.events || []).reduce((max, event) => Math.max(max, event.id), 0);
-      source = new EventSource(`/api/v1/jobs/${encodeURIComponent(jobId)}/events?after=${last}`);
-      source.addEventListener("log", (event) => {
-        if (token !== outputToken || live !== generation) return;
+      appState.setSource(new EventSource(`/api/v1/jobs/${encodeURIComponent(jobId)}/events?after=${last}`));
+      appState.source.addEventListener("log", (event) => {
+        if (token !== outputToken || live !== appState.generation) return;
         appendLog(JSON.parse(event.data));
       });
-      source.addEventListener("end", (event) => {
-        if (token !== outputToken || live !== generation) return;
+      appState.source.addEventListener("end", (event) => {
+        if (token !== outputToken || live !== appState.generation) return;
         const payload = JSON.parse(event.data);
         const badge = document.querySelector("#node-output .pill");
         if (badge) {
           badge.className = `pill ${payload.status}`;
           badge.textContent = statusLabel(payload.status);
         }
-        source.close();
-        source = null;
+        appState.source.close();
+        appState.setSource(null);
       });
     } catch (error) {
-      if (token === outputToken && live === generation) handle(error);
+      if (token === outputToken && live === appState.generation) handle(error);
     }
   }
 
@@ -5144,23 +4843,23 @@ async function pageRun(id) {
   }
 
   const run = await api("GET", `/api/v1/workflow-jobs/${encodeURIComponent(id)}`);
-  if (live !== generation) return;
+  if (live !== appState.generation) return;
   paint(run);
   if (["successful", "failed", "canceled"].includes(run.status)) return;
-  pollTimer = setInterval(async () => {
-    if (live !== generation) return;
+  appState.setPollTimer(setInterval(async () => {
+    if (live !== appState.generation) return;
     try {
       const next = await api("GET", `/api/v1/workflow-jobs/${encodeURIComponent(id)}`);
-      if (live !== generation) return;
+      if (live !== appState.generation) return;
       paint(next);
       if (["successful", "failed", "canceled"].includes(next.status)) {
-        clearInterval(pollTimer);
-        pollTimer = null;
+        clearInterval(appState.pollTimer);
+        appState.setPollTimer(null);
       }
     } catch (error) {
-      if (live === generation) handle(error);
+      if (live === appState.generation) handle(error);
     }
-  }, 1000);
+  }, 1000));
 }
 
 function hookStatusLabel(value) {
@@ -5359,7 +5058,7 @@ async function pageRuntime() {
 
 function canManageEnvironment(item) {
   if (!can("owner")) return false;
-  if (item && item.scope === "global") return !!me.is_admin;
+  if (item && item.scope === "global") return !!appState.me.is_admin;
   return true;
 }
 
@@ -5374,7 +5073,7 @@ function environmentScopeOptions(selected) {
     ["team", "this_team"],
     ["organization", "this_organization"],
   ];
-  if (me.is_admin) choices.push(["global", "global"]);
+  if (appState.me.is_admin) choices.push(["global", "global"]);
   return choices.map(([value, label]) =>
     `<option value="${value}"${value === selected ? " selected" : ""}>${h(label)}</option>`
   ).join("");
@@ -5561,13 +5260,13 @@ async function pageProjects() {
 async function openProjectDialog(item, initialTab = "") {
   const editing = Boolean(item);
   const [organizations, credentials] = await Promise.all([
-    editing || me.is_admin ? api("GET", "/api/v1/organizations") : Promise.resolve([]),
+    editing || appState.me.is_admin ? api("GET", "/api/v1/organizations") : Promise.resolve([]),
     api("GET", "/api/v1/credentials"),
   ]);
-  const current = (me.teams || []).find((team) => team.id === teamId);
+  const current = (appState.me.teams || []).find((team) => team.id === appState.teamId);
   const organization = editing ? await api("GET", `/api/v1/organizations/${encodeURIComponent(item.organization_id)}`) : null;
-  const organizationField = editing || me.is_admin
-    ? `<label class="field"><span>${h("organization")}</span><select name="organization_id"${me.is_admin ? "" : " disabled"}>${orgOptions(organizations, editing ? item.organization_id : (current && current.organization_id))}</select></label>`
+  const organizationField = editing || appState.me.is_admin
+    ? `<label class="field"><span>${h("organization")}</span><select name="organization_id"${appState.me.is_admin ? "" : " disabled"}>${orgOptions(organizations, editing ? item.organization_id : (current && current.organization_id))}</select></label>`
     : "";
   const general = `<label class="field required"><span>${h("name")}</span><input name="name" required value="${editing ? esc(item.name) : ""}"></label>`;
   const source = `
@@ -5625,7 +5324,7 @@ async function openProjectDialog(item, initialTab = "") {
     onTab: editing ? (tab) => rememberEditHash({ edit: item.id, tab }, false) : undefined,
   });
   bindProjectCredential(dialog.form, credentials);
-  if (editing && me.is_admin) {
+  if (editing && appState.me.is_admin) {
     dialog.form.organization_id.addEventListener("change", async () => {
       const box = dialog.overlay.querySelector("#team-boxes");
       box.innerHTML = `<p class="small muted">${h("loading_teams")}</p>`;
@@ -5692,7 +5391,7 @@ async function pageProject(id) {
       if (!(await confirmDialog({ title: t("delete"), body: t("delete_this_project", { name: project.name }), confirmLabel: t("delete"), danger: true }))) return;
       try {
         await api("DELETE", `/api/v1/projects/${encodeURIComponent(id)}`);
-        leaveGuard = null;
+        appState.setLeaveGuard(null);
         go("#/projects");
       } catch (error) { handle(error); }
     });
@@ -6215,11 +5914,11 @@ async function pageInventory(id) {
   const pages = () => Math.max(1, Math.ceil(Number(page.total) / view.size));
   if (view.page > pages()) {
     view.page = pages();
-    shownHash = inventoryHostHash(id, view);
-    history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", shownHash);
+    appState.setShownHash(inventoryHostHash(id, view));
+    history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", appState.shownHash);
     page = await api("GET", inventoryHostUrl(id, view));
   }
-  const notice = sourceNotice && sourceNotice.inventoryId === id ? sourceNotice : null;
+  const notice = appState.sourceNotice && appState.sourceNotice.inventoryId === id ? appState.sourceNotice : null;
   const external = (item.sources || []).some((source) => source.kind === "project" || source.kind === "netbox");
   const groups = page.groups || [];
   const groupOptions = [
@@ -6288,7 +5987,7 @@ async function pageInventory(id) {
       <button class="btn danger" id="delete-inventory" type="button">${h("delete_inventory")}</button>
     </section>` : ""}`,
     can("operator") ? `<a class="btn pill" href="#/inventories?edit=${esc(item.id)}">${h("edit")}</a><a class="btn pill" href="#/inventories?new=1">${h("inventory_2")}</a>` : "");
-  if (notice) sourceNotice = null;
+  if (notice) appState.setSourceNotice(null);
   const hostSearch = document.querySelector("#host-search");
   const hostGroup = document.querySelector("#host-group");
   const hostSize = document.querySelector("#host-size");
@@ -6310,7 +6009,7 @@ async function pageInventory(id) {
     const next = inventoryHostHash(id, view);
     if (push) history.pushState({ idx: ((history.state && history.state.idx) || 0) + 1 }, "", next);
     else history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", next);
-    shownHash = next;
+    appState.setShownHash(next);
   };
   const drawHosts = (data) => {
     view.page = Math.max(1, Number(data.page) || view.page);
@@ -6483,7 +6182,7 @@ async function pageInventory(id) {
           try {
             const saved = await api("PUT", `/api/v1/inventories/${encodeURIComponent(id)}/sources/${encodeURIComponent(source.id)}`, readSourceUpdate(card));
             const collisions = saved.collisions || [];
-            sourceNotice = saved.sync && saved.sync.ok
+            appState.setSourceNotice(saved.sync && saved.sync.ok
               ? {
                 inventoryId: id,
                 sourceId: source.id,
@@ -6491,7 +6190,7 @@ async function pageInventory(id) {
                   ? t("netbox_collisions", { groups: collisions.join(", ") })
                   : t("hosts_before_after", { before: saved.sync.before, after: saved.sync.after }),
               }
-              : null;
+              : null);
             markSaved();
             route();
           } catch (error) {
@@ -6562,14 +6261,12 @@ async function pageInventory(id) {
       } catch (error) { handle(error); }
     });
   }
-  leaveGuard = () => document.querySelector("#source-edit [data-dirty]") !== null
-    || document.querySelector("#source-drafts [data-kind]") !== null;
+  appState.setLeaveGuard(() => document.querySelector("#source-edit [data-dirty]") !== null
+    || document.querySelector("#source-drafts [data-kind]") !== null);
 }
 function looksSecretVar(name) {
   return /(pass(word|phrase)?|secret|token|api[-_]?key|private[-_]?key|access[-_]?key|auth[-_]?key|credential|vault)/i.test(name);
 }
-
-let variablesViewSerial = 0;
 
 function variableText(item) {
   return looksSecretVar(item.name) ? "••••••" : String(item.value ?? "");
@@ -6628,7 +6325,7 @@ function effectiveVariablesJson(vars) {
 }
 
 function variablesViewer(vars) {
-  const id = `vars-${++variablesViewSerial}`;
+  const id = `vars-${appState.setVariablesViewSerial(appState.variablesViewSerial + 1)}`;
   const empty = `<p class="small muted">${h("no_variables")}</p>`;
   const yaml = vars.length ? `<pre class="vars">${effectiveVariablesYaml(vars)}</pre>` : empty;
   const json = vars.length ? `<pre class="vars">${effectiveVariablesJson(vars)}</pre>` : empty;
@@ -7465,7 +7162,7 @@ async function pageOrganizations() {
       <input class="search" id="organization-search" placeholder="${h("search_organizations")}" autocomplete="off">
       <div id="organization-table"></div>
     </section>`,
-    me.is_admin ? addLink("#/organizations?new=1", "organization_2") : "");
+    appState.me.is_admin ? addLink("#/organizations?new=1", "organization_2") : "");
   const drawOrganizations = () => {
     const needle = document.querySelector("#organization-search").value.trim().toLowerCase();
     const rows = items.filter((item) => !needle || `${item.name} ${item.description || ""}`.toLowerCase().includes(needle)).map((item) =>
@@ -7477,13 +7174,13 @@ async function pageOrganizations() {
   drawOrganizations();
   const request = editQuery();
   if (request.create !== null) {
-    if (me.is_admin) openOrganizationDialog(null);
+    if (appState.me.is_admin) openOrganizationDialog(null);
     return;
   }
   if (!request.edit) return;
   try {
     const item = await api("GET", `/api/v1/organizations/${encodeURIComponent(request.edit)}`);
-    openOrganizationDialog(item, !me.is_admin, request.tab);
+    openOrganizationDialog(item, !appState.me.is_admin, request.tab);
   } catch (error) {
     handle(error);
   }
@@ -7515,7 +7212,7 @@ function openOrganizationDialog(item, readOnly = false, initialTab = "") {
           name: form.name.value,
           description: form.description.value,
         });
-        me = await api("GET", "/api/v1/me");
+        appState.setMe(await api("GET", "/api/v1/me"));
       } else {
         await api("POST", "/api/v1/organizations", { name: form.name.value, description: form.description.value });
       }
@@ -7529,13 +7226,13 @@ function openOrganizationDialog(item, readOnly = false, initialTab = "") {
 }
 
 async function pageTeam() {
-  const teams = me.teams || [];
-  const current = teams.find((team) => team.id === teamId);
-  const organizations = me.is_admin ? await api("GET", "/api/v1/organizations") : [];
+  const teams = appState.me.teams || [];
+  const current = teams.find((team) => team.id === appState.teamId);
+  const organizations = appState.me.is_admin ? await api("GET", "/api/v1/organizations") : [];
   let members = [];
-  if (teamId) members = await api("GET", `/api/v1/teams/${encodeURIComponent(teamId)}/members`);
+  if (appState.teamId) members = await api("GET", `/api/v1/teams/${encodeURIComponent(appState.teamId)}/members`);
   const memberRows = members.map((member) => {
-    const name = me.is_admin
+    const name = appState.me.is_admin
       ? `<a href="#/users?edit=${esc(member.user_id)}">${esc(member.display_name)}</a>`
       : esc(member.display_name);
     const roleCell = member.source === "manual" && can("owner")
@@ -7550,16 +7247,16 @@ async function pageTeam() {
     return `<tr><td>${name} <span class="small muted">${esc(member.username)}</span></td><td>${roleCell}</td><td>${sourceCell}</td><td>${remove}</td></tr>`;
   });
   const actions = [
-    teamId && can("owner") ? addLink("#/team?new=member", "member") : "",
-    me.is_admin ? addLink("#/team?new=1", "team_2") : "",
-    me.is_admin ? addLink("#/users?new=1", "user_2") : "",
+    appState.teamId && can("owner") ? addLink("#/team?new=member", "member") : "",
+    appState.me.is_admin ? addLink("#/team?new=1", "team_2") : "",
+    appState.me.is_admin ? addLink("#/users?new=1", "user_2") : "",
   ].join("");
   shell(t("team"), `
     ${current ? `<section class="card" style="margin-bottom:14px">
       <h2>${esc(current.name)}</h2>
       <p class="muted">${esc(current.description || "")}</p>
       <p class="small">${h("organization_name_2", { name: current.organization_name || "—" })}</p>
-      ${current.role === "owner" || me.is_admin ? `<div class="row"><a class="btn" href="#/team?edit=${esc(current.id)}">${h("edit")}</a></div>` : `<p class="small">${h("ldap_group_group", { group: current.ldap_group || "—" })}</p>`}
+      ${current.role === "owner" || appState.me.is_admin ? `<div class="row"><a class="btn" href="#/team?edit=${esc(current.id)}">${h("edit")}</a></div>` : `<p class="small">${h("ldap_group_group", { group: current.ldap_group || "—" })}</p>`}
     </section>
     <section class="card">
       <h2>${h("members")}</h2>
@@ -7570,17 +7267,17 @@ async function pageTeam() {
   if (request.create === "member") {
     if (can("owner")) openMemberDialog();
   } else if (request.create !== null) {
-    if (me.is_admin) openTeamDialog(null, organizations, current && current.organization_id);
+    if (appState.me.is_admin) openTeamDialog(null, organizations, current && current.organization_id);
   } else if (request.edit) {
     const item = teams.find((team) => team.id === request.edit);
     if (!item) clearEditHash();
-    else if (item.role === "owner" || me.is_admin) openTeamDialog(item, organizations);
+    else if (item.role === "owner" || appState.me.is_admin) openTeamDialog(item, organizations);
   }
   document.querySelectorAll("[data-member-role]").forEach((select) => {
     select.addEventListener("change", async () => {
       const next = select.value;
       try {
-        await api("POST", `/api/v1/teams/${encodeURIComponent(teamId)}/members`, {
+        await api("POST", `/api/v1/teams/${encodeURIComponent(appState.teamId)}/members`, {
           username: select.dataset.memberRole,
           role: next,
         });
@@ -7594,7 +7291,7 @@ async function pageTeam() {
   document.querySelectorAll("[data-member]").forEach((button) => {
     button.addEventListener("click", async () => {
       try {
-        await api("DELETE", `/api/v1/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(button.dataset.member)}`);
+        await api("DELETE", `/api/v1/teams/${encodeURIComponent(appState.teamId)}/members/${encodeURIComponent(button.dataset.member)}`);
         route();
       } catch (error) { handle(error); }
     });
@@ -7603,7 +7300,7 @@ async function pageTeam() {
 
 function openTeamDialog(item, organizations, defaultOrganizationId) {
   const editing = Boolean(item);
-  const organizationField = me.is_admin
+  const organizationField = appState.me.is_admin
     ? `<label class="field"><span>${h(editing ? "move_organization" : "organization")}</span><select name="organization_id">${editing ? orgOptions(organizations, item.organization_id) : `<option value="">${h("new_organization_named_after_the_team")}</option>${orgOptions(organizations, defaultOrganizationId || "")}`}</select></label>`
     : "";
   openEditDialog({
@@ -7626,10 +7323,10 @@ function openTeamDialog(item, organizations, defaultOrganizationId) {
         await api("PUT", `/api/v1/teams/${encodeURIComponent(item.id)}`, payload);
       } else {
         const created = await api("POST", "/api/v1/teams", payload);
-        teamId = created.id;
-        localStorage.setItem("koreograf.team", teamId);
+        appState.setTeamId(created.id);
+        localStorage.setItem("koreograf.team", appState.teamId);
       }
-      me = await api("GET", "/api/v1/me");
+      appState.setMe(await api("GET", "/api/v1/me"));
       markSaved();
       close();
       await route();
@@ -7650,7 +7347,7 @@ function openMemberDialog() {
       </div>`,
     submit: t("add"),
     onSubmit: async ({ form, close }) => {
-      await api("POST", `/api/v1/teams/${encodeURIComponent(teamId)}/members`, {
+      await api("POST", `/api/v1/teams/${encodeURIComponent(appState.teamId)}/members`, {
         username: form.username.value,
         role: form.role.value,
       });
@@ -7666,11 +7363,11 @@ function emailLine(email) {
 }
 
 async function pageAccount() {
-  me = await api("GET", "/api/v1/me");
+  appState.setMe(await api("GET", "/api/v1/me"));
   const tokens = await api("GET", "/api/v1/me/tokens");
-  const revealed = revealToken;
-  revealToken = null;
-  const rows = (me.memberships || []).map((row) => {
+  const revealed = appState.revealToken;
+  appState.setRevealToken(null);
+  const rows = (appState.me.memberships || []).map((row) => {
     const org = row.organization_name || "—";
     return `<tr><td>${esc(org)}</td><td>${esc(row.team_name)}</td><td>${esc(roleLabel(row.role))}</td><td>${esc(sourceLabel(row.source))}</td></tr>`;
   });
@@ -7689,21 +7386,21 @@ async function pageAccount() {
         <p>${h("api_tokens_hint")}</p>
         <p><code>${esc(revealed)}</code> <button class="btn compact" type="button" data-copy="${esc(revealed)}">${h("copy")}</button></p>
       </div>` : "";
-  const local = me.auth_source === "local";
+  const local = appState.me.auth_source === "local";
   const identity = local ? `
     <form class="card form" id="account-form">
       <h2>${h("account")}</h2>
-      <p class="small muted">${h("username")}: ${esc(me.username)} · ${esc(authSourceLabel(me.auth_source))}${me.is_admin ? ` · ${h("administrator")}` : ""}</p>
-      <label class="field"><span>${h("display_name")}</span><input name="display_name" value="${esc(me.display_name)}" required></label>
-      <label class="field"><span>${h("email")}</span><input name="email" type="email" value="${esc(me.email || "")}" autocomplete="email"></label>
+      <p class="small muted">${h("username")}: ${esc(appState.me.username)} · ${esc(authSourceLabel(appState.me.auth_source))}${appState.me.is_admin ? ` · ${h("administrator")}` : ""}</p>
+      <label class="field"><span>${h("display_name")}</span><input name="display_name" value="${esc(appState.me.display_name)}" required></label>
+      <label class="field"><span>${h("email")}</span><input name="email" type="email" value="${esc(appState.me.email || "")}" autocomplete="email"></label>
       <label class="field"><span>${h("new_password")}</span><input name="password" type="password" minlength="8" autocomplete="new-password" placeholder="${h("leave_empty_to_keep_the_password")}"></label>
       <button class="btn pill primary" type="submit">${h("save")}</button>
     </form>` : `
     <section class="card">
       <h2>${h("account")}</h2>
-      <p class="small muted">${h("username")}: ${esc(me.username)} · ${esc(authSourceLabel(me.auth_source))}${me.is_admin ? ` · ${h("administrator")}` : ""}</p>
-      <p>${h("display_name")}: ${esc(me.display_name)}</p>
-      <p>${h("email")}: ${emailLine(me.email)}</p>
+      <p class="small muted">${h("username")}: ${esc(appState.me.username)} · ${esc(authSourceLabel(appState.me.auth_source))}${appState.me.is_admin ? ` · ${h("administrator")}` : ""}</p>
+      <p>${h("display_name")}: ${esc(appState.me.display_name)}</p>
+      <p>${h("email")}: ${emailLine(appState.me.email)}</p>
       <p class="muted">${h("name_and_email_come_from_the_directory")}</p>
     </section>`;
   shell(t("my_account"), `
@@ -7736,7 +7433,7 @@ async function pageAccount() {
           email: form.email.value,
         };
         if (form.password.value) payload.password = form.password.value;
-        me = await api("PUT", "/api/v1/me", payload);
+        appState.setMe(await api("PUT", "/api/v1/me", payload));
         markSaved();
         route();
       } catch (error) { handle(error); }
@@ -7748,7 +7445,7 @@ async function pageAccount() {
       event.preventDefault();
       try {
         const created = await api("POST", "/api/v1/me/tokens", { name: tokenForm.name.value });
-        revealToken = created.secret;
+        appState.setRevealToken(created.secret);
         await route();
       } catch (error) { handle(error); }
     });
@@ -7773,7 +7470,7 @@ async function pageAccount() {
 }
 
 async function pageUsers() {
-  if (!me.is_admin) {
+  if (!appState.me.is_admin) {
     deny("users", "admin");
     return;
   }
@@ -7854,7 +7551,7 @@ function openUserCreateDialog() {
 }
 
 function openUserDialog(item, teams, initialTab = "") {
-  const self = item.id === me.id;
+  const self = item.id === appState.me.id;
   const memberIds = new Set((item.memberships || []).map((row) => row.team_id));
   const openTeams = teams.filter((team) => !memberIds.has(team.id));
   const rows = (item.memberships || []).map((row) => {
@@ -7913,7 +7610,7 @@ function openUserDialog(item, teams, initialTab = "") {
       };
       if (form.password && form.password.value) payload.password = form.password.value;
       await api("PUT", `/api/v1/users/${encodeURIComponent(item.id)}`, payload);
-      if (self) me = await api("GET", "/api/v1/me");
+      if (self) appState.setMe(await api("GET", "/api/v1/me"));
       markSaved();
       close();
       await route();
@@ -8026,13 +7723,13 @@ function bindAssistantAction() {
   const confirm = document.querySelector("[data-assistant-confirm]");
   const cancel = document.querySelector("[data-assistant-cancel]");
   const finish = (text) => {
-    assistantPendingAction = null;
-    assistantTranscript.push({ role: "assistant", content: text });
+    appState.setAssistantPendingAction(null);
+    appState.assistantTranscript.push({ role: "assistant", content: text });
     renderAssistantThread();
   };
   if (confirm) {
     confirm.addEventListener("click", async () => {
-      const action = assistantPendingAction;
+      const action = appState.assistantPendingAction;
       if (!action) return;
       confirm.disabled = true;
       if (cancel) cancel.disabled = true;
@@ -8048,7 +7745,7 @@ function bindAssistantAction() {
   }
   if (cancel) {
     cancel.addEventListener("click", async () => {
-      const action = assistantPendingAction;
+      const action = appState.assistantPendingAction;
       if (!action) return;
       confirm.disabled = true;
       cancel.disabled = true;
@@ -8065,24 +7762,24 @@ function bindAssistantAction() {
 function renderAssistantThread() {
   const thread = document.querySelector("#assistant-thread");
   if (!thread) return;
-  const turns = assistantTranscript.map(assistantTurnHtml).join("");
-  const pending = assistantPending
+  const turns = appState.assistantTranscript.map(assistantTurnHtml).join("");
+  const pending = appState.assistantPending
     ? `<div class="assistant-message from-assistant"><p class="small muted">${h("assistant")}</p><p>${h("assistant_thinking")}</p></div>`
     : "";
-  const action = assistantPendingAction ? assistantConfirmHtml(assistantPendingAction) : "";
+  const action = appState.assistantPendingAction ? assistantConfirmHtml(appState.assistantPendingAction) : "";
   thread.innerHTML = turns || pending || action ? `${turns}${pending}${action}` : `<p class="small muted">${h("assistant_empty")}</p>`;
   bindAssistantAction();
   thread.scrollTop = thread.scrollHeight;
 }
 
 async function pageAssistant() {
-  if (!assistantEnabled) {
+  if (!appState.assistantEnabled) {
     shell(t("assistant"), `<div class="card">${h("assistant_is_not_enabled")}</div>`);
     return;
   }
   const params = new URLSearchParams((location.hash || "").split("?")[1] || "");
   const explainJob = params.get("explain") || "";
-  const model = assistantModel ? `<span class="small muted">${h("assistant_model", { model: assistantModel })}</span>` : "";
+  const model = appState.assistantModel ? `<span class="small muted">${h("assistant_model", { model: appState.assistantModel })}</span>` : "";
   shell(t("assistant"), `<div class="card assistant">
     <p class="small muted">${h("assistant_hint")}</p>
     <div class="assistant-thread" id="assistant-thread" aria-live="polite"></div>
@@ -8095,24 +7792,24 @@ async function pageAssistant() {
   const button = document.querySelector("#assistant-send");
   renderAssistantThread();
   const send = async (text, jobId) => {
-    if (!text || assistantPending || assistantPendingAction) return;
-    assistantTranscript.push({ role: "user", content: text });
+    if (!text || appState.assistantPending || appState.assistantPendingAction) return;
+    appState.assistantTranscript.push({ role: "user", content: text });
     form.message.value = "";
-    assistantPending = true;
+    appState.setAssistantPending(true);
     button.disabled = true;
     renderAssistantThread();
     try {
-      const body = { message: text, history: assistantTranscript.slice(0, -1).slice(-20) };
+      const body = { message: text, history: appState.assistantTranscript.slice(0, -1).slice(-20) };
       if (jobId) body.job_id = jobId;
       const result = await api("POST", "/api/v1/assistant/chat", body);
       if (result && result.answer) {
-        assistantTranscript.push({ role: "assistant", content: String(result.answer) });
+        appState.assistantTranscript.push({ role: "assistant", content: String(result.answer) });
       }
-      if (result && result.pending_action) assistantPendingAction = result.pending_action;
+      if (result && result.pending_action) appState.setAssistantPendingAction(result.pending_action);
     } catch (error) {
       handle(error);
     } finally {
-      assistantPending = false;
+      appState.setAssistantPending(false);
       button.disabled = false;
       renderAssistantThread();
       form.message.focus();
@@ -8124,7 +7821,7 @@ async function pageAssistant() {
   });
   if (explainJob) {
     history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", "#/assistant");
-    shownHash = "#/assistant";
+    appState.setShownHash("#/assistant");
     send(t("assistant_explain_prompt"), explainJob);
   }
 }
@@ -8259,13 +7956,13 @@ function databaseAuditHtml(status) {
 }
 
 async function pageSettings(notice) {
-  if (!me.is_admin) {
+  if (!appState.me.is_admin) {
     deny("settings", "admin");
     return;
   }
-  databaseCheckId = null;
+  appState.setDatabaseCheckId(null);
   const item = await api("GET", "/api/v1/settings");
-  const environments = teamId ? await api("GET", "/api/v1/environments") : [];
+  const environments = appState.teamId ? await api("GET", "/api/v1/environments") : [];
   const ldap = item.ldap || {};
   const proxy = item.proxy || {};
   const llm = item.llm || {};
@@ -8437,7 +8134,7 @@ async function pageSettings(notice) {
     const address = settingsTabAddress(currentTab);
     if ((location.hash || "#/") !== address) {
       history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", address);
-      shownHash = address;
+      appState.setShownHash(address);
     }
     if (focus) {
       const active = tabButtons.find((button) => button.dataset.settingsTab === currentTab);
@@ -8518,7 +8215,7 @@ async function pageSettings(notice) {
     document.querySelector("#database-switch").innerHTML = databaseSwitchHtml(status);
     document.querySelector("#database-audit").innerHTML = databaseAuditHtml(status);
     databaseCheck.disabled = !supported || Boolean(status.running) || Boolean(status.done);
-    databaseStart.disabled = !supported || !databaseCheckId || Boolean(status.running) || Boolean(status.done);
+    databaseStart.disabled = !supported || !appState.databaseCheckId || Boolean(status.running) || Boolean(status.done);
     if (Boolean(status.running) && document.querySelector("#database-progress")) {
       window.setTimeout(() => refreshDatabaseStatus(renderDatabaseStatus), 1000);
     }
@@ -8536,13 +8233,13 @@ async function pageSettings(notice) {
   };
   databaseCheck.addEventListener("click", async () => {
     databaseCheck.disabled = true;
-    databaseCheckId = null;
+    appState.setDatabaseCheckId(null);
     databaseStart.disabled = true;
     try {
       const result = await api("POST", "/api/v1/admin/database/check", databaseTargetBody(form));
-      databaseCheckId = result && result.id ? String(result.id) : null;
+      appState.setDatabaseCheckId(result && result.id ? String(result.id) : null);
       document.querySelector("#database-checks").innerHTML = databaseChecksHtml(result);
-      databaseStart.disabled = !databaseCheckId;
+      databaseStart.disabled = !appState.databaseCheckId;
     } catch (error) {
       handle(error);
     } finally {
@@ -8550,12 +8247,12 @@ async function pageSettings(notice) {
     }
   });
   databaseStart.addEventListener("click", async () => {
-    if (!databaseCheckId) return;
+    if (!appState.databaseCheckId) return;
     if (!(await confirmDialog({ title: t("start_migration"), body: t("migration_starts_maintenance"), confirmLabel: t("start_migration"), danger: true }))) return;
     databaseStart.disabled = true;
     try {
-      await api("POST", "/api/v1/admin/database/migrate", { id: databaseCheckId });
-      databaseCheckId = null;
+      await api("POST", "/api/v1/admin/database/migrate", { id: appState.databaseCheckId });
+      appState.setDatabaseCheckId(null);
       await loadMaintenance();
       await refreshDatabaseStatus(renderDatabaseStatus);
     } catch (error) {
@@ -8570,7 +8267,7 @@ function backupDownloadUrl(includeTofuState) {
 }
 
 async function pageBackup() {
-  if (!me.is_admin) {
+  if (!appState.me.is_admin) {
     deny("backup", "admin");
     return;
   }
@@ -8595,7 +8292,7 @@ async function pageBackup() {
     button.disabled = true;
     try {
       const headers = {};
-      if (teamId) headers["X-Team-Id"] = teamId;
+      if (appState.teamId) headers["X-Team-Id"] = appState.teamId;
       const includeTofuState = document.querySelector("#backup-tofu-state").checked;
       const response = await fetch(backupDownloadUrl(includeTofuState), { headers, credentials: "same-origin" });
       const blob = await response.blob();
@@ -8633,7 +8330,7 @@ async function pageBackup() {
     button.disabled = true;
     try {
       const headers = { "X-Restore-Confirm": "ERSETZEN" };
-      if (teamId) headers["X-Team-Id"] = teamId;
+      if (appState.teamId) headers["X-Team-Id"] = appState.teamId;
       const response = await fetch("/api/v1/admin/backup", {
         method: "POST",
         headers,
@@ -8646,7 +8343,7 @@ async function pageBackup() {
         error.vars = data.vars || null;
         throw error;
       }
-      me = null;
+      appState.setMe(null);
       renderLogin("backup_restored_the_previous_installation_is_restore_previous", "good");
     } catch (error) {
       handle(error);
@@ -8701,7 +8398,7 @@ function showLoading(title) {
 
 function settleRoute(back) {
   const hash = location.hash || "#/";
-  if (back && routeScroll.has(hash)) window.scrollTo(0, routeScroll.get(hash));
+  if (back && appState.routeScroll.has(hash)) window.scrollTo(0, appState.routeScroll.get(hash));
   else window.scrollTo(0, 0);
   if (back) return;
   const main = document.querySelector(".main");
@@ -8716,36 +8413,36 @@ function hasHistoryIndex(state) {
 
 function routeDirection(state) {
   if (hasHistoryIndex(state)) {
-    const back = state.idx <= historyIndex;
-    historyIndex = state.idx;
+    const back = state.idx <= appState.historyIndex;
+    appState.setHistoryIndex(state.idx);
     return back;
   }
-  historyIndex += 1;
+  appState.setHistoryIndex(appState.historyIndex + 1);
   return false;
 }
 
 async function route() {
   const nextHash = location.hash || "#/";
-  if (leaveGuard && shownHash !== null && nextHash !== shownHash && leaveGuard()) {
+  if (appState.leaveGuard && appState.shownHash !== null && nextHash !== appState.shownHash && appState.leaveGuard()) {
     return confirmDialog({ title: t("discard_unsaved_changes"), confirmLabel: t("ok") }).then((leave) => {
       if (!leave) {
-        history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", shownHash);
+        history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", appState.shownHash);
         return;
       }
       return load();
     });
   }
   async function load() {
-    leaveGuard = null;
-    const previousHash = shownHash;
-    shownHash = nextHash;
+    appState.setLeaveGuard(null);
+    const previousHash = appState.shownHash;
+    appState.setShownHash(nextHash);
     closeLive();
-    if (navToken) navToken.abort();
+    if (appState.navToken) appState.navToken.abort();
     const hash = location.hash || "#/";
     const hashPath = hash.split("?")[0];
     const token = new AbortController();
-    navToken = token;
-    if (!me) {
+    appState.setNavToken(token);
+    if (!appState.me) {
       if (hashPath !== "#/login") location.hash = "#/login";
       renderLogin("");
       return;
@@ -8757,58 +8454,23 @@ async function route() {
     const parts = hashPath.slice(1).split("/").filter(Boolean);
     const historyState = history.state;
     const back = routeDirection(historyState);
-    if (!hasHistoryIndex(historyState)) history.replaceState({ idx: historyIndex }, "", location.hash || "#/");
-    if (previousHash !== null && previousHash !== nextHash) routeScroll.set(previousHash, window.scrollY);
+    if (!hasHistoryIndex(historyState)) history.replaceState({ idx: appState.historyIndex }, "", location.hash || "#/");
+    if (previousHash !== null && previousHash !== nextHash) appState.routeScroll.set(previousHash, window.scrollY);
     showLoading(routeTitle(parts));
     if (!back) window.scrollTo(0, 0);
     try {
-      if (parts.length === 0) await pageDashboard();
-      else if (parts[0] === "templates" && parts[1] === "new") { location.replace("#/templates?new=1"); return; }
-      else if (parts[0] === "templates" && parts[1]) { location.replace(`#/templates?edit=${encodeURIComponent(parts[1])}`); return; }
-      else if (parts[0] === "templates") await pageTemplates();
-      else if (parts[0] === "jobs" && parts[1]) await pageJob(parts[1]);
-      else if (parts[0] === "jobs") await pageJobs();
-      else if (parts[0] === "workflows" && parts[1] === "new") { location.replace("#/workflows?new=1"); return; }
-      else if (parts[0] === "workflows" && parts[1]) await pageWorkflow(parts[1]);
-      else if (parts[0] === "workflows") await pageWorkflows();
-      else if (parts[0] === "schedules") await pageSchedules();
-      else if (parts[0] === "runs" && parts[1]) await pageRun(parts[1]);
-      else if (parts[0] === "hooks" && parts[1] === "new") { location.replace("#/hooks?new=1"); return; }
-      else if (parts[0] === "hooks" && parts[1]) { location.replace(`#/hooks?edit=${encodeURIComponent(parts[1])}`); return; }
-      else if (parts[0] === "hooks") await pageHooks();
-      else if (parts[0] === "environments" && parts[1] === "new") { location.replace("#/runtime?new=1"); return; }
-      else if (parts[0] === "environments" && parts[1]) await pageEnvironment(parts[1]);
-      else if (parts[0] === "runtime") await pageRuntime();
-      else if (parts[0] === "projects" && parts[1] === "new") { location.replace("#/projects?new=1"); return; }
-      else if (parts[0] === "projects" && parts[1]) await pageProject(parts[1]);
-      else if (parts[0] === "projects") await pageProjects();
-      else if (parts[0] === "inventories" && parts[1] === "new") { location.replace("#/inventories?new=1"); return; }
-      else if (parts[0] === "inventories" && parts[1] && parts[2] === "hosts" && parts[3]) await pageInventoryHost(parts[1], decodeURIComponent(parts[3]));
-      else if (parts[0] === "inventories" && parts[1] && parts[2] === "groups" && parts[3]) await pageInventoryGroup(parts[1], decodeURIComponent(parts[3]));
-      else if (parts[0] === "inventories" && parts[1]) await pageInventory(parts[1]);
-      else if (parts[0] === "inventories") await pageInventories();
-      else if (parts[0] === "credentials" && parts[1] === "new") { location.replace("#/credentials?new=1"); return; }
-      else if (parts[0] === "credentials" && parts[1]) { location.replace(`#/credentials?edit=${encodeURIComponent(parts[1])}`); return; }
-      else if (parts[0] === "credentials") await pageCredentials();
-      else if (parts[0] === "organizations" && parts[1] === "new") { location.replace("#/organizations?new=1"); return; }
-      else if (parts[0] === "organizations" && parts[1]) { location.replace(`#/organizations?edit=${encodeURIComponent(parts[1])}`); return; }
-      else if (parts[0] === "organizations") await pageOrganizations();
-      else if (parts[0] === "catalog") location.hash = "#/projects";
-      else if (parts[0] === "team" && parts[1] === "members" && parts[2] === "new") { location.replace("#/team?new=member"); return; }
-      else if (parts[0] === "team" && parts[1] === "new") { location.replace("#/team?new=1"); return; }
-      else if (parts[0] === "team" && parts[1]) { location.replace(`#/team?edit=${encodeURIComponent(parts[1])}`); return; }
-      else if (parts[0] === "account") await pageAccount();
-      else if (parts[0] === "users" && parts[1] === "new") { location.replace("#/users?new=1"); return; }
-      else if (parts[0] === "users" && parts[1]) { location.replace(`#/users?edit=${encodeURIComponent(parts[1])}`); return; }
-      else if (parts[0] === "users") await pageUsers();
-      else if (parts[0] === "settings") await pageSettings();
-      else if (parts[0] === "assistant") await pageAssistant();
-      else if (parts[0] === "backup") await pageBackup();
-      else if (parts[0] === "team") await pageTeam();
-      else shell(t("page"), `<div class="card">${h("this_page_does_not_exist")}</div>`);
+      const matched = matchRoute(hashPath);
+      if (!matched) shell(t("page"), `<div class="card">${h("this_page_does_not_exist")}</div>`);
+      else {
+        const result = await matched.handler(matched.params);
+        if (result && result.redirect) {
+          location.replace(result.redirect);
+          return;
+        }
+      }
       settleRoute(back);
     } catch (error) {
-      if (token !== navToken) return;
+      if (token !== appState.navToken) return;
       renderRouteError(error);
       settleRoute(false);
     }
@@ -8816,29 +8478,81 @@ async function route() {
   return load();
 }
 
-async function boot() {
-  const catalogs = lang === "de" ? ["de"] : ["de", lang];
+export async function boot() {
+  const catalogs = currentLanguage() === "de" ? ["de"] : ["de", currentLanguage()];
   await Promise.all(catalogs.map(loadCatalog));
   try {
-    me = await api("GET", "/api/v1/me");
-    const known = (me.teams || []).some((team) => team.id === teamId);
+    appState.setMe(await api("GET", "/api/v1/me"));
+    const known = (appState.me.teams || []).some((team) => team.id === appState.teamId);
     if (!known) {
-      teamId = preferredTeam();
-      localStorage.setItem("koreograf.team", teamId);
+      appState.setTeamId(preferredTeam());
+      localStorage.setItem("koreograf.team", appState.teamId);
     }
     try {
       const assistant = await api("GET", "/api/v1/assistant");
-      assistantEnabled = Boolean(assistant && assistant.enabled);
-      assistantModel = assistant && assistant.model ? String(assistant.model) : "";
+      appState.setAssistantEnabled(Boolean(assistant && assistant.enabled));
+      appState.setAssistantModel(assistant && assistant.model ? String(assistant.model) : "");
     } catch {
-      assistantEnabled = false;
-      assistantModel = "";
+      appState.setAssistantEnabled(false);
+      appState.setAssistantModel("");
     }
   } catch {
-    me = null;
+    appState.setMe(null);
   }
   window.addEventListener("hashchange", route);
   route();
 }
 
-boot();
+configureLanguage({
+  ask: (options) => confirmDialog(options),
+  leaveGuard: () => appState.leaveGuard,
+  clearLeaveGuard: () => appState.setLeaveGuard(null),
+  signedIn: () => Boolean(appState.me),
+  renderLogin: (message) => renderLogin(message),
+  route: () => route(),
+});
+configureDialogs((error) => handle(error));
+
+registerRoute("#/", pageDashboard);
+registerRedirect("#/templates/new", "#/templates?new=1");
+registerRedirect("#/templates/:id", ({ id }) => `#/templates?edit=${encodeURIComponent(id)}`);
+registerRoute("#/templates", pageTemplates);
+registerRoute("#/jobs/:id", (params) => pageJob(params.id));
+registerRoute("#/jobs", pageJobs);
+registerRedirect("#/workflows/new", "#/workflows?new=1");
+registerRoute("#/workflows/:id", (params) => pageWorkflow(params.id));
+registerRoute("#/workflows", pageWorkflows);
+registerRoute("#/schedules", pageSchedules);
+registerRoute("#/runs/:id", (params) => pageRun(params.id));
+registerRedirect("#/hooks/new", "#/hooks?new=1");
+registerRedirect("#/hooks/:id", ({ id }) => `#/hooks?edit=${encodeURIComponent(id)}`);
+registerRoute("#/hooks", pageHooks);
+registerRedirect("#/environments/new", "#/runtime?new=1");
+registerRoute("#/environments/:id", (params) => pageEnvironment(params.id));
+registerRoute("#/runtime", pageRuntime);
+registerRedirect("#/projects/new", "#/projects?new=1");
+registerRoute("#/projects/:id", (params) => pageProject(params.id));
+registerRoute("#/projects", pageProjects);
+registerRedirect("#/inventories/new", "#/inventories?new=1");
+registerRoute("#/inventories/:id/hosts/:name", (params) => pageInventoryHost(params.id, decodeURIComponent(params.name)));
+registerRoute("#/inventories/:id/groups/:name", (params) => pageInventoryGroup(params.id, decodeURIComponent(params.name)));
+registerRoute("#/inventories/:id", (params) => pageInventory(params.id));
+registerRoute("#/inventories", pageInventories);
+registerRedirect("#/credentials/new", "#/credentials?new=1");
+registerRedirect("#/credentials/:id", ({ id }) => `#/credentials?edit=${encodeURIComponent(id)}`);
+registerRoute("#/credentials", pageCredentials);
+registerRedirect("#/organizations/new", "#/organizations?new=1");
+registerRedirect("#/organizations/:id", ({ id }) => `#/organizations?edit=${encodeURIComponent(id)}`);
+registerRoute("#/organizations", pageOrganizations);
+registerRoute("#/catalog", () => { location.hash = "#/projects"; });
+registerRedirect("#/team/members/new", "#/team?new=member");
+registerRedirect("#/team/new", "#/team?new=1");
+registerRedirect("#/team/:id", ({ id }) => `#/team?edit=${encodeURIComponent(id)}`);
+registerRoute("#/account", pageAccount);
+registerRedirect("#/users/new", "#/users?new=1");
+registerRedirect("#/users/:id", ({ id }) => `#/users?edit=${encodeURIComponent(id)}`);
+registerRoute("#/users", pageUsers);
+registerRoute("#/settings", pageSettings);
+registerRoute("#/assistant", pageAssistant);
+registerRoute("#/backup", pageBackup);
+registerRoute("#/team", pageTeam);

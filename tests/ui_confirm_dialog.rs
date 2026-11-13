@@ -1,5 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+#[path = "common/web_source.rs"]
+mod web_source;
+
 use std::path::Path;
 
 fn function<'a>(script: &'a str, name: &str) -> &'a str {
@@ -16,22 +19,20 @@ fn function<'a>(script: &'a str, name: &str) -> &'a str {
 
 #[test]
 fn web_ui_has_no_native_confirms() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source::source();
     assert!(
         !script.contains("window.confirm"),
-        "app.js still calls window.confirm"
+        "the web ui still calls window.confirm"
     );
     assert!(
         !script.contains("confirm("),
-        "app.js still calls the native confirm"
+        "the web ui still calls the native confirm"
     );
 }
 
 #[test]
 fn the_confirm_helper_uses_the_shared_overlay() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source::source();
     let helper = function(&script, "confirmDialog");
     assert!(
         helper.contains("new Promise"),

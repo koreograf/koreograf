@@ -1,3 +1,6 @@
+#[path = "common/web_source.rs"]
+mod web_source;
+
 use std::path::Path;
 use std::process::Command;
 
@@ -62,7 +65,7 @@ check(/position:\s*sticky/.test(sticky[1]), "the job header is not sticky");
 #[test]
 fn empty_lists_and_long_logs_are_guided_and_contained() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let js = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let js = web_source::source();
     let css = std::fs::read_to_string(root.join("web/app.css")).expect("app.css");
     let probe = EMPTY_STATE_PROBE
         .replace("__JS__", &serde_json::to_string(&js).expect("js json"))

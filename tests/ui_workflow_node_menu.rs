@@ -1,5 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+#[path = "common/web_source.rs"]
+mod web_source;
+
 use std::path::Path;
 
 fn web_file(name: &str) -> String {
@@ -18,7 +21,7 @@ fn function<'a>(script: &'a str, name: &str) -> &'a str {
 
 #[test]
 fn workflow_nodes_use_canvas_and_node_context_menus() {
-    let script = web_file("app.js");
+    let script = web_source::source();
     let add = function(&script, "addNodeControls");
     assert!(
         !add.contains("add-template"),

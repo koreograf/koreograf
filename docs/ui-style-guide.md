@@ -1,6 +1,6 @@
 # UI style guide
 
-This guide describes the browser UI as it exists today. `web/app.css`, `web/app.js`, and the language files are the source of truth. Read this page before you change a page, an overlay, or a string. The guide is not a redesign: a visual change needs its own issue.
+This guide describes the browser UI as it exists today. `web/app.css`, `web/js/`, and the language files are the source of truth. Read this page before you change a page, an overlay, or a string. The guide is not a redesign: a visual change needs its own issue.
 
 ## Principles
 

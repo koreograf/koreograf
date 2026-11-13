@@ -22,7 +22,13 @@ async fn responses_carry_standard_headers() {
     let state = koreograf::boot(config(&dir, &Options::default())).unwrap();
     assert!(!state.cfg.hsts);
     let app = koreograf::router(state);
-    for path in ["/", "/app.js", "/api/me", "/healthz", "/metrics"] {
+    for path in [
+        "/",
+        "/js/features/legacy.js",
+        "/api/me",
+        "/healthz",
+        "/metrics",
+    ] {
         let response = app
             .clone()
             .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
@@ -72,9 +78,9 @@ async fn owner_can_edit_an_execution_environment() {
     let app = harness.app.clone();
     let dir = harness.dir.clone();
 
-    let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = script.as_str().unwrap_or("");
+    let script = web_source();
     let runtime = script
         .split_once("async function pageRuntime")
         .expect("runtime page")
@@ -753,9 +759,9 @@ async fn environment_scopes_follow_the_selected_team() {
     let app = harness.app.clone();
     let dir = harness.dir.clone();
 
-    let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = script.as_str().unwrap_or("");
+    let script = web_source();
     assert!(script.contains("applies_to"));
     assert!(script.contains("this_team"));
     assert!(script.contains("this_organization"));
@@ -1742,9 +1748,9 @@ async fn admin_settings_hide_secrets_and_apply_without_restart() {
     let app = harness.app.clone();
     let dir = harness.dir.clone();
 
-    let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = script.as_str().unwrap_or("");
+    let script = web_source();
     assert!(script.contains("#/settings"));
     assert!(script.contains("settings"));
     assert!(script.contains("bind_password"));

@@ -1,5 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+#[path = "common/web_source.rs"]
+mod web_source;
+
 use std::path::Path;
 use std::process::Command;
 
@@ -22,7 +25,7 @@ fn function<'a>(script: &'a str, name: &str) -> &'a str {
 
 #[test]
 fn settings_are_one_form_with_tab_panels() {
-    let script = web_file("app.js");
+    let script = web_source::source();
     let page = function(&script, "pageSettings");
     assert!(
         page.contains("<form class=\"card form\" id=\"settings-form\">"),
@@ -70,7 +73,7 @@ fn settings_are_one_form_with_tab_panels() {
 
 #[test]
 fn settings_tab_address_round_trips() {
-    let script = web_file("app.js");
+    let script = web_source::source();
     let tab = function(&script, "settingsTab");
     let address = function(&script, "settingsTabAddress");
     let probe = format!(

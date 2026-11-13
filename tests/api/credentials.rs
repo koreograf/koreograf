@@ -13,9 +13,9 @@ async fn owner_can_store_an_ssh_password_without_a_key() {
     let app = harness.app.clone();
     let dir = harness.dir.clone();
 
-    let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = script.as_str().unwrap_or("");
+    let script = web_source();
     assert!(script.contains("machine_ssh"));
     assert!(script.contains("amazon_web_services"));
     assert!(script.contains("a_key_or_a_password_or_both"));
@@ -201,9 +201,9 @@ async fn template_accepts_one_credential_per_kind_and_many_vaults() {
     let app = harness.app.clone();
     let dir = harness.dir.clone();
 
-    let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = script.as_str().unwrap_or("");
+    let script = web_source();
     assert!(script.contains("one_credential_of_each_kind_choose_vault_credentials"));
     assert!(script.contains("applies_only_to_this_node_the_template_stays"));
     assert!(script.contains("id=\"vault-pills\""));
@@ -548,9 +548,9 @@ async fn template_credential_kinds_follow_the_tool() {
     let db_state = state.clone();
     let app = koreograf::router(state);
 
-    let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = script.as_str().unwrap_or("");
+    let script = web_source();
     assert!(script.contains("const TOOL_CREDENTIAL_KINDS = {"));
     assert!(script.contains("ansible: [\"ssh\", \"vault\"]"));
     assert!(script.contains("opentofu: [\"aws\", \"azure\", \"gce\", \"vmware\", \"openstack\", \"kubernetes\", \"env\"]"));

@@ -1,5 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+#[path = "common/web_source.rs"]
+mod web_source;
+
 use std::path::Path;
 use std::process::Command;
 
@@ -34,8 +37,8 @@ check(append.includes("line.textContent = plainLogLine(row.line)"), "the job log
 check(append.includes("line.koreografRaw = line.textContent"), "the log search keeps escape codes");
 
 const fill = extractFunction("fillVersion");
-check(fill.includes("buildCommit.slice(0, 7)"), "the sidebar shows the full commit");
-check(fill.includes("link.title = buildCommit"), "the full commit is not in the title");
+check(fill.includes("appState.buildCommit.slice(0, 7)"), "the sidebar shows the full commit");
+check(fill.includes("link.title = appState.buildCommit"), "the full commit is not in the title");
 const versionRule = /\.version-line a\s*\{([^}]*)\}/.exec(css);
 check(versionRule, "the version line has no rule");
 check(/overflow:\s*hidden/.test(versionRule[1]), "the version line may overflow the rail");
@@ -61,7 +64,7 @@ check(settle.includes("heading.focus"), "a new page does not focus the heading")
 check(settle.includes("routeScroll.get"), "back does not restore the scroll position");
 check(js.includes('<h1 tabindex="-1">'), "the page heading cannot take focus");
 const direction = new Function(
-  `let historyIndex = 0;\n${extractFunction("hasHistoryIndex")}\n${extractFunction("routeDirection")}\nreturn { routeDirection, index: () => historyIndex };`,
+  `const appState = { historyIndex: 0, setHistoryIndex(value) { this.historyIndex = value; } };\n${extractFunction("hasHistoryIndex")}\n${extractFunction("routeDirection")}\nreturn { routeDirection, index: () => appState.historyIndex };`,
 )();
 check(direction.routeDirection(null) === false, "a new entry is treated as back");
 check(direction.index() === 1, "a new entry gets no history index");
@@ -84,7 +87,7 @@ const DYNAMIC_KEYS: &[&str] = &[
 #[test]
 fn audit_details_are_polished() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let js = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let js = web_source::source();
     let css = std::fs::read_to_string(root.join("web/app.css")).expect("app.css");
     let probe = POLISH_PROBE
         .replace("__JS__", &serde_json::to_string(&js).expect("js json"))
