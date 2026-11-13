@@ -18,8 +18,15 @@ mod features;
 mod health;
 mod hooks;
 mod http;
-pub mod llm;
-pub mod mcp;
+pub mod llm {
+    pub use crate::features::assistant::{
+        complete, config_for, from_env, parse, ChatBody, ChatMessage, LlmConfig, LlmConfigError,
+        LlmError, LlmSetup, PendingActionResponse,
+    };
+}
+pub mod mcp {
+    pub use crate::features::assistant::{requested, run, Client, Error, JobQuery, Server};
+}
 mod portable;
 mod preflight;
 mod runner;

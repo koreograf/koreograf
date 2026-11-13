@@ -1,3 +1,4 @@
+pub(crate) mod assistant;
 pub(crate) mod credentials;
 pub(crate) mod identity;
 pub(crate) mod inventories;
