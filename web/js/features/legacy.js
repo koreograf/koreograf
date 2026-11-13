@@ -2035,20 +2035,6 @@ function fieldLabel(key) {
   return FIELD_LABELS[key] || key;
 }
 
-function secretControl(name, label, widget, stored) {
-  const clear = stored
-    ? `<label class="field check"><input type="checkbox" data-clear="${esc(name)}"><span>${h("remove")}</span></label>`
-    : "";
-  return `<label class="field"><span>${h(label)}</span>${widget}</label>${clear}`;
-}
-
-function secretInput(name, label, type, stored) {
-  const inputType = type || "text";
-  const complete = inputType === "password" ? "new-password" : "off";
-  const filled = stored ? ` value="********" data-stored-mask="1"` : "";
-  return secretControl(name, label, `<input name="${name}" type="${inputType}" autocomplete="${complete}"${filled}>`, stored);
-}
-
 function secretArea(name, label, stored) {
   const filled = stored ? ` data-stored-mask="1"` : "";
   const body = stored ? "********" : "";
