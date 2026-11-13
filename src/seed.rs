@@ -13,6 +13,7 @@ use crate::db::{
     self, Environment, Hook, Inventory, InventorySource, Project, Template, User, Workflow,
 };
 use crate::error::AppResult;
+use crate::features::inventories;
 use crate::store;
 
 const SEEDED_ENVIRONMENTS_KEY: &str = "default_environments";
@@ -173,9 +174,9 @@ impl SeedStore for Connection {
     }
 
     fn insert_inventory(&self, item: &Inventory, sources: &[InventorySource]) -> AppResult<()> {
-        store::inventories::insert_inventory(self, item)?;
+        inventories::store::insert_inventory(self, item)?;
         for source in sources {
-            store::inventories::insert_inventory_source(self, source)?;
+            inventories::store::insert_inventory_source(self, source)?;
         }
         Ok(())
     }

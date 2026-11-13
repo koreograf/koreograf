@@ -5,6 +5,8 @@ mod settings;
 mod sources;
 mod work;
 
+pub(crate) use catalog::{inventory_detail, InventoryDetailResponse, InventorySyncResponse};
+pub(crate) use sources::{project_dir, read_project_file, visible_project};
 pub(crate) use work::LaunchBody;
 
 use std::path::{Component, Path, PathBuf};
@@ -156,6 +158,7 @@ fn api_routes() -> Router<Shared> {
         .merge(admin::routes())
         .merge(catalog::routes())
         .merge(llm::routes())
+        .merge(crate::features::inventories::routes())
         .merge(crate::features::jobs::routes())
         .merge(crate::features::schedules::routes())
         .merge(crate::features::workflows::routes())
@@ -459,7 +462,7 @@ fn has_bidi_control(value: &str) -> bool {
 
 /// A static INI body with a broken line is rejected before it is stored.
 pub fn check_static_ini(body: &str) -> AppResult<()> {
-    if let Some(line) = crate::inventory::find_ini_error(body) {
+    if let Some(line) = crate::features::inventories::find_ini_error(body) {
         return Err(ApiError::bad_vars(
             "inventory_ini_is_invalid",
             [("line", line.to_string())],

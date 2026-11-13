@@ -433,7 +433,7 @@ fn insert_shell(
 
 fn insert_inventory(db: &rusqlite::Connection, team_id: &str, admin_saved: bool) -> String {
     let id = Uuid::new_v4().to_string();
-    crate::store::inventories::insert_inventory(
+    crate::features::inventories::store::insert_inventory(
         db,
         &db::Inventory {
             id: id.clone(),

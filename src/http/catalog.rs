@@ -17,8 +17,8 @@ use crate::db::{
     self, Credential, Delivery, Environment, Inventory, InventorySource, Organization, Project,
 };
 use crate::error::{ApiError, ApiJson, AppResult};
+use crate::features::inventories::{self as inventory, EffectiveVar, InventoryData, InventoryHost};
 use crate::features::jobs;
-use crate::inventory::{self, EffectiveVar, InventoryData, InventoryHost};
 use crate::preflight;
 use crate::runner;
 use crate::Shared;
@@ -145,7 +145,7 @@ pub struct InventoryBody {
     #[serde(default)]
     body: String,
     #[serde(default)]
-    sources: Vec<super::sources::SourceInput>,
+    sources: Vec<crate::features::inventories::SourceInput>,
 }
 
 #[derive(Deserialize)]
@@ -480,7 +480,7 @@ pub(super) struct InventorySummaryResponse {
 }
 
 #[derive(Serialize)]
-pub(super) struct InventoryDetailResponse {
+pub(crate) struct InventoryDetailResponse {
     id: String,
     team_id: String,
     name: String,
@@ -495,22 +495,22 @@ pub(super) struct InventoryDetailResponse {
     group_count: usize,
     hosts: Vec<InventoryHost>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) sync: Option<InventorySyncResponse>,
+    pub(crate) sync: Option<InventorySyncResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) collisions: Option<Vec<String>>,
+    pub(crate) collisions: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) dropped_vars: Option<Vec<String>>,
+    pub(crate) dropped_vars: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
-pub(super) struct InventorySyncResponse {
+pub(crate) struct InventorySyncResponse {
     pub ok: bool,
     pub before: usize,
     pub after: usize,
 }
 
 impl InventoryDetailResponse {
-    pub(super) fn host_count(&self) -> usize {
+    pub(crate) fn host_count(&self) -> usize {
         self.host_count
     }
 }
@@ -1578,7 +1578,11 @@ fn netbox_url(
     Some(format!("{endpoint}/dcim/devices/{id}/"))
 }
 
-fn matches_host(host: &crate::inventory::InventoryHost, needle: &str, group: &str) -> bool {
+fn matches_host(
+    host: &crate::features::inventories::InventoryHost,
+    needle: &str,
+    group: &str,
+) -> bool {
     if !group.is_empty() && !host.groups.iter().any(|item| item.to_lowercase() == group) {
         return false;
     }
@@ -1593,13 +1597,13 @@ fn matches_host(host: &crate::inventory::InventoryHost, needle: &str, group: &st
         })
 }
 
-fn sort_hosts(hosts: &mut [crate::inventory::InventoryHost], sort: &str) {
+fn sort_hosts(hosts: &mut [crate::features::inventories::InventoryHost], sort: &str) {
     let (field, reverse) = match sort.trim().strip_prefix('-') {
         Some(field) => (field, true),
         None => (sort.trim(), false),
     };
     hosts.sort_by(|left, right| {
-        let key = |host: &crate::inventory::InventoryHost| match field {
+        let key = |host: &crate::features::inventories::InventoryHost| match field {
             "address" => host
                 .vars
                 .get("ansible_host")
@@ -1673,7 +1677,7 @@ pub async fn create_inventory(
     gate(&state, &user, &team, Role::Operator)?;
     let name = require_name(&body.name)?;
     if !body.sources.is_empty() {
-        return super::sources::create_with_sources(
+        return crate::features::inventories::create_with_sources(
             state,
             team,
             name,
@@ -1737,7 +1741,7 @@ fn inventory_summary(c: &dyn Backend, item: &Inventory) -> AppResult<InventorySu
     })
 }
 
-pub(super) fn inventory_detail(
+pub(crate) fn inventory_detail(
     c: &dyn Backend,
     item: &Inventory,
 ) -> AppResult<InventoryDetailResponse> {
