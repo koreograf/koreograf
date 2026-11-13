@@ -1,16 +1,104 @@
 use axum::extract::State;
 use axum::routing::get;
 use axum::{Json, Router};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::auth::AuthUser;
 use crate::error::{ApiError, ApiJson, AppResult};
-use crate::settings::{self, LlmWrite, SettingsWrite};
+use crate::settings::{self, Effective, LlmWrite, SettingsWrite};
 use crate::Shared;
 
 pub(super) fn routes() -> Router<Shared> {
     Router::new().route("/settings", get(get_settings).put(put_settings))
+}
+
+#[derive(Serialize)]
+pub(super) struct SettingsResponse {
+    source: String,
+    ldap: LdapSettingsResponse,
+    proxy: ProxySettingsResponse,
+    runner: String,
+    job_timeout_secs: u64,
+    job_output_lines: u64,
+    default_environment_ansible: String,
+    default_environment_opentofu: String,
+    default_environment_shell: String,
+    llm: LlmSettingsResponse,
+}
+
+#[derive(Serialize)]
+pub(super) struct LdapSettingsResponse {
+    url: String,
+    mode: String,
+    bind_dn: String,
+    bind_password_set: bool,
+    user_base: String,
+    user_filter: String,
+    username_attr: String,
+    group_attr: String,
+    group_base: String,
+    starttls: bool,
+    tls_insecure: bool,
+}
+
+#[derive(Serialize)]
+pub(super) struct ProxySettingsResponse {
+    url: String,
+    username: String,
+    password_set: bool,
+    no_proxy: String,
+    unsupported_env: bool,
+}
+
+#[derive(Serialize)]
+pub(super) struct LlmSettingsResponse {
+    enabled: bool,
+    provider: String,
+    base_url: String,
+    model: String,
+    api_key_set: bool,
+}
+
+impl From<&Effective> for SettingsResponse {
+    fn from(effective: &Effective) -> Self {
+        Self {
+            source: if effective.saved { "saved" } else { "env" }.to_string(),
+            ldap: LdapSettingsResponse {
+                url: effective.ldap.url.clone(),
+                mode: effective.ldap.mode.clone(),
+                bind_dn: effective.ldap.bind_dn.clone(),
+                bind_password_set: !effective.ldap.bind_password.is_empty(),
+                user_base: effective.ldap.user_base.clone(),
+                user_filter: effective.ldap.user_filter.clone(),
+                username_attr: effective.ldap.username_attr.clone(),
+                group_attr: effective.ldap.group_attr.clone(),
+                group_base: effective.ldap.group_base.clone(),
+                starttls: effective.ldap.starttls,
+                tls_insecure: effective.ldap.tls_insecure,
+            },
+            proxy: ProxySettingsResponse {
+                url: effective.proxy.url.clone(),
+                username: effective.proxy.username.clone(),
+                password_set: !effective.proxy.password.is_empty(),
+                no_proxy: effective.proxy.no_proxy.clone(),
+                unsupported_env: effective.unsupported_proxy,
+            },
+            runner: effective.runner.as_str().to_string(),
+            job_timeout_secs: effective.job_timeout_secs,
+            job_output_lines: effective.job_output_lines,
+            default_environment_ansible: effective.default_environment_ansible.clone(),
+            default_environment_opentofu: effective.default_environment_opentofu.clone(),
+            default_environment_shell: effective.default_environment_shell.clone(),
+            llm: LlmSettingsResponse {
+                enabled: effective.llm_enabled,
+                provider: effective.llm_provider.as_str().to_string(),
+                base_url: effective.llm_url.clone(),
+                model: effective.llm_model.clone(),
+                api_key_set: !effective.llm_api_key.is_empty(),
+            },
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -100,16 +188,19 @@ pub(super) struct ProxyBody {
     no_proxy: String,
 }
 
-pub async fn get_settings(State(state): State<Shared>, user: AuthUser) -> AppResult<Json<Value>> {
+pub async fn get_settings(
+    State(state): State<Shared>,
+    user: AuthUser,
+) -> AppResult<Json<SettingsResponse>> {
     admin(&user)?;
-    Ok(Json(settings::view(&state)?))
+    Ok(Json(SettingsResponse::from(&settings::view(&state)?)))
 }
 
 pub async fn put_settings(
     State(state): State<Shared>,
     user: AuthUser,
     ApiJson(body): ApiJson<SettingsBody>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<SettingsResponse>> {
     admin(&user)?;
     if !body.reset {
         check_complete(&body)?;
@@ -154,7 +245,9 @@ pub async fn put_settings(
         llm,
         reset: body.reset,
     };
-    Ok(Json(settings::save(&state, &write)?))
+    Ok(Json(SettingsResponse::from(&settings::save(
+        &state, &write,
+    )?)))
 }
 
 fn check_complete(body: &SettingsBody) -> AppResult<()> {
