@@ -24,7 +24,7 @@ function onboardingCard() {
   </section>`;
 }
 
-function importNoticeHtml(importReport) {
+export function importNoticeHtml(importReport) {
   const paths = (importReport && importReport.missing_paths) || [];
   if (!paths.length) return "";
   return `<div class="banner warn"><p>${h("imported_paths_need_a_mount_or_a_change")}</p><ul>${paths.map((path) => `<li><code>${esc(path)}</code></li>`).join("")}</ul></div>`;
@@ -60,7 +60,7 @@ function shortDay(value) {
   });
 }
 
-function dashboardTabs(tab) {
+export function dashboardTabs(tab) {
   const item = (id) => `<button class="btn pill${tab === id ? " primary" : ""}" type="button" role="tab" id="tab-${id}" aria-selected="${tab === id}" data-page-tab="${id}">${h(id)}</button>`;
   return `<div class="spread tab-bar"><div class="tabs" role="tablist" aria-label="${h("overview")} / ${h("dashboard")}">${item("overview")}${item("dashboard")}</div></div>`;
 }
@@ -81,7 +81,7 @@ function dashboardChart(series, values, heading, legend) {
   return `<section class="card"><div class="spread"><h2>${h(heading)}</h2>${legend ? `<div class="row">${legend}</div>` : ""}</div><div class="chart" role="img" aria-label="${h(heading)}">${days}</div></section>`;
 }
 
-function dashboardBody(data, range) {
+export function dashboardBody(data, range) {
   const series = Array.isArray(data.series) ? data.series : [];
   const started = series.reduce((sum, day) => sum + (Number(day.started) || 0), 0);
   const finished = series.reduce((sum, day) => sum + (Number(day.successful) || 0) + (Number(day.failed) || 0) + (Number(day.canceled) || 0), 0);

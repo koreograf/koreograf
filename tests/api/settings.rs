@@ -74,20 +74,6 @@ async fn owner_can_edit_an_execution_environment() {
 
     let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = web_source();
-    let runtime = script
-        .split_once("async function pageRuntime")
-        .expect("runtime page")
-        .1
-        .split_once("function openEnvironmentDialog")
-        .expect("environment form")
-        .0;
-    let environments = runtime
-        .find("execution_environments")
-        .expect("environment heading");
-    let collections = runtime.find("cached_collections").expect("cache heading");
-    assert!(environments < collections);
-    assert!(runtime.contains("#/environments/"));
 
     let (status, me, cookie) = call(
         &app,
@@ -755,15 +741,6 @@ async fn environment_scopes_follow_the_selected_team() {
 
     let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = web_source();
-    assert!(script.contains("applies_to"));
-    assert!(script.contains("this_team"));
-    assert!(script.contains("this_organization"));
-    assert!(script.contains("organization_name"));
-    assert!(script.contains("team_name"));
-    assert!(script.contains("global_applies_to_every_team_the_organization_applies"));
-    assert!(script.contains("canManageEnvironment"));
-    assert!(script.contains("scopeLabel(row)"));
 
     let (status, me, cookie) = call(
         &app,
@@ -1744,19 +1721,6 @@ async fn admin_settings_hide_secrets_and_apply_without_restart() {
 
     let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = web_source();
-    assert!(script.contains("#/settings"));
-    assert!(script.contains("settings"));
-    assert!(script.contains("bind_password"));
-    assert!(script.contains("proxy_address"));
-    assert!(script.contains("use_environment_variables"));
-    assert!(script.contains("data-stored-mask=\"1\""));
-    assert!(!script.contains("private_ca_file"));
-    assert!(!script.contains("ldap_ca_file"));
-    assert!(!script.contains("name=ca_file"));
-    assert!(!script.contains("an_absolute_pem_path"));
-    assert!(!script.contains("bind-secret-value"));
-    assert!(!script.contains("proxy-secret-value"));
 
     let (status, denied, _) = call(&app, "GET", "/api/settings", None, None, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{denied}");

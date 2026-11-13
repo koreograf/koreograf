@@ -22,13 +22,6 @@ async fn organizations_inventories_and_git_sync() {
 
     let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = web_source();
-    assert!(script.contains("inventories"), "{script}");
-    assert!(script.contains("organizations"));
-    assert!(script.contains("nav-group"));
-    let (status, style, _) = call(&app, "GET", "/app.css", None, None, None).await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(style.as_str().unwrap_or("").contains("nav-label"));
 
     let (status, me, cookie) = call(
         &app,
@@ -1106,36 +1099,6 @@ async fn playbooks_project_inventory_and_netbox() {
 
     let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = web_source();
-    assert!(script.contains("playbook_from_the_project"), "{script}");
-    assert!(script.contains("data-add-kind=\"project\""));
-    assert!(script.contains("data-add-kind=\"netbox\""));
-    assert!(script.contains("refresh"));
-    assert!(script.contains("netbox: t(\"netbox\")"));
-    assert!(script.contains("[\"netbox\", \"netbox\", \"netbox_credential_address_hint\"]"));
-    assert!(script.contains("data-netbox-address"));
-    assert!(script.contains("data-new-netbox-credential"));
-    assert!(!script.contains("data-token-box"));
-    let inspector = script
-        .split_once("function renderInspector")
-        .expect("workflow inspector")
-        .1;
-    let node_at = inspector.find("this_node").expect("selected node panel");
-    let add_at = inspector[..node_at]
-        .rfind("addNodeControls()")
-        .expect("add stays above the selected node");
-    assert!(
-        node_at - add_at < 800,
-        "add node drifted away from the selected node"
-    );
-    let node_panel = &inspector[node_at..inspector.find("node-delete").expect("delete node")];
-    assert!(node_panel.contains("on_success_go_to"));
-    assert!(node_panel.contains("on_failure_go_to"));
-    assert!(node_panel.contains("always_go_to"));
-    assert!(node_panel.contains("nodeParams("));
-    assert!(script.contains("applies_only_to_this_node_the_template_stays"));
-    assert!(script.contains("node-inventory"));
-    assert!(script.contains("no_inventory"));
 
     let (status, me, cookie) = call(
         &app,

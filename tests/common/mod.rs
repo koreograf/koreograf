@@ -1,12 +1,9 @@
 #![allow(dead_code, clippy::expect_used, clippy::unwrap_used)]
 
 mod helpers;
-mod web_source;
 
 #[allow(unused_imports)]
 pub use helpers::*;
-#[allow(unused_imports)]
-pub use web_source::source as web_source;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};

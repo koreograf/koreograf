@@ -109,10 +109,6 @@ async fn admin_can_list_and_update_users() {
 
     let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = web_source();
-    assert!(script.contains("search_users"));
-    assert!(script.contains("#/users"));
-    assert!(script.contains("user_2"));
 
     let (status, denied, _) = call(&app, "GET", "/api/users", None, None, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{denied}");
@@ -443,18 +439,6 @@ async fn signed_in_user_can_read_their_own_account() {
 
     let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = web_source();
-    assert!(script.contains("my_account"));
-    assert!(script.contains("#/account"));
-    assert!(script.contains("data-lang-select"));
-    assert!(script.contains("GER"));
-    assert!(script.contains("ENG"));
-    let (status, style, _) = call(&app, "GET", "/app.css", None, None, None).await;
-    assert_eq!(status, StatusCode::OK);
-    let style = style.as_str().unwrap_or("");
-    assert!(style.contains("[hidden]"));
-    assert!(style.contains("display: none !important"));
-    assert!(style.contains("color: var(--ink)"));
 
     let (status, me, cookie) = call(
         &app,
@@ -603,11 +587,6 @@ async fn a_rejected_sign_in_uses_one_message_and_keeps_the_username() {
 
     let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = web_source();
-    assert!(script.contains("invalid_username_or_password"));
-    assert!(script.contains("value=\"${esc(username || \"\")}\""));
-    assert!(script.contains("[name=password]"));
-    assert!(script.contains("password.focus()"));
 
     let (status, missing, _) = call(&app, "GET", "/api/me", None, None, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{missing}");

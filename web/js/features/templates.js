@@ -296,7 +296,7 @@ async function pageTemplates() {
   await openTemplateDialog(item, request.tab);
 }
 
-function environmentRuntimeWarning(mode, runtime, environmentId) {
+export function environmentRuntimeWarning(mode, runtime, environmentId) {
   if (!environmentId || runtime) return "";
   const selected = mode || "auto";
   if (selected === "auto") return "this_execution_environment_is_ignored_until_docker_or";
@@ -304,10 +304,16 @@ function environmentRuntimeWarning(mode, runtime, environmentId) {
   return "";
 }
 
-function playbookChoice(books, entrypoint) {
+export function playbookChoice(books, entrypoint) {
   if (books.includes(entrypoint)) return entrypoint;
   if (!entrypoint && books.length) return books[0];
   return "";
+}
+
+export function environmentsFor(environments, tool) {
+  const matching = environments.filter((row) => row.tool === tool);
+  const legacy = environments.filter((row) => !row.tool || row.tool === "any");
+  return [...matching, ...legacy];
 }
 
 async function openTemplateDialog(existing, initialTab = "") {
@@ -326,11 +332,7 @@ async function openTemplateDialog(existing, initialTab = "") {
     name: "", description: "", tool: "ansible", project_id: "", inventory_id: "",
     credential_id: "", credential_ids: [], environment_id: "", entrypoint: "", extra_vars: {}, spec: {},
   };
-  const environmentsFor = (tool) => {
-    const matching = environments.filter((row) => row.tool === tool);
-    const legacy = environments.filter((row) => !row.tool || row.tool === "any");
-    return [...matching, ...legacy];
-  };
+  const environmentsForTool = (tool) => environmentsFor(environments, tool);
   const environmentDefault = (tool) => runner[`default_environment_${tool}`] || "";
   const noEnvironmentAvailable = (tool) => !runner.container_image
     && (runner.runner_mode || "auto") !== "docker"
@@ -345,7 +347,7 @@ async function openTemplateDialog(existing, initialTab = "") {
       ? `<option value="${NO_ENVIRONMENT}"${chosen === NO_ENVIRONMENT ? " selected" : ""}>${h("no_environment_run_on_the_controller")}</option>`
       : "";
     const control = `<option value="">${esc(label)}</option>${noEnvironmentOption}`;
-    const rows = environmentsFor(tool).map((row) =>
+    const rows = environmentsForTool(tool).map((row) =>
       `<option value="${esc(row.id)}"${row.id === chosen ? " selected" : ""}>${esc(`${row.name} (${scopeLabel(row)}, ${environmentToolLabel(row.tool)})`)}</option>`
     ).join("");
     return control + rows;
@@ -634,7 +636,7 @@ async function openTemplateDialog(existing, initialTab = "") {
   };
   const showToolSections = () => {
     const tool = form.tool.value;
-    const available = environmentsFor(tool);
+    const available = environmentsForTool(tool);
     const selected = form.environment_id.value;
     form.environment_id.innerHTML = environmentOptions(tool, selected);
     const incompatible = selected && selected !== NO_ENVIRONMENT && !available.some((row) => row.id === selected);
@@ -751,7 +753,7 @@ async function deleteTemplate(item, dialog) {
   }
 }
 
-const TOOL_CREDENTIAL_KINDS = {
+export const TOOL_CREDENTIAL_KINDS = {
   ansible: ["ssh", "vault"],
   opentofu: ["aws", "azure", "gce", "vmware", "openstack", "kubernetes", "env"],
   shell: ["ssh", "env"],
@@ -824,7 +826,7 @@ function renderVaultPills(box, credentials, ids, readOnly = false) {
   }).join("");
 }
 
-function bindVaultPicker(form, credentials, selectedIds, readOnly = false) {
+export function bindVaultPicker(form, credentials, selectedIds, readOnly = false) {
   const box = form.querySelector("#vault-pills");
   const search = form.querySelector("#vault-search");
   const options = form.querySelector("#vault-options");

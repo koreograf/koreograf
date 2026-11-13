@@ -66,7 +66,7 @@ async function pageWorkflows() {
   }
 }
 
-function openWorkflowDialog() {
+export function openWorkflowDialog() {
   openEditDialog({
     id: "workflow-dialog",
     title: t("new_workflow"),
