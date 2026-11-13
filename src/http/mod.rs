@@ -5,6 +5,8 @@ mod settings;
 mod sources;
 mod work;
 
+pub(crate) use work::LaunchBody;
+
 use std::path::{Component, Path, PathBuf};
 
 use axum::extract::{Path as UrlPath, Request, State};
@@ -156,6 +158,7 @@ fn api_routes() -> Router<Shared> {
         .merge(llm::routes())
         .merge(crate::features::jobs::routes())
         .merge(crate::features::schedules::routes())
+        .merge(crate::features::workflows::routes())
         .merge(session::routes())
         .merge(settings::routes())
         .merge(sources::routes())
@@ -485,6 +488,10 @@ pub fn blank(value: Option<String>) -> Option<String> {
             Some(item)
         }
     })
+}
+
+pub fn empty_object() -> Value {
+    Value::Object(serde_json::Map::new())
 }
 
 pub fn job_json(job: &Job, events: Option<&[JobEvent]>) -> serde_json::Value {

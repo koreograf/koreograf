@@ -7,9 +7,9 @@ use uuid::Uuid;
 use crate::config::{LocalJobs, RunnerMode};
 use crate::db::{self, Hook, Job, WorkflowJob};
 use crate::error::{ApiError, AppResult};
+use crate::features::workflows::{self as workflow, NodePhase};
 use crate::hooks::{self, AlertEvent};
 use crate::runner;
-use crate::workflow::{self, NodePhase};
 use crate::Shared;
 
 use super::model::{Dispatch, LaunchOverrides, LaunchRequest};

@@ -468,7 +468,7 @@ fn insert_override_workflow(
         }],
         "edges": []
     });
-    crate::store::workflows::insert_workflow(
+    crate::features::workflows::store::insert_workflow(
         db,
         &db::Workflow {
             id: id.clone(),
@@ -487,7 +487,7 @@ fn insert_override_workflow(
 async fn wait_workflow(state: &Shared, id: &str) -> String {
     for _ in 0..50 {
         if let Ok(db) = state.db() {
-            if let Ok(Some(run)) = crate::store::workflows::workflow_job(&db, id) {
+            if let Ok(Some(run)) = crate::features::workflows::store::workflow_job(&db, id) {
                 if matches!(run.status.as_str(), "successful" | "failed" | "canceled") {
                     return run.status;
                 }
@@ -839,7 +839,7 @@ async fn relaunch_of_a_workflow_snapshot_needs_that_workflow_release() {
         let db = state.db().expect("db");
         let template_id = insert_shell(&db, &team_id, None, "true");
         let workflow_id = insert_override_workflow(&db, &team_id, &template_id, json!({}), false);
-        crate::store::workflows::insert_workflow_job(
+        crate::features::workflows::store::insert_workflow_job(
             &db,
             &db::WorkflowJob {
                 id: "wf-run".into(),

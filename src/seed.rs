@@ -185,7 +185,7 @@ impl SeedStore for Connection {
     }
 
     fn insert_workflow(&self, item: &Workflow) -> AppResult<()> {
-        crate::store::workflows::insert_workflow(self, item)
+        crate::features::workflows::store::insert_workflow(self, item)
     }
 
     fn insert_hook(&self, item: &Hook) -> AppResult<()> {

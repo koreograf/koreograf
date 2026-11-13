@@ -271,7 +271,7 @@ pub(crate) fn workflows_using_inventory(
 }
 
 pub(crate) fn workflow_references_inventory(graph: &str, inventory_id: &str) -> bool {
-    match serde_json::from_str::<crate::workflow::Graph>(graph) {
+    match serde_json::from_str::<crate::features::workflows::Graph>(graph) {
         Ok(graph) => graph
             .nodes
             .iter()
