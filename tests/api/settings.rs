@@ -22,13 +22,7 @@ async fn responses_carry_standard_headers() {
     let state = koreograf::boot(config(&dir, &Options::default())).unwrap();
     assert!(!state.cfg.hsts);
     let app = koreograf::router(state);
-    for path in [
-        "/",
-        "/js/features/legacy.js",
-        "/api/me",
-        "/healthz",
-        "/metrics",
-    ] {
+    for path in ["/", "/js/main.js", "/api/me", "/healthz", "/metrics"] {
         let response = app
             .clone()
             .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
@@ -78,7 +72,7 @@ async fn owner_can_edit_an_execution_environment() {
     let app = harness.app.clone();
     let dir = harness.dir.clone();
 
-    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let script = web_source();
     let runtime = script
@@ -759,7 +753,7 @@ async fn environment_scopes_follow_the_selected_team() {
     let app = harness.app.clone();
     let dir = harness.dir.clone();
 
-    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let script = web_source();
     assert!(script.contains("applies_to"));
@@ -1748,7 +1742,7 @@ async fn admin_settings_hide_secrets_and_apply_without_restart() {
     let app = harness.app.clone();
     let dir = harness.dir.clone();
 
-    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let script = web_source();
     assert!(script.contains("#/settings"));

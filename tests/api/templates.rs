@@ -13,7 +13,7 @@ async fn an_empty_template_entry_path_is_rejected_and_marked_in_the_form() {
     let app = harness.app.clone();
     let dir = harness.dir.clone();
 
-    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let script = web_source();
     assert!(script.contains("for_example_site_yml"));
@@ -118,7 +118,7 @@ async fn a_template_can_run_the_last_sync_offline() {
     let state = koreograf::boot(cfg).unwrap();
     let app = koreograf::router(state);
 
-    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let script = web_source();
     assert!(script.contains("id=\"update-on-launch\""));

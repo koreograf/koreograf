@@ -527,7 +527,8 @@ fn hooks_environments_and_team_members_use_the_edit_overlay() {
     assert!(hook.contains("openEditDialog({"));
     assert!(hook.contains("api(\"POST\", \"/api/v1/hooks\""));
     assert!(hook.contains("api(\"PUT\", `/api/v1/hooks/"));
-    assert!(hook.contains("jsonObject(form.extra_vars.value"));
+    let payload = extract_braced_function(&script, "function hookPayload");
+    assert!(payload.contains("jsonObject(form.extra_vars.value"));
     assert!(hook.contains("markSaved();"));
     assert!(hook.contains("close();"));
     assert!(hook.contains("await route();"));

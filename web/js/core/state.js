@@ -9,7 +9,6 @@ export let navOpen = false;
 export let navKey = null;
 export let navToken = null;
 export let leaveGuard = null;
-export let revealToken = null;
 export let shownHash = null;
 export const routeScroll = new Map();
 export let historyIndex = 0;
@@ -18,13 +17,9 @@ export let buildCommit = "";
 export let versionRequested = false;
 export let assistantEnabled = false;
 export let assistantModel = "";
-export let assistantTranscript = [];
-export let assistantPending = false;
-export let assistantPendingAction = null;
 export let maintenanceActive = false;
 export let maintenanceSince = "";
 export let maintenanceTimer = null;
-export let databaseCheckId = null;
 export let flashKey = "";
 export let notedInvalid = false;
 export let editSerial = 0;
@@ -65,10 +60,6 @@ export function setLeaveGuard(value) {
   return (leaveGuard = value);
 }
 
-export function setRevealToken(value) {
-  return (revealToken = value);
-}
-
 export function setShownHash(value) {
   return (shownHash = value);
 }
@@ -97,18 +88,6 @@ export function setAssistantModel(value) {
   return (assistantModel = value);
 }
 
-export function setAssistantTranscript(value) {
-  return (assistantTranscript = value);
-}
-
-export function setAssistantPending(value) {
-  return (assistantPending = value);
-}
-
-export function setAssistantPendingAction(value) {
-  return (assistantPendingAction = value);
-}
-
 export function setMaintenanceActive(value) {
   return (maintenanceActive = value);
 }
@@ -119,10 +98,6 @@ export function setMaintenanceSince(value) {
 
 export function setMaintenanceTimer(value) {
   return (maintenanceTimer = value);
-}
-
-export function setDatabaseCheckId(value) {
-  return (databaseCheckId = value);
 }
 
 export function setFlashKey(value) {

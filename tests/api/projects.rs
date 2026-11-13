@@ -20,7 +20,7 @@ async fn organizations_inventories_and_git_sync() {
     let state = koreograf::boot(cfg).unwrap();
     let app = koreograf::router(state);
 
-    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let script = web_source();
     assert!(script.contains("inventories"), "{script}");
@@ -1104,7 +1104,7 @@ async fn playbooks_project_inventory_and_netbox() {
     let app = harness.app.clone();
     let dir = harness.dir.clone();
 
-    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let script = web_source();
     assert!(script.contains("playbook_from_the_project"), "{script}");
