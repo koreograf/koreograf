@@ -1135,7 +1135,7 @@ fn inventory_tables_drop_variables_and_details_keep_them() {
     .join("\n");
     let probe = format!(
         r#"{functions}
-const appState = {{ variablesViewSerial: 0, setVariablesViewSerial(value) {{ return (this.variablesViewSerial = value); }} }};
+let variablesSerial = 0;
 function t(key) {{ return key; }}
 function esc(value) {{
   return String(value ?? "").replace(/[&<>"']/g, (ch) => ({{

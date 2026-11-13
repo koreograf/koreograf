@@ -69,6 +69,14 @@ test("an administrator navigates every route, launches the demo shell job and sw
     expect(new URL(page.url()).hash).not.toBe("");
   }
 
+  await nav.getByRole("link", { name: "Team", exact: true }).click();
+  await page.evaluate(() => { window.location.hash = "#/team?new=1"; });
+  const teamDialog = page.getByRole("dialog");
+  await expect(teamDialog).toBeVisible();
+  await expect(teamDialog.locator("select[name=organization_id]")).toBeVisible();
+  await teamDialog.getByRole("button", { name: "Close" }).click();
+  await expect(teamDialog).toHaveCount(0);
+
   await nav.getByRole("link", { name: "Templates", exact: true }).click();
   await page.getByRole("link", { name: "Healthcheck", exact: true }).click();
   const dialog = page.getByRole("dialog");

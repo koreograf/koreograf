@@ -1,4 +1,5 @@
 import * as appState from "./state.js";
+import { esc, h } from "./dom.js";
 import { t } from "./i18n.js";
 
 export const FIELD_ALIAS = {
@@ -147,4 +148,18 @@ export function jsonObject(text, label) {
     throw error;
   }
   return value;
+}
+
+export function secretControl(name, label, widget, stored) {
+  const clear = stored
+    ? `<label class="field check"><input type="checkbox" data-clear="${esc(name)}"><span>${h("remove")}</span></label>`
+    : "";
+  return `<label class="field"><span>${h(label)}</span>${widget}</label>${clear}`;
+}
+
+export function secretInput(name, label, type, stored) {
+  const inputType = type || "text";
+  const complete = inputType === "password" ? "new-password" : "off";
+  const filled = stored ? ` value="********" data-stored-mask="1"` : "";
+  return secretControl(name, label, `<input name="${name}" type="${inputType}" autocomplete="${complete}"${filled}>`, stored);
 }

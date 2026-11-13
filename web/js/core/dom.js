@@ -30,6 +30,12 @@ export function table(headers, rows) {
   return `<div class="table-wrap"><table class="table"><thead><tr>${headers.map((item) => `<th>${esc(item)}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
+export function orgOptions(organizations, selected) {
+  return organizations.map((item) =>
+    `<option value="${esc(item.id)}"${item.id === selected ? " selected" : ""}>${esc(item.name)}</option>`
+  ).join("");
+}
+
 export function selectOptions(items, selected, allowEmpty, label) {
   const empty = allowEmpty ? `<option value="">—</option>` : "";
   const options = items.map((item) =>
