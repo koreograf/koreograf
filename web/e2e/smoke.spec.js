@@ -84,6 +84,8 @@ test("an administrator navigates every route, launches the demo shell job and sw
   await expect(dialog.getByRole("heading", { name: "Edit template" })).toBeVisible();
   await expect(dialog.getByRole("textbox", { name: /^Name/ })).toHaveValue("Healthcheck");
   await expect(dialog.getByRole("textbox", { name: "Description" })).toHaveValue("A short shell check that runs without Ansible.");
+  await dialog.getByRole("tab", { name: "Schedules", exact: true }).click();
+  await expect(dialog.getByRole("button", { name: "+ Schedule", exact: true })).toBeVisible();
   await dialog.getByRole("button", { name: "Close" }).click();
   await expect(dialog).toHaveCount(0);
 

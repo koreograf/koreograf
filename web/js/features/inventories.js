@@ -100,7 +100,7 @@ function netboxGroupingFields(selected) {
     <label class="check-row"><input type="checkbox" name="group_by" value="${esc(key)}"${selected.includes(key) ? " checked" : ""}><span>${h(label)}</span></label>`).join("")}</div>`;
 }
 
-function mountSourceDraft(container, projects, kind, preset, options = {}) {
+export function mountSourceDraft(container, projects, kind, preset, options = {}) {
   const data = preset || {};
   const credentials = options.credentials || [];
   const editing = Boolean(options.editing);
@@ -877,9 +877,14 @@ async function pageInventory(id) {
       } catch (error) { handle(error); }
     });
   }
-  appState.setLeaveGuard(() => document.querySelector("#source-edit [data-dirty]") !== null
-    || document.querySelector("#source-drafts [data-kind]") !== null);
+  appState.setLeaveGuard(sourceEditGuard);
 }
+
+export function sourceEditGuard() {
+  return document.querySelector("#source-edit [data-dirty]") !== null
+    || document.querySelector("#source-drafts [data-kind]") !== null;
+}
+
 function looksSecretVar(name) {
   return /(pass(word|phrase)?|secret|token|api[-_]?key|private[-_]?key|access[-_]?key|auth[-_]?key|credential|vault)/i.test(name);
 }

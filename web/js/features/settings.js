@@ -74,7 +74,7 @@ export function settingsTab() {
   return ["directory", "proxy", "jobs", "assistant", "database"].includes(tab) ? tab : "directory";
 }
 
-function settingsTabAddress(tab) {
+export function settingsTabAddress(tab) {
   return tab === "directory" ? "#/settings" : `#/settings?tab=${tab}`;
 }
 

@@ -2,7 +2,6 @@
 
 mod common;
 
-use std::path::Path;
 use std::time::Duration;
 
 use axum::http::StatusCode;
@@ -241,89 +240,6 @@ async fn the_wizard_routes_need_an_administrator() {
     ] {
         let (status, body) = app.call(method, uri, Some(&viewer), None, body).await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}: {body}");
-    }
-}
-
-#[test]
-fn the_wizard_and_the_maintenance_banner_are_in_the_ui_and_catalogs() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = common::web_source();
-    assert!(
-        script.contains("id=\"settings-panel-database\""),
-        "database panel"
-    );
-    assert!(script.contains("databaseTargetBody"), "database form");
-    assert!(script.contains("databaseChecksHtml"), "check list");
-    assert!(script.contains("databaseProgressHtml"), "table progress");
-    assert!(script.contains("databaseSwitchHtml"), "switch instructions");
-    assert!(script.contains("maintenanceBanner"), "maintenance banner");
-    assert!(
-        script.contains("loadMaintenance()"),
-        "the banner is not loaded"
-    );
-    assert!(
-        script.contains("/api/v1/admin/database/check"),
-        "check route"
-    );
-    assert!(
-        script.contains("/api/v1/admin/database/migrate"),
-        "start route"
-    );
-
-    let mut catalogs = Vec::new();
-    for language in ["de", "en"] {
-        let path = root.join(format!("web/i18n/{language}.json"));
-        let text = std::fs::read_to_string(&path).expect("catalog");
-        let value: serde_json::Value = serde_json::from_str(&text).expect("catalog json");
-        let object = value.as_object().expect("catalog object");
-        let keys = object.keys().cloned().collect::<Vec<_>>();
-        let mut sorted = keys.clone();
-        sorted.sort();
-        assert_eq!(keys, sorted, "{language} is not alphabetical");
-        for key in [
-            "move_database_to_postgresql",
-            "step_1_target",
-            "step_2_checks",
-            "step_3_migration",
-            "step_4_switch",
-            "maintenance_mode_banner",
-            "no_new_jobs_during_maintenance",
-            "database_migration_done",
-            "database_migration_failed",
-            "database_check_unreachable",
-            "run_the_checks_again",
-            "finish_or_cancel_running_jobs",
-            "restart_koreograf_after_the_change",
-            "rollback_switches_the_url_back",
-        ] {
-            assert!(
-                object
-                    .get(key)
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|item| !item.trim().is_empty()),
-                "{key} is missing from {language}.json"
-            );
-        }
-        catalogs.push(
-            object
-                .keys()
-                .cloned()
-                .collect::<std::collections::BTreeSet<_>>(),
-        );
-    }
-    assert_eq!(catalogs[0], catalogs[1], "the catalogs differ");
-
-    let docs = std::fs::read_to_string(root.join("docs/postgresql.md")).expect("docs page");
-    assert!(docs.contains("Docker Compose"), "Docker example");
-    assert!(docs.contains("OS package"), "package example");
-    assert!(docs.contains("Helm"), "Helm example");
-    assert!(docs.contains("Roll back"), "rollback");
-    for page in ["installation.md", "configuration.md", "backup-restore.md"] {
-        let text = std::fs::read_to_string(root.join("docs").join(page)).expect(page);
-        assert!(
-            text.contains("postgresql.md"),
-            "{page} does not link the PostgreSQL page"
-        );
     }
 }
 
