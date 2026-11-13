@@ -14,7 +14,7 @@ Koreograf is a Rust prototype: one binary with an HTTP API, a browser UI, and a 
 
 ## Layout
 
-Domain code lives in `src/features/<domain>/` as `mod.rs`, `routes.rs`, `model.rs`, `service.rs`, `store.rs`, and `tests.rs`; shared infrastructure stays in `src/core/`. `src/features/mod.rs` lists the domains in one sorted list, and a new domain adds one line there.
+Domain code lives in `src/features/<domain>/` as `mod.rs`, `routes.rs`, `model.rs`, `service.rs`, `store.rs`, and `tests.rs`; shared infrastructure stays at the crate root (`config.rs`, `error.rs`, `crypto.rs`), and `src/http/` holds the router, middleware, asset serving, and request helpers. `src/features/mod.rs` lists the domains in one sorted list, and a new domain adds one line there.
 
 ## Git
 
