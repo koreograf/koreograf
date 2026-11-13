@@ -161,6 +161,7 @@ fn api_routes() -> Router<Shared> {
         .merge(crate::features::credentials::routes())
         .merge(crate::features::inventories::routes())
         .merge(crate::features::jobs::routes())
+        .merge(crate::features::projects::routes())
         .merge(crate::features::schedules::routes())
         .merge(crate::features::workflows::routes())
         .merge(session::routes())

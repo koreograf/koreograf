@@ -14,6 +14,7 @@ use crate::db::{
 };
 use crate::error::AppResult;
 use crate::features::inventories;
+use crate::features::projects;
 use crate::store;
 
 const SEEDED_ENVIRONMENTS_KEY: &str = "default_environments";
@@ -170,7 +171,7 @@ impl SeedStore for Connection {
     }
 
     fn insert_project(&self, project: &Project) -> AppResult<()> {
-        store::projects::insert_project(self, project)
+        projects::store::insert_project(self, project)
     }
 
     fn insert_inventory(&self, item: &Inventory, sources: &[InventorySource]) -> AppResult<()> {
@@ -182,7 +183,7 @@ impl SeedStore for Connection {
     }
 
     fn insert_template(&self, item: &Template) -> AppResult<()> {
-        store::templates::insert_template(self, item)
+        projects::store::insert_template(self, item)
     }
 
     fn insert_workflow(&self, item: &Workflow) -> AppResult<()> {

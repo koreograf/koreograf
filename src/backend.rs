@@ -19,6 +19,7 @@ use crate::error::{ApiError, AppResult};
 use crate::features::credentials;
 use crate::features::inventories;
 use crate::features::jobs;
+use crate::features::projects;
 use crate::features::schedules;
 use crate::features::workflows;
 use crate::store;
@@ -615,27 +616,27 @@ impl Backend for SqliteBackend {
 
     fn list_projects(&self, team_id: &str) -> AppResult<Vec<Project>> {
         let conn = lock(&self.conn)?;
-        store::projects::list_projects(&conn, team_id)
+        projects::store::list_projects(&conn, team_id)
     }
 
     fn project(&self, id: &str) -> AppResult<Option<Project>> {
         let conn = lock(&self.conn)?;
-        store::projects::project(&conn, id)
+        projects::store::project(&conn, id)
     }
 
     fn project_visible(&self, id: &str, team_id: &str) -> AppResult<bool> {
         let conn = lock(&self.conn)?;
-        store::projects::project_visible(&conn, id, team_id)
+        projects::store::project_visible(&conn, id, team_id)
     }
 
     fn insert_project(&self, project: &Project) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::projects::insert_project(&conn, project)
+        projects::store::insert_project(&conn, project)
     }
 
     fn delete_project(&self, id: &str, team_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::projects::delete_project(&conn, id, team_id)
+        projects::store::delete_project(&conn, id, team_id)
     }
 
     fn set_project_details(
@@ -647,37 +648,37 @@ impl Backend for SqliteBackend {
         revision: &str,
     ) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::projects::set_project_details(&conn, id, name, source_type, source, revision)
+        projects::store::set_project_details(&conn, id, name, source_type, source, revision)
     }
 
     fn set_project_organization(&self, id: &str, organization_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::projects::set_project_organization(&conn, id, organization_id)
+        projects::store::set_project_organization(&conn, id, organization_id)
     }
 
     fn replace_project_teams(&self, project_id: &str, team_ids: &[String]) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::projects::replace_project_teams(&conn, project_id, team_ids)
+        projects::store::replace_project_teams(&conn, project_id, team_ids)
     }
 
     fn set_project_credential(&self, id: &str, credential_id: Option<&str>) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::projects::set_project_credential(&conn, id, credential_id)
+        projects::store::set_project_credential(&conn, id, credential_id)
     }
 
     fn set_project_admin_saved(&self, id: &str, admin_saved: bool) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::projects::set_project_admin_saved(&conn, id, admin_saved)
+        projects::store::set_project_admin_saved(&conn, id, admin_saved)
     }
 
     fn set_project_sync_success(&self, id: &str, at: &str, commit: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::projects::set_project_sync_success(&conn, id, at, commit)
+        projects::store::set_project_sync_success(&conn, id, at, commit)
     }
 
     fn set_project_sync_failed(&self, id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::projects::set_project_sync_failed(&conn, id)
+        projects::store::set_project_sync_failed(&conn, id)
     }
 
     fn list_inventories(&self, team_id: &str) -> AppResult<Vec<Inventory>> {
@@ -892,19 +893,19 @@ impl Backend for SqliteBackend {
 
     fn list_templates(&self, team_id: &str) -> AppResult<Vec<Template>> {
         let conn = lock(&self.conn)?;
-        store::templates::list_templates(&conn, team_id)
+        projects::store::list_templates(&conn, team_id)
     }
 
     fn template(&self, id: &str) -> AppResult<Option<Template>> {
         let conn = lock(&self.conn)?;
-        store::templates::template(&conn, id)
+        projects::store::template(&conn, id)
     }
 
     fn insert_template(&self, item: &Template, credential_ids: &[String]) -> AppResult<()> {
         let mut conn = lock(&self.conn)?;
         let tx = conn.transaction()?;
-        store::templates::insert_template(&tx, item)?;
-        store::templates::save_template_credentials(&tx, &item.id, credential_ids)?;
+        projects::store::insert_template(&tx, item)?;
+        projects::store::save_template_credentials(&tx, &item.id, credential_ids)?;
         tx.commit()?;
         Ok(())
     }
@@ -912,25 +913,25 @@ impl Backend for SqliteBackend {
     fn update_template(&self, item: &Template, credential_ids: &[String]) -> AppResult<()> {
         let mut conn = lock(&self.conn)?;
         let tx = conn.transaction()?;
-        store::templates::update_template(&tx, item)?;
-        store::templates::save_template_credentials(&tx, &item.id, credential_ids)?;
+        projects::store::update_template(&tx, item)?;
+        projects::store::save_template_credentials(&tx, &item.id, credential_ids)?;
         tx.commit()?;
         Ok(())
     }
 
     fn delete_template(&self, id: &str, team_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::templates::delete_template(&conn, id, team_id)
+        projects::store::delete_template(&conn, id, team_id)
     }
 
     fn template_credential_ids(&self, template_id: &str) -> AppResult<Vec<String>> {
         let conn = lock(&self.conn)?;
-        store::templates::template_credential_ids(&conn, template_id)
+        projects::store::template_credential_ids(&conn, template_id)
     }
 
     fn list_template_credential_links(&self, team_id: &str) -> AppResult<Vec<(String, String)>> {
         let conn = lock(&self.conn)?;
-        store::templates::list_template_credential_links(&conn, team_id)
+        projects::store::list_template_credential_links(&conn, team_id)
     }
 
     fn list_hooks(&self, team_id: &str) -> AppResult<Vec<Hook>> {
@@ -2128,17 +2129,17 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &store::sql::postgres(store::projects::LIST_PROJECTS),
+                    &store::sql::postgres(projects::store::LIST_PROJECTS),
                     &[&team_id],
                 )
                 .await?;
             let mut projects = rows
                 .iter()
-                .map(store::projects::row_project)
+                .map(projects::store::row_project)
                 .collect::<AppResult<Vec<_>>>()?;
             for project in &mut projects {
                 project.team_ids =
-                    store::projects::postgres_project_team_ids(&client, &project.id).await?;
+                    projects::store::postgres_project_team_ids(&client, &project.id).await?;
             }
             Ok(projects)
         })
@@ -2149,16 +2150,16 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    &store::sql::postgres(store::projects::PROJECT_BY_ID),
+                    &store::sql::postgres(projects::store::PROJECT_BY_ID),
                     &[&id],
                 )
                 .await?;
             let Some(row) = row else {
                 return Ok(None);
             };
-            let mut project = store::projects::row_project(&row)?;
+            let mut project = projects::store::row_project(&row)?;
             project.team_ids =
-                store::projects::postgres_project_team_ids(&client, &project.id).await?;
+                projects::store::postgres_project_team_ids(&client, &project.id).await?;
             Ok(Some(project))
         })
     }
@@ -2168,7 +2169,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    &store::sql::postgres(store::projects::PROJECT_VISIBLE),
+                    &store::sql::postgres(projects::store::PROJECT_VISIBLE),
                     &[&id, &team_id],
                 )
                 .await?;
@@ -2182,7 +2183,7 @@ impl Backend for PostgresBackend {
             let transaction = client.transaction().await?;
             transaction
                 .execute(
-                    &store::sql::postgres(store::projects::INSERT_PROJECT),
+                    &store::sql::postgres(projects::store::INSERT_PROJECT),
                     &[
                         &project.id,
                         &project.team_id,
@@ -2197,7 +2198,7 @@ impl Backend for PostgresBackend {
                     ],
                 )
                 .await?;
-            store::projects::postgres_write_project_teams(
+            projects::store::postgres_write_project_teams(
                 &transaction,
                 &project.id,
                 &project.team_ids,
@@ -2213,7 +2214,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    &store::sql::postgres(store::projects::DELETE_PROJECT),
+                    &store::sql::postgres(projects::store::DELETE_PROJECT),
                     &[&id, &team_id],
                 )
                 .await?;
@@ -2236,7 +2237,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    &store::sql::postgres(store::projects::SET_PROJECT_DETAILS),
+                    &store::sql::postgres(projects::store::SET_PROJECT_DETAILS),
                     &[&id, &name, &source_type, &source, &revision],
                 )
                 .await?;
@@ -2252,7 +2253,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    &store::sql::postgres(store::projects::SET_PROJECT_ORGANIZATION),
+                    &store::sql::postgres(projects::store::SET_PROJECT_ORGANIZATION),
                     &[&id, &organization_id],
                 )
                 .await?;
@@ -2267,7 +2268,7 @@ impl Backend for PostgresBackend {
         self.run(async {
             let mut client = self.pool.get().await.map_err(pool_error)?;
             let transaction = client.transaction().await?;
-            store::projects::postgres_write_project_teams(&transaction, project_id, team_ids)
+            projects::store::postgres_write_project_teams(&transaction, project_id, team_ids)
                 .await?;
             transaction.commit().await?;
             Ok(())
@@ -2279,7 +2280,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    &store::sql::postgres(store::projects::SET_PROJECT_CREDENTIAL),
+                    &store::sql::postgres(projects::store::SET_PROJECT_CREDENTIAL),
                     &[&id, &credential_id],
                 )
                 .await?;
@@ -2295,7 +2296,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    &store::sql::postgres(store::projects::SET_PROJECT_ADMIN_SAVED),
+                    &store::sql::postgres(projects::store::SET_PROJECT_ADMIN_SAVED),
                     &[&id, &(admin_saved as i32)],
                 )
                 .await?;
@@ -2311,7 +2312,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    &store::sql::postgres(store::projects::SET_PROJECT_SYNC_SUCCESS),
+                    &store::sql::postgres(projects::store::SET_PROJECT_SYNC_SUCCESS),
                     &[&id, &at, &commit],
                 )
                 .await?;
@@ -2327,7 +2328,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    &store::sql::postgres(store::projects::SET_PROJECT_SYNC_FAILED),
+                    &store::sql::postgres(projects::store::SET_PROJECT_SYNC_FAILED),
                     &[&id],
                 )
                 .await?;
@@ -2919,11 +2920,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &store::sql::postgres(store::templates::LIST_TEMPLATES),
+                    &store::sql::postgres(projects::store::LIST_TEMPLATES),
                     &[&team_id],
                 )
                 .await?;
-            rows.iter().map(store::templates::row_template).collect()
+            rows.iter().map(projects::store::row_template).collect()
         })
     }
 
@@ -2932,11 +2933,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    &store::sql::postgres(store::templates::TEMPLATE_BY_ID),
+                    &store::sql::postgres(projects::store::TEMPLATE_BY_ID),
                     &[&id],
                 )
                 .await?;
-            row.as_ref().map(store::templates::row_template).transpose()
+            row.as_ref().map(projects::store::row_template).transpose()
         })
     }
 
@@ -2946,7 +2947,7 @@ impl Backend for PostgresBackend {
             let transaction = client.transaction().await?;
             transaction
                 .execute(
-                    &store::sql::postgres(store::templates::INSERT_TEMPLATE),
+                    &store::sql::postgres(projects::store::INSERT_TEMPLATE),
                     &[
                         &item.id,
                         &item.team_id,
@@ -2968,7 +2969,7 @@ impl Backend for PostgresBackend {
                     ],
                 )
                 .await?;
-            store::templates::postgres_write_template_credentials(
+            projects::store::postgres_write_template_credentials(
                 &transaction,
                 &item.id,
                 credential_ids,
@@ -2985,7 +2986,7 @@ impl Backend for PostgresBackend {
             let transaction = client.transaction().await?;
             let changed = transaction
                 .execute(
-                    &store::sql::postgres(store::templates::UPDATE_TEMPLATE),
+                    &store::sql::postgres(projects::store::UPDATE_TEMPLATE),
                     &[
                         &item.id,
                         &item.team_id,
@@ -3009,7 +3010,7 @@ impl Backend for PostgresBackend {
             if changed == 0 {
                 return Err(ApiError::NotFound);
             }
-            store::templates::postgres_write_template_credentials(
+            projects::store::postgres_write_template_credentials(
                 &transaction,
                 &item.id,
                 credential_ids,
@@ -3026,7 +3027,7 @@ impl Backend for PostgresBackend {
             let transaction = client.transaction().await?;
             let changed = transaction
                 .execute(
-                    &store::sql::postgres(store::templates::DELETE_TEMPLATE),
+                    &store::sql::postgres(projects::store::DELETE_TEMPLATE),
                     &[&id, &team_id],
                 )
                 .await?;
@@ -3035,7 +3036,7 @@ impl Backend for PostgresBackend {
             }
             transaction
                 .execute(
-                    &store::sql::postgres(store::templates::DELETE_TEMPLATE_SCHEDULES),
+                    &store::sql::postgres(projects::store::DELETE_TEMPLATE_SCHEDULES),
                     &[&id],
                 )
                 .await?;
@@ -3049,7 +3050,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &store::sql::postgres(store::templates::TEMPLATE_CREDENTIAL_IDS),
+                    &store::sql::postgres(projects::store::TEMPLATE_CREDENTIAL_IDS),
                     &[&template_id],
                 )
                 .await?;
@@ -3062,7 +3063,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &store::sql::postgres(store::templates::LIST_TEMPLATE_CREDENTIAL_LINKS),
+                    &store::sql::postgres(projects::store::LIST_TEMPLATE_CREDENTIAL_LINKS),
                     &[&team_id],
                 )
                 .await?;
