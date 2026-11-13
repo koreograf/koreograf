@@ -2,7 +2,7 @@
   "private": true,
   "description": "Commit message checks. The application itself is the Rust package.",
   "scripts": {
-    "test:unit": "node --test web/tests/",
+    "test:unit": "node --test 'web/tests/*.test.js'",
     "test:e2e": "playwright test --config web/e2e/playwright.config.js"
   },
   "devDependencies": {

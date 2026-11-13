@@ -182,8 +182,8 @@ jobs:
         run: npm ci
       - name: Parse the web UI
         run: find web -name '*.js' -print0 | xargs -0 -n1 node --check
-      - name: Test the catalogs
-        run: node --test web/tests/
+      - name: Test the web modules
+        run: node --test 'web/tests/*.test.js'
       - name: Parse the image harness
         run: python3 -m py_compile tests/harness/scripts/image-smoke.py tests/harness/scripts/unix-socket.py
 

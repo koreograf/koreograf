@@ -108,3 +108,62 @@ test("the template list confirms an OpenTofu apply before posting", async () => 
   await tick();
   assert.equal(posts, 1, "the confirmed launch did not post");
 });
+
+test("the workflow list confirms an OpenTofu apply before posting", async () => {
+  await setup();
+  const router = await load("core/router.js");
+  await load("features/workflows/index.js");
+  const templates = [{ id: "apply", name: "apply-prod", tool: "opentofu", spec: { action: "apply" } }];
+  const workflows = [{ id: "w1", name: "Deploy", description: "", graph: { nodes: [{ id: "n1", template_id: "apply" }], edges: [] } }];
+  let posts = 0;
+  globalThis.fetch = async (path, init) => {
+    if (init && init.method === "POST") {
+      posts += 1;
+      return { ok: true, status: 200, text: async () => JSON.stringify({ id: "run-1" }) };
+    }
+    let body = [];
+    if (path.startsWith("/api/v1/workflows")) body = workflows;
+    else if (path.startsWith("/api/v1/templates")) body = templates;
+    return { ok: true, status: 200, text: async () => JSON.stringify(body) };
+  };
+  location.hash = "#/workflows";
+  await router.matchRoute("#/workflows").handler();
+  document.querySelector('[data-launch="w1"]').dispatchEvent({ type: "click" });
+  await tick();
+  assert.ok(document.querySelector("#tofu-apply-confirm"), "the workflow list launch skipped the confirmation");
+  assert.equal(posts, 0, "the workflow list launch posted before confirming");
+  document.querySelector("#tofu-apply-confirm").dispatchEvent({ type: "keydown", key: "Escape", preventDefault() {} });
+  await tick();
+  await tick();
+  assert.equal(posts, 0, "cancel still launched the workflow");
+});
+
+test("the workflow editor confirms an OpenTofu apply before saving and launching", async () => {
+  await setup();
+  const { mountEditor } = await load("features/workflows/editor.js");
+  const templates = [{ id: "apply", name: "apply-prod", tool: "opentofu", spec: { action: "apply" } }];
+  const workflow = {
+    id: "w1",
+    name: "Deploy",
+    description: "",
+    graph: { nodes: [{ id: "n1", template_id: "apply", name: "Apply", x: 20, y: 20 }], edges: [] },
+  };
+  let puts = 0;
+  let posts = 0;
+  globalThis.fetch = async (path, init) => {
+    if (init && init.method === "PUT") puts += 1;
+    if (init && init.method === "POST") posts += 1;
+    return { ok: true, status: 200, text: async () => JSON.stringify({ id: "run-1" }) };
+  };
+  mountEditor(workflow, templates, false, {}, { inventories: [], credentials: [] }, {});
+  document.querySelector("#wf-launch").dispatchEvent({ type: "click" });
+  await tick();
+  assert.ok(document.querySelector("#tofu-apply-confirm"), "the workflow editor launch skipped the confirmation");
+  assert.equal(puts + posts, 0, "the workflow editor launch saved or posted before confirming");
+  document.querySelector("#tofu-apply-confirm .dialog-form").dispatchEvent({ type: "submit", preventDefault() {} });
+  await tick();
+  await tick();
+  await tick();
+  assert.equal(puts, 1, "the confirmed editor launch did not save");
+  assert.equal(posts, 1, "the confirmed editor launch did not post");
+});
