@@ -919,9 +919,9 @@ mod tests {
     use super::*;
     use crate::features::inventories::store::inventory;
     use crate::features::jobs::store::{insert_job, list_jobs};
+    use crate::features::projects::store::{list_projects, project};
     use crate::features::workflows::store::workflow;
     use crate::store::environments::{environment, insert_environment, list_environments};
-    use crate::store::projects::{list_projects, project};
     use crate::store::teams::{
         grant_manual_membership, insert_organization, insert_team, list_members, team_by_id,
         upsert_membership,

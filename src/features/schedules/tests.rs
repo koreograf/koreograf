@@ -272,7 +272,7 @@ async fn an_operator_schedule_does_not_start_an_admin_only_local_run() {
         )
         .expect("operator");
         let id = "operator-shell".to_string();
-        crate::store::templates::insert_template(
+        crate::features::projects::store::insert_template(
             &db,
             &db::Template {
                 id: id.clone(),
@@ -425,7 +425,7 @@ async fn a_removed_member_does_not_start_the_next_run() {
             .expect("member");
         crate::store::teams::delete_membership(&db, &team_id, "operator-user").expect("remove");
         let id = "member-shell".to_string();
-        crate::store::templates::insert_template(
+        crate::features::projects::store::insert_template(
             &db,
             &db::Template {
                 id: id.clone(),

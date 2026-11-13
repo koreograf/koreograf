@@ -405,7 +405,7 @@ fn insert_shell(
     script: &str,
 ) -> String {
     let id = Uuid::new_v4().to_string();
-    crate::store::templates::insert_template(
+    crate::features::projects::store::insert_template(
         db,
         &db::Template {
             id: id.clone(),
