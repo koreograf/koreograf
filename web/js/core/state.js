@@ -9,7 +9,6 @@ export let navOpen = false;
 export let navKey = null;
 export let navToken = null;
 export let leaveGuard = null;
-export let sourceNotice = null;
 export let revealToken = null;
 export let shownHash = null;
 export const routeScroll = new Map();
@@ -29,7 +28,6 @@ export let databaseCheckId = null;
 export let flashKey = "";
 export let notedInvalid = false;
 export let editSerial = 0;
-export let variablesViewSerial = 0;
 
 export function setMe(value) {
   return (me = value);
@@ -65,10 +63,6 @@ export function setNavToken(value) {
 
 export function setLeaveGuard(value) {
   return (leaveGuard = value);
-}
-
-export function setSourceNotice(value) {
-  return (sourceNotice = value);
 }
 
 export function setRevealToken(value) {
@@ -141,8 +135,4 @@ export function setNotedInvalid(value) {
 
 export function setEditSerial(value) {
   return (editSerial = value);
-}
-
-export function setVariablesViewSerial(value) {
-  return (variablesViewSerial = value);
 }
