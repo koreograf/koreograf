@@ -17,8 +17,8 @@ use crate::db::{
     self, Credential, Delivery, Environment, Inventory, InventorySource, Organization, Project,
 };
 use crate::error::{ApiError, ApiJson, AppResult};
+use crate::features::jobs;
 use crate::inventory::{self, EffectiveVar, InventoryData, InventoryHost};
-use crate::jobs;
 use crate::preflight;
 use crate::runner;
 use crate::Shared;

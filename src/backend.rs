@@ -16,6 +16,7 @@ use crate::db::{
     WorkflowNodeRow,
 };
 use crate::error::{ApiError, AppResult};
+use crate::features::jobs;
 use crate::features::schedules;
 use crate::store;
 
@@ -966,62 +967,62 @@ impl Backend for SqliteBackend {
 
     fn job(&self, id: &str) -> AppResult<Option<Job>> {
         let conn = lock(&self.conn)?;
-        store::jobs::job(&conn, id)
+        jobs::store::job(&conn, id)
     }
 
     fn list_jobs(&self, team_id: &str, query: &JobQuery) -> AppResult<(Vec<Job>, i64)> {
         let conn = lock(&self.conn)?;
-        store::jobs::list_jobs(&conn, team_id, query)
+        jobs::store::list_jobs(&conn, team_id, query)
     }
 
     fn insert_job(&self, item: &Job) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::jobs::insert_job(&conn, item)
+        jobs::store::insert_job(&conn, item)
     }
 
     fn mark_running(&self, id: &str) -> AppResult<bool> {
         let conn = lock(&self.conn)?;
-        store::jobs::mark_running(&conn, id)
+        jobs::store::mark_running(&conn, id)
     }
 
     fn set_failed_hosts(&self, id: &str, failed_hosts: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::jobs::set_failed_hosts(&conn, id, failed_hosts)
+        jobs::store::set_failed_hosts(&conn, id, failed_hosts)
     }
 
     fn set_job_parameters(&self, id: &str, parameters: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::jobs::set_job_parameters(&conn, id, parameters)
+        jobs::store::set_job_parameters(&conn, id, parameters)
     }
 
     fn finish_job(&self, id: &str, status: &str) -> AppResult<bool> {
         let conn = lock(&self.conn)?;
-        store::jobs::finish_job(&conn, id, status)
+        jobs::store::finish_job(&conn, id, status)
     }
 
     fn insert_event(&self, job_id: &str, stream: &str, line: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::jobs::insert_event(&conn, job_id, stream, line)
+        jobs::store::insert_event(&conn, job_id, stream, line)
     }
 
     fn events_after(&self, job_id: &str, after: i64, limit: i64) -> AppResult<Vec<JobEvent>> {
         let conn = lock(&self.conn)?;
-        store::jobs::events_after(&conn, job_id, after, limit)
+        jobs::store::events_after(&conn, job_id, after, limit)
     }
 
     fn events_count_between(&self, job_id: &str, after: i64, before: i64) -> AppResult<i64> {
         let conn = lock(&self.conn)?;
-        store::jobs::events_count_between(&conn, job_id, after, before)
+        jobs::store::events_count_between(&conn, job_id, after, before)
     }
 
     fn events_bytes(&self, job_id: &str) -> AppResult<i64> {
         let conn = lock(&self.conn)?;
-        store::jobs::events_bytes(&conn, job_id)
+        jobs::store::events_bytes(&conn, job_id)
     }
 
     fn events_last(&self, job_id: &str, limit: i64) -> AppResult<Vec<JobEvent>> {
         let conn = lock(&self.conn)?;
-        store::jobs::events_last(&conn, job_id, limit)
+        jobs::store::events_last(&conn, job_id, limit)
     }
 
     fn workflow_job(&self, id: &str) -> AppResult<Option<WorkflowJob>> {
@@ -1062,12 +1063,12 @@ impl Backend for SqliteBackend {
 
     fn recent_jobs(&self, team_id: &str, limit: i64) -> AppResult<Vec<Job>> {
         let conn = lock(&self.conn)?;
-        store::jobs::recent_jobs(&conn, team_id, limit)
+        jobs::store::recent_jobs(&conn, team_id, limit)
     }
 
     fn job_activity(&self, team_id: &str, from: &str, to: &str) -> AppResult<Vec<JobActivity>> {
         let conn = lock(&self.conn)?;
-        store::jobs::job_activity(&conn, team_id, from, to)
+        jobs::store::job_activity(&conn, team_id, from, to)
     }
 
     fn import_report(&self) -> AppResult<Option<serde_json::Value>> {
@@ -1409,7 +1410,7 @@ impl Backend for PostgresBackend {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             let jobs: i64 = client
-                .query_one(&store::sql::postgres(store::jobs::JOBS_BUSY), &[])
+                .query_one(&store::sql::postgres(jobs::store::JOBS_BUSY), &[])
                 .await?
                 .get(0);
             let flows: i64 = client
@@ -3191,9 +3192,9 @@ impl Backend for PostgresBackend {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
-                .query_opt(&store::sql::postgres(&store::jobs::job_by_id_sql()), &[&id])
+                .query_opt(&store::sql::postgres(&jobs::store::job_by_id_sql()), &[&id])
                 .await?;
-            row.as_ref().map(store::jobs::row_job).transpose()
+            row.as_ref().map(jobs::store::row_job).transpose()
         })
     }
 
@@ -3204,7 +3205,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &store::sql::postgres(&store::jobs::list_jobs_sql(
+                    &store::sql::postgres(&jobs::store::list_jobs_sql(
                         store::sql::Dialect::Postgres,
                     )),
                     &[
@@ -3223,11 +3224,11 @@ impl Backend for PostgresBackend {
                 .await?;
             let items = rows
                 .iter()
-                .map(store::jobs::row_job)
+                .map(jobs::store::row_job)
                 .collect::<AppResult<Vec<_>>>()?;
             let total = client
                 .query_one(
-                    &store::sql::postgres(&store::jobs::count_jobs_sql(
+                    &store::sql::postgres(&jobs::store::count_jobs_sql(
                         store::sql::Dialect::Postgres,
                     )),
                     &[
@@ -3252,7 +3253,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::jobs::INSERT_JOB),
+                    &store::sql::postgres(jobs::store::INSERT_JOB),
                     &[
                         &item.id,
                         &item.team_id,
@@ -3282,7 +3283,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    &store::sql::postgres(store::jobs::MARK_RUNNING),
+                    &store::sql::postgres(jobs::store::MARK_RUNNING),
                     &[&id, &db::now()],
                 )
                 .await?;
@@ -3295,7 +3296,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::jobs::SET_FAILED_HOSTS),
+                    &store::sql::postgres(jobs::store::SET_FAILED_HOSTS),
                     &[&id, &failed_hosts],
                 )
                 .await?;
@@ -3308,7 +3309,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::jobs::SET_JOB_PARAMETERS),
+                    &store::sql::postgres(jobs::store::SET_JOB_PARAMETERS),
                     &[&id, &parameters],
                 )
                 .await?;
@@ -3321,7 +3322,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    &store::sql::postgres(store::jobs::FINISH_JOB),
+                    &store::sql::postgres(jobs::store::FINISH_JOB),
                     &[&id, &status, &db::now()],
                 )
                 .await?;
@@ -3334,7 +3335,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::jobs::INSERT_EVENT),
+                    &store::sql::postgres(jobs::store::INSERT_EVENT),
                     &[&job_id, &db::now(), &stream, &line],
                 )
                 .await?;
@@ -3347,11 +3348,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &store::sql::postgres(store::jobs::EVENTS_AFTER),
+                    &store::sql::postgres(jobs::store::EVENTS_AFTER),
                     &[&job_id, &after, &limit],
                 )
                 .await?;
-            rows.iter().map(store::jobs::row_job_event).collect()
+            rows.iter().map(jobs::store::row_job_event).collect()
         })
     }
 
@@ -3360,7 +3361,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_one(
-                    &store::sql::postgres(store::jobs::EVENTS_COUNT_BETWEEN),
+                    &store::sql::postgres(jobs::store::EVENTS_COUNT_BETWEEN),
                     &[&job_id, &after, &before],
                 )
                 .await?;
@@ -3373,7 +3374,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_one(
-                    &store::sql::postgres(store::jobs::events_bytes_sql(
+                    &store::sql::postgres(jobs::store::events_bytes_sql(
                         store::sql::Dialect::Postgres,
                     )),
                     &[&job_id],
@@ -3388,13 +3389,13 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &store::sql::postgres(store::jobs::EVENTS_LAST),
+                    &store::sql::postgres(jobs::store::EVENTS_LAST),
                     &[&job_id, &limit],
                 )
                 .await?;
             let mut events = rows
                 .iter()
-                .map(store::jobs::row_job_event)
+                .map(jobs::store::row_job_event)
                 .collect::<AppResult<Vec<_>>>()?;
             events.reverse();
             Ok(events)
@@ -3515,11 +3516,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &store::sql::postgres(&store::jobs::recent_jobs_sql()),
+                    &store::sql::postgres(&jobs::store::recent_jobs_sql()),
                     &[&team_id, &limit],
                 )
                 .await?;
-            rows.iter().map(store::jobs::row_job).collect()
+            rows.iter().map(jobs::store::row_job).collect()
         })
     }
 
@@ -3528,11 +3529,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &store::sql::postgres(store::jobs::JOB_ACTIVITY),
+                    &store::sql::postgres(jobs::store::JOB_ACTIVITY),
                     &[&team_id, &from, &to],
                 )
                 .await?;
-            rows.iter().map(store::jobs::row_job_activity).collect()
+            rows.iter().map(jobs::store::row_job_activity).collect()
         })
     }
 

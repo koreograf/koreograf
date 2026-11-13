@@ -154,6 +154,7 @@ fn api_routes() -> Router<Shared> {
         .merge(admin::routes())
         .merge(catalog::routes())
         .merge(llm::routes())
+        .merge(crate::features::jobs::routes())
         .merge(crate::features::schedules::routes())
         .merge(session::routes())
         .merge(settings::routes())

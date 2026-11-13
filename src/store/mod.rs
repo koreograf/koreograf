@@ -4,7 +4,6 @@ pub(crate) mod deliveries;
 pub(crate) mod environments;
 pub(crate) mod hooks;
 pub(crate) mod inventories;
-pub(crate) mod jobs;
 pub(crate) mod projects;
 pub(crate) mod settings;
 pub(crate) mod sql;
