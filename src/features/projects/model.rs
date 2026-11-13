@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::db::Project;
 use crate::error::{ApiError, AppResult};
+use crate::http::empty_object;
 use crate::runner;
 
 #[derive(Deserialize)]
@@ -121,4 +123,21 @@ impl SyncResponse {
 #[derive(Serialize)]
 pub(super) struct SyncProjectResponse {
     pub(super) path: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LaunchBody {
+    #[serde(default = "empty_object")]
+    pub(crate) extra_vars: Value,
+    /// Empty string clears the inventory. Omit the field to keep the template value.
+    #[serde(default)]
+    pub(crate) inventory_id: Option<String>,
+    /// Replaces the template credentials for this job. Omit the field to keep them.
+    #[serde(default)]
+    pub(crate) credential_ids: Option<Vec<String>>,
+    /// Ansible prompt fields merged onto the template spec.
+    #[serde(default)]
+    pub(crate) spec: Option<Value>,
+    #[serde(default)]
+    pub(crate) launch_with_options: bool,
 }

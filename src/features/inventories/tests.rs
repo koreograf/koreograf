@@ -1082,3 +1082,84 @@ query_filters:
     assert_eq!(found.query_filters, vec!["status=active".to_string()]);
     assert_eq!(found.validate_certs, Some(false));
 }
+
+fn environment_test_user() -> crate::features::identity::AuthUser {
+    crate::features::identity::AuthUser {
+        id: "user".into(),
+        username: "ada".into(),
+        display_name: "Ada".into(),
+        auth_source: "local".into(),
+        email: None,
+        is_admin: false,
+    }
+}
+
+fn environment_test_body(tool: &str) -> super::super::routes::EnvironmentBody {
+    super::super::routes::EnvironmentBody {
+        name: "EE".into(),
+        image: "quay.io/example/ee:1".into(),
+        tool: tool.into(),
+        pull_policy: "if_not_present".into(),
+        network: String::new(),
+        description: String::new(),
+        scope: None,
+    }
+}
+
+fn legacy_environment() -> crate::db::Environment {
+    crate::db::Environment {
+        id: "legacy".into(),
+        team_id: None,
+        organization_id: None,
+        name: "EE".into(),
+        tool: "any".into(),
+        image: "quay.io/example/ee:1".into(),
+        pull_policy: "if_not_present".into(),
+        network: String::new(),
+        description: String::new(),
+        created_at: String::new(),
+        scope: "global".into(),
+        organization_name: String::new(),
+        team_name: String::new(),
+    }
+}
+
+#[test]
+fn new_environments_need_ansible_opentofu_or_shell() {
+    for tool in ["ansible", "opentofu", "shell"] {
+        let (_, _, _, _, _, parsed) = super::super::routes::environment_fields(
+            &environment_test_user(),
+            &environment_test_body(tool),
+            None,
+        )
+        .unwrap();
+        assert_eq!(parsed, tool);
+    }
+    for tool in ["any", "docker", ""] {
+        let err = super::super::routes::environment_fields(
+            &environment_test_user(),
+            &environment_test_body(tool),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err.to_string(), "choose_a_tool_for_the_environment");
+    }
+}
+
+#[test]
+fn a_legacy_any_environment_survives_an_unchanged_save() {
+    let legacy = legacy_environment();
+    let (_, _, _, _, _, parsed) = super::super::routes::environment_fields(
+        &environment_test_user(),
+        &environment_test_body("any"),
+        Some(&legacy),
+    )
+    .unwrap();
+    assert_eq!(parsed, "any");
+    let mut changed = environment_test_body("any");
+    changed.image = "quay.io/example/ee:2".into();
+    let err =
+        super::super::routes::environment_fields(&environment_test_user(), &changed, Some(&legacy))
+            .unwrap_err();
+    assert_eq!(err.to_string(), "choose_a_tool_for_the_environment");
+}
