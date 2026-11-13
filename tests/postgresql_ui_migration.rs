@@ -129,6 +129,77 @@ async fn failed_checks_refuse_to_start_and_never_echo_the_password() {
 }
 
 #[tokio::test]
+async fn the_database_wizard_responses_have_the_documented_shape() {
+    let app = TestApp::boot(
+        "db-wizard-shape",
+        Options {
+            mcp: false,
+            ..Options::default()
+        },
+    );
+    let admin = app.login("admin", common::ADMIN_PASSWORD).await;
+
+    let (status, body) = app
+        .call(
+            "GET",
+            "/api/v1/admin/database/status",
+            Some(&admin),
+            None,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        json!({
+            "engine": "sqlite",
+            "supported": true,
+            "maintenance": {"active": false, "since": null},
+            "migration": {
+                "running": false,
+                "done": false,
+                "failed": false,
+                "started_at": null,
+                "finished_at": null,
+                "target_host": "",
+                "url": "",
+                "rows": 0,
+                "error": null,
+                "tables": [],
+                "audit": null
+            }
+        })
+    );
+
+    let (status, body) = app
+        .call(
+            "POST",
+            "/api/v1/admin/database/check",
+            Some(&admin),
+            None,
+            Some(target_body("127.0.0.1", 1, PASSWORD)),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        json!({
+            "all_passed": false,
+            "id": null,
+            "checks": [
+                {"id": "source_schema", "ok": true, "key": "database_check_source_schema_ok"},
+                {"id": "reachable", "ok": false, "key": "database_check_unreachable"},
+                {"id": "tls", "ok": false, "key": "database_check_not_run"},
+                {"id": "server_version", "ok": false, "key": "database_check_not_run"},
+                {"id": "rights", "ok": false, "key": "database_check_not_run"},
+                {"id": "empty", "ok": false, "key": "database_check_not_run"}
+            ]
+        })
+    );
+    assert!(!body_text(&body).contains(PASSWORD), "{body}");
+}
+
+#[tokio::test]
 async fn the_wizard_routes_need_an_administrator() {
     let app = TestApp::boot(
         "db-wizard-admin",
@@ -317,6 +388,7 @@ async fn the_ui_migration_copies_rows_enters_maintenance_and_returns_a_password_
         )
         .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{started}");
+    assert_eq!(started, json!({"started": true}));
 
     let mut last = Value::Null;
     for _ in 0..100 {

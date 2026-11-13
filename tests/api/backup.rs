@@ -6,6 +6,75 @@ use crate::common::{call_cookie as call, call_raw_headers as call_raw};
 use crate::common::*;
 
 #[tokio::test]
+async fn admin_responses_have_the_documented_shape() {
+    let harness = TestApp::boot("admin-shape", Options::default());
+    let app = harness.app.clone();
+    let dir = harness.dir.clone();
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/v1/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+
+    let (status, maintenance, _) = call(&app, "GET", "/api/v1/maintenance", None, None, None).await;
+    assert_eq!(status, StatusCode::OK, "{maintenance}");
+    assert_eq!(maintenance, json!({"active": false, "since": null}));
+
+    let (status, archive, _) = call_raw(
+        &app,
+        "GET",
+        "/api/v1/admin/backup",
+        Some(&cookie),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(archive.starts_with(b"PK"), "zip magic");
+
+    let (status, restored, headers) = call_raw(
+        &app,
+        "POST",
+        "/api/v1/admin/backup",
+        Some(&cookie),
+        &[("x-restore-confirm", "ERSETZEN")],
+        Some(archive),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&restored)
+    );
+    let restored: serde_json::Value = serde_json::from_slice(&restored).expect("restore body");
+    assert_eq!(
+        restored,
+        json!({
+            "restored": true,
+            "engine": "sqlite",
+            "previous": "restore-previous.zip"
+        })
+    );
+    assert!(!restored.to_string().contains("secret.key"), "{restored}");
+    assert!(!restored.to_string().contains("koreograf.db"), "{restored}");
+    let set_cookie = headers
+        .get("set-cookie")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    assert!(set_cookie.contains("Max-Age=0"), "{set_cookie}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn admin_backup_roundtrip_replaces_the_installation() {
     let harness = TestApp::boot("backup-http", Options::default());
     let app = harness.app.clone();
