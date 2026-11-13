@@ -4,7 +4,7 @@ import * as appState from "../core/state.js";
 import { api } from "../core/api.js";
 import { confirmDialog, configureDialogs } from "../core/dialog.js";
 import { can, go, handle, loadMaintenance, markSaved, needTeam, preferredTeam, renderLogin, roleLabel, route, shell } from "../core/app.js";
-import { addLink, esc, h, paramRow, selectOptions, table } from "../core/dom.js";
+import { addLink, esc, h, orgOptions, paramRow, selectOptions, table } from "../core/dom.js";
 import { clearEditHash, editQuery, openEditDialog, rememberEditHash } from "../core/edit.js";
 import { environmentToolLabel, pill, scopeLabel, spanText, when } from "../core/format.js";
 import { jsonObject, secretInput } from "../core/forms.js";

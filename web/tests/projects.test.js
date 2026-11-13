@@ -7,6 +7,7 @@ const { pathToFileURL } = require("node:url");
 const test = require("node:test");
 
 const load = () => import(pathToFileURL(join(__dirname, "..", "js", "features", "projects.js")).href);
+const loadDom = () => import(pathToFileURL(join(__dirname, "..", "js", "core", "dom.js")).href);
 
 function form(overrides = {}) {
   const values = {
@@ -42,6 +43,14 @@ test("the project list filter matches name, organization and type", async () => 
   assert.equal(projectMatches(item, "ops"), true);
   assert.equal(projectMatches(item, "git"), true);
   assert.equal(projectMatches(item, "ansible"), false);
+});
+
+test("the shared organization options mark the selected entry and escape names", async () => {
+  const { orgOptions } = await loadDom();
+  assert.equal(
+    orgOptions([{ id: "org-1", name: "A & B" }, { id: "org-2", name: "Ops" }], "org-2"),
+    `<option value="org-1">A &amp; B</option><option value="org-2" selected>Ops</option>`
+  );
 });
 
 test("a new project payload carries the source and no team ids", async () => {

@@ -2,7 +2,7 @@ import * as appState from "../core/state.js";
 import { api } from "../core/api.js";
 import { confirmDialog } from "../core/dialog.js";
 import { can, go, handle, markSaved, needTeam, route, shell } from "../core/app.js";
-import { addLink, emptyState, esc, h, paramRow, selectOptions, table } from "../core/dom.js";
+import { addLink, emptyState, esc, h, orgOptions, paramRow, selectOptions, table } from "../core/dom.js";
 import { clearEditHash, editQuery, openEditDialog, rememberEditHash } from "../core/edit.js";
 import { when } from "../core/format.js";
 import { t } from "../core/i18n.js";
@@ -17,12 +17,6 @@ function grantLabel(item) {
 
 export function projectMatches(item, needle) {
   return !needle || `${item.name} ${item.organization_name || ""} ${item.source_type} ${grantLabel(item)}`.toLowerCase().includes(needle);
-}
-
-function orgOptions(organizations, selected) {
-  return organizations.map((item) =>
-    `<option value="${esc(item.id)}"${item.id === selected ? " selected" : ""}>${esc(item.name)}</option>`
-  ).join("");
 }
 
 function teamBoxes(teams, selected) {
