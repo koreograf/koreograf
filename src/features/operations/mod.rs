@@ -10,14 +10,12 @@ pub(crate) mod store;
 mod tests;
 
 pub use model::DATABASE_CHECK_IDS;
-pub(crate) use model::{
-    CheckResult, JobMeta, MigrationStatus, PendingTarget, ProxySettings, Runtime,
-    DEFAULT_ENVIRONMENT_KEYS, REPORT_KEY,
-};
+pub(crate) use model::{JobMeta, ProxySettings, Runtime, DEFAULT_ENVIRONMENT_KEYS, REPORT_KEY};
 pub(crate) use routes::routes;
+#[cfg(test)]
+pub(crate) use service::{audit_entry, audit_line, export, parse_form_target, restore, target_url};
 pub(crate) use service::{
-    all_passed, audit_entry, audit_line, busy, check_source, configured_mode, copy_database,
-    copy_source, export, job_labels, load, log_cache, parse_form_target, precheck, prepare, report,
-    restore, run_checks, scrape, target_url, Metrics,
+    busy, configured_mode, copy_database, job_labels, load, log_cache, prepare, report, scrape,
+    Metrics,
 };
 pub use service::{db_migrate, db_migrate_requested};

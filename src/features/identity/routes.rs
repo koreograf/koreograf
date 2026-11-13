@@ -1,19 +1,21 @@
 use axum::extract::{Path, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::backend::Backend;
 use crate::crypto::{self, hash_password};
-use crate::db;
+use crate::db::{self, Organization};
 use crate::error::{ApiError, ApiJson, AppResult};
-use crate::http::{no_content, require_name};
+use crate::http::{blank, gate, no_content, require_description, require_name};
 use crate::Shared;
 
 use super::model::{
     AccountDetailResponse, AccountListResponse, AccountResponse, AuthUser, ClientPeer,
-    CreatedTokenResponse, LoginBody, MeUpdate, ProfileResponse, TokenBody, TokenListResponse,
+    CreatedTokenResponse, LoginBody, MeUpdate, ProfileResponse, Role, TokenBody, TokenListResponse,
     TokenResponse, UserBody, UserUpdate,
 };
 use super::service::{
@@ -35,6 +37,18 @@ pub(crate) fn routes() -> Router<Shared> {
         .route(
             "/users/{id}",
             get(get_user).put(update_user).delete(delete_user),
+        )
+        .route("/teams", get(list_teams).post(create_team))
+        .route("/teams/{id}", put(update_team))
+        .route("/teams/{id}/members", get(list_members).post(add_member))
+        .route("/teams/{id}/members/{user_id}", delete(remove_member))
+        .route(
+            "/organizations",
+            get(list_organizations).post(create_organization),
+        )
+        .route(
+            "/organizations/{id}",
+            get(get_organization).put(update_organization),
         )
 }
 
@@ -336,4 +350,290 @@ pub async fn delete_user(
         return Err(ApiError::NotFound);
     }
     Ok(no_content())
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TeamBody {
+    name: String,
+    #[serde(default)]
+    description: String,
+    ldap_group: Option<String>,
+    organization_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemberBody {
+    username: String,
+    role: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OrganizationBody {
+    name: String,
+    #[serde(default)]
+    description: String,
+}
+#[derive(Serialize)]
+pub(super) struct TeamResponse {
+    id: String,
+    name: String,
+    description: String,
+    ldap_group: Option<String>,
+    organization_id: String,
+    organization_name: String,
+    created_at: String,
+}
+
+impl TeamResponse {
+    fn new(team: &db::Team) -> Self {
+        Self {
+            id: team.id.clone(),
+            name: team.name.clone(),
+            description: team.description.clone(),
+            ldap_group: team.ldap_group.clone(),
+            organization_id: team.organization_id.clone(),
+            organization_name: team.organization_name.clone(),
+            created_at: team.created_at.clone(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub(super) struct TeamRoleResponse {
+    #[serde(flatten)]
+    team: TeamResponse,
+    role: String,
+}
+
+#[derive(Serialize)]
+#[serde(transparent)]
+pub(super) struct TeamListResponse(Vec<TeamRoleResponse>);
+
+#[derive(Serialize)]
+#[serde(transparent)]
+pub(super) struct MemberListResponse(Vec<db::Member>);
+
+#[derive(Serialize)]
+pub(super) struct MemberCreatedResponse {
+    user_id: String,
+    role: String,
+}
+
+pub async fn list_teams(
+    State(state): State<Shared>,
+    user: AuthUser,
+) -> AppResult<Json<TeamListResponse>> {
+    let teams = state.store().list_teams_for_user(&user.id, user.is_admin)?;
+    Ok(Json(TeamListResponse(
+        teams
+            .into_iter()
+            .map(|(team, role)| TeamRoleResponse {
+                team: TeamResponse::new(&team),
+                role,
+            })
+            .collect(),
+    )))
+}
+
+pub async fn create_team(
+    State(state): State<Shared>,
+    user: AuthUser,
+    ApiJson(body): ApiJson<TeamBody>,
+) -> AppResult<(StatusCode, Json<TeamResponse>)> {
+    if !user.is_admin {
+        return Err(ApiError::Forbidden);
+    }
+    let name = require_name(&body.name)?;
+    let id = Uuid::new_v4().to_string();
+    let ldap_group = blank(body.ldap_group);
+    let organization_id = organization_for_new_team(state.store(), body.organization_id, &name)?;
+    state.store().insert_team(
+        &id,
+        &organization_id,
+        &name,
+        &require_description(&body.description)?,
+        ldap_group.as_deref(),
+    )?;
+    state
+        .store()
+        .upsert_membership(&id, &user.id, "owner", "manual")?;
+    let team = state.store().team_by_id(&id)?.ok_or(ApiError::NotFound)?;
+    Ok((StatusCode::CREATED, Json(TeamResponse::new(&team))))
+}
+
+pub async fn update_team(
+    State(state): State<Shared>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    ApiJson(body): ApiJson<TeamBody>,
+) -> AppResult<Json<TeamResponse>> {
+    gate(&state, &user, &id, Role::Owner)?;
+    let name = require_name(&body.name)?;
+    let ldap_group = blank(body.ldap_group);
+    if let Some(organization_id) = blank(body.organization_id) {
+        if !user.is_admin {
+            return Err(ApiError::Forbidden);
+        }
+        state
+            .store()
+            .organization(&organization_id)?
+            .ok_or_else(|| ApiError::bad("organization_is_missing"))?;
+        state.store().set_team_organization(&id, &organization_id)?;
+    }
+    state.store().update_team(
+        &id,
+        &name,
+        &require_description(&body.description)?,
+        ldap_group.as_deref(),
+    )?;
+    let team = state.store().team_by_id(&id)?.ok_or(ApiError::NotFound)?;
+    Ok(Json(TeamResponse::new(&team)))
+}
+
+fn organization_for_new_team(
+    store: &dyn Backend,
+    requested: Option<String>,
+    team_name: &str,
+) -> AppResult<String> {
+    if let Some(organization_id) = blank(requested) {
+        store
+            .organization(&organization_id)?
+            .ok_or_else(|| ApiError::bad("organization_is_missing"))?;
+        return Ok(organization_id);
+    }
+    if let Some(existing) = store.organization_by_name(team_name)? {
+        return Ok(existing.id);
+    }
+    let organization_id = Uuid::new_v4().to_string();
+    store.insert_organization(&organization_id, team_name, "")?;
+    Ok(organization_id)
+}
+
+pub async fn list_members(
+    State(state): State<Shared>,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Json<MemberListResponse>> {
+    gate(&state, &user, &id, Role::Viewer)?;
+    let members = state.store().list_members(&id)?;
+    Ok(Json(MemberListResponse(members)))
+}
+
+pub async fn add_member(
+    State(state): State<Shared>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    ApiJson(body): ApiJson<MemberBody>,
+) -> AppResult<(StatusCode, Json<MemberCreatedResponse>)> {
+    gate(&state, &user, &id, Role::Owner)?;
+    let role =
+        Role::parse(&body.role).ok_or_else(|| ApiError::bad("role_is_viewer_operator_or_owner"))?;
+    let username = body.username.trim().to_ascii_lowercase();
+    let member = state
+        .store()
+        .user_by_username(&username)?
+        .ok_or_else(|| ApiError::bad("unknown_user_create_the_account_first"))?;
+    state
+        .store()
+        .grant_manual_membership(&id, &member.id, role.as_str())?;
+    Ok((
+        StatusCode::CREATED,
+        Json(MemberCreatedResponse {
+            user_id: member.id,
+            role: role.as_str().to_string(),
+        }),
+    ))
+}
+
+pub async fn remove_member(
+    State(state): State<Shared>,
+    user: AuthUser,
+    Path((id, user_id)): Path<(String, String)>,
+) -> AppResult<axum::response::Response> {
+    gate(&state, &user, &id, Role::Owner)?;
+    if user_id == user.id && !user.is_admin {
+        return Err(ApiError::bad("you_cannot_remove_yourself_from_the_team"));
+    }
+    let db = state.store();
+    db.delete_membership(&id, &user_id)?;
+    Ok(no_content())
+}
+#[derive(Serialize)]
+#[serde(transparent)]
+pub(super) struct OrganizationListResponse(Vec<Organization>);
+
+#[derive(Serialize)]
+pub(super) struct OrganizationDetailResponse {
+    id: String,
+    name: String,
+    description: String,
+    created_at: String,
+    teams: Vec<TeamResponse>,
+}
+pub async fn list_organizations(
+    State(state): State<Shared>,
+    user: AuthUser,
+) -> AppResult<Json<OrganizationListResponse>> {
+    let db = state.store();
+    let items = db.list_organizations(&user.id, user.is_admin)?;
+    Ok(Json(OrganizationListResponse(items)))
+}
+
+pub async fn create_organization(
+    State(state): State<Shared>,
+    user: AuthUser,
+    ApiJson(body): ApiJson<OrganizationBody>,
+) -> AppResult<(StatusCode, Json<Organization>)> {
+    if !user.is_admin {
+        return Err(ApiError::Forbidden);
+    }
+    let name = require_name(&body.name)?;
+    let id = Uuid::new_v4().to_string();
+    let db = state.store();
+    db.insert_organization(&id, &name, &require_description(&body.description)?)?;
+    let item = db.organization(&id)?.ok_or(ApiError::NotFound)?;
+    Ok((StatusCode::CREATED, Json(item)))
+}
+
+pub async fn get_organization(
+    State(state): State<Shared>,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Json<OrganizationDetailResponse>> {
+    let db = state.store();
+    let item = db.organization(&id)?.ok_or(ApiError::NotFound)?;
+    if !user.is_admin
+        && !db
+            .list_organizations(&user.id, false)?
+            .iter()
+            .any(|org| org.id == id)
+    {
+        return Err(ApiError::Forbidden);
+    }
+    let teams = db.teams_in_organization(&id)?;
+    Ok(Json(OrganizationDetailResponse {
+        id: item.id,
+        name: item.name,
+        description: item.description,
+        created_at: item.created_at,
+        teams: teams.iter().map(TeamResponse::new).collect(),
+    }))
+}
+
+pub async fn update_organization(
+    State(state): State<Shared>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    ApiJson(body): ApiJson<OrganizationBody>,
+) -> AppResult<Json<Organization>> {
+    if !user.is_admin {
+        return Err(ApiError::Forbidden);
+    }
+    let name = require_name(&body.name)?;
+    let db = state.store();
+    db.update_organization(&id, &name, &require_description(&body.description)?)?;
+    let item = db.organization(&id)?.ok_or(ApiError::NotFound)?;
+    Ok(Json(item))
 }

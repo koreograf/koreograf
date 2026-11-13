@@ -1,12 +1,3 @@
-mod admin;
-mod catalog;
-mod sources;
-mod work;
-
-pub(crate) use catalog::{inventory_detail, InventoryDetailResponse, InventorySyncResponse};
-pub(crate) use sources::{project_dir, read_project_file, visible_project};
-pub(crate) use work::LaunchBody;
-
 use std::path::{Component, Path, PathBuf};
 
 use axum::extract::{Path as UrlPath, Request, State};
@@ -153,8 +144,6 @@ async fn origin_guard(State(state): State<Shared>, req: Request, next: Next) -> 
 fn api_routes() -> Router<Shared> {
     Router::new()
         .route("/version", get(version))
-        .merge(admin::routes())
-        .merge(catalog::routes())
         .merge(crate::features::assistant::routes())
         .merge(crate::features::credentials::routes())
         .merge(crate::features::identity::routes())
@@ -164,8 +153,6 @@ fn api_routes() -> Router<Shared> {
         .merge(crate::features::schedules::routes())
         .merge(crate::features::workflows::routes())
         .merge(crate::features::operations::routes())
-        .merge(sources::routes())
-        .merge(work::routes())
         .fallback(not_found)
 }
 
@@ -221,7 +208,10 @@ pub fn router(state: Shared) -> Router {
         .route("/favicon.svg", get(favicon))
         .route("/", get(index))
         .route("/{*path}", any(asset))
-        .route("/hooks/{id}/{token}", post(work::ingest))
+        .route(
+            "/hooks/{id}/{token}",
+            post(crate::features::workflows::ingest),
+        )
         .merge(api_prefixes(api_routes().layer(
             axum::middleware::from_fn_with_state(state.clone(), origin_guard),
         )));
