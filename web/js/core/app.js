@@ -385,6 +385,15 @@ export function shell(title, body, actions) {
   loadMaintenance();
 }
 
+export function deny(title, min) {
+  const text = min === "admin"
+    ? "you_need_an_administrator_account"
+    : min === "owner"
+      ? "you_need_the_owner_role"
+      : "you_need_the_operator_role";
+  shell(t(title), `<div class="card">${h(text)}</div>`);
+}
+
 export function needTeam() {
   if (appState.teamId) return true;
   shell(t("team"), `<div class="card"><p>${h("this_account_has_no_team_an_administrator_creates")}</p><p><a href="#/team">${h("open_team")}</a></p></div>`);

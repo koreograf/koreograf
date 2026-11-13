@@ -1,4 +1,4 @@
-import { esc } from "./dom.js";
+import { esc, h } from "./dom.js";
 import { currentLanguage, t } from "./i18n.js";
 
 export function statusLabel(status) {
@@ -73,6 +73,88 @@ export function verbosityLabel(level) {
     "3_debug",
     "4_connection_debug",
   ][Number(level)] || "";
+}
+
+export function sourceLabel(source) {
+  if (source === "ldap") return "LDAP";
+  if (source === "manual") return t("manual");
+  if (source === "local") return t("local");
+  return source || "";
+}
+
+export function authSourceLabel(source) {
+  return sourceLabel(source === "local" ? "local" : source);
+}
+
+export function emailLine(email) {
+  return email ? esc(email) : `<span class="muted">${h("no_email_is_stored")}</span>`;
+}
+
+export function bytes(value) {
+  const n = Number(value) || 0;
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MiB`;
+}
+
+export function preflightNotices(report) {
+  if (!report || report.ok) return [];
+  const missing = report.missing || [];
+  const runtimeMissing = missing.some((item) => item.kind === "runtime");
+  return missing.map((item) => {
+    if (item.kind === "runtime") {
+      const reason = item.reason === "timeout" || item.reason === "not_answering" ? item.reason : "missing";
+      return { key: `preflight_runtime_${reason}` };
+    }
+    if (item.kind === "project") {
+      return {
+        key: item.reason === "timeout" || item.reason === "failed" ? "preflight_project_unusable" : "preflight_project_missing",
+        tool: item.tool,
+      };
+    }
+    if (item.reason === "version") {
+      return {
+        key: "preflight_tool_too_old",
+        tool: item.tool,
+        template_tool: item.template_tool,
+        version: item.version || "",
+        minimum: item.minimum || "",
+      };
+    }
+    if (item.reason === "timeout" || item.reason === "failed") {
+      return { key: "preflight_tool_unusable", tool: item.tool, template_tool: item.template_tool };
+    }
+    return {
+      key: runtimeMissing ? "preflight_no_runtime_and_tool_missing" : "preflight_tool_missing",
+      tool: item.tool,
+      template_tool: item.template_tool,
+    };
+  });
+}
+
+export function preflightNoticeHtml(report) {
+  const notices = preflightNotices(report);
+  if (!notices.length) return "";
+  const lines = notices.map((item) => {
+    const template = item.template_tool || "";
+    const vars = {
+      ...item,
+      templates: template ? t(template) : "",
+      install: item.tool === "sh"
+        ? t("preflight_install_shell")
+        : item.tool === "ssh"
+          ? t("preflight_install_ssh")
+          : item.kind === "project"
+            ? t("preflight_install_git")
+            : (template ? t(template) : item.tool),
+    };
+    return `<p>${h(item.key, vars)}</p>`;
+  }).join("");
+  return `<div class="banner warn">${lines}</div>`;
+}
+
+export function preflightReportHtml(report) {
+  return preflightNoticeHtml(report) || `<div class="banner good">${h("preflight_ready")}</div>`;
 }
 
 export function scopeLabel(item) {
