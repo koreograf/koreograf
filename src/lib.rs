@@ -6,13 +6,11 @@
 
 #![forbid(unsafe_code)]
 
-mod askpass;
 mod auth;
 mod backend;
 mod backup;
 mod cacheinfo;
 mod config;
-mod credentials;
 mod crypto;
 mod datalock;
 mod db;
@@ -45,7 +43,6 @@ use crate::backend::Backend;
 use crate::error::ApiError;
 use crate::runner::RunningProc;
 
-pub use askpass::{askpass, askpass_kind, git_ssh, git_ssh_requested, AskpassKind};
 pub use config::{
     database_from_env, parse_database_config, Config, CookieSecure, DatabaseConfig, LdapConfig,
     LocalJobs, PostgresConfig, RunnerMode, SslMode,
@@ -53,6 +50,7 @@ pub use config::{
 pub use datalock::lock_data_directory;
 pub use dbmigrate::{db_migrate, db_migrate_requested, DATABASE_CHECK_IDS};
 pub use entrypoint::{entrypoint, entrypoint_requested};
+pub use features::credentials::{askpass, askpass_kind, git_ssh, git_ssh_requested, AskpassKind};
 pub use health::{healthcheck, healthcheck_requested};
 
 /// Shared process state. Cheap to clone because it is an `Arc`.
@@ -240,7 +238,7 @@ pub fn boot_with(mut cfg: Config, database: DatabaseConfig) -> anyhow::Result<Sh
         preflight: Mutex::new(None),
     });
     if state.engine() == "sqlite" {
-        credentials::backfill_netbox_urls(&state)?;
+        features::credentials::backfill_netbox_urls(&state)?;
     }
     Ok(state)
 }

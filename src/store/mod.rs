@@ -1,5 +1,4 @@
 pub(crate) mod auth;
-pub(crate) mod credentials;
 pub(crate) mod deliveries;
 pub(crate) mod environments;
 pub(crate) mod hooks;

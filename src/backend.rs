@@ -16,6 +16,7 @@ use crate::db::{
     WorkflowNodeRow,
 };
 use crate::error::{ApiError, AppResult};
+use crate::features::credentials;
 use crate::features::inventories;
 use crate::features::jobs;
 use crate::features::schedules;
@@ -836,27 +837,27 @@ impl Backend for SqliteBackend {
 
     fn list_credentials(&self, team_id: &str) -> AppResult<Vec<Credential>> {
         let conn = lock(&self.conn)?;
-        store::credentials::list_credentials(&conn, team_id)
+        credentials::store::list_credentials(&conn, team_id)
     }
 
     fn credential(&self, id: &str) -> AppResult<Option<Credential>> {
         let conn = lock(&self.conn)?;
-        store::credentials::credential(&conn, id)
+        credentials::store::credential(&conn, id)
     }
 
     fn insert_credential(&self, item: &Credential) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::credentials::insert_credential(&conn, item)
+        credentials::store::insert_credential(&conn, item)
     }
 
     fn update_credential(&self, item: &Credential) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::credentials::update_credential(&conn, item)
+        credentials::store::update_credential(&conn, item)
     }
 
     fn delete_credential(&self, id: &str, team_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::credentials::delete_credential(&conn, id, team_id)
+        credentials::store::delete_credential(&conn, id, team_id)
     }
 
     fn credential_usages(
@@ -865,7 +866,7 @@ impl Backend for SqliteBackend {
         team_id: &str,
     ) -> AppResult<Vec<CredentialUsage>> {
         let conn = lock(&self.conn)?;
-        store::credentials::credential_usages(&conn, credential_id, team_id)
+        credentials::store::credential_usages(&conn, credential_id, team_id)
     }
 
     fn list_environments(&self, team_id: &str) -> AppResult<Vec<Environment>> {
@@ -2702,12 +2703,12 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &store::sql::postgres(store::credentials::LIST_CREDENTIALS),
+                    &store::sql::postgres(credentials::store::LIST_CREDENTIALS),
                     &[&team_id],
                 )
                 .await?;
             rows.iter()
-                .map(store::credentials::row_credential)
+                .map(credentials::store::row_credential)
                 .collect()
         })
     }
@@ -2717,12 +2718,12 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    &store::sql::postgres(store::credentials::CREDENTIAL_BY_ID),
+                    &store::sql::postgres(credentials::store::CREDENTIAL_BY_ID),
                     &[&id],
                 )
                 .await?;
             row.as_ref()
-                .map(store::credentials::row_credential)
+                .map(credentials::store::row_credential)
                 .transpose()
         })
     }
@@ -2732,7 +2733,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::credentials::INSERT_CREDENTIAL),
+                    &store::sql::postgres(credentials::store::INSERT_CREDENTIAL),
                     &[
                         &item.id,
                         &item.team_id,
@@ -2754,7 +2755,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    &store::sql::postgres(store::credentials::UPDATE_CREDENTIAL),
+                    &store::sql::postgres(credentials::store::UPDATE_CREDENTIAL),
                     &[
                         &item.id,
                         &item.team_id,
@@ -2776,7 +2777,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    &store::sql::postgres(store::credentials::DELETE_CREDENTIAL),
+                    &store::sql::postgres(credentials::store::DELETE_CREDENTIAL),
                     &[&id, &team_id],
                 )
                 .await?;
@@ -2796,12 +2797,12 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &store::sql::postgres(store::credentials::CREDENTIAL_USAGES),
+                    &store::sql::postgres(credentials::store::CREDENTIAL_USAGES),
                     &[&credential_id, &team_id],
                 )
                 .await?;
             rows.iter()
-                .map(store::credentials::row_credential_usage)
+                .map(credentials::store::row_credential_usage)
                 .collect()
         })
     }

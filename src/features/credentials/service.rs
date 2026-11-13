@@ -1,8 +1,3 @@
-//! Credential shapes and the files a job receives.
-//!
-//! Secrets stay in files with mode 0600 or in process environment variables.
-//! They are not placed on the command line.
-
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -10,34 +5,11 @@ use serde_json::{Map, Value};
 
 use crate::error::{ApiError, AppResult};
 
-pub const KINDS: &[&str] = &[
-    "ssh",
-    "vault",
-    "scm",
-    "net",
-    "aws",
-    "azure",
-    "gce",
-    "vmware",
-    "openstack",
-    "registry",
-    "github",
-    "gitlab",
-    "galaxy",
-    "kubernetes",
-    "insights",
-    "env",
-    "netbox",
-];
+use super::model::{AssignedCredential, AssignedSet, PreparedCredential, KINDS};
 
 const BECOME_METHODS: &[&str] = &[
     "sudo", "su", "pbrun", "pfexec", "doas", "dzdo", "ksu", "runas",
 ];
-
-pub struct PreparedCredential {
-    pub env: Vec<(String, String)>,
-    pub files: Vec<(String, String)>,
-}
 
 pub fn known_kind(kind: &str) -> bool {
     KINDS.contains(&kind)
@@ -62,14 +34,6 @@ pub fn kinds_for_tool(tool: &str) -> &'static [&'static str] {
 
 pub fn kind_fits_tool(tool: &str, kind: &str) -> bool {
     kinds_for_tool(tool).contains(&kind)
-}
-
-/// One credential chosen for a template. `vault_id` is empty for every kind except vault.
-#[derive(Clone, Copy)]
-pub struct AssignedCredential<'a> {
-    pub id: &'a str,
-    pub kind: &'a str,
-    pub vault_id: &'a str,
 }
 
 /// One credential of each kind. Vault may repeat when each vault id is unique.
@@ -102,13 +66,6 @@ pub fn check_assignment(items: &[AssignedCredential<'_>]) -> Result<(), String> 
         }
     }
     Ok(())
-}
-
-/// Ids accepted for one team, plus the credential shown as the primary.
-/// The primary is the first credential that is not a vault password.
-pub struct AssignedSet {
-    pub ids: Vec<String>,
-    pub primary_id: Option<String>,
 }
 
 /// Team, vault id, and kind rules for credentials that are already loaded.
@@ -614,8 +571,8 @@ pub(crate) fn backfill_netbox_urls(state: &crate::Shared) -> Result<(), crate::e
     let (credentials, sources) = {
         let db = state.db()?;
         (
-            crate::store::credentials::netbox_credentials(&db)?,
-            crate::store::credentials::netbox_credential_endpoints(&db)?,
+            super::store::netbox_credentials(&db)?,
+            super::store::netbox_credential_endpoints(&db)?,
         )
     };
     let mut endpoints = HashMap::new();
@@ -929,148 +886,106 @@ fn safe_ident(key: &str) -> bool {
     chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AskpassKind {
+    Git,
+    Ssh,
+}
 
-    #[test]
-    fn ssh_password_stays_out_of_environment_values() {
-        let secret = json!({
-            "username": "deploy",
-            "password": "s3cret-pass",
-            "become_method": "sudo",
-            "become_password": "root-pass"
-        });
-        check("ssh", &secret).unwrap();
-        let work = std::env::temp_dir();
-        let prepared = prepare("ssh", &secret, false, &work).unwrap();
-        let rendered = prepared
-            .env
-            .iter()
-            .map(|(key, value)| format!("{key}={value}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(!rendered.contains("s3cret-pass"));
-        assert!(!rendered.contains("root-pass"));
-        assert!(prepared
-            .env
-            .iter()
-            .any(|(key, _)| key == "KOREOGRAF_CONNECTION_PASSWORD_FILE"));
-        assert!(prepared
-            .files
-            .iter()
-            .any(|(name, body)| name == "connection.pass" && body == "s3cret-pass"));
-        assert!(prepared
-            .files
-            .iter()
-            .any(|(name, body)| name == "auth.json" && body.contains("ansible_password")));
-        assert!(check("ssh", &json!({})).is_err());
-        assert!(check("ssh", &json!({"password": "only"})).is_ok());
-    }
-
-    #[test]
-    fn edit_keeps_a_blank_secret_and_hides_the_value() {
-        let previous = json!({
-            "username": "deploy",
-            "password": "old-pass",
-            "private_key": "stored-key-material",
-            "become_method": "sudo"
-        });
-        let merged = merge_secret(
-            "ssh",
-            &previous,
-            &json!({"username": "nas", "password": "  ", "become_method": ""}),
-            &["private_key".to_string(), "username".to_string()],
-        )
-        .unwrap();
-        assert_eq!(merged["username"], "nas");
-        assert_eq!(merged["password"], "old-pass");
-        assert!(merged.get("private_key").is_none());
-        assert!(merged.get("become_method").is_none());
-        let replaced = merge_secret(
-            "ssh",
-            &previous,
-            &json!({"password": "new-pass"}),
-            &["password".to_string()],
-        )
-        .unwrap();
-        assert_eq!(replaced["password"], "new-pass");
-        assert_eq!(replaced["private_key"], previous["private_key"]);
-        let (fields, set) = describe("ssh", &replaced);
-        assert_eq!(fields["username"], "deploy");
-        assert!(fields.get("password").is_none());
-        assert_eq!(set, vec!["password".to_string(), "private_key".to_string()]);
-        let rendered = format!("{fields} {}", set.join(","));
-        assert!(!rendered.contains("new-pass"));
-        assert!(!rendered.contains("stored-key-material"));
-        let env = merge_secret(
-            "env",
-            &json!({"A": "1", "B": "2"}),
-            &json!({"A": "3"}),
-            &["B".to_string()],
-        )
-        .unwrap();
-        assert_eq!(env["A"], "3");
-        assert!(env.get("B").is_none());
-        assert!(merge_secret("ssh", &previous, &json!([]), &[]).is_err());
-        assert!(check(
-            "aws",
-            &json!({"access_key": "AKIA", "secret_key": "secret"})
-        )
-        .is_ok());
-    }
-
-    #[test]
-    fn one_kind_except_many_vault_credentials() {
-        let ssh = AssignedCredential {
-            id: "ssh",
-            kind: "ssh",
-            vault_id: "",
-        };
-        let prod = AssignedCredential {
-            id: "vault-prod",
-            kind: "vault",
-            vault_id: "prod",
-        };
-        let stage = AssignedCredential {
-            id: "vault-stage",
-            kind: "vault",
-            vault_id: "stage",
-        };
-        assert!(check_assignment(&[ssh, prod, stage]).is_ok());
-        let other = AssignedCredential {
-            id: "ssh-2",
-            kind: "ssh",
-            vault_id: "",
-        };
-        assert_eq!(
-            check_assignment(&[ssh, other]).unwrap_err(),
-            "only_one_credential_of_each_kind_is_allowed"
-        );
-        let again = AssignedCredential {
-            id: "vault-prod-2",
-            kind: "vault",
-            vault_id: "prod",
-        };
-        assert_eq!(
-            check_assignment(&[prod, again]).unwrap_err(),
-            "this_vault_id_is_already_selected"
-        );
-        let plain = AssignedCredential {
-            id: "vault-plain",
-            kind: "vault",
-            vault_id: "",
-        };
-        let plain_two = AssignedCredential {
-            id: "vault-plain-2",
-            kind: "vault",
-            vault_id: "",
-        };
-        assert_eq!(
-            check_assignment(&[plain, plain_two]).unwrap_err(),
-            "only_one_vault_credential_may_omit_the_vault"
-        );
-        assert!(check_assignment(&[ssh, plain, prod]).is_ok());
+pub fn askpass_kind<I, S>(args: I) -> Option<AskpassKind>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let first = args.into_iter().next()?;
+    let name = Path::new(first.as_ref())
+        .file_name()
+        .and_then(|value| value.to_str())?;
+    match name {
+        "git-askpass" => Some(AskpassKind::Git),
+        "ssh-askpass" => Some(AskpassKind::Ssh),
+        _ => None,
     }
 }
+
+pub fn git_ssh_requested<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter()
+        .next()
+        .and_then(|arg| {
+            Path::new(arg.as_ref())
+                .file_name()
+                .and_then(|value| value.to_str())
+                .map(|name| name == "git-ssh")
+        })
+        .unwrap_or(false)
+}
+
+pub fn git_ssh<I, S>(args: I) -> Result<(), String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    let key = std::env::var("KOREOGRAF_GIT_SSH_KEY")
+        .map_err(|_| "KOREOGRAF_GIT_SSH_KEY is not set for the git ssh helper.".to_string())?;
+    let mut command = std::process::Command::new("/usr/bin/ssh");
+    command
+        .arg("-i")
+        .arg(key)
+        .arg("-o")
+        .arg("IdentitiesOnly=yes")
+        .arg("-o")
+        .arg("StrictHostKeyChecking=accept-new")
+        .args(args);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let err = command.exec();
+        Err(format!("The git ssh helper could not start ssh ({err})."))
+    }
+    #[cfg(not(unix))]
+    {
+        let status = command
+            .status()
+            .map_err(|err| format!("The git ssh helper could not start ssh ({err})."))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("The git ssh helper exited with {status}."))
+        }
+    }
+}
+
+pub fn askpass(kind: AskpassKind, prompt: &str) -> Result<String, String> {
+    askpass_answer(kind, prompt, |name| std::env::var(name).ok())
+}
+
+fn askpass_answer(
+    kind: AskpassKind,
+    prompt: &str,
+    env: impl Fn(&str) -> Option<String>,
+) -> Result<String, String> {
+    match kind {
+        AskpassKind::Git => {
+            if prompt.to_ascii_lowercase().contains("sername") {
+                return Ok(env("KOREOGRAF_GIT_USERNAME").unwrap_or_else(|| "oauth2".into()));
+            }
+            read_secret(env, "KOREOGRAF_GIT_PASSWORD_FILE")
+        }
+        AskpassKind::Ssh => read_secret(env, "KOREOGRAF_SSH_ASKPASS_FILE"),
+    }
+}
+
+fn read_secret(env: impl Fn(&str) -> Option<String>, name: &str) -> Result<String, String> {
+    let path = env(name).ok_or_else(|| format!("{name} is not set for the credential helper."))?;
+    let value = std::fs::read_to_string(&path)
+        .map_err(|err| format!("The credential helper could not read its secret ({err})."))?;
+    Ok(value.trim_end_matches(['\r', '\n']).to_string())
+}
+
+#[cfg(test)]
+#[path = "tests.rs"]
+mod tests;
