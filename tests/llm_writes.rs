@@ -303,3 +303,115 @@ async fn a_write_round_trip_waits_for_confirmation_and_cancel_changes_nothing() 
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     assert_eq!(body["error"], "assistant_action_is_unknown");
 }
+
+#[tokio::test]
+async fn assistant_endpoints_return_the_documented_shape() {
+    let harness = TestApp::boot("assistant-shape", Options::default());
+    let admin = harness.login("admin", "test-admin-pass").await;
+    let (team, _) = team(&harness, &admin).await;
+    let project = demo_project(&harness, &admin, &team).await;
+
+    save_assistant(&harness, &admin, "http://127.0.0.1:9/v1", true).await;
+    let (status, body) = harness
+        .call("GET", "/api/v1/assistant", Some(&admin), None, None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        json!({"enabled": true, "model": "test-model", "provider": "ollama"})
+    );
+    assert!(!body.to_string().contains("sk-test-secret"), "{body}");
+
+    let (endpoint, server) =
+        stub(json!({"choices": [{"message": {"content": "Hello shape"}}]})).await;
+    save_assistant(&harness, &admin, &endpoint, true).await;
+    let (status, body) = harness
+        .call(
+            "POST",
+            "/api/v1/assistant/chat",
+            Some(&admin),
+            Some(&team),
+            Some(json!({"message": "hello"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body, json!({"answer": "Hello shape"}));
+    assert!(!body.to_string().contains("sk-test-secret"), "{body}");
+    let request = server.await.unwrap();
+    assert!(!wire_body(&request).contains("sk-test-secret"), "{request}");
+
+    let (endpoint, server) = stub(tool_call(
+        "sync_project",
+        json!({"id": project, "team_id": team}),
+    ))
+    .await;
+    save_assistant(&harness, &admin, &endpoint, true).await;
+    let (status, body) = harness
+        .call(
+            "POST",
+            "/api/v1/assistant/chat",
+            Some(&admin),
+            Some(&team),
+            Some(json!({"message": "sync the demo project"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        json!({
+            "answer": "",
+            "pending_action": {
+                "id": body["pending_action"]["id"].clone(),
+                "tool": "sync_project",
+                "target": "Demo",
+            },
+        })
+    );
+    assert!(!body.to_string().contains("sk-test-secret"), "{body}");
+    let action = body["pending_action"]["id"].as_str().unwrap().to_string();
+    let request = server.await.unwrap();
+    assert!(!wire_body(&request).contains("sk-test-secret"), "{request}");
+
+    let (status, body) = harness
+        .call(
+            "POST",
+            "/api/v1/assistant/confirm",
+            Some(&admin),
+            Some(&team),
+            Some(json!({"id": action})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body, json!({"ok": true}));
+
+    let (endpoint, server) = stub(tool_call(
+        "sync_project",
+        json!({"id": project, "team_id": team}),
+    ))
+    .await;
+    save_assistant(&harness, &admin, &endpoint, true).await;
+    let (status, body) = harness
+        .call(
+            "POST",
+            "/api/v1/assistant/chat",
+            Some(&admin),
+            Some(&team),
+            Some(json!({"message": "sync the demo project again"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let action = body["pending_action"]["id"].as_str().unwrap().to_string();
+    let _ = server.await;
+
+    let (status, body) = harness
+        .call(
+            "POST",
+            "/api/v1/assistant/cancel",
+            Some(&admin),
+            Some(&team),
+            Some(json!({"id": action})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body, json!({"ok": true}));
+}
