@@ -149,11 +149,16 @@ fn local_launch_refused(
     if !refused_by_policy {
         return Ok(false);
     }
-    let matches = crate::auth::command_matches_template(template, parameters);
+    let matches = crate::features::identity::command_matches_template(template, parameters);
     let requires_workflow = requires_workflow || !matches;
     let effective = template_with_saved_targets(template, parameters);
-    let allowed = crate::auth::launcher_is_admin(store, launched_by)?
-        && crate::auth::content_saved_by_admin(store, &effective, workflow_id, requires_workflow)?;
+    let allowed = crate::features::identity::launcher_is_admin(store, launched_by)?
+        && crate::features::identity::content_saved_by_admin(
+            store,
+            &effective,
+            workflow_id,
+            requires_workflow,
+        )?;
     Ok(!allowed)
 }
 
@@ -218,8 +223,10 @@ pub fn relaunch(
             parameters =
                 runner::parameters_with_limit(&parameters, &limit).map_err(ApiError::from)?;
         }
-        let differs =
-            !crate::auth::command_matches_template(&template, &db::json_object(&parameters));
+        let differs = !crate::features::identity::command_matches_template(
+            &template,
+            &db::json_object(&parameters),
+        );
         // A stored command that is not the current template stays tied to the
         // workflow that saved it, so the local-run check can see that release.
         let workflow_job_id = if differs {

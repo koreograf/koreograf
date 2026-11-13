@@ -4,8 +4,8 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::auth::AuthUser;
 use crate::error::{ApiError, ApiJson, AppResult};
+use crate::features::identity::AuthUser;
 use crate::settings::{self, Effective, LlmWrite, SettingsWrite};
 use crate::Shared;
 

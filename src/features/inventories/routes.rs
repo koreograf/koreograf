@@ -8,10 +8,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::auth::{AuthUser, Role};
 use crate::backend::Backend;
 use crate::db::{self, Inventory};
 use crate::error::{ApiError, ApiJson, AppResult};
+use crate::features::identity::{AuthUser, Role};
 use crate::http::{
     blank, check_static_ini, gate, inventory_detail, project_dir, read_project_file, require_name,
     team_header, visible_project, InventoryDetailResponse, InventorySyncResponse,

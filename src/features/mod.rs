@@ -1,4 +1,5 @@
 pub(crate) mod credentials;
+pub(crate) mod identity;
 pub(crate) mod inventories;
 pub(crate) mod jobs;
 pub(crate) mod projects;

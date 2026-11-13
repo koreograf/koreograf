@@ -689,7 +689,12 @@ fn actor_may_launch(
     if user.disabled {
         return Ok(false);
     }
-    match crate::auth::authorize(store, &user.into(), team_id, crate::auth::Role::Operator) {
+    match crate::features::identity::authorize(
+        store,
+        &user.into(),
+        team_id,
+        crate::features::identity::Role::Operator,
+    ) {
         Ok(()) => Ok(true),
         Err(ApiError::Forbidden) => Ok(false),
         Err(err) => Err(err),

@@ -4,9 +4,9 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use uuid::Uuid;
 
-use crate::auth::{AuthUser, Role};
 use crate::db::{self, Project};
 use crate::error::{ApiError, ApiJson, AppResult};
+use crate::features::identity::{AuthUser, Role};
 use crate::features::jobs;
 use crate::http::{blank, gate, no_content, require_name, team_header};
 use crate::Shared;

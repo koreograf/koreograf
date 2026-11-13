@@ -10,11 +10,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::auth::{AuthUser, Role};
 use crate::backend::Backend;
 use crate::cacheinfo::{self, CacheEntry};
 use crate::db::{self, Delivery, Environment, Inventory, InventorySource, Organization};
 use crate::error::{ApiError, ApiJson, AppResult};
+use crate::features::identity::{AuthUser, Role};
 use crate::features::inventories::{self as inventory, EffectiveVar, InventoryData, InventoryHost};
 use crate::preflight;
 use crate::runner;

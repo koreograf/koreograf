@@ -513,7 +513,7 @@ impl Server {
             .extensions
             .get::<axum::http::request::Parts>()
             .ok_or_else(|| Error::new("sign_in_is_required").text())?;
-        let token = crate::auth::bearer_token(&parts.headers)
+        let token = crate::features::identity::bearer_token(&parts.headers)
             .ok_or_else(|| Error::new("sign_in_is_required").text())?;
         Ok(self.client.clone().with_token(token))
     }

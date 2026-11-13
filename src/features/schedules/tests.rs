@@ -261,7 +261,7 @@ async fn an_operator_schedule_does_not_start_an_admin_only_local_run() {
         .to_string();
     let template_id = {
         let db = state.db().expect("db");
-        crate::store::auth::insert_user(
+        crate::features::identity::store::insert_user(
             &db,
             "operator-user",
             "operator",
@@ -411,7 +411,7 @@ async fn a_removed_member_does_not_start_the_next_run() {
         .to_string();
     let template_id = {
         let db = state.db().expect("db");
-        crate::store::auth::insert_user(
+        crate::features::identity::store::insert_user(
             &db,
             "operator-user",
             "operator",
@@ -421,9 +421,15 @@ async fn a_removed_member_does_not_start_the_next_run() {
             false,
         )
         .expect("operator");
-        crate::store::teams::grant_manual_membership(&db, &team_id, "operator-user", "operator")
-            .expect("member");
-        crate::store::teams::delete_membership(&db, &team_id, "operator-user").expect("remove");
+        crate::features::identity::store::grant_manual_membership(
+            &db,
+            &team_id,
+            "operator-user",
+            "operator",
+        )
+        .expect("member");
+        crate::features::identity::store::delete_membership(&db, &team_id, "operator-user")
+            .expect("remove");
         let id = "member-shell".to_string();
         crate::features::projects::store::insert_template(
             &db,
@@ -514,8 +520,13 @@ async fn a_removed_member_does_not_start_the_next_run() {
             )
             .expect("reason");
         assert_eq!(reason.as_deref(), Some("schedule_needs_a_new_owner"));
-        crate::store::teams::grant_manual_membership(&db, &team_id, "operator-user", "viewer")
-            .expect("viewer");
+        crate::features::identity::store::grant_manual_membership(
+            &db,
+            &team_id,
+            "operator-user",
+            "viewer",
+        )
+        .expect("viewer");
         db.execute(
             "UPDATE schedules
              SET occurrence_count = 0, missed_at = NULL

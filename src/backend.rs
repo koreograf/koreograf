@@ -17,6 +17,7 @@ use crate::db::{
 };
 use crate::error::{ApiError, AppResult};
 use crate::features::credentials;
+use crate::features::identity::store as identity_store;
 use crate::features::inventories;
 use crate::features::jobs;
 use crate::features::projects;
@@ -350,7 +351,7 @@ impl Backend for SqliteBackend {
 
     fn count_teams(&self) -> AppResult<i64> {
         let conn = lock(&self.conn)?;
-        store::teams::count_teams(&conn)
+        identity_store::count_teams(&conn)
     }
 
     fn seed_state(&self, key: &str) -> AppResult<Option<String>> {
@@ -365,32 +366,32 @@ impl Backend for SqliteBackend {
 
     fn user_by_username(&self, username: &str) -> AppResult<Option<User>> {
         let conn = lock(&self.conn)?;
-        store::auth::user_by_username(&conn, username)
+        identity_store::user_by_username(&conn, username)
     }
 
     fn user_by_session(&self, token: &str) -> AppResult<Option<User>> {
         let conn = lock(&self.conn)?;
-        store::auth::user_by_session(&conn, token)
+        identity_store::user_by_session(&conn, token)
     }
 
     fn user_by_api_token(&self, token_hash: &str) -> AppResult<Option<User>> {
         let conn = lock(&self.conn)?;
-        store::auth::user_by_api_token(&conn, token_hash)
+        identity_store::user_by_api_token(&conn, token_hash)
     }
 
     fn create_session(&self, token: &str, user_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::auth::create_session(&conn, token, user_id)
+        identity_store::create_session(&conn, token, user_id)
     }
 
     fn delete_session(&self, token: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::auth::delete_session(&conn, token)
+        identity_store::delete_session(&conn, token)
     }
 
     fn purge_sessions(&self) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::auth::purge_sessions(&conn)
+        identity_store::purge_sessions(&conn)
     }
 
     fn insert_user(
@@ -403,7 +404,7 @@ impl Backend for SqliteBackend {
         is_admin: bool,
     ) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::auth::insert_user(
+        identity_store::insert_user(
             &conn,
             id,
             username,
@@ -416,12 +417,12 @@ impl Backend for SqliteBackend {
 
     fn user_by_id(&self, id: &str) -> AppResult<Option<User>> {
         let conn = lock(&self.conn)?;
-        store::auth::user_by_id(&conn, id)
+        identity_store::user_by_id(&conn, id)
     }
 
     fn list_users(&self) -> AppResult<Vec<(User, i64)>> {
         let conn = lock(&self.conn)?;
-        store::auth::list_users(&conn)
+        identity_store::list_users(&conn)
     }
 
     fn update_profile(
@@ -432,12 +433,12 @@ impl Backend for SqliteBackend {
         password_hash: Option<&str>,
     ) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::auth::update_profile(&conn, id, display_name, email, password_hash)
+        identity_store::update_profile(&conn, id, display_name, email, password_hash)
     }
 
     fn set_user_email(&self, id: &str, email: Option<&str>) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::auth::set_user_email(&conn, id, email)
+        identity_store::set_user_email(&conn, id, email)
     }
 
     fn update_user(
@@ -449,22 +450,22 @@ impl Backend for SqliteBackend {
         password_hash: Option<&str>,
     ) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::auth::update_user(&conn, id, display_name, is_admin, disabled, password_hash)
+        identity_store::update_user(&conn, id, display_name, is_admin, disabled, password_hash)
     }
 
     fn delete_user_sessions(&self, user_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::auth::delete_user_sessions(&conn, user_id)
+        identity_store::delete_user_sessions(&conn, user_id)
     }
 
     fn delete_user(&self, id: &str) -> AppResult<bool> {
         let conn = lock(&self.conn)?;
-        store::auth::delete_user(&conn, id)
+        identity_store::delete_user(&conn, id)
     }
 
     fn other_active_admins(&self, user_id: &str) -> AppResult<i64> {
         let conn = lock(&self.conn)?;
-        store::auth::other_active_admins(&conn, user_id)
+        identity_store::other_active_admins(&conn, user_id)
     }
 
     fn create_api_token(
@@ -477,27 +478,27 @@ impl Backend for SqliteBackend {
         created_at: &str,
     ) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::auth::create_api_token(&conn, id, user_id, name, prefix, token_hash, created_at)
+        identity_store::create_api_token(&conn, id, user_id, name, prefix, token_hash, created_at)
     }
 
     fn list_api_tokens(&self, user_id: &str) -> AppResult<Vec<ApiToken>> {
         let conn = lock(&self.conn)?;
-        store::auth::list_api_tokens(&conn, user_id)
+        identity_store::list_api_tokens(&conn, user_id)
     }
 
     fn delete_api_token(&self, id: &str, user_id: &str) -> AppResult<bool> {
         let conn = lock(&self.conn)?;
-        store::auth::delete_api_token(&conn, id, user_id)
+        identity_store::delete_api_token(&conn, id, user_id)
     }
 
     fn list_teams_for_user(&self, user_id: &str, admin: bool) -> AppResult<Vec<(Team, String)>> {
         let conn = lock(&self.conn)?;
-        store::teams::list_teams_for_user(&conn, user_id, admin)
+        identity_store::list_teams_for_user(&conn, user_id, admin)
     }
 
     fn list_user_memberships(&self, user_id: &str) -> AppResult<Vec<UserMembership>> {
         let conn = lock(&self.conn)?;
-        store::teams::list_user_memberships(&conn, user_id)
+        identity_store::list_user_memberships(&conn, user_id)
     }
 
     fn replace_settings(&self, rows: &[(String, String)]) -> AppResult<()> {
@@ -512,12 +513,12 @@ impl Backend for SqliteBackend {
 
     fn team_by_id(&self, id: &str) -> AppResult<Option<Team>> {
         let conn = lock(&self.conn)?;
-        store::teams::team_by_id(&conn, id)
+        identity_store::team_by_id(&conn, id)
     }
 
     fn role_of(&self, team_id: &str, user_id: &str) -> AppResult<Option<String>> {
         let conn = lock(&self.conn)?;
-        store::teams::role_of(&conn, team_id, user_id)
+        identity_store::role_of(&conn, team_id, user_id)
     }
 
     fn insert_team(
@@ -529,7 +530,7 @@ impl Backend for SqliteBackend {
         ldap_group: Option<&str>,
     ) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::teams::insert_team(&conn, id, organization_id, name, description, ldap_group)
+        identity_store::insert_team(&conn, id, organization_id, name, description, ldap_group)
     }
 
     fn update_team(
@@ -540,47 +541,47 @@ impl Backend for SqliteBackend {
         ldap_group: Option<&str>,
     ) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::teams::update_team(&conn, id, name, description, ldap_group)
+        identity_store::update_team(&conn, id, name, description, ldap_group)
     }
 
     fn set_team_organization(&self, team_id: &str, organization_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::teams::set_team_organization(&conn, team_id, organization_id)
+        identity_store::set_team_organization(&conn, team_id, organization_id)
     }
 
     fn insert_organization(&self, id: &str, name: &str, description: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::teams::insert_organization(&conn, id, name, description)
+        identity_store::insert_organization(&conn, id, name, description)
     }
 
     fn update_organization(&self, id: &str, name: &str, description: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::teams::update_organization(&conn, id, name, description)
+        identity_store::update_organization(&conn, id, name, description)
     }
 
     fn organization(&self, id: &str) -> AppResult<Option<Organization>> {
         let conn = lock(&self.conn)?;
-        store::teams::organization(&conn, id)
+        identity_store::organization(&conn, id)
     }
 
     fn organization_by_name(&self, name: &str) -> AppResult<Option<Organization>> {
         let conn = lock(&self.conn)?;
-        store::teams::organization_by_name(&conn, name)
+        identity_store::organization_by_name(&conn, name)
     }
 
     fn list_organizations(&self, user_id: &str, admin: bool) -> AppResult<Vec<Organization>> {
         let conn = lock(&self.conn)?;
-        store::teams::list_organizations(&conn, user_id, admin)
+        identity_store::list_organizations(&conn, user_id, admin)
     }
 
     fn teams_in_organization(&self, organization_id: &str) -> AppResult<Vec<Team>> {
         let conn = lock(&self.conn)?;
-        store::teams::teams_in_organization(&conn, organization_id)
+        identity_store::teams_in_organization(&conn, organization_id)
     }
 
     fn teams_with_ldap(&self) -> AppResult<Vec<Team>> {
         let conn = lock(&self.conn)?;
-        store::teams::teams_with_ldap(&conn)
+        identity_store::teams_with_ldap(&conn)
     }
 
     fn upsert_membership(
@@ -591,27 +592,27 @@ impl Backend for SqliteBackend {
         source: &str,
     ) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::teams::upsert_membership(&conn, team_id, user_id, role, source)
+        identity_store::upsert_membership(&conn, team_id, user_id, role, source)
     }
 
     fn grant_manual_membership(&self, team_id: &str, user_id: &str, role: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::teams::grant_manual_membership(&conn, team_id, user_id, role)
+        identity_store::grant_manual_membership(&conn, team_id, user_id, role)
     }
 
     fn list_members(&self, team_id: &str) -> AppResult<Vec<Member>> {
         let conn = lock(&self.conn)?;
-        store::teams::list_members(&conn, team_id)
+        identity_store::list_members(&conn, team_id)
     }
 
     fn delete_membership(&self, team_id: &str, user_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::teams::delete_membership(&conn, team_id, user_id)
+        identity_store::delete_membership(&conn, team_id, user_id)
     }
 
     fn delete_ldap_membership(&self, team_id: &str, user_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::teams::delete_ldap_membership(&conn, team_id, user_id)
+        identity_store::delete_ldap_membership(&conn, team_id, user_id)
     }
 
     fn list_projects(&self, team_id: &str) -> AppResult<Vec<Project>> {
@@ -872,7 +873,7 @@ impl Backend for SqliteBackend {
 
     fn list_environments(&self, team_id: &str) -> AppResult<Vec<Environment>> {
         let conn = lock(&self.conn)?;
-        let team = store::teams::team_by_id(&conn, team_id)?.ok_or(ApiError::NotFound)?;
+        let team = identity_store::team_by_id(&conn, team_id)?.ok_or(ApiError::NotFound)?;
         store::environments::list_environments(&conn, &team)
     }
 
@@ -1466,7 +1467,7 @@ impl Backend for PostgresBackend {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
-                .query_one(&store::sql::postgres(store::teams::COUNT_TEAMS), &[])
+                .query_one(&store::sql::postgres(identity_store::COUNT_TEAMS), &[])
                 .await?;
             Ok(row.get(0))
         })
@@ -1498,11 +1499,11 @@ impl Backend for PostgresBackend {
     fn user_by_username(&self, username: &str) -> AppResult<Option<User>> {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
-            let sql = store::sql::Dialect::Postgres.render(&store::auth::user_by_username_sql(
+            let sql = store::sql::Dialect::Postgres.render(&identity_store::user_by_username_sql(
                 store::sql::Dialect::Postgres,
             ));
             let row = client.query_opt(&sql, &[&username]).await?;
-            row.as_ref().map(store::auth::row_user).transpose()
+            row.as_ref().map(identity_store::row_user).transpose()
         })
     }
 
@@ -1511,7 +1512,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .query_opt(
-                    &store::sql::postgres(store::auth::USER_BY_SESSION),
+                    &store::sql::postgres(identity_store::USER_BY_SESSION),
                     &[&token],
                 )
                 .await
@@ -1525,7 +1526,7 @@ impl Backend for PostgresBackend {
             self.delete_session(token)?;
             return Ok(None);
         }
-        Ok(Some(store::auth::row_user(&row)?))
+        Ok(Some(identity_store::row_user(&row)?))
     }
 
     fn user_by_api_token(&self, token_hash: &str) -> AppResult<Option<User>> {
@@ -1533,7 +1534,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .query_opt(
-                    &store::sql::postgres(store::auth::USER_BY_API_TOKEN),
+                    &store::sql::postgres(identity_store::USER_BY_API_TOKEN),
                     &[&token_hash],
                 )
                 .await
@@ -1547,13 +1548,13 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::auth::TOUCH_API_TOKEN),
+                    &store::sql::postgres(identity_store::TOUCH_API_TOKEN),
                     &[&token_id, &db::now()],
                 )
                 .await
                 .map_err(ApiError::from)
         })?;
-        Ok(Some(store::auth::row_user(&row)?))
+        Ok(Some(identity_store::row_user(&row)?))
     }
 
     fn create_session(&self, token: &str, user_id: &str) -> AppResult<()> {
@@ -1561,7 +1562,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::auth::CREATE_SESSION),
+                    &store::sql::postgres(identity_store::CREATE_SESSION),
                     &[&token, &user_id, &db::plus_secs(7 * 24 * 3600)],
                 )
                 .await?;
@@ -1574,7 +1575,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::auth::DELETE_SESSION),
+                    &store::sql::postgres(identity_store::DELETE_SESSION),
                     &[&token],
                 )
                 .await?;
@@ -1587,7 +1588,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::auth::PURGE_SESSIONS),
+                    &store::sql::postgres(identity_store::PURGE_SESSIONS),
                     &[&db::now()],
                 )
                 .await?;
@@ -1608,7 +1609,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::auth::INSERT_USER),
+                    &store::sql::postgres(identity_store::INSERT_USER),
                     &[
                         &id,
                         &username,
@@ -1628,20 +1629,21 @@ impl Backend for PostgresBackend {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
-                .query_opt(&store::sql::postgres(store::auth::USER_BY_ID), &[&id])
+                .query_opt(&store::sql::postgres(identity_store::USER_BY_ID), &[&id])
                 .await?;
-            row.as_ref().map(store::auth::row_user).transpose()
+            row.as_ref().map(identity_store::row_user).transpose()
         })
     }
 
     fn list_users(&self) -> AppResult<Vec<(User, i64)>> {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
-            let sql = store::sql::Dialect::Postgres
-                .render(&store::auth::list_users_sql(store::sql::Dialect::Postgres));
+            let sql = store::sql::Dialect::Postgres.render(&identity_store::list_users_sql(
+                store::sql::Dialect::Postgres,
+            ));
             let rows = client.query(&sql, &[]).await?;
             rows.iter()
-                .map(|row| Ok((store::auth::row_user(row)?, row.try_get::<_, i64>(9)?)))
+                .map(|row| Ok((identity_store::row_user(row)?, row.try_get::<_, i64>(9)?)))
                 .collect()
         })
     }
@@ -1658,14 +1660,14 @@ impl Backend for PostgresBackend {
             if let Some(password_hash) = password_hash {
                 client
                     .execute(
-                        &store::sql::postgres(store::auth::UPDATE_PROFILE_PASSWORD),
+                        &store::sql::postgres(identity_store::UPDATE_PROFILE_PASSWORD),
                         &[&id, &display_name, &email, &password_hash],
                     )
                     .await?;
             } else {
                 client
                     .execute(
-                        &store::sql::postgres(store::auth::UPDATE_PROFILE),
+                        &store::sql::postgres(identity_store::UPDATE_PROFILE),
                         &[&id, &display_name, &email],
                     )
                     .await?;
@@ -1679,7 +1681,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::auth::SET_USER_EMAIL),
+                    &store::sql::postgres(identity_store::SET_USER_EMAIL),
                     &[&id, &email],
                 )
                 .await?;
@@ -1700,7 +1702,7 @@ impl Backend for PostgresBackend {
             if let Some(password_hash) = password_hash {
                 client
                     .execute(
-                        &store::sql::postgres(store::auth::UPDATE_USER_PASSWORD),
+                        &store::sql::postgres(identity_store::UPDATE_USER_PASSWORD),
                         &[
                             &id,
                             &display_name,
@@ -1713,7 +1715,7 @@ impl Backend for PostgresBackend {
             } else {
                 client
                     .execute(
-                        &store::sql::postgres(store::auth::UPDATE_USER),
+                        &store::sql::postgres(identity_store::UPDATE_USER),
                         &[&id, &display_name, &(is_admin as i32), &(disabled as i32)],
                     )
                     .await?;
@@ -1727,7 +1729,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::auth::DELETE_USER_SESSIONS),
+                    &store::sql::postgres(identity_store::DELETE_USER_SESSIONS),
                     &[&user_id],
                 )
                 .await?;
@@ -1739,7 +1741,7 @@ impl Backend for PostgresBackend {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             Ok(client
-                .execute(&store::sql::postgres(store::auth::DELETE_USER), &[&id])
+                .execute(&store::sql::postgres(identity_store::DELETE_USER), &[&id])
                 .await?
                 > 0)
         })
@@ -1750,7 +1752,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_one(
-                    &store::sql::postgres(store::auth::OTHER_ACTIVE_ADMINS),
+                    &store::sql::postgres(identity_store::OTHER_ACTIVE_ADMINS),
                     &[&user_id],
                 )
                 .await?;
@@ -1771,7 +1773,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::auth::CREATE_API_TOKEN),
+                    &store::sql::postgres(identity_store::CREATE_API_TOKEN),
                     &[&id, &user_id, &name, &prefix, &token_hash, &created_at],
                 )
                 .await?;
@@ -1784,11 +1786,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &store::sql::postgres(store::auth::LIST_API_TOKENS),
+                    &store::sql::postgres(identity_store::LIST_API_TOKENS),
                     &[&user_id],
                 )
                 .await?;
-            rows.iter().map(store::auth::row_api_token).collect()
+            rows.iter().map(identity_store::row_api_token).collect()
         })
     }
 
@@ -1797,7 +1799,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             Ok(client
                 .execute(
-                    &store::sql::postgres(store::auth::DELETE_API_TOKEN),
+                    &store::sql::postgres(identity_store::DELETE_API_TOKEN),
                     &[&id, &user_id],
                 )
                 .await?
@@ -1806,12 +1808,12 @@ impl Backend for PostgresBackend {
     }
 
     fn list_teams_for_user(&self, user_id: &str, admin: bool) -> AppResult<Vec<(Team, String)>> {
-        let sql = store::sql::postgres(&store::teams::teams_for_user_sql(admin));
+        let sql = store::sql::postgres(&identity_store::teams_for_user_sql(admin));
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client.query(&sql, &[&user_id]).await?;
             rows.iter()
-                .map(|row| Ok((store::teams::row_team(row)?, row.try_get::<_, String>(7)?)))
+                .map(|row| Ok((identity_store::row_team(row)?, row.try_get::<_, String>(7)?)))
                 .collect()
         })
     }
@@ -1821,11 +1823,13 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &store::sql::postgres(store::teams::MEMBERSHIPS_FOR_USER),
+                    &store::sql::postgres(identity_store::MEMBERSHIPS_FOR_USER),
                     &[&user_id],
                 )
                 .await?;
-            rows.iter().map(store::teams::row_user_membership).collect()
+            rows.iter()
+                .map(identity_store::row_user_membership)
+                .collect()
         })
     }
 
@@ -1868,9 +1872,9 @@ impl Backend for PostgresBackend {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
-                .query_opt(&store::sql::postgres(store::teams::TEAM_BY_ID), &[&id])
+                .query_opt(&store::sql::postgres(identity_store::TEAM_BY_ID), &[&id])
                 .await?;
-            row.as_ref().map(store::teams::row_team).transpose()
+            row.as_ref().map(identity_store::row_team).transpose()
         })
     }
 
@@ -1879,7 +1883,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    &store::sql::postgres(store::teams::ROLE_OF),
+                    &store::sql::postgres(identity_store::ROLE_OF),
                     &[&team_id, &user_id],
                 )
                 .await?;
@@ -1899,7 +1903,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::teams::INSERT_TEAM),
+                    &store::sql::postgres(identity_store::INSERT_TEAM),
                     &[
                         &id,
                         &organization_id,
@@ -1925,7 +1929,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    &store::sql::postgres(store::teams::UPDATE_TEAM),
+                    &store::sql::postgres(identity_store::UPDATE_TEAM),
                     &[&id, &name, &description, &ldap_group],
                 )
                 .await?;
@@ -1941,7 +1945,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    &store::sql::postgres(store::teams::SET_TEAM_ORGANIZATION),
+                    &store::sql::postgres(identity_store::SET_TEAM_ORGANIZATION),
                     &[&team_id, &organization_id],
                 )
                 .await?;
@@ -1957,7 +1961,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::teams::INSERT_ORGANIZATION),
+                    &store::sql::postgres(identity_store::INSERT_ORGANIZATION),
                     &[&id, &name, &description, &db::now()],
                 )
                 .await?;
@@ -1970,7 +1974,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    &store::sql::postgres(store::teams::UPDATE_ORGANIZATION),
+                    &store::sql::postgres(identity_store::UPDATE_ORGANIZATION),
                     &[&id, &name, &description],
                 )
                 .await?;
@@ -1986,11 +1990,13 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    &store::sql::postgres(store::teams::ORGANIZATION_BY_ID),
+                    &store::sql::postgres(identity_store::ORGANIZATION_BY_ID),
                     &[&id],
                 )
                 .await?;
-            row.as_ref().map(store::teams::row_organization).transpose()
+            row.as_ref()
+                .map(identity_store::row_organization)
+                .transpose()
         })
     }
 
@@ -1999,19 +2005,21 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    &store::sql::postgres(store::teams::ORGANIZATION_BY_NAME),
+                    &store::sql::postgres(identity_store::ORGANIZATION_BY_NAME),
                     &[&name],
                 )
                 .await?;
-            row.as_ref().map(store::teams::row_organization).transpose()
+            row.as_ref()
+                .map(identity_store::row_organization)
+                .transpose()
         })
     }
 
     fn list_organizations(&self, user_id: &str, admin: bool) -> AppResult<Vec<Organization>> {
         let sql = store::sql::postgres(if admin {
-            store::teams::ORGANIZATIONS_ALL
+            identity_store::ORGANIZATIONS_ALL
         } else {
-            store::teams::ORGANIZATIONS_FOR_USER
+            identity_store::ORGANIZATIONS_FOR_USER
         });
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
@@ -2020,7 +2028,7 @@ impl Backend for PostgresBackend {
             } else {
                 client.query(&sql, &[&user_id]).await?
             };
-            rows.iter().map(store::teams::row_organization).collect()
+            rows.iter().map(identity_store::row_organization).collect()
         })
     }
 
@@ -2029,11 +2037,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &store::sql::postgres(store::teams::TEAMS_IN_ORGANIZATION),
+                    &store::sql::postgres(identity_store::TEAMS_IN_ORGANIZATION),
                     &[&organization_id],
                 )
                 .await?;
-            rows.iter().map(store::teams::row_team).collect()
+            rows.iter().map(identity_store::row_team).collect()
         })
     }
 
@@ -2041,9 +2049,9 @@ impl Backend for PostgresBackend {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
-                .query(&store::sql::postgres(store::teams::TEAMS_WITH_LDAP), &[])
+                .query(&store::sql::postgres(identity_store::TEAMS_WITH_LDAP), &[])
                 .await?;
-            rows.iter().map(store::teams::row_team).collect()
+            rows.iter().map(identity_store::row_team).collect()
         })
     }
 
@@ -2058,7 +2066,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::teams::UPSERT_MEMBERSHIP),
+                    &store::sql::postgres(identity_store::UPSERT_MEMBERSHIP),
                     &[&team_id, &user_id, &role, &source],
                 )
                 .await?;
@@ -2071,7 +2079,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    &store::sql::postgres(store::teams::MEMBERSHIP_SOURCE),
+                    &store::sql::postgres(identity_store::MEMBERSHIP_SOURCE),
                     &[&team_id, &user_id],
                 )
                 .await?;
@@ -2090,11 +2098,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &store::sql::postgres(store::teams::LIST_MEMBERS),
+                    &store::sql::postgres(identity_store::LIST_MEMBERS),
                     &[&team_id],
                 )
                 .await?;
-            rows.iter().map(store::teams::row_member).collect()
+            rows.iter().map(identity_store::row_member).collect()
         })
     }
 
@@ -2103,7 +2111,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::teams::DELETE_MEMBERSHIP),
+                    &store::sql::postgres(identity_store::DELETE_MEMBERSHIP),
                     &[&team_id, &user_id],
                 )
                 .await?;
@@ -2116,7 +2124,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::teams::DELETE_LDAP_MEMBERSHIP),
+                    &store::sql::postgres(identity_store::DELETE_LDAP_MEMBERSHIP),
                     &[&team_id, &user_id],
                 )
                 .await?;

@@ -1,6 +1,5 @@
 mod admin;
 mod catalog;
-mod session;
 mod settings;
 mod sources;
 mod work;
@@ -27,9 +26,10 @@ use tower_http::trace::TraceLayer;
 /// Style attributes stay inline. `style-src 'self'` alone would block them.
 const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; img-src 'self' data:; style-src 'self'; style-src-attr 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 
-use crate::auth::{self, AuthUser, Role};
 use crate::db::{self, Job, JobEvent};
 use crate::error::{ApiError, AppResult};
+use crate::features::identity as auth;
+use crate::features::identity::{AuthUser, Role};
 use crate::llm;
 use crate::runner;
 use crate::Shared;
@@ -159,12 +159,12 @@ fn api_routes() -> Router<Shared> {
         .merge(catalog::routes())
         .merge(llm::routes())
         .merge(crate::features::credentials::routes())
+        .merge(crate::features::identity::routes())
         .merge(crate::features::inventories::routes())
         .merge(crate::features::jobs::routes())
         .merge(crate::features::projects::routes())
         .merge(crate::features::schedules::routes())
         .merge(crate::features::workflows::routes())
-        .merge(session::routes())
         .merge(settings::routes())
         .merge(sources::routes())
         .merge(work::routes())

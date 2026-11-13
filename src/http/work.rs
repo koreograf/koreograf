@@ -9,11 +9,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::auth::{AuthUser, Role};
 use crate::crypto;
 use crate::db::{self, Delivery, Hook, Template};
 use crate::error::{ApiError, ApiJson, ApiJsonValue, AppResult};
 use crate::features::credentials;
+use crate::features::identity::{AuthUser, Role};
 use crate::features::jobs::{self, JobResponse, LaunchRequest};
 use crate::runner;
 use crate::Shared;
@@ -444,7 +444,7 @@ pub async fn test_hook(
     let hook = {
         let db = state.store();
         let hook = db.hook(&id)?.ok_or(ApiError::NotFound)?;
-        crate::auth::authorize(db, &user, &hook.team_id, Role::Operator)?;
+        crate::features::identity::authorize(db, &user, &hook.team_id, Role::Operator)?;
         hook
     };
     let payload = TestHookPayload {

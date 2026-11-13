@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::auth::{AuthUser, Role};
 use crate::db::{self, Template, Workflow};
 use crate::error::{ApiError, ApiJson, AppResult};
+use crate::features::identity::{AuthUser, Role};
 use crate::features::jobs;
 use crate::http::LaunchBody;
 use crate::http::{empty_object, gate, no_content, require_description, require_name, team_header};
@@ -174,7 +174,7 @@ pub(crate) async fn get_workflow(
 ) -> AppResult<Json<WorkflowResponse>> {
     let db = state.store();
     let item = db.workflow(&id)?.ok_or(ApiError::NotFound)?;
-    crate::auth::authorize(db, &user, &item.team_id, Role::Viewer)?;
+    crate::features::identity::authorize(db, &user, &item.team_id, Role::Viewer)?;
     Ok(Json(WorkflowResponse::new(&item)))
 }
 
@@ -253,7 +253,7 @@ pub(crate) async fn get_workflow_job(
 ) -> AppResult<Json<WorkflowJobResponse>> {
     let db = state.store();
     let run = db.workflow_job(&id)?.ok_or(ApiError::NotFound)?;
-    crate::auth::authorize(db, &user, &run.team_id, Role::Viewer)?;
+    crate::features::identity::authorize(db, &user, &run.team_id, Role::Viewer)?;
     Ok(Json(WorkflowJobResponse::new(db, &run)?))
 }
 

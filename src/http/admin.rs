@@ -7,11 +7,12 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::auth::{self, AuthUser};
 use crate::backup;
 use crate::db;
 use crate::dbmigrate::{self, CheckResult, MigrationStatus, PendingTarget, Runtime};
 use crate::error::{ApiError, ApiJson, AppResult};
+use crate::features::identity as auth;
+use crate::features::identity::AuthUser;
 use crate::Shared;
 
 pub(super) fn routes() -> Router<Shared> {
