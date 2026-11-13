@@ -1,6 +1,6 @@
-use crate::auth::AuthUser;
 use crate::backend::Backend;
 use crate::error::{ApiError, AppResult};
+use crate::features::identity::AuthUser;
 use crate::runner;
 use crate::Shared;
 

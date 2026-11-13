@@ -7,10 +7,10 @@ use chrono::{Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::auth::{AuthUser, Role};
 use crate::backend::Backend;
 use crate::db::{self, Schedule};
 use crate::error::{ApiError, ApiJson, AppResult};
+use crate::features::identity::{AuthUser, Role};
 use crate::http::{gate, no_content, require_name, team_header};
 use crate::Shared;
 

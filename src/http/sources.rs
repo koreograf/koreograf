@@ -5,9 +5,9 @@ use axum::http::HeaderMap;
 use axum::routing::get;
 use axum::{Json, Router};
 
-use crate::auth::{AuthUser, Role};
 use crate::db::Project;
 use crate::error::{ApiError, AppResult};
+use crate::features::identity::{AuthUser, Role};
 use crate::features::inventories::{scan_project, ProjectContents};
 use crate::runner;
 use crate::Shared;

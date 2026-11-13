@@ -1404,10 +1404,11 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), RunnerError
         if state.cfg.local_jobs == LocalJobs::Admins {
             let allowed = {
                 let db = state.store();
-                let launcher = crate::auth::launcher_is_admin(db, &job.launched_by)
+                let launcher = crate::features::identity::launcher_is_admin(db, &job.launched_by)
                     .map_err(|e| RunnerError::internal(e.to_string()))?;
                 let params = db::json_object(&job.parameters);
-                let matches = crate::auth::command_matches_template(&original, &params);
+                let matches =
+                    crate::features::identity::command_matches_template(&original, &params);
                 let workflow_id = match job.workflow_job_id.as_deref().filter(|id| !id.is_empty()) {
                     Some(id) => db
                         .workflow_job(id)
@@ -1420,7 +1421,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), RunnerError
                     .as_deref()
                     .is_some_and(|id| !id.is_empty())
                     || !matches;
-                let content = crate::auth::content_saved_by_admin(
+                let content = crate::features::identity::content_saved_by_admin(
                     db,
                     &template,
                     workflow_id.as_deref(),
@@ -2020,7 +2021,7 @@ fn load_environment(
         return Err(RunnerError::spec("the_network_name_is_invalid"));
     }
     if state.cfg.local_jobs == LocalJobs::Admins && privileged_network(&environment.network) {
-        let admin = crate::auth::launcher_is_admin(db, launched_by)
+        let admin = crate::features::identity::launcher_is_admin(db, launched_by)
             .map_err(|e| RunnerError::internal(e.to_string()))?;
         if !admin {
             return Err(RunnerError::spec(

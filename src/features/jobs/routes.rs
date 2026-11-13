@@ -11,9 +11,9 @@ use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::auth::{AuthUser, Role};
 use crate::db::{self, Job, JobEvent};
 use crate::error::{ApiError, ApiJson, AppResult};
+use crate::features::identity::{AuthUser, Role};
 use crate::http::{gate, team_header};
 use crate::runner;
 use crate::Shared;
@@ -204,7 +204,7 @@ pub async fn get_job(
 ) -> AppResult<Json<JobResponse>> {
     let db = state.store();
     let job = db.job(&id)?.ok_or(ApiError::NotFound)?;
-    crate::auth::authorize(db, &user, &job.team_id, Role::Viewer)?;
+    crate::features::identity::authorize(db, &user, &job.team_id, Role::Viewer)?;
     let events = events_for_page(db, &id)?;
     let capped = db.events_bytes(&id)? > OUTPUT_LIMIT as i64;
     Ok(Json(
@@ -314,7 +314,7 @@ pub async fn job_output(
     let (body, filename) = {
         let db = state.store();
         let job = db.job(&id)?.ok_or(ApiError::NotFound)?;
-        crate::auth::authorize(db, &user, &job.team_id, Role::Viewer)?;
+        crate::features::identity::authorize(db, &user, &job.team_id, Role::Viewer)?;
         let body = render_job_output(db, &id)?;
         (body, output_filename(&job.name, &job.id))
     };
@@ -343,7 +343,7 @@ pub async fn cancel_job(
     let team = {
         let db = state.store();
         let job = db.job(&id)?.ok_or(ApiError::NotFound)?;
-        crate::auth::authorize(db, &user, &job.team_id, Role::Operator)?;
+        crate::features::identity::authorize(db, &user, &job.team_id, Role::Operator)?;
         job.team_id
     };
     cancel(&state, &id)?;
@@ -362,7 +362,7 @@ pub async fn relaunch_job(
     {
         let db = state.store();
         let job = db.job(&id)?.ok_or(ApiError::NotFound)?;
-        crate::auth::authorize(db, &user, &job.team_id, Role::Operator)?;
+        crate::features::identity::authorize(db, &user, &job.team_id, Role::Operator)?;
     }
     let job_id = relaunch(&state, &id, &user.username, body.only_failed_hosts)?;
     let db = state.store();
@@ -379,7 +379,7 @@ pub async fn job_events(
     {
         let db = state.store();
         let job = db.job(&id)?.ok_or(ApiError::NotFound)?;
-        crate::auth::authorize(db, &user, &job.team_id, Role::Viewer)?;
+        crate::features::identity::authorize(db, &user, &job.team_id, Role::Viewer)?;
     }
     let after = query.after.unwrap_or(0);
     let stream = async_stream::stream! {

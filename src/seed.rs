@@ -13,6 +13,7 @@ use crate::db::{
     self, Environment, Hook, Inventory, InventorySource, Project, Template, User, Workflow,
 };
 use crate::error::AppResult;
+use crate::features::identity::store as identity_store;
 use crate::features::inventories;
 use crate::features::projects;
 use crate::store;
@@ -94,7 +95,7 @@ trait SeedStore {
 
 impl SeedStore for Connection {
     fn user_by_username(&self, username: &str) -> AppResult<Option<User>> {
-        store::auth::user_by_username(self, username)
+        identity_store::user_by_username(self, username)
     }
 
     fn insert_user(
@@ -106,7 +107,7 @@ impl SeedStore for Connection {
         auth_source: &str,
         is_admin: bool,
     ) -> AppResult<()> {
-        store::auth::insert_user(
+        identity_store::insert_user(
             self,
             id,
             username,
@@ -118,7 +119,7 @@ impl SeedStore for Connection {
     }
 
     fn count_teams(&self) -> AppResult<i64> {
-        store::teams::count_teams(self)
+        identity_store::count_teams(self)
     }
 
     fn seed_state(&self, key: &str) -> AppResult<Option<String>> {
@@ -146,7 +147,7 @@ impl SeedStore for Connection {
     }
 
     fn insert_organization(&self, id: &str, name: &str, description: &str) -> AppResult<()> {
-        store::teams::insert_organization(self, id, name, description)
+        identity_store::insert_organization(self, id, name, description)
     }
 
     fn insert_team(
@@ -157,7 +158,7 @@ impl SeedStore for Connection {
         description: &str,
         ldap_group: Option<&str>,
     ) -> AppResult<()> {
-        store::teams::insert_team(self, id, organization_id, name, description, ldap_group)
+        identity_store::insert_team(self, id, organization_id, name, description, ldap_group)
     }
 
     fn upsert_membership(
@@ -167,7 +168,7 @@ impl SeedStore for Connection {
         role: &str,
         source: &str,
     ) -> AppResult<()> {
-        store::teams::upsert_membership(self, team_id, user_id, role, source)
+        identity_store::upsert_membership(self, team_id, user_id, role, source)
     }
 
     fn insert_project(&self, project: &Project) -> AppResult<()> {
@@ -301,7 +302,7 @@ pub fn seed(backend: &dyn Backend, cfg: &Config) -> AppResult<Option<String>> {
             crate::error::ApiError::Internal("The SQLite database lock is damaged.".into())
         })?;
         let tx = conn.unchecked_transaction()?;
-        store::auth::purge_sessions(&tx)?;
+        identity_store::purge_sessions(&tx)?;
         let generated = seed_with(&*tx, cfg)?;
         tx.commit()?;
         generated

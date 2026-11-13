@@ -11,9 +11,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use tower::ServiceExt;
 
-use crate::auth::{self, AuthUser, Role};
 use crate::config::LlmProvider;
 use crate::db::Team;
+use crate::features::identity as auth;
+use crate::features::identity::{AuthUser, Role};
 use crate::settings;
 use crate::Shared;
 

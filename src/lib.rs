@@ -6,7 +6,6 @@
 
 #![forbid(unsafe_code)]
 
-mod auth;
 mod backend;
 mod backup;
 mod cacheinfo;
@@ -21,7 +20,6 @@ mod features;
 mod health;
 mod hooks;
 mod http;
-mod ldap;
 pub mod llm;
 pub mod mcp;
 mod metrics;

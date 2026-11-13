@@ -917,15 +917,15 @@ pub struct Schedule {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::features::identity::store::{
+        grant_manual_membership, insert_organization, insert_team, list_members, team_by_id,
+        upsert_membership,
+    };
     use crate::features::inventories::store::inventory;
     use crate::features::jobs::store::{insert_job, list_jobs};
     use crate::features::projects::store::{list_projects, project};
     use crate::features::workflows::store::workflow;
     use crate::store::environments::{environment, insert_environment, list_environments};
-    use crate::store::teams::{
-        grant_manual_membership, insert_organization, insert_team, list_members, team_by_id,
-        upsert_membership,
-    };
 
     fn sample_job(id: &str, team_id: &str, name: &str, created_at: &str) -> Job {
         Job {
@@ -1405,7 +1405,10 @@ mod tests {
         let conn = open(&dir.join("koreograf.db")).unwrap();
         insert_organization(&conn, "org", "Plattform", "").unwrap();
         insert_team(&conn, "team", "org", "Plattform", "", None).unwrap();
-        crate::store::auth::insert_user(&conn, "user", "ada", "Ada", None, "ldap", false).unwrap();
+        crate::features::identity::store::insert_user(
+            &conn, "user", "ada", "Ada", None, "ldap", false,
+        )
+        .unwrap();
         upsert_membership(&conn, "team", "user", "operator", "ldap").unwrap();
         let err = grant_manual_membership(&conn, "team", "user", "owner").unwrap_err();
         assert_eq!(

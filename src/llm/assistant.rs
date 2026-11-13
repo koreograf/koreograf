@@ -5,8 +5,9 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
-use crate::auth::{self, AuthUser, Role};
 use crate::error::{ApiJson, ErrorBody};
+use crate::features::identity as auth;
+use crate::features::identity::{AuthUser, Role};
 use crate::Shared;
 
 use super::{
