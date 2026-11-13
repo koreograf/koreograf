@@ -319,19 +319,19 @@ impl Backend for SqliteBackend {
     fn export_sqlite(&self, dest: &Path) -> AppResult<()> {
         let live = lock(&self.conn)?;
         let mut snapshot = Connection::open(dest)?;
-        crate::backup::copy_database(&live, &mut snapshot)
+        crate::features::operations::copy_database(&live, &mut snapshot)
     }
 
     fn restore_sqlite(&self, source: &Path) -> AppResult<()> {
         let mut live = lock(&self.conn)?;
         let source = Connection::open(source)?;
-        crate::backup::copy_database(&source, &mut live)?;
+        crate::features::operations::copy_database(&source, &mut live)?;
         db::ensure_schema(&live)
     }
 
     fn busy(&self) -> AppResult<bool> {
         let live = lock(&self.conn)?;
-        crate::backup::busy(&live)
+        crate::features::operations::busy(&live)
     }
 
     fn ping(&self) -> AppResult<()> {
@@ -341,12 +341,12 @@ impl Backend for SqliteBackend {
 
     fn settings_rows(&self) -> AppResult<HashMap<String, String>> {
         let conn = lock(&self.conn)?;
-        store::settings::read_rows(&conn)
+        crate::features::operations::store::read_rows(&conn)
     }
 
     fn set_setting(&self, key: &str, value: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::settings::set_setting(&conn, key, value)
+        crate::features::operations::store::set_setting(&conn, key, value)
     }
 
     fn count_teams(&self) -> AppResult<i64> {
@@ -356,12 +356,12 @@ impl Backend for SqliteBackend {
 
     fn seed_state(&self, key: &str) -> AppResult<Option<String>> {
         let conn = lock(&self.conn)?;
-        store::settings::seed_state(&conn, key)
+        crate::features::operations::store::seed_state(&conn, key)
     }
 
     fn set_seed_state(&self, key: &str, value: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::settings::set_seed_state(&conn, key, value)
+        crate::features::operations::store::set_seed_state(&conn, key, value)
     }
 
     fn user_by_username(&self, username: &str) -> AppResult<Option<User>> {
@@ -503,7 +503,7 @@ impl Backend for SqliteBackend {
 
     fn replace_settings(&self, rows: &[(String, String)]) -> AppResult<()> {
         let mut conn = lock(&self.conn)?;
-        store::settings::replace(&mut conn, rows)
+        crate::features::operations::store::replace(&mut conn, rows)
     }
 
     fn environment(&self, id: &str) -> AppResult<Option<Environment>> {
@@ -1078,7 +1078,7 @@ impl Backend for SqliteBackend {
 
     fn import_report(&self) -> AppResult<Option<serde_json::Value>> {
         let conn = lock(&self.conn)?;
-        crate::migration::report(&conn)
+        crate::features::operations::report(&conn)
     }
 
     fn first_workflow(&self, team_id: &str) -> AppResult<Option<Workflow>> {
@@ -1441,7 +1441,10 @@ impl Backend for PostgresBackend {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
-                .query(&store::sql::postgres(store::settings::SETTINGS_ROWS), &[])
+                .query(
+                    &store::sql::postgres(crate::features::operations::store::SETTINGS_ROWS),
+                    &[],
+                )
                 .await?;
             Ok(rows
                 .into_iter()
@@ -1455,7 +1458,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::settings::INSERT_SETTING),
+                    &store::sql::postgres(crate::features::operations::store::INSERT_SETTING),
                     &[&key, &value],
                 )
                 .await?;
@@ -1477,7 +1480,10 @@ impl Backend for PostgresBackend {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
-                .query_opt(&store::sql::postgres(store::settings::SEED_STATE), &[&key])
+                .query_opt(
+                    &store::sql::postgres(crate::features::operations::store::SEED_STATE),
+                    &[&key],
+                )
                 .await?;
             Ok(row.map(|row| row.get(0)))
         })
@@ -1488,7 +1494,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::settings::SET_SEED_STATE),
+                    &store::sql::postgres(crate::features::operations::store::SET_SEED_STATE),
                     &[&key, &value],
                 )
                 .await?;
@@ -1838,12 +1844,15 @@ impl Backend for PostgresBackend {
             let mut client = self.pool.get().await.map_err(pool_error)?;
             let transaction = client.transaction().await?;
             transaction
-                .execute(&store::sql::postgres(store::settings::DELETE_SETTINGS), &[])
+                .execute(
+                    &store::sql::postgres(crate::features::operations::store::DELETE_SETTINGS),
+                    &[],
+                )
                 .await?;
             for (key, value) in rows {
                 transaction
                     .execute(
-                        &store::sql::postgres(store::settings::INSERT_SETTING),
+                        &store::sql::postgres(crate::features::operations::store::INSERT_SETTING),
                         &[key, value],
                     )
                     .await?;
@@ -2880,7 +2889,7 @@ impl Backend for PostgresBackend {
             if changed == 0 {
                 return Err(ApiError::NotFound);
             }
-            for key in crate::settings::DEFAULT_ENVIRONMENT_KEYS {
+            for key in crate::features::operations::DEFAULT_ENVIRONMENT_KEYS {
                 let tool = key.trim_start_matches("default_environment_");
                 if global && crate::runner::environment_fits_tool(tool, &item.tool) {
                     continue;
@@ -2910,7 +2919,7 @@ impl Backend for PostgresBackend {
             if changed == 0 {
                 return Err(ApiError::NotFound);
             }
-            for key in crate::settings::DEFAULT_ENVIRONMENT_KEYS {
+            for key in crate::features::operations::DEFAULT_ENVIRONMENT_KEYS {
                 transaction
                     .execute(
                         &store::sql::postgres(store::environments::DELETE_DEFAULT_SETTING),
@@ -3554,8 +3563,8 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    &store::sql::postgres(store::settings::SETTING),
-                    &[&crate::migration::REPORT_KEY],
+                    &store::sql::postgres(crate::features::operations::store::SETTING),
+                    &[&crate::features::operations::REPORT_KEY],
                 )
                 .await?;
             Ok(row.and_then(|row| {

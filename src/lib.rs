@@ -7,13 +7,11 @@
 #![forbid(unsafe_code)]
 
 mod backend;
-mod backup;
 mod cacheinfo;
 mod config;
 mod crypto;
 mod datalock;
 mod db;
-mod dbmigrate;
 mod entrypoint;
 mod error;
 mod features;
@@ -22,13 +20,10 @@ mod hooks;
 mod http;
 pub mod llm;
 pub mod mcp;
-mod metrics;
-mod migration;
 mod portable;
 mod preflight;
 mod runner;
 mod seed;
-mod settings;
 mod store;
 mod tls;
 
@@ -46,9 +41,9 @@ pub use config::{
     LocalJobs, PostgresConfig, RunnerMode, SslMode,
 };
 pub use datalock::lock_data_directory;
-pub use dbmigrate::{db_migrate, db_migrate_requested, DATABASE_CHECK_IDS};
 pub use entrypoint::{entrypoint, entrypoint_requested};
 pub use features::credentials::{askpass, askpass_kind, git_ssh, git_ssh_requested, AskpassKind};
+pub use features::operations::{db_migrate, db_migrate_requested, DATABASE_CHECK_IDS};
 pub use health::{healthcheck, healthcheck_requested};
 
 /// Shared process state. Cheap to clone because it is an `Arc`.
@@ -56,10 +51,10 @@ pub struct AppState {
     pub(crate) backend: Box<dyn Backend>,
     pub cfg: Config,
     pub(crate) cipher: Mutex<crypto::Cipher>,
-    pub(crate) metrics: metrics::Metrics,
+    pub(crate) metrics: features::operations::Metrics,
     /// One backup or restore at a time. Take this before the database lock.
     pub(crate) maintenance: Mutex<()>,
-    pub(crate) migration: Mutex<dbmigrate::Runtime>,
+    pub(crate) migration: Mutex<features::operations::Runtime>,
     pub(crate) procs: Mutex<HashMap<String, RunningProc>>,
     /// Jobs whose later output is discarded. Set when cancel commits.
     pub(crate) canceled: Mutex<HashSet<String>>,
@@ -142,7 +137,7 @@ where
 /// Print the runner preflight and return the process exit code.
 pub async fn doctor() -> anyhow::Result<i32> {
     let cfg = Config::from_env();
-    let mode = settings::configured_mode(&cfg);
+    let mode = features::operations::configured_mode(&cfg);
     let report = preflight::check(mode, cfg.container_image).await;
     println!("{}", report.log_block());
     Ok(if report.ok() { 0 } else { 2 })
@@ -228,9 +223,9 @@ pub fn boot_with(mut cfg: Config, database: DatabaseConfig) -> anyhow::Result<Sh
         backend,
         cfg,
         cipher: Mutex::new(cipher),
-        metrics: metrics::Metrics::new(),
+        metrics: features::operations::Metrics::new(),
         maintenance: Mutex::new(()),
-        migration: Mutex::new(dbmigrate::Runtime::default()),
+        migration: Mutex::new(features::operations::Runtime::default()),
         procs: Mutex::new(HashMap::new()),
         canceled: Mutex::new(HashSet::new()),
         preflight: Mutex::new(None),
@@ -257,10 +252,10 @@ pub async fn serve(cfg: Config) -> anyhow::Result<()> {
     std::fs::create_dir_all(&data_dir)?;
     let _data_lock = datalock::lock_data_directory(&data_dir)?;
     if database.engine() == "sqlite" {
-        migration::prepare(&cfg)?;
+        features::operations::prepare(&cfg)?;
     }
     let state = boot_with(cfg, database)?;
-    let mode = match settings::load(&state) {
+    let mode = match features::operations::load(&state) {
         Ok(effective) => {
             tls::warn_directory(&effective.ldap);
             effective.runner

@@ -123,19 +123,19 @@ impl SeedStore for Connection {
     }
 
     fn seed_state(&self, key: &str) -> AppResult<Option<String>> {
-        store::settings::seed_state(self, key)
+        crate::features::operations::store::seed_state(self, key)
     }
 
     fn set_seed_state(&self, key: &str, value: &str) -> AppResult<()> {
-        store::settings::set_seed_state(self, key, value)
+        crate::features::operations::store::set_seed_state(self, key, value)
     }
 
     fn setting(&self, key: &str) -> AppResult<Option<String>> {
-        store::settings::setting(self, key)
+        crate::features::operations::store::setting(self, key)
     }
 
     fn set_setting(&self, key: &str, value: &str) -> AppResult<()> {
-        store::settings::set_setting(self, key, value)
+        crate::features::operations::store::set_setting(self, key, value)
     }
 
     fn environment_exists(&self, id: &str) -> AppResult<bool> {

@@ -7,12 +7,12 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::backup;
 use crate::db;
-use crate::dbmigrate::{self, CheckResult, MigrationStatus, PendingTarget, Runtime};
 use crate::error::{ApiError, ApiJson, AppResult};
 use crate::features::identity as auth;
 use crate::features::identity::AuthUser;
+use crate::features::operations as ops;
+use crate::features::operations::{CheckResult, MigrationStatus, PendingTarget, Runtime};
 use crate::Shared;
 
 pub(super) fn routes() -> Router<Shared> {
@@ -81,7 +81,7 @@ pub async fn download(
     if !user.is_admin {
         return Err(ApiError::Forbidden);
     }
-    let bytes = backup::export(&state, query.tofu_state)?;
+    let bytes = ops::export(&state, query.tofu_state)?;
     Ok((
         [
             (
@@ -115,7 +115,7 @@ pub async fn restore(
     {
         return Err(ApiError::bad("confirm_the_replacement_with_ersetzen"));
     }
-    backup::restore(&state, &body)?;
+    ops::restore(&state, &body)?;
     let mut response = (
         StatusCode::OK,
         Json(RestoreResponse {
@@ -200,7 +200,7 @@ pub async fn database_check(
     if state.engine() != "sqlite" {
         return Err(ApiError::bad("database_already_on_postgresql"));
     }
-    let target = dbmigrate::parse_form_target(
+    let target = ops::parse_form_target(
         &body.host,
         body.port,
         &body.database,
@@ -220,8 +220,8 @@ pub async fn database_check(
         runtime.pending = None;
     }
     let source = state.cfg.data_dir.join("koreograf.db");
-    let checks = dbmigrate::run_checks(&target, &source).await;
-    let passed = dbmigrate::all_passed(&checks);
+    let checks = ops::run_checks(&target, &source).await;
+    let passed = ops::all_passed(&checks);
     let id = if passed {
         let id = Uuid::new_v4().to_string();
         let mut runtime = migration_lock(&state)?;
@@ -280,12 +280,12 @@ pub async fn database_migrate(
             None => return Err(ApiError::bad("run_the_checks_again")),
         };
         let started_at = db::now();
-        let audit = dbmigrate::audit_entry(&user.username, &target);
+        let audit = ops::audit_entry(&user.username, &target);
         runtime.status = MigrationStatus {
             running: true,
             started_at: Some(started_at.clone()),
             target_host: target.target(),
-            url: dbmigrate::target_url(&target),
+            url: ops::target_url(&target),
             tables: MigrationStatus::empty_tables(),
             audit: Some(audit.clone()),
             ..MigrationStatus::default()
@@ -294,7 +294,7 @@ pub async fn database_migrate(
         target
     };
     tracing::info!(
-        audit = %dbmigrate::audit_line(&dbmigrate::audit_entry(&user.username, &target)),
+        audit = %ops::audit_line(&ops::audit_entry(&user.username, &target)),
         "database migration started"
     );
     let task_state = state.clone();
@@ -315,16 +315,15 @@ async fn run_migration(state: Shared, target: crate::PostgresConfig, user: Strin
         .join(format!("migration-{}.db", Uuid::new_v4()));
     let result = async {
         state.store().export_sqlite(&snapshot)?;
-        dbmigrate::check_source(&snapshot)
-            .map_err(|_| ApiError::bad("database_migration_failed"))?;
+        ops::check_source(&snapshot).map_err(|_| ApiError::bad("database_migration_failed"))?;
         let client = crate::backend::connect_client(&target)
             .await
             .map_err(|_| ApiError::bad("database_migration_failed"))?;
-        dbmigrate::precheck(&client)
+        ops::precheck(&client)
             .await
             .map_err(|_| ApiError::bad("database_migration_failed"))?;
         let progress_state = state.clone();
-        dbmigrate::copy_source(&client, &snapshot, move |table, rows| {
+        ops::copy_source(&client, &snapshot, move |table, rows| {
             if let Ok(mut runtime) = progress_state.migration.lock() {
                 if let Some(item) = runtime
                     .status

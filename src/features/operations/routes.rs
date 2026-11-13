@@ -4,12 +4,13 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::model::{Effective, LlmWrite, SettingsWrite};
+use super::service::{save, view};
 use crate::error::{ApiError, ApiJson, AppResult};
 use crate::features::identity::AuthUser;
-use crate::settings::{self, Effective, LlmWrite, SettingsWrite};
 use crate::Shared;
 
-pub(super) fn routes() -> Router<Shared> {
+pub(crate) fn routes() -> Router<Shared> {
     Router::new().route("/settings", get(get_settings).put(put_settings))
 }
 
@@ -193,7 +194,7 @@ pub async fn get_settings(
     user: AuthUser,
 ) -> AppResult<Json<SettingsResponse>> {
     admin(&user)?;
-    Ok(Json(SettingsResponse::from(&settings::view(&state)?)))
+    Ok(Json(SettingsResponse::from(&view(&state)?)))
 }
 
 pub async fn put_settings(
@@ -245,9 +246,7 @@ pub async fn put_settings(
         llm,
         reset: body.reset,
     };
-    Ok(Json(SettingsResponse::from(&settings::save(
-        &state, &write,
-    )?)))
+    Ok(Json(SettingsResponse::from(&save(&state, &write)?)))
 }
 
 fn check_complete(body: &SettingsBody) -> AppResult<()> {

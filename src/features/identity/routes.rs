@@ -74,7 +74,9 @@ pub async fn login(
             return session_response(&state, &headers, &user);
         }
     }
-    let directory = crate::settings::load(&state)?.directory().cloned();
+    let directory = crate::features::operations::load(&state)?
+        .directory()
+        .cloned();
     if let Some(cfg) = directory {
         match authenticate(&cfg, &username, &body.password).await {
             Ok(identity) => {

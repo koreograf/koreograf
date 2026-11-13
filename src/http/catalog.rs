@@ -463,7 +463,7 @@ pub async fn runner_status(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     // The probe awaits. Load settings only after it returns.
-    let effective = crate::settings::load(&state)?;
+    let effective = crate::features::operations::load(&state)?;
     let report = crate::preflight::check(effective.runner, state.cfg.container_image).await;
     let runtime = if report.runtime.responding {
         report.runtime.binary.clone()
@@ -493,7 +493,7 @@ pub async fn runner_preflight(
     if !user.is_admin {
         return Err(ApiError::Forbidden);
     }
-    let effective = crate::settings::load(&state)?;
+    let effective = crate::features::operations::load(&state)?;
     let report = crate::preflight::check(effective.runner, state.cfg.container_image).await;
     let response = PreflightResponse::new(&report);
     state.set_preflight_report(report);
@@ -509,7 +509,7 @@ pub async fn overview(
     gate(&state, &user, &team, Role::Viewer)?;
     // The preflight awaits. Take it before the database lock so the
     // connection guard, which is not Send, is never held across that point.
-    let effective = crate::settings::load(&state)?;
+    let effective = crate::features::operations::load(&state)?;
     let runtime = runner::detect_runtime().await;
     let preflight = if user.is_admin {
         state.preflight_report()

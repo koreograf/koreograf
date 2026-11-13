@@ -98,7 +98,7 @@ pub(crate) fn update_environment(c: &Connection, item: &Environment) -> AppResul
         return Err(ApiError::NotFound);
     }
     let global = item.team_id.is_none() && item.organization_id.is_none();
-    for key in crate::settings::DEFAULT_ENVIRONMENT_KEYS {
+    for key in crate::features::operations::DEFAULT_ENVIRONMENT_KEYS {
         let tool = key.trim_start_matches("default_environment_");
         if global && crate::runner::environment_fits_tool(tool, &item.tool) {
             continue;
@@ -113,7 +113,7 @@ pub(crate) fn delete_environment(c: &Connection, id: &str) -> AppResult<()> {
     if changed == 0 {
         return Err(ApiError::NotFound);
     }
-    for key in crate::settings::DEFAULT_ENVIRONMENT_KEYS {
+    for key in crate::features::operations::DEFAULT_ENVIRONMENT_KEYS {
         c.execute(DELETE_DEFAULT_SETTING, params![key, id])?;
     }
     Ok(())

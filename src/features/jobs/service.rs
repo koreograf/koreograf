@@ -18,7 +18,7 @@ pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
     if state.in_maintenance() {
         return Err(ApiError::bad("maintenance_mode_is_active"));
     }
-    let settings = crate::settings::load(state)?;
+    let settings = crate::features::operations::load(state)?;
     let id = Uuid::new_v4().to_string();
     {
         let db = state.store();
@@ -168,7 +168,7 @@ pub fn relaunch(
     launched_by: &str,
     only_failed_hosts: bool,
 ) -> AppResult<String> {
-    let settings = crate::settings::load(state)?;
+    let settings = crate::features::operations::load(state)?;
     let (team_id, template_id, extra, parameters, workflow_job_id) = {
         let db = state.store();
         let job = db.job(source_id)?.ok_or(ApiError::NotFound)?;
@@ -711,7 +711,7 @@ pub async fn sync_project(state: &Shared, project: &db::Project) -> AppResult<St
     if project.source_type != "git" {
         return Ok(project.source.clone());
     }
-    let proxy = crate::settings::load(state)?.proxy;
+    let proxy = crate::features::operations::load(state)?.proxy;
     let credential = runner::project_credential_secret(state, project)
         .map_err(|_| ApiError::bad("the_source_control_credential_cannot_be_read"))?;
     let result = runner::materialize_project(
@@ -749,10 +749,10 @@ pub fn cancel(state: &Shared, job_id: &str) -> AppResult<()> {
         }
         let changed = db.finish_job(job_id, "canceled")?;
         db.insert_event(job_id, "system", "Cancel requested.")?;
-        changed.then(|| crate::metrics::job_labels(&job))
+        changed.then(|| crate::features::operations::job_labels(&job))
     };
     if let Some(labels) = unstarted {
-        let meta = crate::metrics::JobMeta {
+        let meta = crate::features::operations::JobMeta {
             job_id,
             team_id: &labels.team_id,
             tool: &labels.tool,
@@ -942,7 +942,7 @@ fn apply_step(
                 return Ok(());
             };
             let prepared = {
-                let settings = crate::settings::load(state)?;
+                let settings = crate::features::operations::load(state)?;
                 let db = state.store();
                 match db.template(&node.template_id)? {
                     Some(template) if template.team_id == team_id => {
@@ -1023,7 +1023,7 @@ fn workflow_hook_refuses_local_run(
     if state.cfg.local_jobs != LocalJobs::Admins {
         return Ok(false);
     }
-    let settings = crate::settings::load(state)?;
+    let settings = crate::features::operations::load(state)?;
     let db = state.store();
     let item = match db.workflow(workflow_id)? {
         Some(item) => item,
