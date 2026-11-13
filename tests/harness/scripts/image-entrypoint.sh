@@ -8,6 +8,7 @@ VOLUME=koreograf-entrypoint-check
 STOP_NAME=koreograf-entrypoint-stop
 ORPHAN_NAME=koreograf-entrypoint-orphan
 ORPHAN_VOLUME=koreograf-entrypoint-orphan
+OUTSIDE_VOLUME=koreograf-entrypoint-outside
 SOCKET_DIR=$(mktemp -d)
 SOCKET_PID=
 
@@ -20,7 +21,7 @@ cleanup() {
     fi
     rm -rf "$SOCKET_DIR"
     docker rm -f "$VOLUME" "$STOP_NAME" "$ORPHAN_NAME" >/dev/null 2>&1 || true
-    docker volume rm "$VOLUME" "$ORPHAN_VOLUME" >/dev/null 2>&1 || true
+    docker volume rm "$VOLUME" "$ORPHAN_VOLUME" "$OUTSIDE_VOLUME" >/dev/null 2>&1 || true
     exit "$status"
 }
 trap cleanup EXIT INT TERM
@@ -42,6 +43,19 @@ docker run --rm --user 0 -v "$VOLUME":/var/lib/koreograf --entrypoint /usr/local
     "$IMAGE" entrypoint koreograf --version >/dev/null
 owner=$(docker run --rm -v "$VOLUME":/data "$HELPER" stat -c '%u:%g' /data/secret.key)
 test "$owner" = "10001:10001"
+
+docker volume create "$OUTSIDE_VOLUME" >/dev/null
+docker run --rm -v "$OUTSIDE_VOLUME":/outside "$HELPER" \
+    sh -c 'printf x > /outside/secret && chown 0:0 /outside/secret && chmod 600 /outside/secret'
+docker run --rm -v "$VOLUME":/data "$HELPER" \
+    sh -c 'mkdir -p /data/jobs && ln -sfn /outside/secret /data/jobs/leak'
+docker run --rm --user 0 -v "$VOLUME":/var/lib/koreograf -v "$OUTSIDE_VOLUME":/outside \
+    --entrypoint /usr/local/bin/koreograf "$IMAGE" entrypoint koreograf --version >/dev/null
+owner=$(docker run --rm -v "$OUTSIDE_VOLUME":/outside "$HELPER" stat -c '%u:%g' /outside/secret)
+if [ "$owner" != "0:0" ]; then
+    printf 'the entrypoint followed a symlink under jobs and left the target %s\n' "$owner" >&2
+    exit 1
+fi
 
 docker run --rm --entrypoint /usr/local/bin/koreograf "$IMAGE" entrypoint koreograf --version >/dev/null
 

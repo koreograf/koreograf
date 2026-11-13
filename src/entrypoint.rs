@@ -1,5 +1,7 @@
 use std::ffi::OsString;
 use std::fs;
+#[cfg(unix)]
+use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
 
 pub fn entrypoint_requested<I, S>(args: I) -> bool
@@ -145,81 +147,161 @@ fn git_ca_bundle_from(
 
 #[cfg(unix)]
 fn prepare_data_dir(path: &Path) -> Result<(), String> {
-    use std::os::unix::fs::MetadataExt;
+    use nix::sys::stat::fstat;
+    use nix::unistd::{fchown, Gid, Uid};
 
     fs::create_dir_all(path)
         .map_err(|err| format!("Could not create the data directory ({err})."))?;
-    let root =
-        fs::metadata(path).map_err(|err| format!("Could not read the data directory ({err})."))?;
-    let device = root.dev();
-    chown(path)?;
-    chown_tree(path, device)
+    let mut dir = open_dir(path)?;
+    let device = fstat(dir.as_fd())
+        .map_err(|err| format!("Could not read {} ({err}).", path.display()))?
+        .st_dev;
+    fchown(
+        dir.as_fd(),
+        Some(Uid::from_raw(TARGET_UID)),
+        Some(Gid::from_raw(TARGET_GID)),
+    )
+    .map_err(|err| format!("Could not change the owner of {} ({err}).", path.display()))?;
+    walk_tree(
+        &mut dir,
+        Some(device),
+        TARGET_UID,
+        TARGET_GID,
+        &mut |_, _| {},
+    )
 }
 
 #[cfg(unix)]
-fn chown_tree(path: &Path, device: u64) -> Result<(), String> {
-    use std::os::unix::fs::MetadataExt;
+fn open_dir(path: &Path) -> Result<nix::dir::Dir, String> {
+    use nix::fcntl::{openat, OFlag, AT_FDCWD};
+    use nix::sys::stat::Mode;
 
-    let entries =
-        fs::read_dir(path).map_err(|err| format!("Could not read {} ({err}).", path.display()))?;
-    for entry in entries {
-        let entry = entry.map_err(|err| format!("Could not read {} ({err}).", path.display()))?;
-        let child = entry.path();
-        let metadata = fs::symlink_metadata(&child)
-            .map_err(|err| format!("Could not read {} ({err}).", child.display()))?;
-        if metadata.dev() != device {
+    let fd = openat(
+        AT_FDCWD,
+        path,
+        OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|err| format!("Could not open {} ({err}).", path.display()))?;
+    nix::dir::Dir::from_fd(fd).map_err(|err| format!("Could not read {} ({err}).", path.display()))
+}
+
+#[cfg(unix)]
+fn walk_tree<F>(
+    dir: &mut nix::dir::Dir,
+    device: Option<u64>,
+    uid: u32,
+    gid: u32,
+    before_descend: &mut F,
+) -> Result<(), String>
+where
+    F: FnMut(&nix::dir::Dir, &std::ffi::CStr),
+{
+    use nix::errno::Errno;
+    use nix::fcntl::{openat, AtFlags, OFlag};
+    use nix::sys::stat::{fstat, fstatat, Mode, SFlag};
+
+    let names = list_names(dir)?;
+    for name in names {
+        let name = name.as_c_str();
+        let metadata = match fstatat(dir.as_fd(), name, AtFlags::AT_SYMLINK_NOFOLLOW) {
+            Ok(metadata) => metadata,
+            Err(Errno::ENOENT) => continue,
+            Err(err) => {
+                return Err(format!(
+                    "Could not read {} ({err}).",
+                    name.to_string_lossy()
+                ))
+            }
+        };
+        if device.is_some_and(|device| metadata.st_dev != device) {
             continue;
         }
-        if metadata.uid() != TARGET_UID || metadata.gid() != TARGET_GID {
-            chown(&child)?;
+        if metadata.st_uid != uid || metadata.st_gid != gid {
+            if let Err(err) = chown_at(dir, name, uid, gid) {
+                if err == Errno::ENOENT {
+                    continue;
+                }
+                return Err(format!(
+                    "Could not change the owner of {} ({err}).",
+                    name.to_string_lossy()
+                ));
+            }
         }
-        if metadata.is_dir() {
-            chown_tree(&child, device)?;
+        if SFlag::from_bits_truncate(metadata.st_mode) != SFlag::S_IFDIR {
+            continue;
         }
+        before_descend(dir, name);
+        let child = match openat(
+            dir.as_fd(),
+            name,
+            OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(child) => child,
+            Err(err) if err == Errno::ELOOP || err == Errno::ENOTDIR || err == Errno::ENOENT => {
+                continue;
+            }
+            Err(err) => {
+                return Err(format!(
+                    "Could not open {} ({err}).",
+                    name.to_string_lossy()
+                ))
+            }
+        };
+        let child_device = fstat(&child)
+            .map_err(|err| format!("Could not read {} ({err}).", name.to_string_lossy()))?
+            .st_dev;
+        if device.is_some_and(|device| child_device != device) {
+            continue;
+        }
+        let mut child_dir = nix::dir::Dir::from_fd(child)
+            .map_err(|err| format!("Could not read {} ({err}).", name.to_string_lossy()))?;
+        walk_tree(&mut child_dir, device, uid, gid, before_descend)?;
     }
     Ok(())
 }
 
 #[cfg(unix)]
-fn chown(path: &Path) -> Result<(), String> {
-    use nix::fcntl::AtFlags;
-    use nix::unistd::{fchownat, Gid, Uid};
-
-    fchownat(
-        nix::fcntl::AT_FDCWD,
-        path,
-        Some(Uid::from_raw(TARGET_UID)),
-        Some(Gid::from_raw(TARGET_GID)),
-        AtFlags::AT_SYMLINK_NOFOLLOW,
-    )
-    .map_err(|err| format!("Could not change the owner of {} ({err}).", path.display()))
+fn list_names(dir: &mut nix::dir::Dir) -> Result<Vec<std::ffi::CString>, String> {
+    let mut names = Vec::new();
+    for entry in dir.iter() {
+        let entry = entry.map_err(|err| format!("Could not list a directory ({err})."))?;
+        let name = entry.file_name();
+        if name.to_bytes() == b"." || name.to_bytes() == b".." {
+            continue;
+        }
+        names.push(name.to_owned());
+    }
+    Ok(names)
 }
 
 #[cfg(unix)]
-pub(crate) fn own_tree(path: &Path, uid: u32, gid: u32) -> Result<(), String> {
+fn chown_at(dir: &nix::dir::Dir, name: &std::ffi::CStr, uid: u32, gid: u32) -> nix::Result<()> {
     use nix::fcntl::AtFlags;
     use nix::unistd::{fchownat, Gid, Uid};
 
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|err| format!("Could not read {} ({err}).", path.display()))?;
     fchownat(
-        nix::fcntl::AT_FDCWD,
-        path,
+        dir.as_fd(),
+        name,
         Some(Uid::from_raw(uid)),
         Some(Gid::from_raw(gid)),
         AtFlags::AT_SYMLINK_NOFOLLOW,
     )
+}
+
+#[cfg(unix)]
+pub(crate) fn own_tree(path: &Path, uid: u32, gid: u32) -> Result<(), String> {
+    use nix::unistd::{fchown, Gid, Uid};
+
+    let mut dir = open_dir(path)?;
+    fchown(
+        dir.as_fd(),
+        Some(Uid::from_raw(uid)),
+        Some(Gid::from_raw(gid)),
+    )
     .map_err(|err| format!("Could not change the owner of {} ({err}).", path.display()))?;
-    if metadata.is_dir() {
-        let entries = fs::read_dir(path)
-            .map_err(|err| format!("Could not read {} ({err}).", path.display()))?;
-        for entry in entries {
-            let entry =
-                entry.map_err(|err| format!("Could not read {} ({err}).", path.display()))?;
-            own_tree(&entry.path(), uid, gid)?;
-        }
-    }
-    Ok(())
+    walk_tree(&mut dir, None, uid, gid, &mut |_, _| {})
 }
 
 #[cfg(unix)]
@@ -375,6 +457,109 @@ mod tests {
         let path = std::env::temp_dir().join("koreograf-missing-socket");
         let _ = fs::remove_file(&path);
         assert_eq!(socket_group(&path).unwrap(), None);
+    }
+
+    #[cfg(unix)]
+    fn require_root(test: &str) -> bool {
+        if nix::unistd::Uid::effective().is_root() {
+            return true;
+        }
+        eprintln!("skipping {test}: it needs euid 0 to change owners");
+        false
+    }
+
+    #[cfg(unix)]
+    fn set_owner(path: &Path, uid: u32, gid: u32) {
+        use nix::fcntl::AtFlags;
+        use nix::unistd::{fchownat, Gid, Uid};
+
+        fchownat(
+            nix::fcntl::AT_FDCWD,
+            path,
+            Some(Uid::from_raw(uid)),
+            Some(Gid::from_raw(gid)),
+            AtFlags::empty(),
+        )
+        .unwrap();
+    }
+
+    #[cfg(unix)]
+    fn owner(path: &Path) -> (u32, u32) {
+        use std::os::unix::fs::MetadataExt;
+
+        let metadata = fs::symlink_metadata(path).unwrap();
+        (metadata.uid(), metadata.gid())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_walk_keeps_symlink_targets_outside_the_data_directory() {
+        use std::os::unix::fs::symlink;
+
+        if !require_root("the_walk_keeps_symlink_targets_outside_the_data_directory") {
+            return;
+        }
+        let base = scratch_ca("symlink-walk");
+        let root = base.join("data");
+        let outside_dir = base.join("outside-dir");
+        let outside_file = base.join("outside-file");
+        fs::create_dir_all(root.join("team")).unwrap();
+        fs::create_dir_all(&outside_dir).unwrap();
+        fs::write(root.join("team/state"), "inside").unwrap();
+        fs::write(&outside_file, "outside").unwrap();
+        fs::write(outside_dir.join("secret"), "secret").unwrap();
+        for path in [&outside_dir, &outside_file, &outside_dir.join("secret")] {
+            set_owner(path, 12345, 12345);
+        }
+        symlink(&outside_dir, root.join("team/dir-link")).unwrap();
+        symlink(&outside_file, root.join("team/file-link")).unwrap();
+
+        prepare_data_dir(&root).unwrap();
+
+        assert_eq!(owner(&outside_dir), (12345, 12345));
+        assert_eq!(owner(&outside_file), (12345, 12345));
+        assert_eq!(owner(&outside_dir.join("secret")), (12345, 12345));
+        assert_eq!(owner(&root), (TARGET_UID, TARGET_GID));
+        assert_eq!(owner(&root.join("team/state")), (TARGET_UID, TARGET_GID));
+        assert_eq!(owner(&root.join("team/dir-link")), (TARGET_UID, TARGET_GID));
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_swapped_for_a_symlink_is_not_followed() {
+        use std::os::unix::fs::symlink;
+
+        if !require_root("a_directory_swapped_for_a_symlink_is_not_followed") {
+            return;
+        }
+        let base = scratch_ca("symlink-race");
+        let root = base.join("data");
+        let outside = base.join("outside");
+        fs::create_dir_all(root.join("swap")).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(root.join("swap/state"), "inside").unwrap();
+        fs::write(outside.join("secret"), "secret").unwrap();
+        set_owner(&outside, 12345, 12345);
+        set_owner(&outside.join("secret"), 12345, 12345);
+
+        let mut dir = open_dir(&root).unwrap();
+        let device = nix::sys::stat::fstat(dir.as_fd()).unwrap().st_dev;
+        let mut swapped = false;
+        let mut hook = |_: &nix::dir::Dir, name: &std::ffi::CStr| {
+            if name.to_bytes() == b"swap" {
+                fs::remove_dir_all(root.join("swap")).unwrap();
+                symlink(&outside, root.join("swap")).unwrap();
+                swapped = true;
+            }
+        };
+
+        walk_tree(&mut dir, Some(device), TARGET_UID, TARGET_GID, &mut hook).unwrap();
+
+        assert!(swapped, "the hook did not replace the directory");
+        assert_eq!(owner(&outside), (12345, 12345));
+        assert_eq!(owner(&outside.join("secret")), (12345, 12345));
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[cfg(unix)]
