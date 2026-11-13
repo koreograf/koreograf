@@ -2719,7 +2719,7 @@ async fn postgres_serves_jobs_and_their_output() {
     };
     let success_template = create_template(
         format!("Postgres success {nanos}"),
-        "echo postgres-job-line",
+        "sleep 2; echo postgres-job-line",
     )
     .await;
     let fail_template = create_template(
