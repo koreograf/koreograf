@@ -519,10 +519,6 @@ pub fn job_json(job: &Job, events: Option<&[JobEvent]>) -> serde_json::Value {
     value
 }
 
-pub fn created(body: serde_json::Value) -> Response {
-    (StatusCode::CREATED, axum::Json(body)).into_response()
-}
-
 pub fn accepted(body: serde_json::Value) -> Response {
     (StatusCode::ACCEPTED, axum::Json(body)).into_response()
 }

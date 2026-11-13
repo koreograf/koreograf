@@ -1,18 +1,17 @@
 use axum::extract::{Path, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use chrono::{Timelike, Utc};
-use serde::Deserialize;
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, Role};
 use crate::backend::Backend;
 use crate::db::{self, Schedule};
 use crate::error::{ApiError, ApiJson, AppResult};
-use crate::http::{created, gate, no_content, require_name, team_header};
+use crate::http::{gate, no_content, require_name, team_header};
 use crate::Shared;
 
 use super::model::{End, Frequency, Input, Rule};
@@ -82,6 +81,70 @@ pub struct MissedBody {
     accept: bool,
 }
 
+#[derive(Serialize)]
+pub(super) struct ScheduleResponse {
+    id: String,
+    name: String,
+    target_kind: String,
+    target_id: String,
+    timezone: String,
+    start_date: String,
+    start_time: String,
+    frequency: String,
+    weekdays: Vec<String>,
+    end_kind: String,
+    end_count: Option<i64>,
+    end_date: Option<String>,
+    enabled: bool,
+    next_run_at: Option<String>,
+    missed_at: Option<String>,
+    created_by: String,
+    updated_by: String,
+    launch_block: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(super) struct TeamScheduleResponse {
+    #[serde(flatten)]
+    schedule: ScheduleResponse,
+    target_name: String,
+}
+
+#[derive(Serialize)]
+pub(super) struct PreviewResponse {
+    occurrences: Vec<String>,
+}
+
+impl From<&Schedule> for ScheduleResponse {
+    fn from(item: &Schedule) -> Self {
+        Self {
+            id: item.id.clone(),
+            name: item.name.clone(),
+            target_kind: item.target_kind.clone(),
+            target_id: item.target_id.clone(),
+            timezone: item.timezone.clone(),
+            start_date: item.start_date.clone(),
+            start_time: item.start_time.clone(),
+            frequency: item.frequency.clone(),
+            weekdays: item
+                .weekdays
+                .split(',')
+                .filter(|day| !day.is_empty())
+                .map(str::to_string)
+                .collect(),
+            end_kind: item.end_kind.clone(),
+            end_count: item.end_count,
+            end_date: item.end_date.clone(),
+            enabled: item.enabled,
+            next_run_at: item.next_run_at.clone(),
+            missed_at: item.missed_at.clone(),
+            created_by: item.created_by.clone(),
+            updated_by: item.updated_by.clone(),
+            launch_block: item.launch_block.clone(),
+        }
+    }
+}
+
 fn never() -> String {
     "never".to_string()
 }
@@ -90,20 +153,19 @@ pub async fn list_for_team(
     State(state): State<Shared>,
     headers: HeaderMap,
     user: AuthUser,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<Vec<TeamScheduleResponse>>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     let db = state.store();
     let items = db.list_team_schedules(&team)?;
     let rows = items
-        .iter()
-        .map(|(item, target_name)| {
-            let mut value = schedule_json(item);
-            value["target_name"] = json!(target_name);
-            value
+        .into_iter()
+        .map(|(item, target_name)| TeamScheduleResponse {
+            schedule: ScheduleResponse::from(&item),
+            target_name,
         })
-        .collect::<Vec<_>>();
-    Ok(Json(json!(rows)))
+        .collect();
+    Ok(Json(rows))
 }
 
 pub async fn list_for_template(
@@ -111,7 +173,7 @@ pub async fn list_for_template(
     headers: HeaderMap,
     user: AuthUser,
     Path(id): Path<String>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<Vec<ScheduleResponse>>> {
     list(&state, &headers, &user, "template", &id)
 }
 
@@ -120,7 +182,7 @@ pub async fn list_for_workflow(
     headers: HeaderMap,
     user: AuthUser,
     Path(id): Path<String>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<Vec<ScheduleResponse>>> {
     list(&state, &headers, &user, "workflow", &id)
 }
 
@@ -130,7 +192,7 @@ pub async fn create_for_template(
     user: AuthUser,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<ScheduleBody>,
-) -> AppResult<Response> {
+) -> AppResult<(StatusCode, Json<ScheduleResponse>)> {
     create(&state, &headers, &user, "template", &id, body).await
 }
 
@@ -140,7 +202,7 @@ pub async fn create_for_workflow(
     user: AuthUser,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<ScheduleBody>,
-) -> AppResult<Response> {
+) -> AppResult<(StatusCode, Json<ScheduleResponse>)> {
     create(&state, &headers, &user, "workflow", &id, body).await
 }
 
@@ -149,16 +211,16 @@ pub async fn preview(
     headers: HeaderMap,
     user: AuthUser,
     ApiJson(body): ApiJson<PreviewBody>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<PreviewResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let rule = rule_from_preview(&body)?;
     let times = service::preview_blocking(rule, Utc::now(), 5)
         .await
         .map_err(ApiError::bad)?;
-    Ok(Json(json!({
-        "occurrences": times.into_iter().map(service::format_utc).collect::<Vec<_>>()
-    })))
+    Ok(Json(PreviewResponse {
+        occurrences: times.into_iter().map(service::format_utc).collect(),
+    }))
 }
 
 pub async fn update(
@@ -167,7 +229,7 @@ pub async fn update(
     user: AuthUser,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<ScheduleBody>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<ScheduleResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let name = require_name(&body.name)?;
@@ -194,7 +256,7 @@ pub async fn update(
     item.updated_by = user.username.clone();
     item.launch_block = None;
     db.update_schedule(&item)?;
-    Ok(Json(schedule_json(&item)))
+    Ok(Json(ScheduleResponse::from(&item)))
 }
 
 pub async fn remove(
@@ -216,7 +278,7 @@ pub async fn set_enabled(
     user: AuthUser,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<EnabledBody>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<ScheduleResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let mut item = {
@@ -247,7 +309,7 @@ pub async fn set_enabled(
         item.next_run_at.as_deref(),
         item.occurrence_count,
     )?;
-    Ok(Json(schedule_json(&item)))
+    Ok(Json(ScheduleResponse::from(&item)))
 }
 
 pub async fn answer_missed(
@@ -256,7 +318,7 @@ pub async fn answer_missed(
     user: AuthUser,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<MissedBody>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<ScheduleResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let (item, missed_at) = {
@@ -282,7 +344,7 @@ pub async fn answer_missed(
     }
     let db = state.store();
     let item = load(db, &id, &team)?;
-    Ok(Json(schedule_json(&item)))
+    Ok(Json(ScheduleResponse::from(&item)))
 }
 
 fn list(
@@ -291,16 +353,15 @@ fn list(
     user: &AuthUser,
     kind: &str,
     id: &str,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<Vec<ScheduleResponse>>> {
     let team = team_header(headers)?;
     gate(state, user, &team, Role::Viewer)?;
     let db = state.store();
     target_team(db, kind, id, &team)?;
     let items = db.list_schedules(kind, id)?;
-    Ok(Json(json!(items
-        .iter()
-        .map(schedule_json)
-        .collect::<Vec<_>>())))
+    Ok(Json(
+        items.iter().map(ScheduleResponse::from).collect::<Vec<_>>(),
+    ))
 }
 
 async fn create(
@@ -310,7 +371,7 @@ async fn create(
     kind: &str,
     id: &str,
     body: ScheduleBody,
-) -> AppResult<Response> {
+) -> AppResult<(StatusCode, Json<ScheduleResponse>)> {
     let team = team_header(headers)?;
     gate(state, user, &team, Role::Operator)?;
     let name = require_name(&body.name)?;
@@ -346,7 +407,7 @@ async fn create(
         launch_block: None,
     };
     db.insert_schedule(&item)?;
-    Ok(created(schedule_json(&item)))
+    Ok((StatusCode::CREATED, Json(ScheduleResponse::from(&item))))
 }
 
 fn stored(
@@ -437,34 +498,6 @@ fn rule_from_preview(body: &PreviewBody) -> AppResult<Rule> {
     .map_err(ApiError::bad)?;
     service::ensure_start_is_recent(rule.start_date, rule.timezone).map_err(ApiError::bad)?;
     Ok(rule)
-}
-
-fn schedule_json(item: &Schedule) -> Value {
-    let days: Vec<&str> = item
-        .weekdays
-        .split(',')
-        .filter(|day| !day.is_empty())
-        .collect();
-    json!({
-        "id": item.id,
-        "name": item.name,
-        "target_kind": item.target_kind,
-        "target_id": item.target_id,
-        "timezone": item.timezone,
-        "start_date": item.start_date,
-        "start_time": item.start_time,
-        "frequency": item.frequency,
-        "weekdays": days,
-        "end_kind": item.end_kind,
-        "end_count": item.end_count,
-        "end_date": item.end_date,
-        "enabled": item.enabled,
-        "next_run_at": item.next_run_at,
-        "missed_at": item.missed_at,
-        "created_by": item.created_by,
-        "updated_by": item.updated_by,
-        "launch_block": item.launch_block,
-    })
 }
 
 fn clock(time: chrono::NaiveTime) -> String {
