@@ -4,14 +4,13 @@ use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::Deserialize;
-use serde_json::json;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::{self, AuthUser};
 use crate::backup;
 use crate::db;
-use crate::dbmigrate::{self, MigrationStatus, PendingTarget, Runtime};
+use crate::dbmigrate::{self, CheckResult, MigrationStatus, PendingTarget, Runtime};
 use crate::error::{ApiError, ApiJson, AppResult};
 use crate::Shared;
 
@@ -29,6 +28,48 @@ pub(super) fn routes() -> Router<Shared> {
 pub struct DownloadQuery {
     #[serde(default)]
     tofu_state: bool,
+}
+
+#[derive(Serialize)]
+pub(super) struct MaintenanceResponse {
+    active: bool,
+    since: Option<String>,
+}
+
+impl MaintenanceResponse {
+    fn new(since: Option<String>) -> Self {
+        Self {
+            active: since.is_some(),
+            since,
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub(super) struct RestoreResponse {
+    restored: bool,
+    engine: &'static str,
+    previous: &'static str,
+}
+
+#[derive(Serialize)]
+pub(super) struct DatabaseStatusResponse {
+    engine: &'static str,
+    supported: bool,
+    maintenance: MaintenanceResponse,
+    migration: MigrationStatus,
+}
+
+#[derive(Serialize)]
+pub(super) struct DatabaseCheckResponse {
+    all_passed: bool,
+    id: Option<String>,
+    checks: Vec<CheckResult>,
+}
+
+#[derive(Serialize)]
+pub(super) struct DatabaseMigrateResponse {
+    started: bool,
 }
 
 pub async fn download(
@@ -76,11 +117,11 @@ pub async fn restore(
     backup::restore(&state, &body)?;
     let mut response = (
         StatusCode::OK,
-        Json(json!({
-            "restored": true,
-            "engine": state.engine(),
-            "previous": "restore-previous.zip"
-        })),
+        Json(RestoreResponse {
+            restored: true,
+            engine: state.engine(),
+            previous: "restore-previous.zip",
+        }),
     )
         .into_response();
     let cookie = HeaderValue::from_str(&auth::clear_cookie(auth::request_cookie_secure(
@@ -131,36 +172,29 @@ fn migration_lock(state: &Shared) -> AppResult<std::sync::MutexGuard<'_, Runtime
         .map_err(|_| ApiError::Internal("migration state is damaged".into()))
 }
 
-pub async fn maintenance_status(State(state): State<Shared>) -> Json<serde_json::Value> {
-    let since = state.maintenance_since();
-    Json(json!({
-        "active": since.is_some(),
-        "since": since,
-    }))
+pub async fn maintenance_status(State(state): State<Shared>) -> Json<MaintenanceResponse> {
+    Json(MaintenanceResponse::new(state.maintenance_since()))
 }
 
 pub async fn database_status(
     State(state): State<Shared>,
     user: AuthUser,
-) -> AppResult<Json<serde_json::Value>> {
+) -> AppResult<Json<DatabaseStatusResponse>> {
     admin(&user)?;
     let runtime = migration_lock(&state)?;
-    Ok(Json(json!({
-        "engine": state.engine(),
-        "supported": state.engine() == "sqlite",
-        "maintenance": {
-            "active": runtime.maintenance_since.is_some(),
-            "since": runtime.maintenance_since,
-        },
-        "migration": runtime.status.clone(),
-    })))
+    Ok(Json(DatabaseStatusResponse {
+        engine: state.engine(),
+        supported: state.engine() == "sqlite",
+        maintenance: MaintenanceResponse::new(runtime.maintenance_since.clone()),
+        migration: runtime.status.clone(),
+    }))
 }
 
 pub async fn database_check(
     State(state): State<Shared>,
     user: AuthUser,
     ApiJson(body): ApiJson<DatabaseTargetBody>,
-) -> AppResult<Json<serde_json::Value>> {
+) -> AppResult<Json<DatabaseCheckResponse>> {
     admin(&user)?;
     if state.engine() != "sqlite" {
         return Err(ApiError::bad("database_already_on_postgresql"));
@@ -198,18 +232,18 @@ pub async fn database_check(
     } else {
         None
     };
-    Ok(Json(json!({
-        "all_passed": passed,
-        "id": id,
-        "checks": checks,
-    })))
+    Ok(Json(DatabaseCheckResponse {
+        all_passed: passed,
+        id,
+        checks,
+    }))
 }
 
 pub async fn database_migrate(
     State(state): State<Shared>,
     user: AuthUser,
     ApiJson(body): ApiJson<DatabaseStartBody>,
-) -> AppResult<Response> {
+) -> AppResult<(StatusCode, Json<DatabaseMigrateResponse>)> {
     admin(&user)?;
     if state.engine() != "sqlite" {
         return Err(ApiError::bad("database_already_on_postgresql"));
@@ -267,7 +301,10 @@ pub async fn database_migrate(
     tokio::spawn(async move {
         run_migration(task_state, target, username).await;
     });
-    Ok(super::accepted(json!({"started": true})))
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(DatabaseMigrateResponse { started: true }),
+    ))
 }
 
 async fn run_migration(state: Shared, target: crate::PostgresConfig, user: String) {
