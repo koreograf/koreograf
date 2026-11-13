@@ -84,4 +84,20 @@ test("an administrator navigates every route, launches the demo shell job and sw
   await expect(page.getByText("healthcheck ok", { exact: true })).toBeVisible({ timeout: 30000 });
   await expect(page.getByText("alert=manual", { exact: true })).toBeVisible();
   await expect(page.getByText("Successful", { exact: true })).toBeVisible({ timeout: 30000 });
+
+  await nav.getByRole("link", { name: "Workflows", exact: true }).click();
+  await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
+  const source = page.locator('.wf-node[data-id="check"]');
+  await source.scrollIntoViewIfNeeded();
+  await expect(source).toBeVisible();
+  await page.getByRole("button", { name: "Actions for Healthcheck", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Connect", exact: true }).click();
+  const sourceBox = await source.boundingBox();
+  const boardBox = await page.locator("#board").boundingBox();
+  await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(boardBox.x + boardBox.width - 80, boardBox.y + boardBox.height - 80, { steps: 5 });
+  await page.mouse.up();
+  await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
+  await expect(page.locator("#connect-preview")).toHaveCount(0);
 });
