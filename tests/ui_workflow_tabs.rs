@@ -1,3 +1,6 @@
+#[path = "common/web_source.rs"]
+mod web_source;
+
 use std::path::Path;
 use std::process::Command;
 
@@ -54,8 +57,7 @@ check(address("danger", "w1") === "#/workflows/w1?tab=danger", "the danger tab i
 
 #[test]
 fn workflow_editor_groups_sections_in_page_tabs() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let js = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let js = web_source::source();
     let probe =
         WORKFLOW_TABS_PROBE.replace("__JS__", &serde_json::to_string(&js).expect("js json"));
     let path =

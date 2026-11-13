@@ -4,8 +4,7 @@ use crate::common::*;
 
 #[test]
 fn backup_page_carries_the_state_flag_and_the_overview_shows_missing_paths() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source();
     assert!(script.contains("id=\"backup-tofu-state\""));
     assert!(script.contains("include_opentofu_state"));
     assert!(script.contains("opentofu_state_can_contain_secrets"));
@@ -44,8 +43,7 @@ if (importNoticeHtml({missing_paths: []}) !== "") {
 
 #[test]
 fn job_list_hash_round_trips_filters_and_pages() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source();
     let functions = format!(
         "{}\n{}",
         extract_braced_function(&script, "function jobsState"),
@@ -76,8 +74,7 @@ if (plain.page !== 1 || plain.size !== 25 || jobsHash(plain) !== "#/jobs") {{
 
 #[test]
 fn job_log_summary_search_and_first_failure() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source();
     let functions = format!(
         "{}\n{}\n{}",
         extract_braced_function(&script, "function parseRecapLine"),
@@ -138,8 +135,7 @@ for (const query of ["script", "&lt;", "<b>"]) {{
 
 #[test]
 fn ui_reads_version_and_links_the_repository() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source();
     let login = extract_braced_function(&script, "function renderLogin");
     let shell = extract_braced_function(&script, "function shell");
     let version_slot = extract_braced_function(&script, "function versionSlot");
@@ -167,7 +163,7 @@ fn auto_mode_names_a_missing_runtime() {
     let runner = std::fs::read_to_string(root.join("src/runner.rs")).expect("runner.rs");
     assert!(runner
         .contains("Mount the Docker socket, or set the runner mode to docker to fail instead."));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source();
     assert!(script.contains("id=\"environment-runtime-warning\""));
     assert!(script.contains("this_execution_environment_is_ignored_until_docker_or"));
     assert!(script.contains("no_container_runtime"));
@@ -190,7 +186,7 @@ fn auto_mode_names_a_missing_runtime() {
 #[test]
 fn schedule_overlay_uses_the_shared_wide_form() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source();
     assert!(script.contains("wide: true"));
     assert!(script.contains("bodyClass: \"schedule-body\""));
     assert!(script.contains("class=\"schedule-layout\""));
@@ -220,8 +216,7 @@ fn schedule_overlay_uses_the_shared_wide_form() {
 
 #[test]
 fn schedule_overlay_address_opens_and_closes_the_dialog() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source();
     assert!(script.contains("if (request.edit)"));
     assert!(script.contains(
         "openScheduleForm(item.target_kind || kind, item.target_id || target, item, draw);"
@@ -261,11 +256,10 @@ check(scheduleAddress({{}}, "#/schedules?edit=s1&page=2") === "#/schedules?page=
 
 #[test]
 fn schedule_overlay_guards_unsaved_edits() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source();
     assert!(script.contains("dirty: () => dirty"));
     let form = extract_braced_function(&script, "function openScheduleForm");
-    assert!(form.contains("leaveGuard = () => dialog.dirty();"));
+    assert!(form.contains("appState.setLeaveGuard(() => dialog.dirty());"));
     let submit = form
         .find("onSubmit: async")
         .expect("schedule dialog submit");
@@ -273,14 +267,14 @@ fn schedule_overlay_guards_unsaved_edits() {
         .find("onClose: () => {")
         .expect("schedule dialog close");
     assert!(submit < close);
-    assert!(form[submit..close].contains("leaveGuard = null;"));
-    assert!(form[close..].contains("leaveGuard = null;"));
+    assert!(form[submit..close].contains("appState.setLeaveGuard(null);"));
+    assert!(form[close..].contains("appState.setLeaveGuard(null);"));
 }
 
 #[test]
 fn edit_overlays_share_one_dialog_helper() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source();
     let helper = extract_function_with_destructured_params(&script, "function openEditDialog");
     assert!(helper.contains("openDialog({"));
     assert!(helper.contains("fields_marked_with_a_star_are_required"));
@@ -294,7 +288,7 @@ fn edit_overlays_share_one_dialog_helper() {
     assert!(helper.contains("has-error"));
     assert!(helper.contains("dialog.form.addEventListener(\"invalid\""));
     assert!(helper.contains("choose(panel.dataset.dialogPanel, false)"));
-    assert!(helper.contains("leaveGuard = () => dialog.dirty();"));
+    assert!(helper.contains("appState.setLeaveGuard(() => dialog.dirty());"));
     assert!(helper.contains("clearEditHash();"));
     let dialog = extract_function_with_destructured_params(&script, "function openDialog");
     assert!(dialog.contains("if (dirty && !(await confirmDialog({ title: t(\"discard_unsaved_changes\"), confirmLabel: t(\"ok\") }))) return false;"));
@@ -315,23 +309,22 @@ fn edit_overlays_share_one_dialog_helper() {
 
 #[test]
 fn edit_overlay_addresses_round_trip_and_old_pages_redirect() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source();
     for redirect in [
-        "location.replace(\"#/credentials?new=1\")",
-        "location.replace(`#/credentials?edit=${encodeURIComponent(parts[1])}`)",
-        "location.replace(\"#/organizations?new=1\")",
-        "location.replace(`#/organizations?edit=${encodeURIComponent(parts[1])}`)",
-        "location.replace(\"#/team?new=1\")",
-        "location.replace(`#/team?edit=${encodeURIComponent(parts[1])}`)",
-        "location.replace(\"#/users?new=1\")",
-        "location.replace(`#/users?edit=${encodeURIComponent(parts[1])}`)",
-        "location.replace(\"#/projects?new=1\")",
-        "location.replace(\"#/inventories?new=1\")",
-        "location.replace(\"#/hooks?new=1\")",
-        "location.replace(`#/hooks?edit=${encodeURIComponent(parts[1])}`)",
-        "location.replace(\"#/runtime?new=1\")",
-        "location.replace(\"#/team?new=member\")",
+        "registerRedirect(\"#/credentials/new\", \"#/credentials?new=1\")",
+        "registerRedirect(\"#/credentials/:id\", ({ id }) => `#/credentials?edit=${encodeURIComponent(id)}`)",
+        "registerRedirect(\"#/organizations/new\", \"#/organizations?new=1\")",
+        "registerRedirect(\"#/organizations/:id\", ({ id }) => `#/organizations?edit=${encodeURIComponent(id)}`)",
+        "registerRedirect(\"#/team/new\", \"#/team?new=1\")",
+        "registerRedirect(\"#/team/:id\", ({ id }) => `#/team?edit=${encodeURIComponent(id)}`)",
+        "registerRedirect(\"#/users/new\", \"#/users?new=1\")",
+        "registerRedirect(\"#/users/:id\", ({ id }) => `#/users?edit=${encodeURIComponent(id)}`)",
+        "registerRedirect(\"#/projects/new\", \"#/projects?new=1\")",
+        "registerRedirect(\"#/inventories/new\", \"#/inventories?new=1\")",
+        "registerRedirect(\"#/hooks/new\", \"#/hooks?new=1\")",
+        "registerRedirect(\"#/hooks/:id\", ({ id }) => `#/hooks?edit=${encodeURIComponent(id)}`)",
+        "registerRedirect(\"#/environments/new\", \"#/runtime?new=1\")",
+        "registerRedirect(\"#/team/members/new\", \"#/team?new=member\")",
     ] {
         assert!(script.contains(redirect), "missing redirect {redirect}");
     }
@@ -371,7 +364,7 @@ fn edit_overlay_addresses_round_trip_and_old_pages_redirect() {
     let probe = format!(
         r##"{functions}
 let location = {{ hash: "#/credentials" }};
-let shownHash = null;
+const appState = {{ shownHash: null, setShownHash(value) {{ return (this.shownHash = value); }} }};
 let pushed = 0;
 let replaced = 0;
 const history = {{
@@ -401,11 +394,11 @@ check(editAddress({{ edit: "u1", tab: "account" }}, "#/users?page=2") === "#/use
 check(editAddress({{ edit: "t1" }}, "#/team?edit=t1&tab=general") === "#/team?edit=t1", "old tab was not cleared");
 check(editAddress({{}}, "#/team?edit=t1&tab=general") === "#/team", "address was not cleared");
 rememberEditHash({{ create: "1" }});
-check(pushed === 1 && replaced === 0 && location.hash === "#/credentials?new=1" && shownHash === location.hash, "open did not push the address");
+check(pushed === 1 && replaced === 0 && location.hash === "#/credentials?new=1" && appState.shownHash === location.hash, "open did not push the address");
 rememberEditHash({{ edit: "c1", tab: "memberships" }}, false);
 check(pushed === 1 && replaced === 1 && location.hash === "#/credentials?edit=c1&tab=memberships", "tab did not replace the address");
 clearEditHash();
-check(replaced === 2 && location.hash === "#/credentials" && shownHash === "#/credentials", "close did not clear the address");
+check(replaced === 2 && location.hash === "#/credentials" && appState.shownHash === "#/credentials", "close did not clear the address");
 "##
     );
     run_node_probe("edit-address", &probe);
@@ -413,8 +406,7 @@ check(replaced === 2 && location.hash === "#/credentials" && shownHash === "#/cr
 
 #[test]
 fn credentials_and_admin_objects_use_the_edit_overlay() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source();
     let credentials = extract_braced_function(&script, "async function pageCredentials");
     assert!(credentials.contains("openCredentialDialog(item, !can(\"owner\"), request.tab)"));
     assert!(credentials.contains("openCredentialDialog(null)"));
@@ -437,7 +429,9 @@ fn credentials_and_admin_objects_use_the_edit_overlay() {
     assert!(credential.contains("close();"));
     assert!(credential.contains("await route();"));
     let organizations = extract_braced_function(&script, "async function pageOrganizations");
-    assert!(organizations.contains("openOrganizationDialog(item, !me.is_admin, request.tab)"));
+    assert!(
+        organizations.contains("openOrganizationDialog(item, !appState.me.is_admin, request.tab)")
+    );
     assert!(organizations.contains("openOrganizationDialog(null)"));
     let organization = extract_braced_function(&script, "function openOrganizationDialog");
     assert!(organization.contains("openEditDialog({"));
@@ -473,8 +467,7 @@ fn credentials_and_admin_objects_use_the_edit_overlay() {
 
 #[test]
 fn projects_and_inventories_use_the_edit_overlay() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source();
     let projects = extract_braced_function(&script, "async function pageProjects");
     assert!(projects.contains("openProjectDialog(item, request.tab)"));
     assert!(projects.contains("openProjectDialog(null)"));
@@ -523,8 +516,7 @@ fn projects_and_inventories_use_the_edit_overlay() {
 
 #[test]
 fn hooks_environments_and_team_members_use_the_edit_overlay() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source();
     let hooks = extract_braced_function(&script, "async function pageHooks");
     assert!(hooks.contains("openHookDialog(item)"));
     assert!(hooks.contains("openHookDialog(null)"));
@@ -564,7 +556,8 @@ fn hooks_environments_and_team_members_use_the_edit_overlay() {
     assert!(team.contains("#/team?new=member"));
     let member = extract_braced_function(&script, "function openMemberDialog");
     assert!(member.contains("openEditDialog({"));
-    assert!(member.contains("api(\"POST\", `/api/v1/teams/${encodeURIComponent(teamId)}/members`"));
+    assert!(member
+        .contains("api(\"POST\", `/api/v1/teams/${encodeURIComponent(appState.teamId)}/members`"));
     assert!(member.contains("markSaved();"));
     assert!(member.contains("close();"));
     assert!(member.contains("await route();"));
@@ -575,8 +568,7 @@ fn hooks_environments_and_team_members_use_the_edit_overlay() {
 
 #[test]
 fn template_create_and_edit_use_the_tabbed_overlay() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source();
     let templates = extract_braced_function(&script, "async function pageTemplates");
     assert!(templates.contains("openTemplateDialog(item, request.tab)"));
     assert!(templates.contains("openTemplateDialog(null, request.tab)"));
@@ -639,8 +631,7 @@ fn template_create_and_edit_use_the_tabbed_overlay() {
 
 #[test]
 fn template_vault_pills_add_by_search_remove_and_save() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source();
     let functions = format!(
         "{}\n{}\n{}",
         extract_braced_function(&script, "function vaultSuggestions"),
@@ -719,8 +710,7 @@ check(!readonlyBox.innerHTML.includes("chip-remove"), "read-only pills have a re
 
 #[test]
 fn viewers_open_templates_in_a_read_only_overlay() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source();
     let templates = extract_braced_function(&script, "async function pageTemplates");
     assert!(templates.contains("await openTemplateDialog(item, request.tab);"));
     assert!(
@@ -744,8 +734,12 @@ fn viewers_open_templates_in_a_read_only_overlay() {
     assert!(helper.contains("    form,\n    actions,"));
     let probe = format!(
         r#"{helper}
-let editSerial = 0;
-let leaveGuard = null;
+const appState = {{
+  editSerial: 0,
+  leaveGuard: null,
+  setEditSerial(value) {{ return (this.editSerial = value); }},
+  setLeaveGuard(value) {{ return (this.leaveGuard = value); }},
+}};
 function clearEditHash() {{}}
 function h(value) {{ return value; }}
 let captured = null;
@@ -771,7 +765,7 @@ if (captured.form !== true) {{ console.error("submit dialog did not default to a
 #[test]
 fn tabbed_dialogs_keep_the_tab_row_in_the_chrome() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source();
     let css = std::fs::read_to_string(root.join("web/app.css")).expect("app.css");
     assert!(script.contains("footer = \"\", tabs = \"\""));
     assert!(script.contains("overlay.className = tabs ? \"overlay tabbed\" : \"overlay\";"));
@@ -837,11 +831,10 @@ fn tabbed_dialogs_keep_the_tab_row_in_the_chrome() {
 
 #[test]
 fn template_overlay_addresses_round_trip_and_old_pages_redirect() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source();
     for redirect in [
-        "location.replace(\"#/templates?new=1\")",
-        "location.replace(`#/templates?edit=${encodeURIComponent(parts[1])}`)",
+        "registerRedirect(\"#/templates/new\", \"#/templates?new=1\")",
+        "registerRedirect(\"#/templates/:id\", ({ id }) => `#/templates?edit=${encodeURIComponent(id)}`)",
     ] {
         assert!(script.contains(redirect), "missing redirect {redirect}");
     }
@@ -855,7 +848,7 @@ fn template_overlay_addresses_round_trip_and_old_pages_redirect() {
     let probe = format!(
         r##"{functions}
 let location = {{ hash: "#/templates" }};
-let shownHash = null;
+const appState = {{ shownHash: null, setShownHash(value) {{ return (this.shownHash = value); }} }};
 let pushed = 0;
 let replaced = 0;
 const history = {{
@@ -873,11 +866,11 @@ check(editAddress({{ edit: "t1", tab: "target" }}, "#/templates") === "#/templat
 check(editAddress({{ create: "1", tab: "variables" }}, "#/templates") === "#/templates?new=1&tab=variables", "template new address was not built");
 check(editAddress({{ edit: "t1" }}, "#/templates?tab=target&page=2") === "#/templates?page=2&edit=t1", "old tab was not cleared");
 rememberEditHash({{ create: "1", tab: "general" }});
-check(pushed === 1 && location.hash === "#/templates?new=1&tab=general" && shownHash === location.hash, "template open did not push the address");
+check(pushed === 1 && location.hash === "#/templates?new=1&tab=general" && appState.shownHash === location.hash, "template open did not push the address");
 rememberEditHash({{ edit: "t1", tab: "target" }}, false);
 check(pushed === 1 && replaced === 1 && location.hash === "#/templates?edit=t1&tab=target", "template tab did not replace the address");
 clearEditHash();
-check(replaced === 2 && location.hash === "#/templates" && shownHash === "#/templates", "template close did not clear the address");
+check(replaced === 2 && location.hash === "#/templates" && appState.shownHash === "#/templates", "template close did not clear the address");
 "##
     );
     run_node_probe("template-address", &probe);
@@ -885,8 +878,7 @@ check(replaced === 2 && location.hash === "#/templates" && shownHash === "#/temp
 
 #[test]
 fn workflow_create_uses_the_edit_overlay() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source();
     let workflows = extract_braced_function(&script, "async function pageWorkflows");
     assert!(workflows.contains("#/workflows?new=1"));
     assert!(workflows.contains("const request = editQuery();"));
@@ -913,8 +905,7 @@ fn workflow_create_uses_the_edit_overlay() {
 
 #[test]
 fn workflow_create_overlay_submits_and_keeps_errors() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source();
     let dialog = extract_braced_function(&script, "function openWorkflowDialog");
     let probe = format!(
         r##"{dialog}
@@ -967,9 +958,8 @@ submit().then(async () => {{
 
 #[test]
 fn workflow_overlay_addresses_round_trip_and_old_pages_redirect() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
-    assert!(script.contains("location.replace(\"#/workflows?new=1\")"));
+    let script = web_source();
+    assert!(script.contains("registerRedirect(\"#/workflows/new\", \"#/workflows?new=1\")"));
     assert!(!script.contains("await pageWorkflowNew();"));
     let functions = format!(
         "{}\n{}\n{}\n{}",
@@ -981,7 +971,7 @@ fn workflow_overlay_addresses_round_trip_and_old_pages_redirect() {
     let probe = format!(
         r##"{functions}
 let location = {{ hash: "#/workflows" }};
-let shownHash = null;
+const appState = {{ shownHash: null, setShownHash(value) {{ return (this.shownHash = value); }} }};
 let pushed = 0;
 let replaced = 0;
 const history = {{
@@ -997,9 +987,9 @@ check(editQuery("#/workflows").create === null, "workflow list was read as new")
 check(editAddress({{ create: "1" }}, "#/workflows") === "#/workflows?new=1", "workflow new address was not built");
 check(editAddress({{ create: "1" }}, "#/workflows?page=2") === "#/workflows?page=2&new=1", "workflow new address dropped the query");
 rememberEditHash({{ create: "1" }});
-check(pushed === 1 && location.hash === "#/workflows?new=1" && shownHash === location.hash, "workflow open did not push the address");
+check(pushed === 1 && location.hash === "#/workflows?new=1" && appState.shownHash === location.hash, "workflow open did not push the address");
 clearEditHash();
-check(replaced === 1 && location.hash === "#/workflows" && shownHash === "#/workflows", "workflow close did not clear the address");
+check(replaced === 1 && location.hash === "#/workflows" && appState.shownHash === "#/workflows", "workflow close did not clear the address");
 "##
     );
     run_node_probe("workflow-address", &probe);
@@ -1007,8 +997,7 @@ check(replaced === 1 && location.hash === "#/workflows" && shownHash === "#/work
 
 #[test]
 fn template_tool_switch_changes_options_and_environments() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source();
     let dialog = extract_braced_function(&script, "async function openTemplateDialog");
     assert!(dialog.contains("form.tool.addEventListener(\"change\""));
     assert!(dialog.contains("showToolSections();"));
@@ -1051,8 +1040,7 @@ check(environmentsFor("shell").map((row) => row.id).join(",") === "s1,any1,legac
 
 #[test]
 fn template_validation_errors_open_the_matching_tab() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source();
     let helper = extract_function_with_destructured_params(&script, "function openEditDialog");
     assert!(helper.contains("mark(panel.dataset.dialogPanel);"));
     assert!(helper.contains("choose(panel.dataset.dialogPanel, false);"));
@@ -1084,7 +1072,7 @@ check("template.vars_not_objects", "extra_vars");
 #[test]
 fn template_form_saves_the_visible_playbook_path() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source();
     assert!(script.contains("fields_marked_with_a_star_are_required"));
     assert!(script.contains("class=\"field required\""));
     assert!(script.contains("classList.toggle(\"required\", tool !== \"shell\")"));
@@ -1096,8 +1084,7 @@ fn template_form_saves_the_visible_playbook_path() {
 
 #[test]
 fn inventory_tables_drop_variables_and_details_keep_them() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source();
     let host_table = extract_braced_function(&script, "function inventoryHostTable");
     let group_table = extract_braced_function(&script, "function inventoryGroupTable");
     for table in [&host_table, &group_table] {
@@ -1148,7 +1135,7 @@ fn inventory_tables_drop_variables_and_details_keep_them() {
     .join("\n");
     let probe = format!(
         r#"{functions}
-let variablesViewSerial = 0;
+const appState = {{ variablesViewSerial: 0, setVariablesViewSerial(value) {{ return (this.variablesViewSerial = value); }} }};
 function t(key) {{ return key; }}
 function esc(value) {{
   return String(value ?? "").replace(/[&<>"']/g, (ch) => ({{
@@ -1223,14 +1210,18 @@ check(!empty.includes('<pre class="vars">'), "empty state rendered a code block\
 
 #[test]
 fn route_leave_guard_only_blocks_changed_forms() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source();
     let route = extract_braced_function(&script, "async function route");
     let probe = format!(
-        r##"let leaveGuard = null;
-let shownHash = null;
-let navToken = null;
-let me = null;
+        r##"const appState = {{
+  leaveGuard: null,
+  shownHash: null,
+  navToken: null,
+  me: null,
+  setLeaveGuard(value) {{ return (this.leaveGuard = value); }},
+  setShownHash(value) {{ return (this.shownHash = value); }},
+  setNavToken(value) {{ return (this.navToken = value); }},
+}};
 let location = {{ hash: "#/" }};
 let replaced = 0;
 const history = {{ replaceState(_state, _title, url) {{ replaced += 1; location.hash = url; }} }};
@@ -1245,7 +1236,7 @@ function renderLogin() {{ rendered += 1; }}
 {route}
 function reset(hash) {{
   location.hash = hash;
-  shownHash = hash;
+  appState.setShownHash(hash);
   replaced = 0;
   prompts = 0;
   promptedKey = "";
@@ -1257,35 +1248,35 @@ function check(ok, message) {{
 }}
 (async () => {{
   reset("#/projects/p1");
-  leaveGuard = () => false;
+  appState.setLeaveGuard(() => false);
   location.hash = "#/jobs";
   await route();
-  check(rendered === 1 && shownHash === "#/jobs" && replaced === 0 && prompts === 0, "unchanged project was blocked");
+  check(rendered === 1 && appState.shownHash === "#/jobs" && replaced === 0 && prompts === 0, "unchanged project was blocked");
 
   reset("#/inventories/i1");
-  leaveGuard = () => false;
+  appState.setLeaveGuard(() => false);
   location.hash = "#/jobs";
   await route();
-  check(rendered === 1 && shownHash === "#/jobs" && replaced === 0 && prompts === 0, "unchanged inventory was blocked");
+  check(rendered === 1 && appState.shownHash === "#/jobs" && replaced === 0 && prompts === 0, "unchanged inventory was blocked");
 
   reset("#/projects/p1");
-  leaveGuard = () => true;
+  appState.setLeaveGuard(() => true);
   confirmAnswer = false;
   location.hash = "#/jobs";
   await route();
-  check(prompts === 1 && promptedKey === "discard_unsaved_changes" && replaced === 1 && location.hash === "#/projects/p1" && shownHash === "#/projects/p1" && rendered === 0, "cancel left the form");
+  check(prompts === 1 && promptedKey === "discard_unsaved_changes" && replaced === 1 && location.hash === "#/projects/p1" && appState.shownHash === "#/projects/p1" && rendered === 0, "cancel left the form");
 
   reset("#/inventories/i1");
-  leaveGuard = () => true;
+  appState.setLeaveGuard(() => true);
   location.hash = "#/jobs";
   await route();
-  check(prompts === 1 && replaced === 0 && shownHash === "#/jobs" && rendered === 1, "confirm did not navigate");
+  check(prompts === 1 && replaced === 0 && appState.shownHash === "#/jobs" && rendered === 1, "confirm did not navigate");
 
   reset("#/projects/p1");
-  leaveGuard = () => false;
+  appState.setLeaveGuard(() => false);
   location.hash = "#/projects";
   await route();
-  check(rendered === 1 && shownHash === "#/projects" && replaced === 0, "browser back was blocked");
+  check(rendered === 1 && appState.shownHash === "#/projects" && replaced === 0, "browser back was blocked");
 }})();
 "##
     );
@@ -1294,8 +1285,7 @@ function check(ok, message) {{
 
 #[test]
 fn the_preflight_notice_uses_the_missing_tool_and_runtime() {
-    let script = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("web/app.js"))
-        .expect("app.js");
+    let script = web_source();
     assert!(script.contains("id=\"preflight-check\""));
     assert!(script.contains("api(\"GET\", \"/api/v1/runner/preflight\")"));
     let function = extract_braced_function(&script, "function preflightNotices(report)");
@@ -1326,8 +1316,7 @@ for (const [report, want] of cases) {{
 
 #[test]
 fn dashboard_page_has_tabs_default_range_empty_state_and_cache_numbers() {
-    let script = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("web/app.js"))
-        .expect("app.js");
+    let script = web_source();
     let tabs = extract_braced_function(&script, "function dashboardTabs(tab)");
     let chart = extract_braced_function(
         &script,
@@ -1344,7 +1333,7 @@ fn dashboard_page_has_tabs_default_range_empty_state_and_cache_numbers() {
 {short}
 {range}
 {address}
-let lang = "en";
+function currentLanguage() {{ return "en"; }}
 let location = {{ hash: "#/" }};
 function esc(value) {{ return String(value ?? ""); }}
 function t(key) {{ return key; }}

@@ -1,5 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+#[path = "common/web_source.rs"]
+mod web_source;
+
 use std::fs;
 use std::path::PathBuf;
 
@@ -59,7 +62,7 @@ fn table_text_does_not_break_mid_word() {
 
 #[test]
 fn list_tables_hide_low_priority_cells_on_narrow_windows() {
-    let js = web_file("app.js");
+    let js = web_source::source();
     assert!(js.contains("function table(headers, rows)"));
     assert!(js.contains("class=\"table-wrap\""));
     assert!(js.contains("class=\"tool narrow-hide\""));

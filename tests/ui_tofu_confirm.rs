@@ -1,6 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::path::Path;
+#[path = "common/web_source.rs"]
+mod web_source;
+
 use std::process::Command;
 
 const HELPERS_PROBE: &str = r##"
@@ -213,24 +215,21 @@ check(target === "#/jobs/job-1", "confirm did not open the new job");
 
 #[test]
 fn only_opentofu_apply_and_apply_nodes_are_guarded() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let js = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let js = web_source::source();
     let probe = HELPERS_PROBE.replace("__JS__", &serde_json::to_string(&js).expect("js json"));
     run_node_probe("tofu-confirm-helpers", &probe);
 }
 
 #[test]
 fn confirm_dialog_names_the_target_and_returns_the_answer() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let js = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let js = web_source::source();
     let probe = CONFIRM_PROBE.replace("__JS__", &serde_json::to_string(&js).expect("js json"));
     run_node_probe("tofu-confirm-dialog", &probe);
 }
 
 #[test]
 fn launch_with_options_waits_for_the_confirmation() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let js = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let js = web_source::source();
     let probe = LAUNCH_PROBE.replace("__JS__", &serde_json::to_string(&js).expect("js json"));
     run_node_probe("tofu-confirm-launch", &probe);
 }

@@ -1,6 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::path::PathBuf;
+#[path = "common/web_source.rs"]
+mod web_source;
+
 use std::process::Command;
 
 const SOURCE_GUARD_PROBE: &str = r##"
@@ -59,10 +61,10 @@ check(
   mount.includes('card.querySelector("[data-remove-draft]").addEventListener("click", () => card.remove());'),
   "cancelling a source card does not remove it",
 );
-const guardStart = js.indexOf('leaveGuard = () => document.querySelector("#source-edit [data-dirty]")');
+const guardStart = js.indexOf('appState.setLeaveGuard(() => document.querySelector("#source-edit [data-dirty]")');
 check(guardStart >= 0, "the source edit leave guard is missing");
-const guardEnd = js.indexOf(";", guardStart);
-const guardExpr = js.slice(guardStart + "leaveGuard = ".length, guardEnd);
+const guardEnd = js.indexOf(");", guardStart);
+const guardExpr = js.slice(guardStart + "appState.setLeaveGuard(".length, guardEnd);
 function guard(dirty, draft) {
   const document = {
     querySelector: (selector) => selector.includes("[data-dirty]") ? (dirty ? {} : null) : (draft ? {} : null),
@@ -74,8 +76,8 @@ check(guard(true, false) === true, "a dirty source card does not trigger the lea
 check(guard(false, true) === true, "a source draft does not trigger the leave guard");
 const route = js.indexOf("async function route()");
 check(route >= 0, "route is missing");
-const confirm = js.indexOf("if (leaveGuard && shownHash !== null", route);
-const reset = js.indexOf("leaveGuard = null;", route);
+const confirm = js.indexOf("if (appState.leaveGuard && appState.shownHash !== null", route);
+const reset = js.indexOf("appState.setLeaveGuard(null);", route);
 check(confirm >= 0 && reset > confirm, "route does not clear the leave guard after the confirm");
 "##;
 
@@ -94,8 +96,7 @@ fn run_node_probe(name: &str, probe: &str) {
 
 #[test]
 fn source_cards_share_the_dirty_guard() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let js = std::fs::read_to_string(root.join("web/app.js")).expect("web/app.js");
+    let js = web_source::source();
     let probe = SOURCE_GUARD_PROBE.replace("__JS__", &serde_json::to_string(&js).expect("js json"));
     run_node_probe("source-dirty-guard", &probe);
 }

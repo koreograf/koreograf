@@ -141,7 +141,7 @@ fn message_catalogs_match_and_cover_the_ui() {
         "catalog keys differ"
     );
 
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source();
     let mut missing = BTreeSet::new();
     for key in ui_message_keys(&script) {
         if !de.contains_key(&key) {
@@ -150,11 +150,11 @@ fn message_catalogs_match_and_cover_the_ui() {
     }
     assert!(
         missing.is_empty(),
-        "app.js keys missing from the catalogs: {missing:?}"
+        "js keys missing from the catalogs: {missing:?}"
     );
 
-    let german_ui = umlaut_lines("web/app.js", &script);
-    assert!(german_ui.is_empty(), "German left in app.js: {german_ui:?}");
+    let german_ui = umlaut_lines("web/js", &script);
+    assert!(german_ui.is_empty(), "German left in web/js: {german_ui:?}");
     let mut german_src = Vec::new();
     leftover_german(&root.join("src"), &mut german_src);
     assert!(german_src.is_empty(), "German left in src: {german_src:?}");
@@ -267,7 +267,7 @@ fn rust_sources(dir: &Path) -> String {
 #[test]
 fn source_control_token_hints_are_in_the_forms_and_catalogs() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let script = web_source();
     assert!(script.contains("[\"scm\", \"source_control\", \"source_control_credential_hint\"]"));
     assert!(script.contains("credHint(\"source_control_username_hint\")"));
     assert!(script.contains("h(\"source_control_project_hint\")"));

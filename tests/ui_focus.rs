@@ -1,5 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+#[path = "common/web_source.rs"]
+mod web_source;
+
 use std::path::Path;
 use std::process::Command;
 
@@ -113,8 +116,7 @@ for (const selector of [".btn", ".table a", ".lang-button", ".dialog-close"]) {
 
 #[test]
 fn overlays_restore_focus_to_the_trigger() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let js = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let js = web_source::source();
     let probe = FOCUS_PROBE.replace("__JS__", &serde_json::to_string(&js).expect("js json"));
     run_node_probe("overlay-focus", &probe);
 }
@@ -122,7 +124,7 @@ fn overlays_restore_focus_to_the_trigger() {
 #[test]
 fn login_tab_order_follows_the_form() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let js = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let js = web_source::source();
     let css = std::fs::read_to_string(root.join("web/app.css")).expect("app.css");
     let probe = LOGIN_PROBE
         .replace("__JS__", &serde_json::to_string(&js).expect("js json"))

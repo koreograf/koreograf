@@ -1,6 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::path::Path;
+#[path = "common/web_source.rs"]
+mod web_source;
+
 use std::process::Command;
 
 const DOUBLE_SUBMIT_PROBE: &str = r##"
@@ -215,8 +217,7 @@ check(target === "#/jobs/job-2", "the retry did not open the new job");
 
 #[test]
 fn launch_dialog_double_submit_creates_one_job() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let js = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let js = web_source::source();
     let probe =
         DOUBLE_SUBMIT_PROBE.replace("__JS__", &serde_json::to_string(&js).expect("js json"));
     run_node_probe("double-launch", &probe);
@@ -224,8 +225,7 @@ fn launch_dialog_double_submit_creates_one_job() {
 
 #[test]
 fn failed_launch_restores_the_dialog_submit() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let js = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let js = web_source::source();
     let probe = FAILURE_PROBE.replace("__JS__", &serde_json::to_string(&js).expect("js json"));
     run_node_probe("double-launch-failure", &probe);
 }

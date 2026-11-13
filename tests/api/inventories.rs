@@ -503,9 +503,9 @@ async fn inventory_sources_can_be_edited_and_inventories_renamed() {
     let app = harness.app.clone();
     let dir = harness.dir.clone();
 
-    let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = script.as_str().unwrap_or("");
+    let script = web_source();
     assert!(script.contains("data-edit-source"));
     assert!(script.contains("hosts_before_after"));
 
@@ -2715,9 +2715,9 @@ async fn inventory_sources_and_ansible_check_options() {
     let app = harness.app.clone();
     let dir = harness.dir.clone();
 
-    let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = script.as_str().unwrap_or("");
+    let script = web_source();
     assert!(script.contains("id=\"inventory-search\""));
     assert!(script.contains("inventory_2"));
     assert!(script.contains("project_2"));

@@ -80,9 +80,9 @@ async fn admin_backup_roundtrip_replaces_the_installation() {
     let app = harness.app.clone();
     let dir = harness.dir.clone();
 
-    let (status, script, _) = call(&app, "GET", "/app.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = script.as_str().unwrap_or("");
+    let script = web_source();
     assert!(script.contains("download_backup"));
     assert!(script.contains("#/backup"));
     assert!(script.contains("X-Restore-Confirm"));

@@ -181,7 +181,7 @@ jobs:
       - name: Install node dependencies
         run: npm ci
       - name: Parse the web UI
-        run: node --check web/app.js
+        run: find web -name '*.js' -print0 | xargs -0 -n1 node --check
       - name: Test the catalogs
         run: node --test web/tests/
       - name: Parse the image harness

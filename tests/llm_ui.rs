@@ -1,6 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::path::Path;
+#[path = "common/web_source.rs"]
+mod web_source;
+
 use std::process::Command;
 
 const PROBE: &str = r##"
@@ -30,10 +32,10 @@ const items = nav(true);
 check(Array.isArray(items) && items.length === 1, "the assistant entry is missing while enabled");
 check(items[0][0] === "#/assistant", "the assistant entry does not point at the chat page");
 check(items[0][1] === "Assistant", "the assistant entry has no label");
-check(js.includes("...assistantNavItem(assistantEnabled)"), "the navigation does not use the enabled flag");
+check(js.includes("...assistantNavItem(appState.assistantEnabled)"), "the navigation does not use the enabled flag");
 check(js.includes('api("GET", "/api/v1/assistant")'), "the UI does not read the assistant status");
 const page = extractFunction("pageAssistant");
-check(page.includes("if (!assistantEnabled)"), "the chat page does not check the enabled flag");
+check(page.includes("if (!appState.assistantEnabled)"), "the chat page does not check the enabled flag");
 check(page.includes('api("POST", "/api/v1/assistant/chat"'), "the chat page does not call the assistant route");
 const turn = extractFunction("assistantTurnHtml");
 check(turn.includes("esc(turn.content)"), "the chat page does not escape answers");
@@ -58,8 +60,7 @@ fn run_node_probe(name: &str, probe: &str) {
 
 #[test]
 fn the_assistant_entry_only_shows_when_the_server_enables_it() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let js = std::fs::read_to_string(root.join("web/app.js")).expect("app.js");
+    let js = web_source::source();
     let probe = PROBE.replace("__JS__", &serde_json::to_string(&js).expect("js json"));
     run_node_probe("assistant-ui", &probe);
 }

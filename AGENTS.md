@@ -7,7 +7,7 @@ Koreograf is a Rust prototype: one binary with an HTTP API, a browser UI, and a 
 - `README.md`, `docs/`, code identifiers, and commit messages are English.
 - Commit messages follow Conventional Commits. The subject is imperative, starts with a lowercase letter, has no trailing period, and stays within 72 characters. commitlint enforces that on pull requests.
 - Read `docs/ui-style-guide.md` before you change the browser UI. Its checklist applies to every UI pull request.
-- The browser UI defaults to German. Visible copy lives in `web/i18n/de.json` and `web/i18n/en.json`. The UI looks up a key with `t()` or `h()`. A new visible string is the same key in both files. Smoke tests check that the catalogs match and that every `t()`, `h()`, and `renderLogin()` string in `web/app.js` is a catalog key.
+- The browser UI defaults to German. Visible copy lives in `web/i18n/de.json` and `web/i18n/en.json`. The UI looks up a key with `t()` or `h()`. A new visible string is the same key in both files. Smoke tests check that the catalogs match and that every `t()`, `h()`, and `renderLogin()` string in `web/js/` is a catalog key.
 - A new UI language is one object in `LANGUAGES` (`id`, `code`, `name`, `country`) plus `web/i18n/<id>.json` with the same keys. Add that country's SVG to `FLAG_SVG`; a missing flag shows the country code. The sidebar and the sign-in page share the list. English uses the UK flag.
 - API errors are `{ "error": "<key>" }` plus optional `vars`. Build one that includes user data with `error::message` or `ApiError::bad_vars`. Logs and job output stay English prose. Do not put a catalog key in a line the job view shows raw.
 - Comments in `.env.example` are English. Comments in the Helm chart are still German. Leave the chart comments unless asked to translate them.
@@ -33,7 +33,7 @@ Domain code lives in `src/features/<domain>/` as `mod.rs`, `routes.rs`, `model.r
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
-node --check web/app.js
+find web -name '*.js' -print0 | xargs -0 -n1 node --check
 ```
 
 - `#![forbid(unsafe_code)]` is set. Do not add `unsafe`. Do not use `unwrap` or `expect` on library paths. Do not enable `missing_docs`.
