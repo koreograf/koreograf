@@ -107,7 +107,7 @@ async fn admin_can_list_and_update_users() {
     let app = harness.app.clone();
     let dir = harness.dir.clone();
 
-    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let script = web_source();
     assert!(script.contains("search_users"));
@@ -441,7 +441,7 @@ async fn signed_in_user_can_read_their_own_account() {
     let app = harness.app.clone();
     let dir = harness.dir.clone();
 
-    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let script = web_source();
     assert!(script.contains("my_account"));
@@ -601,7 +601,7 @@ async fn a_rejected_sign_in_uses_one_message_and_keeps_the_username() {
     let app = harness.app.clone();
     let dir = harness.dir.clone();
 
-    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let script = web_source();
     assert!(script.contains("invalid_username_or_password"));

@@ -17,7 +17,7 @@ async fn the_job_log_marks_a_fatal_line_and_keeps_galaxy_as_a_warning() {
     let app = harness.app.clone();
     let dir = harness.dir.clone();
 
-    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let script = web_source();
     assert!(script.contains("function classifyLogLine"));
@@ -256,7 +256,7 @@ async fn failed_job_shows_parameters_and_can_be_relaunched() {
     let app = harness.app.clone();
     let dir = harness.dir.clone();
 
-    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let script = web_source();
     assert!(script.contains("output"));
@@ -414,7 +414,7 @@ async fn prompt_on_launch_overrides_the_job_and_keeps_the_template() {
     let state = koreograf::boot(cfg).unwrap();
     let app = koreograf::router(state);
 
-    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let script = web_source();
     assert!(script.contains("prompt_on_launch"));

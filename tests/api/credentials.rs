@@ -13,7 +13,7 @@ async fn owner_can_store_an_ssh_password_without_a_key() {
     let app = harness.app.clone();
     let dir = harness.dir.clone();
 
-    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let script = web_source();
     assert!(script.contains("machine_ssh"));
@@ -201,7 +201,7 @@ async fn template_accepts_one_credential_per_kind_and_many_vaults() {
     let app = harness.app.clone();
     let dir = harness.dir.clone();
 
-    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let script = web_source();
     assert!(script.contains("one_credential_of_each_kind_choose_vault_credentials"));
@@ -548,7 +548,7 @@ async fn template_credential_kinds_follow_the_tool() {
     let db_state = state.clone();
     let app = koreograf::router(state);
 
-    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let script = web_source();
     assert!(script.contains("const TOOL_CREDENTIAL_KINDS = {"));

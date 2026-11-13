@@ -133,7 +133,7 @@ async fn workflow_node_can_override_template_parameters() {
     let app = harness.app.clone();
     let dir = harness.dir.clone();
 
-    let (status, _, _) = call(&app, "GET", "/js/features/legacy.js", None, None, None).await;
+    let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     let script = web_source();
     assert!(script.contains("colors_show_the_run_a_click_shows_the"));

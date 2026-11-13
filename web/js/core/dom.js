@@ -30,6 +30,22 @@ export function table(headers, rows) {
   return `<div class="table-wrap"><table class="table"><thead><tr>${headers.map((item) => `<th>${esc(item)}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
+export function roleOptions(selected) {
+  const labels = { viewer: "viewer", operator: "operator", owner: "owner" };
+  return ["viewer", "operator", "owner"].map((role) =>
+    `<option value="${role}"${role === selected ? " selected" : ""}>${h(labels[role])}</option>`
+  ).join("");
+}
+
+export function roleLegend() {
+  return `<ul class="role-legend">
+    <li><strong>${h("viewer")}</strong> ${h("a_viewer_sees_projects_inventories_templates_jobs_and")}</li>
+    <li><strong>${h("operator")}</strong> ${h("an_operator_launches_jobs_and_maintains_projects_inventories")}</li>
+    <li><strong>${h("owner")}</strong> ${h("an_owner_also_manages_credentials_environments_and_members")}</li>
+    <li><strong>${h("administrator")}</strong> ${h("an_administrator_manages_organizations_teams_users_settings_and")}</li>
+  </ul>`;
+}
+
 export function orgOptions(organizations, selected) {
   return organizations.map((item) =>
     `<option value="${esc(item.id)}"${item.id === selected ? " selected" : ""}>${esc(item.name)}</option>`

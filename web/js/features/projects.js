@@ -253,6 +253,7 @@ async function pageProject(id) {
   }
 }
 
+registerRoute("#/catalog", () => { location.hash = "#/projects"; });
 registerRedirect("#/projects/new", "#/projects?new=1");
 registerRoute("#/projects/:id", (params) => pageProject(params.id));
 registerRoute("#/projects", pageProjects);
