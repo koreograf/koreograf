@@ -491,7 +491,7 @@ export function inventoryHostUrl(id, state) {
   return `/api/v1/inventories/${encodeURIComponent(id)}/hosts?${params}`;
 }
 
-function inventoryHostTable(hosts, state, id) {
+export function inventoryHostTable(hosts, state, id) {
   const head = (label, field) => {
     const active = state.sort === field || state.sort === `-${field}`;
     const descending = active && state.sort.startsWith("-");
@@ -508,7 +508,7 @@ function inventoryHostTable(hosts, state, id) {
   return `<div class="table-wrap inventory-hosts-table"><table class="table"><thead><tr>${head("name", "name")}${head("address", "address")}${head("groups", "groups")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
 }
 
-function inventoryGroupTable(groups, id) {
+export function inventoryGroupTable(groups, id) {
   const rows = groups.map((group) => {
     const link = `<a href="#/inventories/${encodeURIComponent(id)}/groups/${encodeURIComponent(group.name)}">${esc(group.name)}</a>`;
     return `<tr><td>${link}</td><td>${esc(group.host_count)}</td><td>${esc((group.children || []).join(", "))}</td></tr>`;
@@ -914,7 +914,7 @@ function variableKey(name) {
   return /^[A-Za-z_][A-Za-z0-9_.-]*$/.test(text) ? esc(text) : esc(JSON.stringify(text));
 }
 
-function effectiveVariablesYaml(vars) {
+export function effectiveVariablesYaml(vars) {
   return vars.map((item) => {
     const value = variableScalar(variableText(item));
     return `<span class="vars-key">${variableKey(item.name)}</span>: <span class="vars-value">${value}</span> <span class="vars-comment"># ${esc(variableOrigin(item))}</span>`;
@@ -936,7 +936,7 @@ function jsonVariableMarkup(text) {
   return result + esc(text.slice(last));
 }
 
-function effectiveVariablesJson(vars) {
+export function effectiveVariablesJson(vars) {
   const rows = vars.map((item) => ({
     name: String(item.name ?? ""),
     value: looksSecretVar(item.name) ? "••••••" : (item.value ?? ""),
@@ -945,7 +945,7 @@ function effectiveVariablesJson(vars) {
   return jsonVariableMarkup(JSON.stringify(rows, null, 2));
 }
 
-function variablesViewer(vars) {
+export function variablesViewer(vars) {
   variablesSerial += 1;
   const id = `vars-${variablesSerial}`;
   const empty = `<p class="small muted">${h("no_variables")}</p>`;

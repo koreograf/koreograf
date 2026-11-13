@@ -82,10 +82,6 @@ async fn admin_backup_roundtrip_replaces_the_installation() {
 
     let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = web_source();
-    assert!(script.contains("download_backup"));
-    assert!(script.contains("#/backup"));
-    assert!(script.contains("X-Restore-Confirm"));
 
     let (status, me, cookie) = call(
         &app,

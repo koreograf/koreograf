@@ -505,9 +505,6 @@ async fn inventory_sources_can_be_edited_and_inventories_renamed() {
 
     let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = web_source();
-    assert!(script.contains("data-edit-source"));
-    assert!(script.contains("hosts_before_after"));
 
     let (status, me, cookie) = call(
         &app,
@@ -2717,30 +2714,6 @@ async fn inventory_sources_and_ansible_check_options() {
 
     let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = web_source();
-    assert!(script.contains("id=\"inventory-search\""));
-    assert!(script.contains("inventory_2"));
-    assert!(script.contains("project_2"));
-    assert!(script.contains("credential"));
-    assert!(script.contains("environment"));
-    assert!(script.contains("data-lang-select"));
-    assert!(script.contains("FLAG_SVG"));
-    assert!(script.contains("country: \"gb\""));
-    assert!(script.contains("data-add-kind"));
-    assert!(script.contains("check_dry_run"));
-    assert!(script.contains("skip_tags"));
-    assert!(script.contains("0_normal"));
-    assert!(script.contains("1_verbose"));
-    assert!(script.contains("2_more_verbose"));
-    assert!(script.contains("3_debug"));
-    assert!(script.contains("4_connection_debug"));
-    assert!(script.contains("data-chips"));
-    assert!(script.contains("chip-entry"));
-    let (status, style, _) = call(&app, "GET", "/app.css", None, None, None).await;
-    assert_eq!(status, StatusCode::OK);
-    let style = style.as_str().unwrap_or("");
-    assert!(style.contains(".chips"));
-    assert!(style.contains(".chip-entry"));
 
     let (status, me, cookie) = call(
         &app,

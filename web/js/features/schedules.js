@@ -14,7 +14,7 @@ const SCHEDULE_ZONES = [
 ];
 const SCHEDULE_DAYS = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"];
 
-function scheduleQuery(hash = location.hash || "#/") {
+export function scheduleQuery(hash = location.hash || "#/") {
   const params = new URLSearchParams((hash || "").split("?")[1] || "");
   return {
     edit: params.get("edit") || "",
@@ -24,7 +24,7 @@ function scheduleQuery(hash = location.hash || "#/") {
   };
 }
 
-function scheduleAddress(params, hash = location.hash || "#/") {
+export function scheduleAddress(params, hash = location.hash || "#/") {
   const [path, query] = (hash || "#/").split("?");
   params = params || {};
   const search = new URLSearchParams(query || "");
@@ -37,7 +37,7 @@ function scheduleAddress(params, hash = location.hash || "#/") {
   return `${path}${rest ? `?${rest}` : ""}`;
 }
 
-function scheduleNewTarget(request) {
+export function scheduleNewTarget(request) {
   const value = request.create || "";
   let kind = request.kind;
   let target = request.target;

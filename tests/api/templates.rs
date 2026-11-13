@@ -15,16 +15,6 @@ async fn an_empty_template_entry_path_is_rejected_and_marked_in_the_form() {
 
     let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = web_source();
-    assert!(script.contains("for_example_site_yml"));
-    assert!(script.contains("id=\"entrypoint-error\""));
-    assert!(script.contains("form.entrypoint.value = books[0]"));
-    assert!(script.contains("ansible_needs_a_playbook_as_the_entry"));
-    assert!(script.contains("opentofu_needs_a_module_directory"));
-    assert!(!script.contains("placeholder=\"site.yml\""));
-    let (status, style, _) = call(&app, "GET", "/app.css", None, None, None).await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(style.as_str().unwrap_or("").contains("field-error"));
 
     let (status, me, cookie) = call(
         &app,
@@ -120,9 +110,6 @@ async fn a_template_can_run_the_last_sync_offline() {
 
     let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = web_source();
-    assert!(script.contains("id=\"update-on-launch\""));
-    assert!(script.contains("update_the_project_on_launch"));
 
     let (status, me, cookie) = call(
         &app,

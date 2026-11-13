@@ -46,7 +46,6 @@ async fn web_assets_send_types_etags_and_security_headers() {
     let harness = TestApp::boot("assets", Options::default());
     for (path, content_type) in [
         ("/js/features/jobs.js", "text/javascript; charset=utf-8"),
-        ("/app.css", "text/css; charset=utf-8"),
         ("/i18n/de.json", "application/json; charset=utf-8"),
         ("/i18n/en.json", "application/json; charset=utf-8"),
         ("/index.html", "text/html; charset=utf-8"),

@@ -266,7 +266,7 @@ function failureKind(text) {
 
 const RECAP_FIELDS = ["ok", "changed", "unreachable", "failed", "skipped", "rescued", "ignored"];
 
-function parseRecapLine(text) {
+export function parseRecapLine(text) {
   const match = /^\s*(\S+)\s*:\s*ok=(\d+)\s+changed=(\d+)\s+unreachable=(\d+)\s+failed=(\d+)\s+skipped=(\d+)\s+rescued=(\d+)\s+ignored=(\d+)\s*$/.exec(String(text ?? ""));
   if (!match) return null;
   return {
@@ -281,11 +281,11 @@ function parseRecapLine(text) {
   };
 }
 
-function recapFailed(row) {
+export function recapFailed(row) {
   return Boolean(row && (row.failed > 0 || row.unreachable > 0));
 }
 
-function searchSegments(text, query) {
+export function searchSegments(text, query) {
   const raw = String(text ?? "");
   const needle = String(query ?? "");
   if (!needle) return [{ text: raw, hit: false }];
@@ -484,7 +484,7 @@ function showTagFilterBanner() {
   );
 }
 
-function classifyLogLine(log, row) {
+export function classifyLogLine(log, row) {
   const text = plainLogLine(row.line);
   if (tagFilterNote(row)) return "warn";
   const galaxy = galaxyPhase(log, text);
@@ -586,7 +586,7 @@ function credentialSummary(params) {
   return [params.credential_name, kind].filter(Boolean).join(" · ");
 }
 
-function jobParameters(job) {
+export function jobParameters(job) {
   const params = job.parameters && job.parameters.tool ? job.parameters : null;
   const hosts = Array.isArray(job.failed_hosts) ? job.failed_hosts : [];
   if (!params) {

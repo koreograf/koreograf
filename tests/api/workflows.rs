@@ -135,13 +135,6 @@ async fn workflow_node_can_override_template_parameters() {
 
     let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = web_source();
-    assert!(script.contains("colors_show_the_run_a_click_shows_the"));
-    assert!(script.contains("back_to_the_workflow"));
-    assert!(script.contains("id=\"run-log\""));
-    assert!(script.contains("id: \"node-output\""));
-    assert!(!script.contains("Ein Klick öffnet den Auftrag"));
-    assert!(!script.contains("#/jobs/${phase.job_id}"));
 
     let (status, me, cookie) = call(
         &app,

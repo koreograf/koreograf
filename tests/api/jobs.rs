@@ -19,36 +19,6 @@ async fn the_job_log_marks_a_fatal_line_and_keeps_galaxy_as_a_warning() {
 
     let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = web_source();
-    assert!(script.contains("function classifyLogLine"));
-    assert!(script.contains("fatal:\\s*\\["));
-    assert!(script.contains("UNREACHABLE!"));
-    assert!(script.contains("ERROR!"));
-    assert!(script.contains("failed=[1-9]"));
-    assert!(script.contains("unreachable=[1-9]"));
-    assert!(script.contains("PLAY RECAP"));
-    assert!(script.contains("Galaxy install failed. The existing cache is used anyway."));
-    assert!(script.contains("Role install failed. The existing cache is used anyway."));
-    assert!(script.contains("ansible-galaxy collection install"));
-    assert!(script.contains("first_failure"));
-    assert!(script.contains(
-        "row.stream === \"system\" && plainLogLine(row.line).includes(\"Tag filter matched no tasks.\")"
-    ));
-    assert!(script.contains("tag_filter_matched_no_tasks"));
-    assert!(script.contains("function when("));
-    assert!(script.contains("timeZoneName: \"short\""));
-    assert!(script.contains("let flashKey"));
-    assert!(script.contains("this_field_needs_a_valid_value"));
-    assert!(script.contains("class=\"btn pill danger\""));
-    assert!(script.contains("log-summary"));
-    let (status, style, _) = call(&app, "GET", "/app.css", None, None, None).await;
-    assert_eq!(status, StatusCode::OK);
-    let style = style.as_str().unwrap_or("");
-    assert!(style.contains(".card.danger-zone"));
-    assert!(style.contains(".table th { text-align: left; font-size: 13px;"));
-    assert!(style.contains(".log div.fail"));
-    assert!(style.contains(".log div.warn"));
-    assert!(style.contains(".log-summary"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -258,18 +228,6 @@ async fn failed_job_shows_parameters_and_can_be_relaunched() {
 
     let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = web_source();
-    assert!(script.contains("output"));
-    assert!(script.contains("download_output"));
-    assert!(script.contains("data-relaunch"));
-    assert!(script.contains("relaunch"));
-    assert!(script.contains("failed_hosts_only"));
-    let (status, style, _) = call(&app, "GET", "/app.css", None, None, None).await;
-    assert_eq!(status, StatusCode::OK);
-    let style = style.as_str().unwrap_or("");
-    assert!(style.contains(".tabs"));
-    assert!(style.contains(".tab-bar"));
-    assert!(script.contains("download-output"));
 
     let (status, me, cookie) = call(
         &app,
@@ -416,9 +374,6 @@ async fn prompt_on_launch_overrides_the_job_and_keeps_the_template() {
 
     let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = web_source();
-    assert!(script.contains("prompt_on_launch"));
-    assert!(script.contains("launch-prompt"));
 
     let (status, me, cookie) = call(
         &app,

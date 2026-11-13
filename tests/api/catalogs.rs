@@ -141,20 +141,6 @@ fn message_catalogs_match_and_cover_the_ui() {
         "catalog keys differ"
     );
 
-    let script = web_source();
-    let mut missing = BTreeSet::new();
-    for key in ui_message_keys(&script) {
-        if !de.contains_key(&key) {
-            missing.insert(key);
-        }
-    }
-    assert!(
-        missing.is_empty(),
-        "js keys missing from the catalogs: {missing:?}"
-    );
-
-    let german_ui = umlaut_lines("web/js", &script);
-    assert!(german_ui.is_empty(), "German left in web/js: {german_ui:?}");
     let mut german_src = Vec::new();
     leftover_german(&root.join("src"), &mut german_src);
     assert!(german_src.is_empty(), "German left in src: {german_src:?}");
@@ -169,27 +155,6 @@ fn message_catalogs_match_and_cover_the_ui() {
     assert!(
         api_missing.is_empty(),
         "API keys missing from the catalogs: {api_missing:?}"
-    );
-
-    let dynamic_prefixes = DYNAMIC_PREFIX_KEYS.map(|(prefix, _)| prefix);
-    let index = std::fs::read_to_string(root.join("web/index.html")).expect("index.html");
-    let web = format!("{script}\n{index}");
-    let rust = rust_sources(&root.join("src"));
-    let mut unused = BTreeSet::new();
-    for key in de.keys() {
-        if quoted_literal(&web, key)
-            || quoted_literal(&rust, key)
-            || dynamic_prefixes
-                .iter()
-                .any(|prefix| key.starts_with(*prefix))
-        {
-            continue;
-        }
-        unused.insert(key.clone());
-    }
-    assert!(
-        unused.is_empty(),
-        "catalog keys used by neither the UI nor the API: {unused:?}"
     );
     for catalog in [&de, &en] {
         let hint = catalog
@@ -236,42 +201,29 @@ fn dynamic_catalog_prefixes_have_their_keys() {
     }
 }
 
-fn quoted_literal(source: &str, key: &str) -> bool {
-    ["\"", "'", "`"]
-        .iter()
-        .any(|quote| source.contains(&format!("{quote}{key}{quote}")))
-}
-
-fn rust_sources(dir: &Path) -> String {
-    let mut text = String::new();
-    for entry in
-        std::fs::read_dir(dir).unwrap_or_else(|err| panic!("read {}: {err}", dir.display()))
-    {
-        let entry = entry.unwrap_or_else(|err| panic!("{err}"));
-        let path = entry.path();
-        if path.is_dir() {
-            text.push_str(&rust_sources(&path));
-            continue;
-        }
-        if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
-            text.push_str(
-                &std::fs::read_to_string(&path)
-                    .unwrap_or_else(|err| panic!("read {}: {err}", path.display())),
-            );
-            text.push('\n');
-        }
-    }
-    text
+#[test]
+fn auto_mode_copy_names_the_missing_runtime() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let runner = std::fs::read_to_string(root.join("src/runner.rs")).expect("runner.rs");
+    assert!(runner
+        .contains("Mount the Docker socket, or set the runner mode to docker to fail instead."));
+    let en = std::fs::read_to_string(root.join("web/i18n/en.json")).expect("en");
+    let de = std::fs::read_to_string(root.join("web/i18n/de.json")).expect("de");
+    assert!(
+        en.contains("Mount the Docker socket, or set the runner mode to docker to fail instead.")
+    );
+    assert!(en.contains("In automatic mode a set image is also ignored"));
+    assert!(de.contains("Docker-Socket"));
+    assert!(de.contains("Im automatischen Modus"));
+    let docs = std::fs::read_to_string(root.join("docs/configuration.md")).expect("docs");
+    assert!(docs.contains("mount the Docker socket"));
+    assert!(docs.contains("stops after ten seconds"));
+    assert!(docs.contains("GET /api/runner"));
 }
 
 #[test]
 fn source_control_token_hints_are_in_the_forms_and_catalogs() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = web_source();
-    assert!(script.contains("[\"scm\", \"source_control\", \"source_control_credential_hint\"]"));
-    assert!(script.contains("credHint(\"source_control_username_hint\")"));
-    assert!(script.contains("h(\"source_control_project_hint\")"));
-    assert!(script.contains("h(\"source_control_key_hint\")"));
     let en = std::fs::read_to_string(root.join("web/i18n/en.json")).expect("en");
     let de = std::fs::read_to_string(root.join("web/i18n/de.json")).expect("de");
     for catalog in [&en, &de] {

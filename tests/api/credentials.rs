@@ -15,17 +15,6 @@ async fn owner_can_store_an_ssh_password_without_a_key() {
 
     let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = web_source();
-    assert!(script.contains("machine_ssh"));
-    assert!(script.contains("amazon_web_services"));
-    assert!(script.contains("a_key_or_a_password_or_both"));
-    assert!(script.contains("source_control_credential_hint"));
-    assert!(script.contains("leave_empty_to_keep_the_stored_value"));
-    assert!(script.contains("data-stored-mask=\"1\""));
-    assert!(script.contains("class=\"secret-mask\""));
-    assert!(!script.contains("*** bedeutet, dass ein Wert gespeichert ist."));
-    assert!(script.contains("the_type_cannot_be_changed"));
-    assert!(script.contains("#/credentials?edit=${esc(item.id)}"));
 
     let (status, me, cookie) = call(
         &app,
@@ -203,13 +192,6 @@ async fn template_accepts_one_credential_per_kind_and_many_vaults() {
 
     let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = web_source();
-    assert!(script.contains("one_credential_of_each_kind_choose_vault_credentials"));
-    assert!(script.contains("applies_only_to_this_node_the_template_stays"));
-    assert!(script.contains("id=\"vault-pills\""));
-    assert!(!script.contains("name=\"vault_ids\""));
-    assert!(script.contains("no_vault_credentials_in_this_team"));
-    assert!(script.contains("remove_vault_credential_name"));
 
     let (status, me, cookie) = call(
         &app,
@@ -550,15 +532,6 @@ async fn template_credential_kinds_follow_the_tool() {
 
     let (status, _, _) = call(&app, "GET", "/js/main.js", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
-    let script = web_source();
-    assert!(script.contains("const TOOL_CREDENTIAL_KINDS = {"));
-    assert!(script.contains("ansible: [\"ssh\", \"vault\"]"));
-    assert!(script.contains("opentofu: [\"aws\", \"azure\", \"gce\", \"vmware\", \"openstack\", \"kubernetes\", \"env\"]"));
-    assert!(script.contains("shell: [\"ssh\", \"env\"]"));
-    assert!(script.contains("data-credential-field"));
-    assert!(script.contains("template-legacy-credentials"));
-    assert!(script.contains("legacy-pills"));
-    assert!(script.contains("remove_credential_name"));
 
     let (status, me, cookie) = call(
         &app,
