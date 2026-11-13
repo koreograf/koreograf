@@ -1,10 +1,16 @@
 import * as appState from "./state.js";
 import { api } from "./api.js";
-import { confirmDialog } from "./dialog.js";
+import { configureDialogs, confirmDialog } from "./dialog.js";
 import { esc, h } from "./dom.js";
-import { FLAG_SVG, LANGUAGES, currentLanguage, setLang, t } from "./i18n.js";
+import { FLAG_SVG, LANGUAGES, configureLanguage, currentLanguage, loadCatalog, setLang, t } from "./i18n.js";
 import { matchRoute } from "./router.js";
 import { ERROR_FIELD, fieldControl, showFieldError } from "./forms.js";
+
+window.addEventListener("beforeunload", (event) => {
+  if (!appState.leaveGuard || !appState.leaveGuard()) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
 
 export function flagMarkup(country) {
   const svg = FLAG_SVG[country];
@@ -577,3 +583,38 @@ export async function route() {
   }
   return load();
 }
+
+export async function boot() {
+  const catalogs = currentLanguage() === "de" ? ["de"] : ["de", currentLanguage()];
+  await Promise.all(catalogs.map(loadCatalog));
+  try {
+    appState.setMe(await api("GET", "/api/v1/me"));
+    const known = (appState.me.teams || []).some((team) => team.id === appState.teamId);
+    if (!known) {
+      appState.setTeamId(preferredTeam());
+      localStorage.setItem("koreograf.team", appState.teamId);
+    }
+    try {
+      const assistant = await api("GET", "/api/v1/assistant");
+      appState.setAssistantEnabled(Boolean(assistant && assistant.enabled));
+      appState.setAssistantModel(assistant && assistant.model ? String(assistant.model) : "");
+    } catch {
+      appState.setAssistantEnabled(false);
+      appState.setAssistantModel("");
+    }
+  } catch {
+    appState.setMe(null);
+  }
+  window.addEventListener("hashchange", route);
+  route();
+}
+
+configureLanguage({
+  ask: (options) => confirmDialog(options),
+  leaveGuard: () => appState.leaveGuard,
+  clearLeaveGuard: () => appState.setLeaveGuard(null),
+  signedIn: () => Boolean(appState.me),
+  renderLogin: (message) => renderLogin(message),
+  route: () => route(),
+});
+configureDialogs((error) => handle(error));
