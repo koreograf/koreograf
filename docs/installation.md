@@ -190,7 +190,7 @@ docker compose -f docker-compose.yml -f docker-compose.socket.yml up -d
 
 The override mounts `/var/run/docker.sock`. The socket is root on the Docker host. It starts the entrypoint as root with only `CHOWN`, `DAC_OVERRIDE`, `SETUID`, and `SETGID`, reads the socket's group, adds that group as the only supplementary group, and drops to uid 10001 with `no_new_privs` before the server starts. It works with any host socket group, so no `KOREOGRAF_DOCKER_SOCKET_GID` is needed. A job then needs a reachable socket and fails at start with a line that names `/var/run/docker.sock` when it is missing. `auto` uses the container runtime; `local` is not available in the image.
 
-To keep the non-root start, set `user: "10001:10001"` and add the socket and its host group in your own override:
+To keep the non-root start, keep the base file's `user` and add the socket and its host group in your own override:
 
 ```yaml
 services:
