@@ -3,30 +3,27 @@ use std::convert::Infallible;
 use std::time::Duration;
 
 use axum::extract::{Path, Query, State};
-use axum::http::{header, HeaderMap, HeaderValue};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use futures::stream::Stream;
-use serde::Deserialize;
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, Role};
 use crate::credentials;
 use crate::crypto;
-use crate::db::{self, Hook, Template, Workflow};
+use crate::db::{self, Delivery, Hook, Job, JobEvent, Template, Workflow};
 use crate::error::{ApiError, ApiJson, ApiJsonValue, AppResult};
 use crate::jobs::{self, LaunchRequest};
 use crate::runner;
 use crate::workflow::{self, Graph};
 use crate::Shared;
 
-use super::{
-    accepted, blank, created, gate, job_json, no_content, require_description, require_name,
-    team_header,
-};
+use super::{blank, gate, no_content, require_description, require_name, team_header};
 
 pub(super) fn routes() -> Router<Shared> {
     Router::new()
@@ -111,7 +108,39 @@ pub struct LaunchBody {
 }
 
 fn empty_object() -> Value {
-    json!({})
+    Value::Object(serde_json::Map::new())
+}
+
+fn empty_graph() -> Value {
+    let mut graph = serde_json::Map::new();
+    graph.insert("nodes".into(), Value::Array(Vec::new()));
+    graph.insert("edges".into(), Value::Array(Vec::new()));
+    Value::Object(graph)
+}
+
+#[derive(Serialize)]
+struct TestHookPayload {
+    status: &'static str,
+    alerts: Vec<TestHookAlert>,
+}
+
+#[derive(Serialize)]
+struct TestHookAlert {
+    status: &'static str,
+    labels: TestHookLabels,
+    annotations: TestHookAnnotations,
+}
+
+#[derive(Serialize)]
+struct TestHookLabels {
+    alertname: String,
+    instance: &'static str,
+    severity: &'static str,
+}
+
+#[derive(Serialize)]
+struct TestHookAnnotations {
+    summary: &'static str,
 }
 
 #[derive(Deserialize)]
@@ -186,11 +215,322 @@ fn default_status() -> String {
     "firing".into()
 }
 
+#[derive(Serialize)]
+pub(super) struct TemplateResponse {
+    id: String,
+    team_id: String,
+    name: String,
+    description: String,
+    tool: String,
+    project_id: Option<String>,
+    inventory_id: Option<String>,
+    credential_id: Option<String>,
+    credential_ids: Vec<String>,
+    environment_id: Option<String>,
+    no_environment: bool,
+    entrypoint: String,
+    extra_vars: Value,
+    spec: Value,
+    created_at: String,
+    update_on_launch: bool,
+    prompt_on_launch: bool,
+}
+
+impl TemplateResponse {
+    fn new(template: &Template, credential_ids: &[String]) -> Self {
+        let credential_ids = if credential_ids.is_empty() {
+            template
+                .credential_id
+                .clone()
+                .into_iter()
+                .collect::<Vec<_>>()
+        } else {
+            credential_ids.to_vec()
+        };
+        Self {
+            id: template.id.clone(),
+            team_id: template.team_id.clone(),
+            name: template.name.clone(),
+            description: template.description.clone(),
+            tool: template.tool.clone(),
+            project_id: template.project_id.clone(),
+            inventory_id: template.inventory_id.clone(),
+            credential_id: template.credential_id.clone(),
+            credential_ids,
+            environment_id: template.environment_id.clone(),
+            no_environment: template.no_environment,
+            entrypoint: template.entrypoint.clone(),
+            extra_vars: db::json_object(&template.extra_vars),
+            spec: db::json_object(&template.spec),
+            created_at: template.created_at.clone(),
+            update_on_launch: template.update_on_launch,
+            prompt_on_launch: template.prompt_on_launch,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(transparent)]
+pub(super) struct TemplateListResponse(Vec<TemplateResponse>);
+
+#[derive(Serialize)]
+pub(super) struct JobEventResponse {
+    id: i64,
+    ts: String,
+    stream: String,
+    line: String,
+}
+
+impl JobEventResponse {
+    fn new(event: &JobEvent) -> Self {
+        Self {
+            id: event.id,
+            ts: event.ts.clone(),
+            stream: event.stream.clone(),
+            line: event.line.clone(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub(super) struct JobResponse {
+    id: String,
+    team_id: String,
+    template_id: Option<String>,
+    workflow_job_id: Option<String>,
+    workflow_node_id: Option<String>,
+    name: String,
+    tool: String,
+    status: String,
+    extra_vars: Value,
+    launched_by: String,
+    trigger: String,
+    started_at: Option<String>,
+    finished_at: Option<String>,
+    created_at: String,
+    parameters: Value,
+    failed_hosts: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    events: Option<Vec<JobEventResponse>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_capped: Option<bool>,
+}
+
+impl JobResponse {
+    fn new(job: &Job, events: Option<&[JobEvent]>) -> Self {
+        Self {
+            id: job.id.clone(),
+            team_id: job.team_id.clone(),
+            template_id: job.template_id.clone(),
+            workflow_job_id: job.workflow_job_id.clone(),
+            workflow_node_id: job.workflow_node_id.clone(),
+            name: job.name.clone(),
+            tool: job.tool.clone(),
+            status: job.status.clone(),
+            extra_vars: db::json_object(&job.extra_vars),
+            launched_by: job.launched_by.clone(),
+            trigger: job.trigger.clone(),
+            started_at: job.started_at.clone(),
+            finished_at: job.finished_at.clone(),
+            created_at: job.created_at.clone(),
+            parameters: db::json_object(&job.parameters),
+            failed_hosts: runner::failed_host_names(&job.failed_hosts),
+            events: events.map(|events| events.iter().map(JobEventResponse::new).collect()),
+            output_capped: None,
+        }
+    }
+
+    fn with_output_capped(mut self, capped: bool) -> Self {
+        self.output_capped = Some(capped);
+        self
+    }
+}
+
+#[derive(Serialize)]
+pub(super) struct JobListResponse {
+    items: Vec<JobResponse>,
+    total: i64,
+}
+
+#[derive(Serialize)]
+struct JobEndResponse {
+    status: String,
+    finished_at: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(super) struct WorkflowResponse {
+    id: String,
+    team_id: String,
+    name: String,
+    description: String,
+    graph: Value,
+    created_at: String,
+}
+
+impl WorkflowResponse {
+    fn new(item: &Workflow) -> Self {
+        Self {
+            id: item.id.clone(),
+            team_id: item.team_id.clone(),
+            name: item.name.clone(),
+            description: item.description.clone(),
+            graph: db::json_object(&item.graph),
+            created_at: item.created_at.clone(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(transparent)]
+pub(super) struct WorkflowListResponse(Vec<WorkflowResponse>);
+
+#[derive(Serialize)]
+pub(super) struct WorkflowNodeResponse {
+    node_id: String,
+    phase: String,
+    job_id: Option<String>,
+    job_name: Option<String>,
+    tool: Option<String>,
+    started_at: Option<String>,
+    finished_at: Option<String>,
+    job_created_at: Option<String>,
+}
+
+impl WorkflowNodeResponse {
+    fn new(db: &dyn crate::backend::Backend, node: &db::WorkflowNodeRow) -> AppResult<Self> {
+        let job = match &node.job_id {
+            Some(id) => db.job(id)?,
+            None => None,
+        };
+        Ok(Self {
+            node_id: node.node_id.clone(),
+            phase: node.phase.clone(),
+            job_id: node.job_id.clone(),
+            job_name: job.as_ref().map(|item| item.name.clone()),
+            tool: job.as_ref().map(|item| item.tool.clone()),
+            started_at: job.as_ref().and_then(|item| item.started_at.clone()),
+            finished_at: job.as_ref().and_then(|item| item.finished_at.clone()),
+            job_created_at: job.as_ref().map(|item| item.created_at.clone()),
+        })
+    }
+}
+
+#[derive(Serialize)]
+pub(super) struct WorkflowJobResponse {
+    id: String,
+    workflow_id: Option<String>,
+    team_id: String,
+    name: String,
+    status: String,
+    extra_vars: Value,
+    launched_by: String,
+    trigger: String,
+    created_at: String,
+    finished_at: Option<String>,
+    graph: Value,
+    nodes: Vec<WorkflowNodeResponse>,
+}
+
+impl WorkflowJobResponse {
+    fn new(db: &dyn crate::backend::Backend, run: &db::WorkflowJob) -> AppResult<Self> {
+        let graph = run
+            .workflow_id
+            .as_deref()
+            .and_then(|id| db.workflow(id).ok().flatten())
+            .map(|item| db::json_object(&item.graph))
+            .unwrap_or_else(empty_graph);
+        let nodes = db
+            .workflow_nodes(&run.id)?
+            .iter()
+            .map(|node| WorkflowNodeResponse::new(db, node))
+            .collect::<AppResult<Vec<_>>>()?;
+        Ok(Self {
+            id: run.id.clone(),
+            workflow_id: run.workflow_id.clone(),
+            team_id: run.team_id.clone(),
+            name: run.name.clone(),
+            status: run.status.clone(),
+            extra_vars: db::json_object(&run.extra_vars),
+            launched_by: run.launched_by.clone(),
+            trigger: run.trigger.clone(),
+            created_at: run.created_at.clone(),
+            finished_at: run.finished_at.clone(),
+            graph,
+            nodes,
+        })
+    }
+}
+
+#[derive(Serialize)]
+pub(super) struct HookResponse {
+    id: String,
+    team_id: String,
+    name: String,
+    token: String,
+    match_alertname: String,
+    match_status: String,
+    template_id: Option<String>,
+    workflow_id: Option<String>,
+    extra_vars: Value,
+    enabled: bool,
+    created_at: String,
+}
+
+impl HookResponse {
+    fn new(hook: &Hook, reveal_token: bool) -> Self {
+        Self {
+            id: hook.id.clone(),
+            team_id: hook.team_id.clone(),
+            name: hook.name.clone(),
+            token: if reveal_token {
+                hook.token.clone()
+            } else {
+                String::new()
+            },
+            match_alertname: hook.match_alertname.clone(),
+            match_status: hook.match_status.clone(),
+            template_id: hook.template_id.clone(),
+            workflow_id: hook.workflow_id.clone(),
+            extra_vars: db::json_object(&hook.extra_vars),
+            enabled: hook.enabled,
+            created_at: hook.created_at.clone(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(transparent)]
+pub(super) struct HookListResponse(Vec<HookResponse>);
+
+#[derive(Serialize)]
+#[serde(transparent)]
+pub(super) struct DeliveryListResponse(Vec<Delivery>);
+
+#[derive(Serialize)]
+pub(super) struct DispatchResponse {
+    status: String,
+    summary: String,
+    job_id: Option<String>,
+    workflow_job_id: Option<String>,
+}
+
+impl DispatchResponse {
+    fn new(dispatch: &jobs::Dispatch) -> Self {
+        Self {
+            status: dispatch.status.clone(),
+            summary: dispatch.summary.clone(),
+            job_id: dispatch.job_id.clone(),
+            workflow_job_id: dispatch.workflow_job_id.clone(),
+        }
+    }
+}
+
 pub async fn list_templates(
     State(state): State<Shared>,
     headers: HeaderMap,
     user: AuthUser,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<TemplateListResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     let db = state.store();
@@ -203,13 +543,15 @@ pub async fn list_templates(
             .or_default()
             .push(credential_id);
     }
-    Ok(Json(json!(items
-        .iter()
-        .map(|item| {
-            let ids = by_template.get(&item.id).map(Vec::as_slice).unwrap_or(&[]);
-            template_json(item, ids)
-        })
-        .collect::<Vec<_>>())))
+    Ok(Json(TemplateListResponse(
+        items
+            .iter()
+            .map(|item| {
+                let ids = by_template.get(&item.id).map(Vec::as_slice).unwrap_or(&[]);
+                TemplateResponse::new(item, ids)
+            })
+            .collect(),
+    )))
 }
 
 pub async fn create_template(
@@ -217,14 +559,17 @@ pub async fn create_template(
     headers: HeaderMap,
     user: AuthUser,
     ApiJson(body): ApiJson<TemplateBody>,
-) -> AppResult<Response> {
+) -> AppResult<(StatusCode, Json<TemplateResponse>)> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let (mut template, credential_ids) = build_template(&state, &team, None, body)?;
     template.admin_saved = user.is_admin;
     let db = state.store();
     db.insert_template(&template, &credential_ids)?;
-    Ok(created(template_json(&template, &credential_ids)))
+    Ok((
+        StatusCode::CREATED,
+        Json(TemplateResponse::new(&template, &credential_ids)),
+    ))
 }
 
 pub async fn update_template(
@@ -233,14 +578,14 @@ pub async fn update_template(
     user: AuthUser,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<TemplateBody>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<TemplateResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let (mut template, credential_ids) = build_template(&state, &team, Some(id), body)?;
     template.admin_saved = user.is_admin;
     let db = state.store();
     db.update_template(&template, &credential_ids)?;
-    Ok(Json(template_json(&template, &credential_ids)))
+    Ok(Json(TemplateResponse::new(&template, &credential_ids)))
 }
 
 pub async fn delete_template(
@@ -262,7 +607,7 @@ pub async fn launch_template(
     user: AuthUser,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<LaunchBody>,
-) -> AppResult<Response> {
+) -> AppResult<(StatusCode, Json<JobResponse>)> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let extra = body.extra_vars;
@@ -291,7 +636,7 @@ pub async fn launch_template(
     )?;
     let db = state.store();
     let job = db.job(&job_id)?.ok_or(ApiError::NotFound)?;
-    Ok(accepted(job_json(&job, None)))
+    Ok((StatusCode::ACCEPTED, Json(JobResponse::new(&job, None))))
 }
 
 pub async fn list_jobs(
@@ -299,7 +644,7 @@ pub async fn list_jobs(
     headers: HeaderMap,
     user: AuthUser,
     Query(query): Query<ListJobsQuery>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<JobListResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     let limit = query_number(query.limit, 25, "limit")?.clamp(1, 100);
@@ -317,24 +662,25 @@ pub async fn list_jobs(
     };
     let db = state.store();
     let (jobs, total) = db.list_jobs(&team, &filter)?;
-    Ok(Json(json!({
-        "items": jobs.iter().map(|job| job_json(job, None)).collect::<Vec<_>>(),
-        "total": total,
-    })))
+    Ok(Json(JobListResponse {
+        items: jobs.iter().map(|job| JobResponse::new(job, None)).collect(),
+        total,
+    }))
 }
 
 pub async fn get_job(
     State(state): State<Shared>,
     user: AuthUser,
     Path(id): Path<String>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<JobResponse>> {
     let db = state.store();
     let job = db.job(&id)?.ok_or(ApiError::NotFound)?;
     crate::auth::authorize(db, &user, &job.team_id, Role::Viewer)?;
     let events = events_for_page(db, &id)?;
-    let mut value = job_json(&job, Some(&events));
-    value["output_capped"] = json!(db.events_bytes(&id)? > OUTPUT_LIMIT as i64);
-    Ok(Json(value))
+    let capped = db.events_bytes(&id)? > OUTPUT_LIMIT as i64;
+    Ok(Json(
+        JobResponse::new(&job, Some(&events)).with_output_capped(capped),
+    ))
 }
 
 const PAGE_EVENTS: i64 = 2_000;
@@ -460,7 +806,7 @@ pub async fn cancel_job(
     State(state): State<Shared>,
     user: AuthUser,
     Path(id): Path<String>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<JobResponse>> {
     let team = {
         let db = state.store();
         let job = db.job(&id)?.ok_or(ApiError::NotFound)?;
@@ -471,7 +817,7 @@ pub async fn cancel_job(
     let _ = team;
     let db = state.store();
     let job = db.job(&id)?.ok_or(ApiError::NotFound)?;
-    Ok(Json(job_json(&job, None)))
+    Ok(Json(JobResponse::new(&job, None)))
 }
 
 pub async fn relaunch_job(
@@ -479,7 +825,7 @@ pub async fn relaunch_job(
     user: AuthUser,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<RelaunchBody>,
-) -> AppResult<Response> {
+) -> AppResult<(StatusCode, Json<JobResponse>)> {
     {
         let db = state.store();
         let job = db.job(&id)?.ok_or(ApiError::NotFound)?;
@@ -488,7 +834,7 @@ pub async fn relaunch_job(
     let job_id = jobs::relaunch(&state, &id, &user.username, body.only_failed_hosts)?;
     let db = state.store();
     let job = db.job(&job_id)?.ok_or(ApiError::NotFound)?;
-    Ok(accepted(job_json(&job, None)))
+    Ok((StatusCode::ACCEPTED, Json(JobResponse::new(&job, None))))
 }
 
 pub async fn job_events(
@@ -521,17 +867,16 @@ pub async fn job_events(
             let count = snapshot.0.len();
             for event in snapshot.0 {
                 last = event.id;
-                let data = json!({
-                    "id": event.id,
-                    "ts": event.ts,
-                    "stream": event.stream,
-                    "line": event.line,
-                });
-                yield Ok(Event::default().event("log").id(event.id.to_string()).data(data.to_string()));
+                let data = JobEventResponse::new(&event);
+                yield Ok(Event::default().event("log").id(event.id.to_string()).data(serde_json::to_string(&data).unwrap_or_default()));
             }
             let terminal = matches!(snapshot.1.as_str(), "successful" | "failed" | "canceled");
             if terminal && count < 200 {
-                yield Ok(Event::default().event("end").data(json!({"status": snapshot.1, "finished_at": snapshot.2}).to_string()));
+                let data = JobEndResponse {
+                    status: snapshot.1,
+                    finished_at: snapshot.2,
+                };
+                yield Ok(Event::default().event("end").data(serde_json::to_string(&data).unwrap_or_default()));
                 break;
             }
             if count == 200 {
@@ -551,26 +896,25 @@ pub async fn list_workflows(
     State(state): State<Shared>,
     headers: HeaderMap,
     user: AuthUser,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<WorkflowListResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     let db = state.store();
     let items = db.list_workflows(&team)?;
-    Ok(Json(json!(items
-        .iter()
-        .map(workflow_json)
-        .collect::<Vec<_>>())))
+    Ok(Json(WorkflowListResponse(
+        items.iter().map(WorkflowResponse::new).collect(),
+    )))
 }
 
 pub async fn get_workflow(
     State(state): State<Shared>,
     user: AuthUser,
     Path(id): Path<String>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<WorkflowResponse>> {
     let db = state.store();
     let item = db.workflow(&id)?.ok_or(ApiError::NotFound)?;
     crate::auth::authorize(db, &user, &item.team_id, Role::Viewer)?;
-    Ok(Json(workflow_json(&item)))
+    Ok(Json(WorkflowResponse::new(&item)))
 }
 
 pub async fn create_workflow(
@@ -578,14 +922,14 @@ pub async fn create_workflow(
     headers: HeaderMap,
     user: AuthUser,
     ApiJson(body): ApiJson<WorkflowBody>,
-) -> AppResult<Response> {
+) -> AppResult<(StatusCode, Json<WorkflowResponse>)> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let mut item = build_workflow(&state, &team, None, body)?;
     item.admin_saved = user.is_admin;
     let db = state.store();
     db.insert_workflow(&item)?;
-    Ok(created(workflow_json(&item)))
+    Ok((StatusCode::CREATED, Json(WorkflowResponse::new(&item))))
 }
 
 pub async fn update_workflow(
@@ -594,14 +938,14 @@ pub async fn update_workflow(
     user: AuthUser,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<WorkflowBody>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<WorkflowResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let mut item = build_workflow(&state, &team, Some(id), body)?;
     item.admin_saved = user.is_admin;
     let db = state.store();
     db.update_workflow(&item)?;
-    Ok(Json(workflow_json(&item)))
+    Ok(Json(WorkflowResponse::new(&item)))
 }
 
 pub async fn delete_workflow(
@@ -623,7 +967,7 @@ pub async fn launch_workflow(
     user: AuthUser,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<LaunchBody>,
-) -> AppResult<Response> {
+) -> AppResult<(StatusCode, Json<WorkflowJobResponse>)> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let extra = body.extra_vars;
@@ -635,34 +979,39 @@ pub async fn launch_workflow(
     let run = db.workflow_job(&run_id)?.ok_or(ApiError::NotFound)?;
     // The connection mutex is not re-entrant. A second lock here froze every
     // request, including health checks, while this handler still held it.
-    Ok(accepted(run_json(db, &run)?))
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(WorkflowJobResponse::new(db, &run)?),
+    ))
 }
 
 pub async fn get_workflow_job(
     State(state): State<Shared>,
     user: AuthUser,
     Path(id): Path<String>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<WorkflowJobResponse>> {
     let db = state.store();
     let run = db.workflow_job(&id)?.ok_or(ApiError::NotFound)?;
     crate::auth::authorize(db, &user, &run.team_id, Role::Viewer)?;
-    Ok(Json(run_json(db, &run)?))
+    Ok(Json(WorkflowJobResponse::new(db, &run)?))
 }
 
 pub async fn list_hooks(
     State(state): State<Shared>,
     headers: HeaderMap,
     user: AuthUser,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<HookListResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     let reveal = can_operate(&state, &user, &team)?;
     let db = state.store();
     let hooks = db.list_hooks(&team)?;
-    Ok(Json(json!(hooks
-        .iter()
-        .map(|hook| hook_json(hook, reveal))
-        .collect::<Vec<_>>())))
+    Ok(Json(HookListResponse(
+        hooks
+            .iter()
+            .map(|hook| HookResponse::new(hook, reveal))
+            .collect(),
+    )))
 }
 
 pub async fn create_hook(
@@ -670,13 +1019,13 @@ pub async fn create_hook(
     headers: HeaderMap,
     user: AuthUser,
     ApiJson(body): ApiJson<HookBody>,
-) -> AppResult<Response> {
+) -> AppResult<(StatusCode, Json<HookResponse>)> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let hook = build_hook(&state, &team, None, body)?;
     let db = state.store();
     db.insert_hook(&hook)?;
-    Ok(created(hook_json(&hook, true)))
+    Ok((StatusCode::CREATED, Json(HookResponse::new(&hook, true))))
 }
 
 pub async fn update_hook(
@@ -685,7 +1034,7 @@ pub async fn update_hook(
     user: AuthUser,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<HookBody>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<HookResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let current = {
@@ -698,7 +1047,7 @@ pub async fn update_hook(
     let hook = build_hook(&state, &team, Some(&current), body)?;
     let db = state.store();
     db.update_hook(&hook)?;
-    Ok(Json(hook_json(&hook, true)))
+    Ok(Json(HookResponse::new(&hook, true)))
 }
 
 pub async fn delete_hook(
@@ -718,45 +1067,48 @@ pub async fn list_deliveries(
     State(state): State<Shared>,
     headers: HeaderMap,
     user: AuthUser,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<DeliveryListResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     let db = state.store();
-    Ok(Json(json!(db.list_deliveries(&team, 30)?)))
+    Ok(Json(DeliveryListResponse(db.list_deliveries(&team, 30)?)))
 }
 
 pub async fn test_hook(
     State(state): State<Shared>,
     user: AuthUser,
     Path(id): Path<String>,
-) -> AppResult<Response> {
+) -> AppResult<(StatusCode, Json<DispatchResponse>)> {
     let hook = {
         let db = state.store();
         let hook = db.hook(&id)?.ok_or(ApiError::NotFound)?;
         crate::auth::authorize(db, &user, &hook.team_id, Role::Operator)?;
         hook
     };
-    let payload = json!({
-        "status": "firing",
-        "alerts": [{
-            "status": "firing",
-            "labels": {
-                "alertname": hook.match_alertname,
-                "instance": "web-1",
-                "severity": "warning"
+    let payload = TestHookPayload {
+        status: "firing",
+        alerts: vec![TestHookAlert {
+            status: "firing",
+            labels: TestHookLabels {
+                alertname: hook.match_alertname.clone(),
+                instance: "web-1",
+                severity: "warning",
             },
-            "annotations": {"summary": "Test delivery from the Koreograf UI"}
-        }]
-    });
+            annotations: TestHookAnnotations {
+                summary: "Test delivery from the Koreograf UI",
+            },
+        }],
+    };
+    let payload = serde_json::to_value(payload).unwrap_or_default();
     let dispatch = jobs::accept_hook(&state, &hook, &payload, Some(&user.username))?;
-    Ok(accepted(json!(dispatch_json(&dispatch))))
+    Ok((StatusCode::ACCEPTED, Json(DispatchResponse::new(&dispatch))))
 }
 
 pub async fn ingest(
     State(state): State<Shared>,
     Path((id, token)): Path<(String, String)>,
     ApiJsonValue(payload): ApiJsonValue,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<DispatchResponse>> {
     let hook = {
         let db = state.store();
         db.hook(&id)?.ok_or(ApiError::NotFound)?
@@ -765,16 +1117,7 @@ pub async fn ingest(
         return Err(ApiError::Unauthorized);
     }
     let dispatch = jobs::accept_hook(&state, &hook, &payload, None)?;
-    Ok(Json(dispatch_json(&dispatch)))
-}
-
-fn dispatch_json(dispatch: &jobs::Dispatch) -> Value {
-    json!({
-        "status": dispatch.status,
-        "summary": dispatch.summary,
-        "job_id": dispatch.job_id,
-        "workflow_job_id": dispatch.workflow_job_id,
-    })
+    Ok(Json(DispatchResponse::new(&dispatch)))
 }
 
 fn can_operate(state: &Shared, user: &AuthUser, team: &str) -> AppResult<bool> {
@@ -799,8 +1142,8 @@ fn build_template(
         return Err(ApiError::bad("tool_is_ansible_opentofu_or_shell"));
     }
     runner::check_relative(body.entrypoint.trim()).map_err(ApiError::from)?;
-    let extra = body.extra_vars.unwrap_or_else(|| json!({}));
-    let spec = body.spec.unwrap_or_else(|| json!({}));
+    let extra = body.extra_vars.unwrap_or_else(empty_object);
+    let spec = body.spec.unwrap_or_else(empty_object);
     if !extra.is_object() || !spec.is_object() {
         return Err(ApiError::bad("template.vars_not_objects"));
     }
@@ -950,7 +1293,7 @@ fn check_node_overrides(
         let mut params = serde_json::Map::new();
         params.insert("spec".into(), db::json_object(&template.spec));
         workflow::apply_overrides(&mut params, over);
-        let spec = params.get("spec").cloned().unwrap_or_else(|| json!({}));
+        let spec = params.get("spec").cloned().unwrap_or_else(empty_object);
         if template.tool == "ansible" {
             runner::check_ansible_spec(&spec).map_err(ApiError::from)?;
         }
@@ -1027,7 +1370,7 @@ fn build_hook(
     if alertname.is_empty() {
         return Err(ApiError::bad("alert_name_is_missing"));
     }
-    let extra = body.extra_vars.unwrap_or_else(|| json!({}));
+    let extra = body.extra_vars.unwrap_or_else(empty_object);
     if !extra.is_object() {
         return Err(ApiError::bad("extra_vars_must_be_an_object"));
     }
@@ -1057,105 +1400,6 @@ fn build_hook(
         enabled: existing.is_none_or(|hook| hook.enabled),
         created_at: existing.map_or_else(db::now, |hook| hook.created_at.clone()),
     })
-}
-
-fn template_json(template: &Template, credential_ids: &[String]) -> Value {
-    let credential_ids = if credential_ids.is_empty() {
-        template
-            .credential_id
-            .clone()
-            .into_iter()
-            .collect::<Vec<_>>()
-    } else {
-        credential_ids.to_vec()
-    };
-    json!({
-        "id": template.id,
-        "team_id": template.team_id,
-        "name": template.name,
-        "description": template.description,
-        "tool": template.tool,
-        "project_id": template.project_id,
-        "inventory_id": template.inventory_id,
-        "credential_id": template.credential_id,
-        "credential_ids": credential_ids,
-        "environment_id": template.environment_id,
-        "no_environment": template.no_environment,
-        "entrypoint": template.entrypoint,
-        "extra_vars": db::json_object(&template.extra_vars),
-        "spec": db::json_object(&template.spec),
-        "created_at": template.created_at,
-        "update_on_launch": template.update_on_launch,
-        "prompt_on_launch": template.prompt_on_launch,
-    })
-}
-
-fn workflow_json(item: &Workflow) -> Value {
-    json!({
-        "id": item.id,
-        "team_id": item.team_id,
-        "name": item.name,
-        "description": item.description,
-        "graph": db::json_object(&item.graph),
-        "created_at": item.created_at,
-    })
-}
-
-fn hook_json(hook: &Hook, reveal_token: bool) -> Value {
-    json!({
-        "id": hook.id,
-        "team_id": hook.team_id,
-        "name": hook.name,
-        "token": if reveal_token { hook.token.clone() } else { String::new() },
-        "match_alertname": hook.match_alertname,
-        "match_status": hook.match_status,
-        "template_id": hook.template_id,
-        "workflow_id": hook.workflow_id,
-        "extra_vars": db::json_object(&hook.extra_vars),
-        "enabled": hook.enabled,
-        "created_at": hook.created_at,
-    })
-}
-
-fn run_json(db: &dyn crate::backend::Backend, run: &db::WorkflowJob) -> AppResult<Value> {
-    let graph = run
-        .workflow_id
-        .as_deref()
-        .and_then(|id| db.workflow(id).ok().flatten())
-        .map(|item| db::json_object(&item.graph))
-        .unwrap_or_else(|| json!({"nodes": [], "edges": []}));
-    let nodes = db.workflow_nodes(&run.id)?;
-    let mut node_rows = Vec::with_capacity(nodes.len());
-    for node in &nodes {
-        let job = match &node.job_id {
-            Some(id) => db.job(id)?,
-            None => None,
-        };
-        node_rows.push(json!({
-            "node_id": node.node_id,
-            "phase": node.phase,
-            "job_id": node.job_id,
-            "job_name": job.as_ref().map(|item| &item.name),
-            "tool": job.as_ref().map(|item| &item.tool),
-            "started_at": job.as_ref().and_then(|item| item.started_at.as_deref()),
-            "finished_at": job.as_ref().and_then(|item| item.finished_at.as_deref()),
-            "job_created_at": job.as_ref().map(|item| &item.created_at),
-        }));
-    }
-    Ok(json!({
-        "id": run.id,
-        "workflow_id": run.workflow_id,
-        "team_id": run.team_id,
-        "name": run.name,
-        "status": run.status,
-        "extra_vars": db::json_object(&run.extra_vars),
-        "launched_by": run.launched_by,
-        "trigger": run.trigger,
-        "created_at": run.created_at,
-        "finished_at": run.finished_at,
-        "graph": graph,
-        "nodes": node_rows,
-    }))
 }
 
 #[cfg(test)]
