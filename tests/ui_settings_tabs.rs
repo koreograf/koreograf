@@ -16,9 +16,10 @@ fn function<'a>(script: &'a str, name: &str) -> &'a str {
         .find(&format!("function {name}("))
         .unwrap_or_else(|| panic!("{name} is missing"));
     let rest = &script[start + 1..];
-    let end = rest
-        .find("\n  function ")
-        .or_else(|| rest.find("\nfunction "))
+    let end = [rest.find("\n  function "), rest.find("\nfunction ")]
+        .into_iter()
+        .flatten()
+        .min()
         .unwrap_or(rest.len());
     &script[start..start + 1 + end]
 }

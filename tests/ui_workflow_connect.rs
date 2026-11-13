@@ -36,7 +36,7 @@ check(nodes.includes("finishConnect(node.id)"), "a clicked target is not connect
 const menu = extractFunction("openNodeMenu");
 check(menu.includes('setAttribute("role", "menu")'), "the node menu has no menu role");
 check(menu.includes("data-connect-node"), "the node menu has no Connect item");
-check(menu.includes("startConnect(node)"), "the menu item does not start a connection");
+check(menu.includes("actions.connect(node)"), "the menu item does not start a connection");
 
 const start = extractFunction("startConnect");
 check(start.includes("connecting = { from: node.id }"), "the source node is not armed");
