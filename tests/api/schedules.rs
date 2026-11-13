@@ -1,6 +1,6 @@
 use axum::http::StatusCode;
 use koreograf::LocalJobs;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::common::call_cookie as call;
 
@@ -757,5 +757,302 @@ async fn an_edit_records_the_user_who_changed_the_schedule() {
         .expect("schedule");
     assert_eq!(row["created_by"], "admin");
     assert_eq!(row["updated_by"], "operator");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn daily_shape(
+    value: &Value,
+    name: &str,
+    target_kind: &str,
+    target_id: &str,
+    enabled: bool,
+    next_run_at: Value,
+    missed_at: Value,
+    created_by: &str,
+    updated_by: &str,
+) -> Value {
+    json!({
+        "id": value["id"].clone(),
+        "name": name,
+        "target_kind": target_kind,
+        "target_id": target_id,
+        "timezone": "Europe/Berlin",
+        "start_date": "2027-06-01",
+        "start_time": "06:00",
+        "frequency": "daily",
+        "weekdays": [],
+        "end_kind": "never",
+        "end_count": null,
+        "end_date": null,
+        "enabled": enabled,
+        "next_run_at": next_run_at,
+        "missed_at": missed_at,
+        "created_by": created_by,
+        "updated_by": updated_by,
+        "launch_block": null,
+    })
+}
+
+#[tokio::test]
+async fn schedule_endpoints_return_the_documented_shape() {
+    let harness = TestApp::boot("schedule-shape", Options::default());
+    let state = harness.state.clone();
+    let app = harness.app.clone();
+    let dir = harness.dir.clone();
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/v1/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/v1/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Scheduled shape",
+            "tool": "shell",
+            "update_on_launch": false,
+            "spec": {"script": "echo scheduled"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().unwrap().to_string();
+
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/templates/{template_id}/schedules"),
+        Some(&cookie),
+        Some(&team),
+        Some(daily_schedule("Morning")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let schedule_id = created["id"].as_str().unwrap().to_string();
+    let expected = daily_shape(
+        &created,
+        "Morning",
+        "template",
+        &template_id,
+        true,
+        json!("2027-06-01T04:00:00Z"),
+        Value::Null,
+        "admin",
+        "admin",
+    );
+    assert_eq!(created, expected);
+
+    let (status, listed, _) = call(
+        &app,
+        "GET",
+        &format!("/api/v1/templates/{template_id}/schedules"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(listed, json!([expected]));
+
+    let (status, team_list, _) = call(
+        &app,
+        "GET",
+        "/api/v1/schedules",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{team_list}");
+    let mut team_expected = expected.clone();
+    team_expected["target_name"] = json!("Scheduled shape");
+    assert_eq!(team_list, json!([team_expected]));
+
+    let mut preview_body = daily_schedule("ignored");
+    preview_body
+        .as_object_mut()
+        .expect("schedule object")
+        .remove("name");
+    let (status, preview, _) = call(
+        &app,
+        "POST",
+        "/api/v1/schedules/preview",
+        Some(&cookie),
+        Some(&team),
+        Some(preview_body),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(
+        preview,
+        json!({
+            "occurrences": [
+                "2027-06-01T04:00:00Z",
+                "2027-06-02T04:00:00Z",
+                "2027-06-03T04:00:00Z",
+                "2027-06-04T04:00:00Z",
+                "2027-06-05T04:00:00Z",
+            ],
+        })
+    );
+
+    let (status, updated, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/v1/schedules/{schedule_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(daily_schedule("Morning later")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    let expected = daily_shape(
+        &updated,
+        "Morning later",
+        "template",
+        &template_id,
+        true,
+        json!("2027-06-01T04:00:00Z"),
+        Value::Null,
+        "admin",
+        "admin",
+    );
+    assert_eq!(updated, expected);
+
+    let (status, paused, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/schedules/{schedule_id}/enabled"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"enabled": false})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{paused}");
+    let expected = daily_shape(
+        &paused,
+        "Morning later",
+        "template",
+        &template_id,
+        false,
+        json!("2027-06-01T04:00:00Z"),
+        Value::Null,
+        "admin",
+        "admin",
+    );
+    assert_eq!(paused, expected);
+
+    mark_missed(&state, &schedule_id);
+    let (status, declined, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/schedules/{schedule_id}/missed"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"accept": false})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{declined}");
+    let expected = daily_shape(
+        &declined,
+        "Morning later",
+        "template",
+        &template_id,
+        false,
+        json!("2027-06-01T04:00:00Z"),
+        Value::Null,
+        "admin",
+        "admin",
+    );
+    assert_eq!(declined, expected);
+
+    let (status, workflow, _) = call(
+        &app,
+        "POST",
+        "/api/v1/workflows",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Scheduled shape flow", "graph": {}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{workflow}");
+    let workflow_id = workflow["id"].as_str().unwrap().to_string();
+    let (status, weekly, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/workflows/{workflow_id}/schedules"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Weekdays",
+            "timezone": "Europe/Berlin",
+            "start_date": "2027-06-01",
+            "start_time": "06:00",
+            "frequency": "weekly",
+            "weekdays": ["FR", "MO"],
+            "end_kind": "after",
+            "end_count": 3
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{weekly}");
+    let expected_weekly = json!({
+        "id": weekly["id"].clone(),
+        "name": "Weekdays",
+        "target_kind": "workflow",
+        "target_id": workflow_id,
+        "timezone": "Europe/Berlin",
+        "start_date": "2027-06-01",
+        "start_time": "06:00",
+        "frequency": "weekly",
+        "weekdays": ["MO", "FR"],
+        "end_kind": "after",
+        "end_count": 3,
+        "end_date": null,
+        "enabled": true,
+        "next_run_at": "2027-06-04T04:00:00Z",
+        "missed_at": null,
+        "created_by": "admin",
+        "updated_by": "admin",
+        "launch_block": null,
+    });
+    assert_eq!(weekly, expected_weekly);
+
+    let (status, workflow_list, _) = call(
+        &app,
+        "GET",
+        &format!("/api/v1/workflows/{workflow_id}/schedules"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{workflow_list}");
+    assert_eq!(workflow_list, json!([expected_weekly]));
+
+    let (status, removed, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/v1/schedules/{schedule_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{removed}");
+    assert_eq!(removed, Value::Null);
+
     let _ = std::fs::remove_dir_all(&dir);
 }
