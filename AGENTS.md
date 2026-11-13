@@ -16,6 +16,14 @@ Koreograf is a Rust prototype: one binary with an HTTP API, a browser UI, and a 
 
 Domain code lives in `src/features/<domain>/` as `mod.rs`, `routes.rs`, `model.rs`, `service.rs`, `store.rs`, and `tests.rs`; shared infrastructure stays at the crate root (`config.rs`, `error.rs`, `crypto.rs`), and `src/http/` holds the router, middleware, asset serving, and request helpers. `src/features/mod.rs` lists the domains in one sorted list, and a new domain adds one line there.
 
+## Browser UI
+
+- `web/js/core/` is shared infrastructure (`state.js`, `dom.js`, `i18n.js`, `api.js`, `dialog.js`, `router.js`, `forms.js`, and similar helpers). `web/js/main.js` boots the UI: it imports `features/index.js`, initialises the language, and calls `boot()`.
+- Each feature owns one file under `web/js/features/`, or one folder when it has several parts (`web/js/features/workflows/`). The current modules are account, assistant, backup, credentials, dashboard, database, environments, hooks, inventories, jobs, organizations, projects, schedules, settings, team, templates, users, and workflows.
+- A feature module registers its own routes with `registerRoute` and is added as one sorted `import "./<feature>.js";` line in `web/js/features/index.js`. A shared file changes only for a helper that two features genuinely use together; that helper moves to `web/js/core/` instead of staying in one feature or being duplicated.
+- Tests go to `web/tests/<feature>.test.js` and run with `node --test web/tests/`.
+- The browser code has no bundler: `web/index.html` loads `web/js/main.js` as a native ES module, and the modules import each other by relative path. The Rust suites read every file under `web/js/` when they scan the UI source, so keys, classes, and scripts must stay visible there.
+
 ## Git
 
 - This repository has no remote. Do not push unless asked.
