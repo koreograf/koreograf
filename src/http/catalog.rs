@@ -494,6 +494,25 @@ pub(super) struct InventoryDetailResponse {
     host_count: usize,
     group_count: usize,
     hosts: Vec<InventoryHost>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) sync: Option<InventorySyncResponse>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) collisions: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) dropped_vars: Option<Vec<String>>,
+}
+
+#[derive(Serialize)]
+pub(super) struct InventorySyncResponse {
+    pub ok: bool,
+    pub before: usize,
+    pub after: usize,
+}
+
+impl InventoryDetailResponse {
+    pub(super) fn host_count(&self) -> usize {
+        self.host_count
+    }
 }
 
 #[derive(Serialize)]
@@ -1741,12 +1760,10 @@ pub(super) fn inventory_detail(
         host_count: data.hosts.len(),
         group_count: group_count(&data),
         hosts: data.hosts,
+        sync: None,
+        collisions: None,
+        dropped_vars: None,
     })
-}
-
-pub(super) fn inventory_json(c: &dyn Backend, item: &Inventory) -> AppResult<Value> {
-    serde_json::to_value(inventory_detail(c, item)?)
-        .map_err(|err| ApiError::Internal(err.to_string()))
 }
 
 pub async fn delete_inventory(
