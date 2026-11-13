@@ -917,9 +917,9 @@ pub struct Schedule {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::features::jobs::store::{insert_job, list_jobs};
     use crate::store::environments::{environment, insert_environment, list_environments};
     use crate::store::inventories::inventory;
-    use crate::store::jobs::{insert_job, list_jobs};
     use crate::store::projects::{list_projects, project};
     use crate::store::teams::{
         grant_manual_membership, insert_organization, insert_team, list_members, team_by_id,

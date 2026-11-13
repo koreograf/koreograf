@@ -5893,7 +5893,9 @@ exit 0
         assert!(head_at < omit_at && omit_at < tail_at);
         let hosts = {
             let db = state.db().unwrap();
-            let job = crate::store::jobs::job(&db, "job-1").unwrap().unwrap();
+            let job = crate::features::jobs::store::job(&db, "job-1")
+                .unwrap()
+                .unwrap();
             failed_host_names(&job.failed_hosts)
         };
         assert_eq!(hosts, vec!["web-9".to_string()]);
@@ -5946,7 +5948,9 @@ exit 0
         );
         let hosts = {
             let db = state.db().unwrap();
-            let job = crate::store::jobs::job(&db, "job-cancel").unwrap().unwrap();
+            let job = crate::features::jobs::store::job(&db, "job-cancel")
+                .unwrap()
+                .unwrap();
             failed_host_names(&job.failed_hosts)
         };
         assert!(hosts.is_empty(), "{hosts:?}");
@@ -5986,7 +5990,7 @@ exit 0
 
     fn insert_output_job(state: &Shared, id: &str) {
         let db = state.db().unwrap();
-        crate::store::jobs::insert_job(
+        crate::features::jobs::store::insert_job(
             &db,
             &db::Job {
                 id: id.into(),
@@ -6015,7 +6019,8 @@ exit 0
         let mut after = 0;
         let mut lines = Vec::new();
         loop {
-            let batch = crate::store::jobs::events_after(&db, job_id, after, 500).unwrap();
+            let batch =
+                crate::features::jobs::store::events_after(&db, job_id, after, 500).unwrap();
             if batch.is_empty() {
                 break;
             }

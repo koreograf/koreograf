@@ -19,7 +19,7 @@ use serde_json::Value;
 
 use crate::db::Schedule;
 use crate::error::{ApiError, AppResult};
-use crate::jobs::{self, LaunchRequest};
+use crate::features::jobs::{self, LaunchRequest};
 use crate::Shared;
 
 use super::model::{Action, End, Frequency, Input, Rule, Step};
