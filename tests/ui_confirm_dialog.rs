@@ -22,11 +22,11 @@ fn web_ui_has_no_native_confirms() {
     let script = web_source::source();
     assert!(
         !script.contains("window.confirm"),
-        "app.js still calls window.confirm"
+        "the web ui still calls window.confirm"
     );
     assert!(
         !script.contains("confirm("),
-        "app.js still calls the native confirm"
+        "the web ui still calls the native confirm"
     );
 }
 
