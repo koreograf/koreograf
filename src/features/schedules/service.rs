@@ -15,7 +15,7 @@ use chrono::{
     Utc, Weekday,
 };
 use chrono_tz::Tz;
-use serde_json::json;
+use serde_json::Value;
 
 use crate::db::Schedule;
 use crate::error::{ApiError, AppResult};
@@ -720,7 +720,7 @@ pub(crate) fn start(state: &Shared, item: &Schedule, actor: &str) -> AppResult<(
                 LaunchRequest {
                     team_id: item.team_id.clone(),
                     template_id: item.target_id.clone(),
-                    extra_vars: json!({}),
+                    extra_vars: Value::Object(serde_json::Map::new()),
                     launched_by: actor.to_string(),
                     trigger: "schedule".to_string(),
                     workflow_job_id: None,
@@ -735,7 +735,7 @@ pub(crate) fn start(state: &Shared, item: &Schedule, actor: &str) -> AppResult<(
                 state,
                 &item.team_id,
                 &item.target_id,
-                json!({}),
+                Value::Object(serde_json::Map::new()),
                 actor,
                 "schedule",
             )?;
