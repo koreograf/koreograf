@@ -53,6 +53,44 @@ gid=$(stat -c '%g' "$SOCKET_DIR/docker.sock")
 docker run --rm --group-add "$gid" -v "$SOCKET_DIR/docker.sock:/var/run/docker.sock" \
     --entrypoint /usr/local/bin/koreograf "$IMAGE" entrypoint koreograf --version >/dev/null
 
+docker run --rm -v "$VOLUME":/data "$HELPER" \
+    sh -c 'mkdir -p /data/cache/team/tofu-state && printf x > /data/cache/team/tofu-state/state \
+        && chown -R 0:0 /data/cache && chmod 700 /data/cache/team/tofu-state'
+docker run --rm --user 0 \
+    --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add SETUID --cap-add SETGID \
+    --security-opt no-new-privileges:true \
+    -v "$VOLUME":/var/lib/koreograf \
+    -v "$SOCKET_DIR/docker.sock:/var/run/docker.sock" \
+    --entrypoint /usr/local/bin/koreograf "$IMAGE" entrypoint \
+    sh -c 'while IFS= read -r line; do case "$line" in
+        Uid:*|Gid:*|Groups:*|NoNewPrivs:*|CapInh:*|CapPrm:*|CapEff:*) printf "%s\n" "$line" ;;
+    esac; done </proc/self/status' >"$SOCKET_DIR/status"
+uid=$(awk '$1 == "Uid:" { print $2 }' "$SOCKET_DIR/status")
+gid_after=$(awk '$1 == "Gid:" { print $2 }' "$SOCKET_DIR/status")
+groups=$(awk '$1 == "Groups:" { $1 = ""; sub(/^ +/, ""); print }' "$SOCKET_DIR/status")
+if [ "$uid" != 10001 ] || [ "$gid_after" != 10001 ] || [ "$groups" != "$gid" ]; then
+    printf 'the socket override did not leave uid 10001, gid 10001 and group %s\n' "$gid" >&2
+    cat "$SOCKET_DIR/status" >&2
+    exit 1
+fi
+if [ "$(awk '$1 == "NoNewPrivs:" { print $2 }' "$SOCKET_DIR/status")" != 1 ]; then
+    printf 'the socket override did not set no_new_privs\n' >&2
+    cat "$SOCKET_DIR/status" >&2
+    exit 1
+fi
+for cap in CapInh CapPrm CapEff; do
+    if [ "$(awk -v key="$cap:" '$1 == key { print $2 }' "$SOCKET_DIR/status")" != 0000000000000000 ]; then
+        printf 'the socket override kept %s\n' "$cap" >&2
+        cat "$SOCKET_DIR/status" >&2
+        exit 1
+    fi
+done
+owner=$(docker run --rm -v "$VOLUME":/data "$HELPER" stat -c '%u:%g' /data/cache/team/tofu-state/state)
+if [ "$owner" != 10001:10001 ]; then
+    printf 'the socket override did not fix a root-owned private data directory\n' >&2
+    exit 1
+fi
+
 chmod 600 "$SOCKET_DIR/docker.sock"
 if docker run --rm -v "$SOCKET_DIR/docker.sock:/var/run/docker.sock" \
     --entrypoint /usr/local/bin/koreograf "$IMAGE" entrypoint koreograf --version \

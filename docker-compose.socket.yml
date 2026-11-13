@@ -1,0 +1,10 @@
+services:
+  koreograf:
+    user: "0:0"
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETUID
+      - SETGID
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
