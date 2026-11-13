@@ -13,6 +13,7 @@ test("the import notice lists the missing paths", async () => {
   const notice = importNoticeHtml({ missing_paths: ["/home/user/projects/demo"] });
   assert.match(notice, /imported_paths_need_a_mount_or_a_change/);
   assert.match(notice, /\/home\/user\/projects\/demo/);
+  assert.match(importNoticeHtml({ missing_paths: ["<b>x</b>"] }), /&lt;b&gt;x&lt;\/b&gt;/);
   assert.equal(importNoticeHtml({ missing_paths: [] }), "");
 });
 
