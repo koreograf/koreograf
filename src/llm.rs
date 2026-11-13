@@ -15,7 +15,7 @@ use crate::config::LlmProvider;
 use crate::db::Team;
 use crate::features::identity as auth;
 use crate::features::identity::{AuthUser, Role};
-use crate::settings;
+use crate::features::operations;
 use crate::Shared;
 
 mod assistant;
@@ -250,7 +250,7 @@ pub fn from_env() -> LlmSetup {
 }
 
 pub fn config_for(state: &Shared) -> LlmSetup {
-    let effective = match settings::load(state) {
+    let effective = match operations::load(state) {
         Ok(effective) => effective,
         Err(_) => return LlmSetup::Incomplete(LlmConfigError::UnreadableSettings),
     };
@@ -1085,7 +1085,7 @@ fn collect_secrets(
 ) -> SecretSet {
     let mut secrets = SecretSet::default();
     secrets.add(credential_secret(credential));
-    if let Ok(effective) = settings::load(state) {
+    if let Ok(effective) = operations::load(state) {
         secrets.add(&effective.ldap.bind_password);
         secrets.add(&effective.proxy.password);
         secrets.add(&effective.llm_api_key);

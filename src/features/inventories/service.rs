@@ -646,7 +646,7 @@ pub fn parse_filters(lines: &[String]) -> Result<Vec<(String, String)>, String> 
 pub async fn fetch(
     source: &NetboxSource,
     token: &str,
-    proxy: &crate::settings::ProxySettings,
+    proxy: &crate::features::operations::ProxySettings,
 ) -> Result<NetboxResult, String> {
     if !valid_endpoint(&source.api_endpoint) {
         return Err("the_netbox_address_must_be_http_or_https".into());
@@ -715,7 +715,7 @@ pub async fn fetch(
 pub async fn fetch_ini(
     source: &NetboxSource,
     token: &str,
-    proxy: &crate::settings::ProxySettings,
+    proxy: &crate::features::operations::ProxySettings,
 ) -> Result<String, String> {
     Ok(fetch(source, token, proxy).await?.body)
 }
@@ -744,7 +744,7 @@ pub fn preview(body: &str) -> NetboxPreview {
 pub async fn test_connection(
     source: &NetboxSource,
     token: &str,
-    proxy: &crate::settings::ProxySettings,
+    proxy: &crate::features::operations::ProxySettings,
 ) -> Result<String, String> {
     if !valid_endpoint(&source.api_endpoint) {
         return Err("the_netbox_address_must_be_http_or_https".into());
@@ -765,7 +765,7 @@ pub async fn test_connection(
 
 fn client(
     source: &NetboxSource,
-    proxy: &crate::settings::ProxySettings,
+    proxy: &crate::features::operations::ProxySettings,
 ) -> Result<reqwest::Client, String> {
     let mut builder = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(8))

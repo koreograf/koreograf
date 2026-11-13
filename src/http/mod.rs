@@ -1,6 +1,5 @@
 mod admin;
 mod catalog;
-mod settings;
 mod sources;
 mod work;
 
@@ -165,7 +164,7 @@ fn api_routes() -> Router<Shared> {
         .merge(crate::features::projects::routes())
         .merge(crate::features::schedules::routes())
         .merge(crate::features::workflows::routes())
-        .merge(settings::routes())
+        .merge(crate::features::operations::routes())
         .merge(sources::routes())
         .merge(work::routes())
         .fallback(not_found)
@@ -291,7 +290,7 @@ async fn metrics(State(state): State<Shared>, headers: HeaderMap) -> Response {
             ),
             (header::CACHE_CONTROL, "no-store"),
         ],
-        crate::metrics::scrape(&state),
+        crate::features::operations::scrape(&state),
     )
         .into_response()
 }

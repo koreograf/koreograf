@@ -11,7 +11,7 @@ use tokio::process::Command;
 use crate::cacheinfo::dir_size;
 use crate::config::{LocalJobs, RunnerMode};
 use crate::db::{self, Environment, Project, Template};
-use crate::metrics::{self, JobMeta};
+use crate::features::operations::{job_labels, log_cache, JobMeta, ProxySettings};
 use crate::Shared;
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -1101,8 +1101,8 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), RunnerError
     }
     check_relative(&template.entrypoint)?;
 
-    let settings =
-        crate::settings::load(state).map_err(|err| RunnerError::internal(err.to_string()))?;
+    let settings = crate::features::operations::load(state)
+        .map_err(|err| RunnerError::internal(err.to_string()))?;
     if settings.runner == RunnerMode::Auto {
         let preflight = crate::preflight::check(settings.runner, state.cfg.container_image).await;
         if state.cfg.container_image && !preflight.runtime.responding {
@@ -1369,7 +1369,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), RunnerError
         playbook: &entrypoint,
         template: &template.name,
     });
-    metrics::log_cache(&state.cfg.data_dir, job_id, &job.team_id);
+    log_cache(&state.cfg.data_dir, job_id, &job.team_id);
 
     let cache_before = dir_size(&cache);
     log(
@@ -1647,7 +1647,7 @@ fn write_job_ca_bundle(work: &Path, pem: &[u8]) -> Result<(), RunnerError> {
     Ok(())
 }
 
-fn apply_proxy_env(env: &mut Vec<(String, String)>, proxy: &crate::settings::ProxySettings) {
+fn apply_proxy_env(env: &mut Vec<(String, String)>, proxy: &ProxySettings) {
     for (key, value) in proxy.job_pairs() {
         if let Some(slot) = env.iter_mut().find(|(name, _)| name == &key) {
             slot.1 = value;
@@ -2562,7 +2562,7 @@ fn store_project_commit(state: &Shared, job_id: &str, commit: &str) {
 pub async fn materialize_project(
     project: &Project,
     data_dir: &Path,
-    proxy: &crate::settings::ProxySettings,
+    proxy: &ProxySettings,
     update: bool,
     roots: &[PathBuf],
     credential: Option<&Value>,
@@ -2836,7 +2836,7 @@ fn safe_directory(path: &Path) -> String {
 }
 
 fn git_cmd(
-    proxy: &crate::settings::ProxySettings,
+    proxy: &ProxySettings,
     allow_file: bool,
     auth: Option<&GitAuth>,
     checkout: Option<&Path>,
@@ -2925,7 +2925,7 @@ async fn git_clone(
     url: &str,
     revision: &str,
     dest: &Path,
-    proxy: &crate::settings::ProxySettings,
+    proxy: &ProxySettings,
     allow_file: bool,
     auth: Option<&GitAuth>,
 ) -> Result<(), RunnerError> {
@@ -2941,7 +2941,7 @@ async fn git_clone(
 async fn git_checkout(
     revision: &str,
     dest: &Path,
-    proxy: &crate::settings::ProxySettings,
+    proxy: &ProxySettings,
     allow_file: bool,
     auth: Option<&GitAuth>,
 ) -> Result<(), RunnerError> {
@@ -2963,7 +2963,7 @@ async fn git_checkout(
 async fn git_update(
     revision: &str,
     dest: &Path,
-    proxy: &crate::settings::ProxySettings,
+    proxy: &ProxySettings,
     allow_file: bool,
     auth: Option<&GitAuth>,
 ) -> Result<(), RunnerError> {
@@ -2979,7 +2979,7 @@ async fn git_sync(
     url: &str,
     revision: &str,
     dest: &Path,
-    proxy: &crate::settings::ProxySettings,
+    proxy: &ProxySettings,
     allow_file: bool,
     auth: Option<&GitAuth>,
 ) -> Result<(), RunnerError> {
@@ -4174,7 +4174,7 @@ fn finish(state: &Shared, job_id: &str, success: bool) {
 fn close_observation(state: &Shared, job_id: &str) {
     let loaded = state.store().job(job_id).ok().flatten();
     let (status, labels) = match loaded {
-        Some(job) => (job.status.clone(), Some(metrics::job_labels(&job))),
+        Some(job) => (job.status.clone(), Some(job_labels(&job))),
         None => ("failed".to_string(), None),
     };
     let meta = labels.as_ref().map(|item| JobMeta {
@@ -4308,7 +4308,7 @@ mod tests {
             last_sync_status: String::new(),
             admin_saved: true,
         };
-        let proxy = crate::settings::ProxySettings::inherit();
+        let proxy = ProxySettings::inherit();
         let path = materialize_project(&project, &dir, &proxy, false, &[], None)
             .await
             .unwrap();
@@ -6418,7 +6418,7 @@ exit 0
             last_sync_status: String::new(),
             admin_saved: true,
         };
-        let proxy = crate::settings::ProxySettings::inherit();
+        let proxy = ProxySettings::inherit();
         let err = materialize_project(&project, &data, &proxy, true, &roots, None)
             .await
             .unwrap_err();

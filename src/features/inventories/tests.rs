@@ -701,7 +701,7 @@ async fn reports_dropped_config_context_keys_in_the_result() {
         query: Vec::new(),
         virtual_machines: false,
     };
-    let proxy = crate::settings::ProxySettings::inherit();
+    let proxy = crate::features::operations::ProxySettings::inherit();
     let result = fetch(&source, "token", &proxy).await.unwrap();
     assert_eq!(
         result.dropped_vars,
@@ -769,7 +769,7 @@ async fn stops_at_the_configurable_host_limit() {
         query: Vec::new(),
         virtual_machines: false,
     };
-    let proxy = crate::settings::ProxySettings::inherit();
+    let proxy = crate::features::operations::ProxySettings::inherit();
     let error = fetch(&source, "token", &proxy).await.unwrap_err();
     assert!(
         error.starts_with("the_netbox_host_limit_of_was_reached_raise_max_hosts"),
@@ -805,7 +805,7 @@ async fn stops_paging_on_a_short_page() {
         query: Vec::new(),
         virtual_machines: false,
     };
-    let proxy = crate::settings::ProxySettings::inherit();
+    let proxy = crate::features::operations::ProxySettings::inherit();
     let ini = fetch_ini(&source, "token", &proxy).await.unwrap();
     assert!(ini.contains("web-1"), "{ini}");
 }
@@ -841,7 +841,7 @@ async fn stops_paging_on_a_repeated_page() {
         query: Vec::new(),
         virtual_machines: false,
     };
-    let proxy = crate::settings::ProxySettings::inherit();
+    let proxy = crate::features::operations::ProxySettings::inherit();
     let ini = fetch_ini(&source, "token", &proxy).await.unwrap();
     assert!(ini.contains("[all]\nweb-0"), "{ini}");
     assert!(ini.contains("web-99"), "{ini}");
@@ -907,7 +907,7 @@ async fn fetches_devices_and_virtual_machines() {
         query: vec![("status".into(), "active".into())],
         virtual_machines: true,
     };
-    let proxy = crate::settings::ProxySettings::inherit();
+    let proxy = crate::features::operations::ProxySettings::inherit();
     let ini = fetch_ini(&source, "secret-token", &proxy).await.unwrap();
     assert!(ini.contains("web-1 ansible_host=10.0.0.8"));
     assert!(ini.contains("web-2"));
@@ -929,7 +929,7 @@ async fn an_unreachable_netbox_gives_up_before_the_total_timeout() {
         query: Vec::new(),
         virtual_machines: false,
     };
-    let proxy = crate::settings::ProxySettings::inherit();
+    let proxy = crate::features::operations::ProxySettings::inherit();
     let started = std::time::Instant::now();
     let error = fetch_ini(&source, "token", &proxy).await.unwrap_err();
     assert!(error.contains("netbox_is_not_reachable"), "{error}");

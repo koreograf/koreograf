@@ -347,7 +347,7 @@ pub async fn test_netbox(
     )?;
     ensure_certificate_override(&state, &user, &team, true, body.validate_certs, None)?;
     let source = connection_source(&access.api_endpoint, &access.token, body.validate_certs)?;
-    let proxy = crate::settings::load(&state)?.proxy;
+    let proxy = crate::features::operations::load(&state)?.proxy;
     let version = test_connection(&source, &access.token, &proxy)
         .await
         .map_err(ApiError::bad)?;
@@ -543,7 +543,7 @@ async fn fetch_netbox(
     source: &NetboxSource,
     token: &str,
 ) -> AppResult<NetboxResult> {
-    let proxy = crate::settings::load(state)?.proxy;
+    let proxy = crate::features::operations::load(state)?.proxy;
     fetch(source, token, &proxy).await.map_err(ApiError::bad)
 }
 
