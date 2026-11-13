@@ -100,7 +100,7 @@ function localParts(zone) {
   };
 }
 
-function latestStartDate(date) {
+export function latestStartDate(date) {
   const value = String(date);
   const year = Number(value.slice(0, 4)) + 10;
   if (value.slice(5, 10) === "02-29") return `${year}-02-28`;
