@@ -1,11 +1,12 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::Deserialize;
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::auth::{AuthUser, Role};
@@ -17,8 +18,8 @@ use crate::runner;
 use crate::scan;
 use crate::Shared;
 
-use super::catalog::{inventory_detail, inventory_json, InventoryDetailResponse};
-use super::{blank, check_static_ini, created, gate, require_name, team_header};
+use super::catalog::{inventory_detail, InventoryDetailResponse, InventorySyncResponse};
+use super::{blank, check_static_ini, gate, require_name, team_header};
 
 pub(super) fn routes() -> Router<Shared> {
     Router::new()
@@ -179,18 +180,56 @@ struct StoredNetbox {
     virtual_machines: bool,
 }
 
+#[derive(Serialize)]
+pub(super) struct NetboxTestResponse {
+    version: String,
+}
+
+#[derive(Serialize)]
+pub(super) struct NetboxPreviewResponse {
+    host_count: usize,
+    groups: Vec<NetboxPreviewGroupResponse>,
+    sample_host: Option<NetboxPreviewHostResponse>,
+    collisions: Vec<String>,
+    dropped_vars: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct NetboxPreviewGroupResponse {
+    name: String,
+    host_count: usize,
+}
+
+#[derive(Serialize)]
+struct NetboxPreviewHostResponse {
+    name: String,
+    vars: BTreeMap<String, String>,
+}
+
+#[derive(Serialize)]
+pub(super) struct SourceDetailResponse {
+    id: String,
+    inventory_id: String,
+    name: String,
+    kind: String,
+    source: Value,
+    credential_id: Option<String>,
+    host_count: usize,
+    body: String,
+}
+
 pub async fn project_contents(
     State(state): State<Shared>,
     headers: HeaderMap,
     user: AuthUser,
     Path(id): Path<String>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<scan::ProjectContents>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     let project = visible_project(&state, &id, &team)?;
     let root = project_dir(&state, &project)?;
     let contents = scan::scan_project(&root).map_err(ApiError::bad)?;
-    Ok(Json(json!(contents)))
+    Ok(Json(contents))
 }
 
 pub async fn import_inventory(
@@ -198,7 +237,7 @@ pub async fn import_inventory(
     headers: HeaderMap,
     user: AuthUser,
     ApiJson(body): ApiJson<ImportBody>,
-) -> AppResult<axum::response::Response> {
+) -> AppResult<(StatusCode, Json<InventoryDetailResponse>)> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let path = body.path.trim();
@@ -225,7 +264,7 @@ pub async fn import_inventory(
         body: text,
         created_at: db::now(),
         source_kind: "project".into(),
-        source_json: json!({"project_id": project.id, "path": path}).to_string(),
+        source_json: project_source_json(&project.id, path),
         credential_id: None,
         admin_saved: user.is_admin,
     };
@@ -242,7 +281,7 @@ pub async fn import_inventory(
     };
     let db = state.store();
     db.insert_inventory(&item, std::slice::from_ref(&source_row), false)?;
-    Ok(created(inventory_json(db, &item)?))
+    Ok((StatusCode::CREATED, Json(inventory_detail(db, &item)?)))
 }
 
 pub async fn create_netbox(
@@ -250,7 +289,7 @@ pub async fn create_netbox(
     headers: HeaderMap,
     user: AuthUser,
     ApiJson(body): ApiJson<NetboxBody>,
-) -> AppResult<axum::response::Response> {
+) -> AppResult<(StatusCode, Json<InventoryDetailResponse>)> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let name = require_name(&body.name)?;
@@ -299,7 +338,7 @@ pub async fn create_netbox(
     let db = state.store();
     db.insert_inventory(&item, std::slice::from_ref(&source_row), true)?;
     let item = db.inventory(&item.id)?.ok_or(ApiError::NotFound)?;
-    Ok(created(inventory_json(db, &item)?))
+    Ok((StatusCode::CREATED, Json(inventory_detail(db, &item)?)))
 }
 
 pub async fn test_netbox(
@@ -307,7 +346,7 @@ pub async fn test_netbox(
     headers: HeaderMap,
     user: AuthUser,
     ApiJson(body): ApiJson<NetboxTestBody>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<NetboxTestResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let access = netbox_access(
@@ -323,7 +362,7 @@ pub async fn test_netbox(
     let version = netbox::test_connection(&source, &access.token, &proxy)
         .await
         .map_err(ApiError::bad)?;
-    Ok(Json(json!({ "version": version })))
+    Ok(Json(NetboxTestResponse { version }))
 }
 
 pub async fn preview_netbox(
@@ -331,7 +370,7 @@ pub async fn preview_netbox(
     headers: HeaderMap,
     user: AuthUser,
     ApiJson(body): ApiJson<NetboxPreviewBody>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<NetboxPreviewResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let access = netbox_access(
@@ -354,22 +393,19 @@ pub async fn preview_netbox(
     })?;
     let fetched = fetch_netbox(&state, &source, &access.token).await?;
     let report = netbox::preview(&fetched.body);
-    let sample = report.sample_host.map(|(name, vars)| {
-        json!({
-            "name": name,
-            "vars": vars,
-        })
-    });
-    Ok(Json(json!({
-        "host_count": report.host_count,
-        "groups": report.groups.iter().map(|(name, hosts)| json!({
-            "name": name,
-            "host_count": hosts,
-        })).collect::<Vec<_>>(),
-        "sample_host": sample,
-        "collisions": fetched.collisions,
-        "dropped_vars": fetched.dropped_vars,
-    })))
+    Ok(Json(NetboxPreviewResponse {
+        host_count: report.host_count,
+        groups: report
+            .groups
+            .into_iter()
+            .map(|(name, host_count)| NetboxPreviewGroupResponse { name, host_count })
+            .collect(),
+        sample_host: report
+            .sample_host
+            .map(|(name, vars)| NetboxPreviewHostResponse { name, vars }),
+        collisions: fetched.collisions,
+        dropped_vars: fetched.dropped_vars,
+    }))
 }
 
 pub async fn sync_inventory(
@@ -377,7 +413,7 @@ pub async fn sync_inventory(
     headers: HeaderMap,
     user: AuthUser,
     Path(id): Path<String>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<InventoryDetailResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let sources = {
@@ -424,10 +460,23 @@ pub async fn sync_inventory(
     let db = state.store();
     db.sync_inventory_sources(&id, &bodies, user.is_admin)?;
     let item = db.inventory(&id)?.ok_or(ApiError::NotFound)?;
-    let mut value = inventory_json(db, &item)?;
-    value["collisions"] = json!(collisions);
-    value["dropped_vars"] = json!(dropped_vars);
-    Ok(Json(value))
+    let mut response = inventory_detail(db, &item)?;
+    response.collisions = Some(collisions);
+    response.dropped_vars = Some(dropped_vars);
+    Ok(Json(response))
+}
+
+fn project_source_json(project_id: &str, path: &str) -> String {
+    #[derive(Serialize)]
+    struct ProjectSource {
+        project_id: String,
+        path: String,
+    }
+    serde_json::to_string(&ProjectSource {
+        project_id: project_id.to_string(),
+        path: path.to_string(),
+    })
+    .unwrap_or_default()
 }
 
 fn project_source_paths(source_json: &str) -> AppResult<(String, String)> {
@@ -805,7 +854,7 @@ pub async fn add_source(
     user: AuthUser,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<SourceInput>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<InventoryDetailResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let position = {
@@ -835,7 +884,7 @@ pub async fn add_source(
     let db = state.store();
     db.add_inventory_source(&id, &source, user.is_admin)?;
     let item = db.inventory(&id)?.ok_or(ApiError::NotFound)?;
-    Ok(Json(inventory_json(db, &item)?))
+    Ok(Json(inventory_detail(db, &item)?))
 }
 
 pub async fn get_source(
@@ -843,21 +892,21 @@ pub async fn get_source(
     headers: HeaderMap,
     user: AuthUser,
     Path((inventory_id, source_id)): Path<(String, String)>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<SourceDetailResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Viewer)?;
     let db = state.store();
     let source = owned_source(db, &inventory_id, &source_id, &team)?;
-    Ok(Json(json!({
-        "id": source.id,
-        "inventory_id": source.inventory_id,
-        "name": source.name,
-        "kind": source.kind,
-        "source": db::json_object(&source.source_json),
-        "credential_id": source.credential_id,
-        "host_count": crate::inventory::parse_hosts(&source.body).len(),
-        "body": source.body,
-    })))
+    Ok(Json(SourceDetailResponse {
+        id: source.id,
+        inventory_id: source.inventory_id,
+        name: source.name,
+        kind: source.kind,
+        source: db::json_object(&source.source_json),
+        credential_id: source.credential_id,
+        host_count: crate::inventory::parse_hosts(&source.body).len(),
+        body: source.body,
+    }))
 }
 
 pub async fn update_source(
@@ -866,7 +915,7 @@ pub async fn update_source(
     user: AuthUser,
     Path((inventory_id, source_id)): Path<(String, String)>,
     ApiJson(body): ApiJson<SourceUpdate>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<InventoryDetailResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let (source, before) = {
@@ -879,9 +928,7 @@ pub async fn update_source(
         if source.inventory_id != inventory_id {
             return Err(ApiError::NotFound);
         }
-        let before = inventory_json(db, &item)?["host_count"]
-            .as_u64()
-            .unwrap_or(0);
+        let before = inventory_detail(db, &item)?.host_count();
         (source, before)
     };
     reject_foreign_fields(&source.kind, &body)?;
@@ -902,14 +949,18 @@ pub async fn update_source(
     let db = state.store();
     db.update_inventory_source(&updated, user.is_admin)?;
     let item = db.inventory(&inventory_id)?.ok_or(ApiError::NotFound)?;
-    let mut value = inventory_json(db, &item)?;
+    let mut response = inventory_detail(db, &item)?;
     if source.kind == "project" || source.kind == "netbox" {
-        let after = value["host_count"].as_u64().unwrap_or(0);
-        value["sync"] = json!({"ok": true, "before": before, "after": after});
-        value["collisions"] = json!(resolved.collisions);
-        value["dropped_vars"] = json!(resolved.dropped_vars);
+        let after = response.host_count();
+        response.sync = Some(InventorySyncResponse {
+            ok: true,
+            before,
+            after,
+        });
+        response.collisions = Some(resolved.collisions);
+        response.dropped_vars = Some(resolved.dropped_vars);
     }
-    Ok(Json(value))
+    Ok(Json(response))
 }
 
 pub async fn delete_source(
@@ -917,14 +968,14 @@ pub async fn delete_source(
     headers: HeaderMap,
     user: AuthUser,
     Path((inventory_id, source_id)): Path<(String, String)>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<InventoryDetailResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let db = state.store();
     owned_source(db, &inventory_id, &source_id, &team)?;
     db.delete_inventory_source(&source_id, &inventory_id, user.is_admin)?;
     let item = db.inventory(&inventory_id)?.ok_or(ApiError::NotFound)?;
-    Ok(Json(inventory_json(db, &item)?))
+    Ok(Json(inventory_detail(db, &item)?))
 }
 
 pub async fn sync_source(
@@ -932,7 +983,7 @@ pub async fn sync_source(
     headers: HeaderMap,
     user: AuthUser,
     Path((inventory_id, source_id)): Path<(String, String)>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<Json<InventoryDetailResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let source = {
@@ -957,10 +1008,10 @@ pub async fn sync_source(
         user.is_admin,
     )?;
     let item = db.inventory(&inventory_id)?.ok_or(ApiError::NotFound)?;
-    let mut value = inventory_json(db, &item)?;
-    value["collisions"] = json!(fetched.collisions);
-    value["dropped_vars"] = json!(fetched.dropped_vars);
-    Ok(Json(value))
+    let mut response = inventory_detail(db, &item)?;
+    response.collisions = Some(fetched.collisions);
+    response.dropped_vars = Some(fetched.dropped_vars);
+    Ok(Json(response))
 }
 
 #[derive(Deserialize)]
@@ -1114,7 +1165,7 @@ fn resolve_project_update(
     let name = updated_name(body.name.clone(), &source.name, &file_stem(path))?;
     Ok(ResolvedUpdate {
         name,
-        source_json: json!({"project_id": project.id, "path": path}).to_string(),
+        source_json: project_source_json(&project.id, path),
         body: text,
         credential_id: None,
         collisions: Vec::new(),
@@ -1241,7 +1292,7 @@ async fn resolve_source(
             Ok(ResolvedSource {
                 name,
                 kind: "project".into(),
-                source_json: json!({"project_id": project.id, "path": path}).to_string(),
+                source_json: project_source_json(&project.id, path),
                 body: text,
                 credential_id: None,
             })

@@ -14,6 +14,7 @@ mod projects;
 mod routes;
 mod schedules;
 mod settings;
+mod sources;
 mod teams;
 mod templates;
 mod web_assets;
