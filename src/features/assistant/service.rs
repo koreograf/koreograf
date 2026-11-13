@@ -1,13 +1,17 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::http::{header, HeaderMap, Method, StatusCode};
-use axum::Router;
 use http_body_util::BodyExt;
-use serde::{Deserialize, Serialize};
+use reqwest::Method as ReqwestMethod;
+use rmcp::handler::server::router::tool::ToolRouter;
+use rmcp::handler::server::wrapper::Parameters;
+use rmcp::service::RequestContext;
+use rmcp::RoleServer;
+use rmcp::{tool, tool_handler, tool_router, ServerHandler};
 use serde_json::{json, Map, Value};
 use tower::ServiceExt;
 
@@ -18,14 +22,12 @@ use crate::features::identity::{AuthUser, Role};
 use crate::features::operations;
 use crate::Shared;
 
-mod assistant;
+use super::model::{
+    ChatBody, ChatMessage, Error, IdArgs, JobQuery, LaunchArgs, ListJobsArgs, LlmConfig,
+    LlmConfigError, LlmError, LlmSetup, PendingActionResponse, TeamArgs, DEFAULT_MAX_TOKENS,
+    DEFAULT_TIMEOUT_SECS,
+};
 
-pub(crate) fn routes() -> Router<Shared> {
-    assistant::routes()
-}
-
-const DEFAULT_MAX_TOKENS: u32 = 800;
-const DEFAULT_TIMEOUT_SECS: u64 = 60;
 const MAX_MESSAGE_CHARS: usize = 8_000;
 const MAX_TURN_CHARS: usize = 8_000;
 const MAX_HISTORY_TURNS: usize = 20;
@@ -39,7 +41,7 @@ const RATE_LIMIT_KEYS: usize = 1_024;
 const PENDING_ACTIONS_MAX: usize = 512;
 const PENDING_ACTION_TTL: Duration = Duration::from_secs(600);
 
-const WRITE_TOOLS: &[&str] = &[
+pub(super) const WRITE_TOOLS: &[&str] = &[
     "launch_template",
     "launch_workflow",
     "cancel_job",
@@ -50,135 +52,6 @@ const WRITE_TOOLS: &[&str] = &[
 
 static CHAT_ATTEMPTS: OnceLock<Mutex<HashMap<String, Vec<Instant>>>> = OnceLock::new();
 static PENDING_ACTIONS: OnceLock<Mutex<HashMap<String, PendingAction>>> = OnceLock::new();
-
-#[derive(Clone, PartialEq, Eq)]
-pub struct LlmConfig {
-    pub endpoint: String,
-    pub model: String,
-    pub max_tokens: u32,
-    pub timeout_secs: u64,
-    pub provider: LlmProvider,
-    api_key: String,
-}
-
-impl std::fmt::Debug for LlmConfig {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("LlmConfig")
-            .field("endpoint", &self.endpoint)
-            .field("model", &self.model)
-            .field("max_tokens", &self.max_tokens)
-            .field("timeout_secs", &self.timeout_secs)
-            .field("provider", &self.provider)
-            .field("api_key", &"<redacted>")
-            .finish()
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LlmConfigError {
-    MissingEndpoint,
-    InvalidEndpoint,
-    MissingModel,
-    InvalidModel,
-    UnreadableKeyFile,
-    UnreadableSettings,
-}
-
-impl std::fmt::Display for LlmConfigError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::MissingEndpoint => "KOREOGRAF_LLM_URL is missing",
-            Self::InvalidEndpoint => {
-                "KOREOGRAF_LLM_URL must be an http or https address without credentials"
-            }
-            Self::MissingModel => "KOREOGRAF_LLM_MODEL is missing",
-            Self::InvalidModel => "KOREOGRAF_LLM_MODEL is invalid",
-            Self::UnreadableKeyFile => "KOREOGRAF_LLM_API_KEY_FILE cannot be read",
-            Self::UnreadableSettings => "the saved assistant settings cannot be read",
-        })
-    }
-}
-
-pub enum LlmSetup {
-    Disabled,
-    Incomplete(LlmConfigError),
-    Configured(LlmConfig),
-}
-
-impl LlmConfig {
-    pub fn new(endpoint: &str, model: &str, api_key: &str) -> Result<Self, LlmConfigError> {
-        Self::build(
-            endpoint,
-            model,
-            api_key,
-            DEFAULT_MAX_TOKENS,
-            DEFAULT_TIMEOUT_SECS,
-        )
-    }
-
-    pub fn with_limits(mut self, max_tokens: u32, timeout_secs: u64) -> Self {
-        self.max_tokens = max_tokens.clamp(64, 4_096);
-        self.timeout_secs = timeout_secs.clamp(5, 300);
-        self
-    }
-
-    pub fn with_provider(mut self, provider: LlmProvider) -> Self {
-        self.provider = provider;
-        self
-    }
-
-    fn build(
-        endpoint: &str,
-        model: &str,
-        api_key: &str,
-        max_tokens: u32,
-        timeout_secs: u64,
-    ) -> Result<Self, LlmConfigError> {
-        let endpoint = endpoint.trim();
-        if endpoint.is_empty() {
-            return Err(LlmConfigError::MissingEndpoint);
-        }
-        let parsed = url::Url::parse(endpoint).map_err(|_| LlmConfigError::InvalidEndpoint)?;
-        if !matches!(parsed.scheme(), "http" | "https")
-            || parsed.host_str().is_none()
-            || !parsed.username().is_empty()
-            || parsed.password().is_some()
-            || endpoint.chars().any(char::is_control)
-        {
-            return Err(LlmConfigError::InvalidEndpoint);
-        }
-        let model = model.trim();
-        if model.is_empty() {
-            return Err(LlmConfigError::MissingModel);
-        }
-        if model.chars().count() > 200 || model.chars().any(char::is_control) {
-            return Err(LlmConfigError::InvalidModel);
-        }
-        Ok(Self {
-            endpoint: endpoint.trim_end_matches('/').to_string(),
-            model: model.to_string(),
-            max_tokens: max_tokens.clamp(64, 4_096),
-            timeout_secs: timeout_secs.clamp(5, 300),
-            provider: LlmProvider::Openai,
-            api_key: api_key.trim().to_string(),
-        })
-    }
-
-    fn request_url(&self) -> String {
-        if self.endpoint.ends_with("/chat/completions") {
-            return self.endpoint.clone();
-        }
-        if self.provider == LlmProvider::Ollama && !self.endpoint.ends_with("/v1") {
-            return format!("{}/v1/chat/completions", self.endpoint);
-        }
-        format!("{}/chat/completions", self.endpoint)
-    }
-
-    fn has_api_key(&self) -> bool {
-        !self.api_key.is_empty()
-    }
-}
 
 pub fn parse(
     enabled: bool,
@@ -271,31 +144,6 @@ pub fn config_for(state: &Shared) -> LlmSetup {
         Ok(Some(config)) => LlmSetup::Configured(config),
         Ok(None) => LlmSetup::Disabled,
         Err(error) => LlmSetup::Incomplete(error),
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, serde::Serialize)]
-pub struct ChatMessage {
-    pub role: String,
-    pub content: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LlmError {
-    RateLimited,
-    Upstream,
-    Unreachable,
-    InvalidResponse,
-}
-
-impl std::fmt::Display for LlmError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::RateLimited => "the assistant is rate limited",
-            Self::Upstream => "the assistant endpoint returned an error",
-            Self::Unreachable => "the assistant endpoint cannot be reached",
-            Self::InvalidResponse => "the assistant returned an invalid answer",
-        })
     }
 }
 
@@ -405,34 +253,17 @@ async fn request_chat(
     })
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ChatBody {
-    message: String,
-    #[serde(default)]
-    history: Vec<ChatMessage>,
-    #[serde(default)]
-    job_id: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct PendingActionResponse {
-    id: String,
-    tool: String,
-    target: String,
-}
-
-enum RunError {
+pub(super) enum RunError {
     Llm(LlmError),
     Key(StatusCode, &'static str),
 }
 
-struct ToolOutcome {
-    answer: String,
-    pending: Option<PendingActionResponse>,
+pub(super) struct ToolOutcome {
+    pub(super) answer: String,
+    pub(super) pending: Option<PendingActionResponse>,
 }
 
-async fn run_tools(
+pub(super) async fn run_tools(
     state: &Shared,
     user: &AuthUser,
     credential: &Credential,
@@ -709,7 +540,7 @@ async fn action_target(
     id.to_string()
 }
 
-async fn job_context(
+pub(super) async fn job_context(
     state: &Shared,
     credential: &Credential,
     id: &str,
@@ -731,7 +562,7 @@ async fn job_context(
     ))
 }
 
-fn write_request(tool: &str, arguments: &Value) -> (Method, String, Option<Value>) {
+pub(super) fn write_request(tool: &str, arguments: &Value) -> (Method, String, Option<Value>) {
     let id = arguments.get("id").and_then(Value::as_str).unwrap_or("");
     let segment = encode_segment(id);
     let extra_vars = || {
@@ -776,11 +607,11 @@ fn tool_team(arguments: &Value, header: Option<&str>) -> Option<String> {
         .or_else(|| header.map(str::to_string))
 }
 
-fn is_write(name: &str) -> bool {
+pub(super) fn is_write(name: &str) -> bool {
     WRITE_TOOLS.contains(&name)
 }
 
-fn conversation(
+pub(super) fn conversation(
     user: &AuthUser,
     teams: &[(Team, String)],
     body: &ChatBody,
@@ -861,7 +692,7 @@ fn system_prompt(user: &AuthUser, teams: &[(Team, String)]) -> String {
     lines.join("\n")
 }
 
-fn within_rate_limit(user_id: &str) -> bool {
+pub(super) fn within_rate_limit(user_id: &str) -> bool {
     let now = Instant::now();
     let Ok(mut attempts) = CHAT_ATTEMPTS
         .get_or_init(|| Mutex::new(HashMap::new()))
@@ -886,13 +717,13 @@ fn within_rate_limit(user_id: &str) -> bool {
 }
 
 #[derive(Clone)]
-struct PendingAction {
-    user_id: String,
-    team_id: String,
-    tool: String,
-    arguments: Value,
-    name: String,
-    created: Instant,
+pub(super) struct PendingAction {
+    pub(super) user_id: String,
+    pub(super) team_id: String,
+    pub(super) tool: String,
+    pub(super) arguments: Value,
+    pub(super) name: String,
+    pub(super) created: Instant,
 }
 
 fn store_pending(user: &AuthUser, team: &str, tool: &str, arguments: &Value, name: &str) -> String {
@@ -922,7 +753,7 @@ fn store_pending(user: &AuthUser, team: &str, tool: &str, arguments: &Value, nam
     id
 }
 
-fn take_pending(id: &str, user_id: &str) -> Option<PendingAction> {
+pub(super) fn take_pending(id: &str, user_id: &str) -> Option<PendingAction> {
     let mut actions = PENDING_ACTIONS
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
@@ -936,7 +767,7 @@ fn take_pending(id: &str, user_id: &str) -> Option<PendingAction> {
     Some(action)
 }
 
-fn drop_pending(id: &str, user_id: &str) {
+pub(super) fn drop_pending(id: &str, user_id: &str) {
     if let Ok(mut actions) = PENDING_ACTIONS
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
@@ -951,12 +782,12 @@ fn drop_pending(id: &str, user_id: &str) {
 }
 
 #[derive(Clone)]
-enum Credential {
+pub(super) enum Credential {
     Cookie(String),
     Bearer(String),
 }
 
-fn request_credential(headers: &HeaderMap) -> Option<Credential> {
+pub(super) fn request_credential(headers: &HeaderMap) -> Option<Credential> {
     if let Some(token) = auth::bearer_token(headers) {
         return Some(Credential::Bearer(token));
     }
@@ -969,7 +800,7 @@ fn credential_secret(credential: &Credential) -> &str {
     }
 }
 
-async fn api_text(
+pub(super) async fn api_text(
     state: &Shared,
     credential: &Credential,
     method: Method,
@@ -1039,7 +870,7 @@ fn error_key(text: &str) -> String {
         .unwrap_or_else(|| "request_failed".to_string())
 }
 
-fn http_status(key: &str) -> StatusCode {
+pub(super) fn http_status(key: &str) -> StatusCode {
     match key {
         "sign_in_is_required" | "unauthorized" => StatusCode::UNAUTHORIZED,
         "forbidden" => StatusCode::FORBIDDEN,
@@ -1049,12 +880,12 @@ fn http_status(key: &str) -> StatusCode {
 }
 
 #[derive(Default)]
-struct SecretSet {
+pub(super) struct SecretSet {
     values: Vec<String>,
 }
 
 impl SecretSet {
-    fn add(&mut self, value: &str) {
+    pub(super) fn add(&mut self, value: &str) {
         let value = value.trim();
         if value.chars().count() < 4 {
             return;
@@ -1077,7 +908,7 @@ impl SecretSet {
     }
 }
 
-fn collect_secrets(
+pub(super) fn collect_secrets(
     state: &Shared,
     _user: &AuthUser,
     teams: &[(Team, String)],
@@ -1128,7 +959,7 @@ fn collect_strings(value: &Value, secrets: &mut SecretSet) {
     }
 }
 
-fn redact_text(text: &str, secrets: &SecretSet) -> String {
+pub(super) fn redact_text(text: &str, secrets: &SecretSet) -> String {
     let text = secrets.redact(text);
     let text = redact_private_keys(&text);
     let text = crate::runner::redact_secrets(&text);
@@ -1279,7 +1110,7 @@ fn redact_prefixed_tokens(text: &str) -> String {
     out
 }
 
-fn redact_value(value: &Value, secrets: &SecretSet) -> Value {
+pub(super) fn redact_value(value: &Value, secrets: &SecretSet) -> Value {
     match value {
         Value::String(text) => Value::String(redact_text(text, secrets)),
         Value::Array(items) => Value::Array(
@@ -1323,7 +1154,7 @@ fn secret_field(key: &str) -> bool {
     .any(|marker| key.contains(marker))
 }
 
-fn truncate_chars(text: &str, max: usize) -> String {
+pub(super) fn truncate_chars(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         return text.to_string();
     }
@@ -1460,99 +1291,743 @@ fn env_string(key: &str) -> String {
     std::env::var(key).unwrap_or_default().trim().to_string()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+const DEFAULT_URL: &str = "http://127.0.0.1:8080";
 
-    fn secrets(values: &[&str]) -> SecretSet {
-        let mut set = SecretSet::default();
-        for value in values {
-            set.add(value);
+#[derive(Debug, Clone)]
+enum Backend {
+    Remote { http: reqwest::Client, base: String },
+    Local { app: axum::Router },
+}
+
+#[derive(Debug, Clone)]
+pub struct Client {
+    backend: Backend,
+    token: String,
+    team_id: Option<String>,
+}
+
+pub(super) fn path_segment(value: &str) -> String {
+    let mut out = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'~' => out.push(byte as char),
+            other => out.push_str(&format!("%{other:02X}")),
         }
-        set
+    }
+    out
+}
+
+impl Client {
+    pub fn new(
+        base: impl Into<String>,
+        token: impl Into<String>,
+        team_id: Option<String>,
+    ) -> Result<Self, Error> {
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .map_err(|_| Error::new("http_client_failed"))?;
+        let base = base.into().trim_end_matches('/').to_string();
+        Ok(Self {
+            backend: Backend::Remote { http, base },
+            token: token.into(),
+            team_id,
+        })
     }
 
-    #[test]
-    fn known_secret_values_never_survive_redaction() {
-        let set = secrets(&["bind-secret-value", "proxy-pass"]);
-        let text = "ldap rejected bind-secret-value; proxy-pass works";
-        let redacted = redact_text(text, &set);
-        assert!(!redacted.contains("bind-secret-value"), "{redacted}");
-        assert!(!redacted.contains("proxy-pass"), "{redacted}");
-        assert!(redacted.contains("[redacted]"), "{redacted}");
-    }
-
-    #[test]
-    fn secret_assignments_bearer_tokens_and_urls_are_masked() {
-        let text = "DB_PASSWORD=hunter2 Authorization: Bearer abc123token git https://user:pw@example/repo.git";
-        let redacted = redact_text(text, &SecretSet::default());
-        assert!(!redacted.contains("hunter2"), "{redacted}");
-        assert!(!redacted.contains("abc123token"), "{redacted}");
-        assert!(!redacted.contains("user:pw"), "{redacted}");
-        assert!(
-            redacted.contains("https://[redacted]@example/repo.git"),
-            "{redacted}"
-        );
-    }
-
-    #[test]
-    fn secret_shaped_tokens_and_private_keys_are_masked() {
-        let openai = ["sk-", "live-abcdefghijklmnopqrstuvwxyz"].concat();
-        let github = ["ghp_", "0123456789abcdef"].concat();
-        let begin = ["-----BEGIN ", "OPENSSH", " PRIVATE KEY-----"].concat();
-        let end = ["-----END ", "OPENSSH", " PRIVATE KEY-----"].concat();
-        let text = format!("token {openai} and {github}\n{begin}\nbody\n{end}");
-        let redacted = redact_text(&text, &SecretSet::default());
-        assert!(
-            !redacted.contains("live-abcdefghijklmnopqrstuvwxyz"),
-            "{redacted}"
-        );
-        assert!(!redacted.contains("0123456789abcdef"), "{redacted}");
-        assert!(!redacted.contains("body"), "{redacted}");
-        assert!(redacted.contains("[redacted private key]"), "{redacted}");
-    }
-
-    #[test]
-    fn extra_vars_values_never_reach_the_model() {
-        let job = json!({
-            "id": "job-1",
-            "name": "Deploy",
-            "extra_vars": {"api_password": "hunter2", "plain": "visible"},
-            "parameters": {"script": "echo ok"},
-            "template": {"token": "ghp_secretvalue", "credential_id": "cred-1"}
-        });
-        let redacted = redact_value(&job, &SecretSet::default());
-        assert_eq!(redacted["extra_vars"], "[redacted]");
-        assert_eq!(redacted["template"]["token"], "[redacted]");
-        assert_eq!(redacted["template"]["credential_id"], "cred-1");
-        assert_eq!(redacted["parameters"]["script"], "echo ok");
-        let text = redacted.to_string();
-        assert!(!text.contains("hunter2"), "{text}");
-        assert!(!text.contains("ghp_secretvalue"), "{text}");
-    }
-
-    #[test]
-    fn vault_blocks_are_masked() {
-        let text = "$ANSIBLE_VAULT;1.1;AES256\n63386436\nmore\n\nplain tail";
-        let redacted = redact_text(text, &SecretSet::default());
-        assert!(!redacted.contains("63386436"), "{redacted}");
-        assert!(redacted.contains("plain tail"), "{redacted}");
-    }
-
-    #[test]
-    fn a_long_output_is_truncated_after_redaction() {
-        let text = format!("{} secret-in-the-tail", "x".repeat(60));
-        let redacted = truncate_chars(&redact_text(&text, &secrets(&["secret-in-the-tail"])), 20);
-        assert!(redacted.ends_with("[truncated]"), "{redacted}");
-        assert!(!redacted.contains("secret-in-the-tail"), "{redacted}");
-    }
-
-    #[test]
-    fn only_write_tools_need_a_confirmation() {
-        for name in WRITE_TOOLS {
-            assert!(is_write(name), "{name}");
+    pub fn local(app: axum::Router) -> Self {
+        Self {
+            backend: Backend::Local { app },
+            token: String::new(),
+            team_id: None,
         }
-        assert!(!is_write("job_output"));
-        assert!(!is_write("launch_everything"));
     }
+
+    fn with_token(mut self, token: String) -> Self {
+        self.token = token;
+        self
+    }
+
+    fn called_team(&self, team_id: Option<&str>) -> Option<String> {
+        team_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .or_else(|| self.team_id.clone())
+    }
+
+    async fn request(
+        &self,
+        method: Method,
+        path: &str,
+        query: &[(&str, String)],
+        body: Option<&Value>,
+        team_id: Option<&str>,
+    ) -> Result<String, Error> {
+        match &self.backend {
+            Backend::Remote { http, base } => {
+                let mut request = http
+                    .request(method, format!("{base}{path}"))
+                    .bearer_auth(&self.token);
+                if !query.is_empty() {
+                    request = request.query(query);
+                }
+                if let Some(team) = self.called_team(team_id) {
+                    request = request.header("X-Team-Id", team);
+                }
+                if let Some(body) = body {
+                    request = request.json(body);
+                }
+                let response = request
+                    .send()
+                    .await
+                    .map_err(|_| Error::new("request_failed"))?;
+                let status = response.status();
+                let text = response
+                    .text()
+                    .await
+                    .map_err(|_| Error::new("invalid_response"))?;
+                if status.is_success() {
+                    return Ok(text);
+                }
+                Err(response_error(status.as_u16(), &text))
+            }
+            Backend::Local { app } => {
+                self.local_request(app, method, path, query, body, team_id)
+                    .await
+            }
+        }
+    }
+
+    async fn local_request(
+        &self,
+        app: &axum::Router,
+        method: Method,
+        path: &str,
+        query: &[(&str, String)],
+        body: Option<&Value>,
+        team_id: Option<&str>,
+    ) -> Result<String, Error> {
+        let mut target = path.to_string();
+        if !query.is_empty() {
+            target.push('?');
+            target.push_str(
+                &query
+                    .iter()
+                    .map(|(key, value)| format!("{}={}", path_segment(key), path_segment(value)))
+                    .collect::<Vec<_>>()
+                    .join("&"),
+            );
+        }
+        let mut builder = axum::http::Request::builder()
+            .method(method)
+            .uri(target)
+            .header(
+                axum::http::header::AUTHORIZATION,
+                format!("Bearer {}", self.token),
+            );
+        if let Some(team) = self.called_team(team_id) {
+            builder = builder.header("X-Team-Id", team);
+        }
+        let request = if let Some(body) = body {
+            builder
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .map_err(|_| Error::new("request_failed"))?
+        } else {
+            builder
+                .body(Body::empty())
+                .map_err(|_| Error::new("request_failed"))?
+        };
+        let response = app
+            .clone()
+            .oneshot(request)
+            .await
+            .map_err(|_| Error::new("request_failed"))?;
+        let status = response.status().as_u16();
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .map_err(|_| Error::new("invalid_response"))?
+            .to_bytes();
+        let text = String::from_utf8_lossy(&bytes).to_string();
+        if (200..300).contains(&status) {
+            return Ok(text);
+        }
+        Err(response_error(status, &text))
+    }
+
+    async fn json(
+        &self,
+        method: Method,
+        path: &str,
+        query: &[(&str, String)],
+        body: Option<&Value>,
+        team_id: Option<&str>,
+    ) -> Result<Value, Error> {
+        let text = self.request(method, path, query, body, team_id).await?;
+        if text.trim().is_empty() {
+            return Ok(Value::Null);
+        }
+        serde_json::from_str(&text).map_err(|_| Error::new("invalid_response"))
+    }
+
+    pub async fn whoami(&self, team_id: Option<&str>) -> Result<Value, Error> {
+        self.json(ReqwestMethod::GET, "/api/me", &[], None, team_id)
+            .await
+    }
+
+    pub async fn version(&self, team_id: Option<&str>) -> Result<Value, Error> {
+        self.json(ReqwestMethod::GET, "/api/version", &[], None, team_id)
+            .await
+    }
+
+    pub async fn list_projects(&self, team_id: Option<&str>) -> Result<Value, Error> {
+        self.json(ReqwestMethod::GET, "/api/projects", &[], None, team_id)
+            .await
+    }
+
+    pub async fn list_inventories(&self, team_id: Option<&str>) -> Result<Value, Error> {
+        self.json(ReqwestMethod::GET, "/api/inventories", &[], None, team_id)
+            .await
+    }
+
+    pub async fn list_credentials(&self, team_id: Option<&str>) -> Result<Value, Error> {
+        self.json(ReqwestMethod::GET, "/api/credentials", &[], None, team_id)
+            .await
+    }
+
+    pub async fn list_templates(&self, team_id: Option<&str>) -> Result<Value, Error> {
+        self.json(ReqwestMethod::GET, "/api/templates", &[], None, team_id)
+            .await
+    }
+
+    pub async fn list_workflows(&self, team_id: Option<&str>) -> Result<Value, Error> {
+        self.json(ReqwestMethod::GET, "/api/workflows", &[], None, team_id)
+            .await
+    }
+
+    pub async fn list_schedules(&self, team_id: Option<&str>) -> Result<Value, Error> {
+        self.json(ReqwestMethod::GET, "/api/schedules", &[], None, team_id)
+            .await
+    }
+
+    pub async fn list_jobs(&self, query: JobQuery<'_>) -> Result<Value, Error> {
+        let mut params = Vec::new();
+        if let Some(limit) = query.limit {
+            params.push(("limit", limit.to_string()));
+        }
+        if let Some(offset) = query.offset {
+            params.push(("offset", offset.to_string()));
+        }
+        if let Some(value) = query.q.filter(|value| !value.is_empty()) {
+            params.push(("q", value.to_string()));
+        }
+        if let Some(value) = query.status.filter(|value| !value.is_empty()) {
+            params.push(("status", value.to_string()));
+        }
+        if let Some(value) = query.tool.filter(|value| !value.is_empty()) {
+            params.push(("tool", value.to_string()));
+        }
+        if let Some(value) = query.template_id.filter(|value| !value.is_empty()) {
+            params.push(("template_id", value.to_string()));
+        }
+        self.json(
+            ReqwestMethod::GET,
+            "/api/jobs",
+            &params,
+            None,
+            query.team_id,
+        )
+        .await
+    }
+
+    pub async fn get_job(&self, id: &str, team_id: Option<&str>) -> Result<Value, Error> {
+        self.json(
+            ReqwestMethod::GET,
+            &format!("/api/jobs/{}", path_segment(id)),
+            &[],
+            None,
+            team_id,
+        )
+        .await
+    }
+
+    pub async fn job_output(&self, id: &str, team_id: Option<&str>) -> Result<String, Error> {
+        self.request(
+            ReqwestMethod::GET,
+            &format!("/api/jobs/{}/output", path_segment(id)),
+            &[],
+            None,
+            team_id,
+        )
+        .await
+    }
+
+    pub async fn get_workflow_job(&self, id: &str, team_id: Option<&str>) -> Result<Value, Error> {
+        self.json(
+            ReqwestMethod::GET,
+            &format!("/api/workflow-jobs/{}", path_segment(id)),
+            &[],
+            None,
+            team_id,
+        )
+        .await
+    }
+
+    pub async fn launch_template(
+        &self,
+        id: &str,
+        extra_vars: Map<String, Value>,
+        team_id: Option<&str>,
+    ) -> Result<Value, Error> {
+        let body = json!({"extra_vars": extra_vars});
+        self.json(
+            ReqwestMethod::POST,
+            &format!("/api/templates/{}/launch", path_segment(id)),
+            &[],
+            Some(&body),
+            team_id,
+        )
+        .await
+    }
+
+    pub async fn launch_workflow(
+        &self,
+        id: &str,
+        extra_vars: Map<String, Value>,
+        team_id: Option<&str>,
+    ) -> Result<Value, Error> {
+        let body = json!({"extra_vars": extra_vars});
+        self.json(
+            ReqwestMethod::POST,
+            &format!("/api/workflows/{}/launch", path_segment(id)),
+            &[],
+            Some(&body),
+            team_id,
+        )
+        .await
+    }
+
+    pub async fn cancel_job(&self, id: &str, team_id: Option<&str>) -> Result<Value, Error> {
+        self.json(
+            ReqwestMethod::POST,
+            &format!("/api/jobs/{}/cancel", path_segment(id)),
+            &[],
+            None,
+            team_id,
+        )
+        .await
+    }
+
+    pub async fn relaunch_job(&self, id: &str, team_id: Option<&str>) -> Result<Value, Error> {
+        let body = json!({});
+        self.json(
+            ReqwestMethod::POST,
+            &format!("/api/jobs/{}/relaunch", path_segment(id)),
+            &[],
+            Some(&body),
+            team_id,
+        )
+        .await
+    }
+
+    pub async fn sync_project(&self, id: &str, team_id: Option<&str>) -> Result<Value, Error> {
+        self.json(
+            ReqwestMethod::POST,
+            &format!("/api/projects/{}/sync", path_segment(id)),
+            &[],
+            None,
+            team_id,
+        )
+        .await
+    }
+
+    pub async fn sync_inventory(&self, id: &str, team_id: Option<&str>) -> Result<Value, Error> {
+        self.json(
+            ReqwestMethod::POST,
+            &format!("/api/inventories/{}/sync", path_segment(id)),
+            &[],
+            None,
+            team_id,
+        )
+        .await
+    }
+}
+
+fn response_error(status: u16, text: &str) -> Error {
+    if let Ok(Value::Object(mut map)) = serde_json::from_str::<Value>(text) {
+        if let Some(key) = map
+            .remove("error")
+            .and_then(|value| value.as_str().map(str::to_string))
+        {
+            let vars = map
+                .remove("vars")
+                .and_then(|value| value.as_object().cloned())
+                .map(|vars| {
+                    vars.into_iter()
+                        .filter_map(|(name, value)| {
+                            value.as_str().map(|value| (name, value.to_string()))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            return Error {
+                status: Some(status),
+                key,
+                vars,
+            };
+        }
+    }
+    let mut vars = BTreeMap::new();
+    vars.insert("status".to_string(), status.to_string());
+    Error {
+        status: Some(status),
+        key: "request_failed".to_string(),
+        vars,
+    }
+}
+
+fn json_text(value: Value) -> String {
+    serde_json::to_string_pretty(&value).unwrap_or_else(|_| "null".to_string())
+}
+
+#[derive(Clone)]
+pub struct Server {
+    client: Client,
+    per_request_token: bool,
+    tool_router: ToolRouter<Self>,
+}
+
+impl Server {
+    pub fn new(client: Client) -> Self {
+        Self {
+            client,
+            per_request_token: false,
+            tool_router: Self::tool_router(),
+        }
+    }
+
+    pub fn http(state: crate::Shared) -> Self {
+        Self {
+            client: Client::local(crate::http::api_router(state)),
+            per_request_token: true,
+            tool_router: Self::tool_router(),
+        }
+    }
+
+    fn client(&self, context: &RequestContext<RoleServer>) -> Result<Client, String> {
+        if !self.per_request_token {
+            return Ok(self.client.clone());
+        }
+        let parts = context
+            .extensions
+            .get::<axum::http::request::Parts>()
+            .ok_or_else(|| Error::new("sign_in_is_required").text())?;
+        let token = crate::features::identity::bearer_token(&parts.headers)
+            .ok_or_else(|| Error::new("sign_in_is_required").text())?;
+        Ok(self.client.clone().with_token(token))
+    }
+}
+
+#[tool_router]
+impl Server {
+    #[tool(description = "Return the signed-in account from GET /api/me.")]
+    async fn whoami(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<TeamArgs>,
+    ) -> Result<String, String> {
+        self.client(&context)?
+            .whoami(args.team_id.as_deref())
+            .await
+            .map(json_text)
+            .map_err(|error| error.text())
+    }
+
+    #[tool(description = "Return the server version from GET /api/version.")]
+    async fn version(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<TeamArgs>,
+    ) -> Result<String, String> {
+        self.client(&context)?
+            .version(args.team_id.as_deref())
+            .await
+            .map(json_text)
+            .map_err(|error| error.text())
+    }
+
+    #[tool(description = "List the projects visible to the selected team.")]
+    async fn list_projects(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<TeamArgs>,
+    ) -> Result<String, String> {
+        self.client(&context)?
+            .list_projects(args.team_id.as_deref())
+            .await
+            .map(json_text)
+            .map_err(|error| error.text())
+    }
+
+    #[tool(description = "List the inventories visible to the selected team.")]
+    async fn list_inventories(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<TeamArgs>,
+    ) -> Result<String, String> {
+        self.client(&context)?
+            .list_inventories(args.team_id.as_deref())
+            .await
+            .map(json_text)
+            .map_err(|error| error.text())
+    }
+
+    #[tool(
+        description = "List the credentials of the selected team. Secrets stay hidden by the API."
+    )]
+    async fn list_credentials(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<TeamArgs>,
+    ) -> Result<String, String> {
+        self.client(&context)?
+            .list_credentials(args.team_id.as_deref())
+            .await
+            .map(json_text)
+            .map_err(|error| error.text())
+    }
+
+    #[tool(
+        description = "List the templates of the selected team. Template JSON can contain secret values in extra_vars; do not repeat those values to the user verbatim."
+    )]
+    async fn list_templates(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<TeamArgs>,
+    ) -> Result<String, String> {
+        self.client(&context)?
+            .list_templates(args.team_id.as_deref())
+            .await
+            .map(json_text)
+            .map_err(|error| error.text())
+    }
+
+    #[tool(
+        description = "List the workflows of the selected team. Node overrides can contain extra_vars, which may hold secrets; never repeat those values verbatim."
+    )]
+    async fn list_workflows(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<TeamArgs>,
+    ) -> Result<String, String> {
+        self.client(&context)?
+            .list_workflows(args.team_id.as_deref())
+            .await
+            .map(json_text)
+            .map_err(|error| error.text())
+    }
+
+    #[tool(description = "List the schedules of the selected team.")]
+    async fn list_schedules(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<TeamArgs>,
+    ) -> Result<String, String> {
+        self.client(&context)?
+            .list_schedules(args.team_id.as_deref())
+            .await
+            .map(json_text)
+            .map_err(|error| error.text())
+    }
+
+    #[tool(
+        description = "List jobs of the selected team with optional limit, offset, q, status, tool, and template_id filters. Job JSON can contain secret values in extra_vars; do not repeat those values to the user verbatim."
+    )]
+    async fn list_jobs(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<ListJobsArgs>,
+    ) -> Result<String, String> {
+        self.client(&context)?
+            .list_jobs(JobQuery {
+                limit: args.limit,
+                offset: args.offset,
+                q: args.q.as_deref(),
+                status: args.status.as_deref(),
+                tool: args.tool.as_deref(),
+                template_id: args.template_id.as_deref(),
+                team_id: args.team_id.as_deref(),
+            })
+            .await
+            .map(json_text)
+            .map_err(|error| error.text())
+    }
+
+    #[tool(
+        description = "Return one job from GET /api/jobs/{id}. Job JSON can contain secret values in extra_vars; do not repeat those values to the user verbatim."
+    )]
+    async fn get_job(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<IdArgs>,
+    ) -> Result<String, String> {
+        self.client(&context)?
+            .get_job(&args.id, args.team_id.as_deref())
+            .await
+            .map(json_text)
+            .map_err(|error| error.text())
+    }
+
+    #[tool(
+        description = "Return the capped text output from GET /api/jobs/{id}/output. The output can contain secret values; do not repeat them verbatim."
+    )]
+    async fn job_output(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<IdArgs>,
+    ) -> Result<String, String> {
+        self.client(&context)?
+            .job_output(&args.id, args.team_id.as_deref())
+            .await
+            .map_err(|error| error.text())
+    }
+
+    #[tool(
+        description = "Return one workflow job from GET /api/workflow-jobs/{id}. Job JSON can contain secret values in extra_vars; do not repeat those values to the user verbatim."
+    )]
+    async fn get_workflow_job(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<IdArgs>,
+    ) -> Result<String, String> {
+        self.client(&context)?
+            .get_workflow_job(&args.id, args.team_id.as_deref())
+            .await
+            .map(json_text)
+            .map_err(|error| error.text())
+    }
+
+    #[tool(
+        description = "Launch a template with POST /api/templates/{id}/launch. extra_vars is a JSON object; it can contain secret values and must not be repeated to the user verbatim."
+    )]
+    async fn launch_template(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<LaunchArgs>,
+    ) -> Result<String, String> {
+        self.client(&context)?
+            .launch_template(&args.id, args.extra_vars, args.team_id.as_deref())
+            .await
+            .map(json_text)
+            .map_err(|error| error.text())
+    }
+
+    #[tool(
+        description = "Launch a workflow with POST /api/workflows/{id}/launch. extra_vars is a JSON object; it can contain secret values and must not be repeated to the user verbatim."
+    )]
+    async fn launch_workflow(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<LaunchArgs>,
+    ) -> Result<String, String> {
+        self.client(&context)?
+            .launch_workflow(&args.id, args.extra_vars, args.team_id.as_deref())
+            .await
+            .map(json_text)
+            .map_err(|error| error.text())
+    }
+
+    #[tool(
+        description = "Cancel a job with POST /api/jobs/{id}/cancel. The response is job JSON that can contain secret values in extra_vars; do not repeat those values to the user verbatim."
+    )]
+    async fn cancel_job(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<IdArgs>,
+    ) -> Result<String, String> {
+        self.client(&context)?
+            .cancel_job(&args.id, args.team_id.as_deref())
+            .await
+            .map(json_text)
+            .map_err(|error| error.text())
+    }
+
+    #[tool(
+        description = "Relaunch a job with POST /api/jobs/{id}/relaunch. The response is job JSON that can contain secret values in extra_vars; do not repeat those values to the user verbatim."
+    )]
+    async fn relaunch_job(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<IdArgs>,
+    ) -> Result<String, String> {
+        self.client(&context)?
+            .relaunch_job(&args.id, args.team_id.as_deref())
+            .await
+            .map(json_text)
+            .map_err(|error| error.text())
+    }
+
+    #[tool(description = "Sync a project with POST /api/projects/{id}/sync.")]
+    async fn sync_project(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<IdArgs>,
+    ) -> Result<String, String> {
+        self.client(&context)?
+            .sync_project(&args.id, args.team_id.as_deref())
+            .await
+            .map(json_text)
+            .map_err(|error| error.text())
+    }
+
+    #[tool(description = "Sync an inventory with POST /api/inventories/{id}/sync.")]
+    async fn sync_inventory(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<IdArgs>,
+    ) -> Result<String, String> {
+        self.client(&context)?
+            .sync_inventory(&args.id, args.team_id.as_deref())
+            .await
+            .map(json_text)
+            .map_err(|error| error.text())
+    }
+}
+
+#[tool_handler(router = self.tool_router)]
+impl ServerHandler for Server {}
+
+pub fn requested<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter()
+        .nth(1)
+        .is_some_and(|arg| arg.as_ref() == "mcp")
+}
+
+pub async fn run() -> anyhow::Result<()> {
+    let token = std::env::var("KOREOGRAF_TOKEN").unwrap_or_default();
+    if token.trim().is_empty() {
+        anyhow::bail!("KOREOGRAF_TOKEN is required");
+    }
+    let base = std::env::var("KOREOGRAF_URL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_URL.to_string());
+    let team = std::env::var("KOREOGRAF_TEAM_ID")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let client = Client::new(base, token, team)
+        .map_err(|_| anyhow::anyhow!("could not create the HTTP client"))?;
+    let server = Server::new(client);
+    let running = rmcp::serve_server(server, rmcp::transport::stdio()).await?;
+    running.waiting().await?;
+    Ok(())
 }

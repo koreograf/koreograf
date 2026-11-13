@@ -10,13 +10,13 @@ use crate::features::identity as auth;
 use crate::features::identity::{AuthUser, Role};
 use crate::Shared;
 
-use super::{
+use super::model::{ChatBody, LlmError, LlmSetup, PendingActionResponse};
+use super::service::{
     api_text, collect_secrets, config_for, conversation, drop_pending, http_status, job_context,
-    request_credential, run_tools, take_pending, within_rate_limit, write_request, ChatBody,
-    LlmError, LlmSetup, PendingActionResponse, RunError,
+    request_credential, run_tools, take_pending, within_rate_limit, write_request, RunError,
 };
 
-pub(super) fn routes() -> Router<Shared> {
+pub(crate) fn routes() -> Router<Shared> {
     Router::new()
         .route("/assistant", get(status))
         .route("/assistant/chat", post(chat))

@@ -29,7 +29,6 @@ use crate::db::{self, Job, JobEvent};
 use crate::error::{ApiError, AppResult};
 use crate::features::identity as auth;
 use crate::features::identity::{AuthUser, Role};
-use crate::llm;
 use crate::runner;
 use crate::Shared;
 
@@ -156,7 +155,7 @@ fn api_routes() -> Router<Shared> {
         .route("/version", get(version))
         .merge(admin::routes())
         .merge(catalog::routes())
-        .merge(llm::routes())
+        .merge(crate::features::assistant::routes())
         .merge(crate::features::credentials::routes())
         .merge(crate::features::identity::routes())
         .merge(crate::features::inventories::routes())
@@ -183,7 +182,11 @@ pub(crate) fn api_router(state: Shared) -> Router {
 fn mcp_router(state: Shared) -> Router<Shared> {
     let service_state = state.clone();
     let service = rmcp::transport::streamable_http_server::StreamableHttpService::new(
-        move || Ok(crate::mcp::Server::http(service_state.clone())),
+        move || {
+            Ok(crate::features::assistant::Server::http(
+                service_state.clone(),
+            ))
+        },
         std::sync::Arc::new(
             rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default(),
         ),
