@@ -9,4 +9,3 @@ pub(crate) mod settings;
 pub(crate) mod sql;
 pub(crate) mod teams;
 pub(crate) mod templates;
-pub(crate) mod workflows;

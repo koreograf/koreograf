@@ -18,6 +18,7 @@ use crate::db::{
 use crate::error::{ApiError, AppResult};
 use crate::features::jobs;
 use crate::features::schedules;
+use crate::features::workflows;
 use crate::store;
 
 pub(crate) trait Backend: Send + Sync {
@@ -1027,22 +1028,22 @@ impl Backend for SqliteBackend {
 
     fn workflow_job(&self, id: &str) -> AppResult<Option<WorkflowJob>> {
         let conn = lock(&self.conn)?;
-        store::workflows::workflow_job(&conn, id)
+        workflows::store::workflow_job(&conn, id)
     }
 
     fn insert_workflow_job(&self, item: &WorkflowJob) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::workflows::insert_workflow_job(&conn, item)
+        workflows::store::insert_workflow_job(&conn, item)
     }
 
     fn set_workflow_status(&self, id: &str, status: &str, finish: bool) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::workflows::set_workflow_status(&conn, id, status, finish)
+        workflows::store::set_workflow_status(&conn, id, status, finish)
     }
 
     fn insert_workflow_node(&self, workflow_job_id: &str, node_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::workflows::insert_workflow_node(&conn, workflow_job_id, node_id)
+        workflows::store::insert_workflow_node(&conn, workflow_job_id, node_id)
     }
 
     fn set_workflow_node(
@@ -1053,12 +1054,12 @@ impl Backend for SqliteBackend {
         job_id: Option<&str>,
     ) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::workflows::set_workflow_node(&conn, workflow_job_id, node_id, phase, job_id)
+        workflows::store::set_workflow_node(&conn, workflow_job_id, node_id, phase, job_id)
     }
 
     fn workflow_nodes(&self, workflow_job_id: &str) -> AppResult<Vec<WorkflowNodeRow>> {
         let conn = lock(&self.conn)?;
-        store::workflows::workflow_nodes(&conn, workflow_job_id)
+        workflows::store::workflow_nodes(&conn, workflow_job_id)
     }
 
     fn recent_jobs(&self, team_id: &str, limit: i64) -> AppResult<Vec<Job>> {
@@ -1078,7 +1079,7 @@ impl Backend for SqliteBackend {
 
     fn first_workflow(&self, team_id: &str) -> AppResult<Option<Workflow>> {
         let conn = lock(&self.conn)?;
-        store::workflows::first_workflow(&conn, team_id)
+        workflows::store::first_workflow(&conn, team_id)
     }
 
     fn first_hook(&self, team_id: &str) -> AppResult<Option<Hook>> {
@@ -1088,32 +1089,32 @@ impl Backend for SqliteBackend {
 
     fn list_workflows(&self, team_id: &str) -> AppResult<Vec<Workflow>> {
         let conn = lock(&self.conn)?;
-        store::workflows::list_workflows(&conn, team_id)
+        workflows::store::list_workflows(&conn, team_id)
     }
 
     fn workflow(&self, id: &str) -> AppResult<Option<Workflow>> {
         let conn = lock(&self.conn)?;
-        store::workflows::workflow(&conn, id)
+        workflows::store::workflow(&conn, id)
     }
 
     fn insert_workflow(&self, item: &Workflow) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::workflows::insert_workflow(&conn, item)
+        workflows::store::insert_workflow(&conn, item)
     }
 
     fn update_workflow(&self, item: &Workflow) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::workflows::update_workflow(&conn, item)
+        workflows::store::update_workflow(&conn, item)
     }
 
     fn delete_workflow(&self, id: &str, team_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        store::workflows::delete_workflow(&conn, id, team_id)
+        workflows::store::delete_workflow(&conn, id, team_id)
     }
 
     fn workflow_team(&self, id: &str) -> AppResult<Option<String>> {
         let conn = lock(&self.conn)?;
-        Ok(store::workflows::workflow(&conn, id)?.map(|item| item.team_id))
+        Ok(workflows::store::workflow(&conn, id)?.map(|item| item.team_id))
     }
 
     fn list_team_schedules(&self, team_id: &str) -> AppResult<Vec<(Schedule, String)>> {
@@ -1415,7 +1416,7 @@ impl Backend for PostgresBackend {
                 .get(0);
             let flows: i64 = client
                 .query_one(
-                    &store::sql::postgres(store::workflows::WORKFLOW_JOBS_BUSY),
+                    &store::sql::postgres(workflows::store::WORKFLOW_JOBS_BUSY),
                     &[],
                 )
                 .await?
@@ -3407,12 +3408,12 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    &store::sql::postgres(&store::workflows::workflow_job_by_id_sql()),
+                    &store::sql::postgres(&workflows::store::workflow_job_by_id_sql()),
                     &[&id],
                 )
                 .await?;
             row.as_ref()
-                .map(store::workflows::row_workflow_job)
+                .map(workflows::store::row_workflow_job)
                 .transpose()
         })
     }
@@ -3422,7 +3423,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::workflows::INSERT_WORKFLOW_JOB),
+                    &store::sql::postgres(workflows::store::INSERT_WORKFLOW_JOB),
                     &[
                         &item.id,
                         &item.workflow_id,
@@ -3447,14 +3448,14 @@ impl Backend for PostgresBackend {
             if finish {
                 client
                     .execute(
-                        &store::sql::postgres(store::workflows::SET_WORKFLOW_STATUS_FINISHED),
+                        &store::sql::postgres(workflows::store::SET_WORKFLOW_STATUS_FINISHED),
                         &[&id, &status, &db::now()],
                     )
                     .await?;
             } else {
                 client
                     .execute(
-                        &store::sql::postgres(store::workflows::SET_WORKFLOW_STATUS),
+                        &store::sql::postgres(workflows::store::SET_WORKFLOW_STATUS),
                         &[&id, &status],
                     )
                     .await?;
@@ -3468,7 +3469,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::workflows::INSERT_WORKFLOW_NODE),
+                    &store::sql::postgres(workflows::store::INSERT_WORKFLOW_NODE),
                     &[&workflow_job_id, &node_id],
                 )
                 .await?;
@@ -3487,7 +3488,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::workflows::SET_WORKFLOW_NODE),
+                    &store::sql::postgres(workflows::store::SET_WORKFLOW_NODE),
                     &[&workflow_job_id, &node_id, &phase, &job_id],
                 )
                 .await?;
@@ -3500,12 +3501,12 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &store::sql::postgres(store::workflows::WORKFLOW_NODES),
+                    &store::sql::postgres(workflows::store::WORKFLOW_NODES),
                     &[&workflow_job_id],
                 )
                 .await?;
             rows.iter()
-                .map(store::workflows::row_workflow_node)
+                .map(workflows::store::row_workflow_node)
                 .collect()
         })
     }
@@ -3558,11 +3559,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    &store::sql::postgres(&store::workflows::first_workflow_sql()),
+                    &store::sql::postgres(&workflows::store::first_workflow_sql()),
                     &[&team_id],
                 )
                 .await?;
-            row.as_ref().map(store::workflows::row_workflow).transpose()
+            row.as_ref().map(workflows::store::row_workflow).transpose()
         })
     }
 
@@ -3581,11 +3582,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let rows = client
                 .query(
-                    &store::sql::postgres(&store::workflows::list_workflows_sql()),
+                    &store::sql::postgres(&workflows::store::list_workflows_sql()),
                     &[&team_id],
                 )
                 .await?;
-            rows.iter().map(store::workflows::row_workflow).collect()
+            rows.iter().map(workflows::store::row_workflow).collect()
         })
     }
 
@@ -3594,11 +3595,11 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    &store::sql::postgres(&store::workflows::workflow_by_id_sql()),
+                    &store::sql::postgres(&workflows::store::workflow_by_id_sql()),
                     &[&id],
                 )
                 .await?;
-            row.as_ref().map(store::workflows::row_workflow).transpose()
+            row.as_ref().map(workflows::store::row_workflow).transpose()
         })
     }
 
@@ -3607,7 +3608,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             client
                 .execute(
-                    &store::sql::postgres(store::workflows::INSERT_WORKFLOW),
+                    &store::sql::postgres(workflows::store::INSERT_WORKFLOW),
                     &[
                         &item.id,
                         &item.team_id,
@@ -3628,7 +3629,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
                 .execute(
-                    &store::sql::postgres(store::workflows::UPDATE_WORKFLOW),
+                    &store::sql::postgres(workflows::store::UPDATE_WORKFLOW),
                     &[
                         &item.id,
                         &item.team_id,
@@ -3652,7 +3653,7 @@ impl Backend for PostgresBackend {
             let transaction = client.transaction().await?;
             let changed = transaction
                 .execute(
-                    &store::sql::postgres(store::workflows::DELETE_WORKFLOW),
+                    &store::sql::postgres(workflows::store::DELETE_WORKFLOW),
                     &[&id, &team_id],
                 )
                 .await?;
@@ -3675,7 +3676,7 @@ impl Backend for PostgresBackend {
             let client = self.pool.get().await.map_err(pool_error)?;
             let row = client
                 .query_opt(
-                    &store::sql::postgres(store::workflows::WORKFLOW_TEAM),
+                    &store::sql::postgres(workflows::store::WORKFLOW_TEAM),
                     &[&id],
                 )
                 .await?;

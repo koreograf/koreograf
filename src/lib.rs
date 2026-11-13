@@ -38,7 +38,6 @@ mod seed;
 mod settings;
 mod store;
 mod tls;
-mod workflow;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};

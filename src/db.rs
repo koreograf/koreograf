@@ -918,6 +918,7 @@ pub struct Schedule {
 mod tests {
     use super::*;
     use crate::features::jobs::store::{insert_job, list_jobs};
+    use crate::features::workflows::store::workflow;
     use crate::store::environments::{environment, insert_environment, list_environments};
     use crate::store::inventories::inventory;
     use crate::store::projects::{list_projects, project};
@@ -925,7 +926,6 @@ mod tests {
         grant_manual_membership, insert_organization, insert_team, list_members, team_by_id,
         upsert_membership,
     };
-    use crate::store::workflows::workflow;
 
     fn sample_job(id: &str, team_id: &str, name: &str, created_at: &str) -> Job {
         Job {
