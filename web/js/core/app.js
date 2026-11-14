@@ -472,6 +472,7 @@ export const ROUTE_TITLES = {
   "": "overview",
   templates: "templates",
   jobs: "jobs",
+  runs: "run_2",
   schedules: "schedules",
   workflows: "workflows",
   hooks: "webhooks",
@@ -503,6 +504,7 @@ export function skeletonBody() {
 }
 
 export function showLoading(title) {
+  document.title = `${title} – Koreograf`;
   const main = document.querySelector(".main");
   if (!main) {
     shell(title, skeletonBody());

@@ -75,12 +75,13 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       <div class="editor-body">
         <div>
           ${readonly ? "" : `
-            <div class="row" style="margin-bottom:10px">
-              <input id="wf-name" value="${esc(workflow.name)}" ${can("operator") ? "" : "disabled"}>
-              <input id="wf-description" maxlength="1000" value="${esc(workflow.description)}" placeholder="${h("description")}" ${can("operator") ? "" : "disabled"}>
+            <div class="field-row" style="margin-bottom:10px">
+              <label class="field"><span>${h("name")}</span><input class="fit" id="wf-name" value="${esc(workflow.name)}" ${can("operator") ? "" : "disabled"}></label>
+              <label class="field"><span>${h("description")}</span><input class="fit" id="wf-description" maxlength="1000" value="${esc(workflow.description)}" ${can("operator") ? "" : "disabled"}></label>
             </div>`}
-          <p class="small muted" id="wf-hint">${readonly ? h("colors_show_the_run_a_click_shows_the") : h("drag_nodes_and_use_the_canvas_menus")}</p>
-          <div class="canvas" id="canvas" tabindex="0" role="group" aria-label="${h("workflow")}"><div id="board" style="position:relative;min-width:100%;min-height:560px"><svg class="edges" id="edges"></svg><div id="nodes"></div></div></div>
+          <p class="small muted" id="wf-hint" role="status" aria-live="polite">${readonly ? h("colors_show_the_run_a_click_shows_the") : h("drag_nodes_and_use_the_canvas_menus")}</p>
+          <p class="small muted" id="wf-keyboard-help">${h(readonly ? "run_keyboard_help" : "workflow_keyboard_help")}</p>
+          <div class="canvas" id="canvas" tabindex="0" role="application" aria-label="${h("workflow_graph")}" aria-describedby="wf-keyboard-help"><div id="board" style="position:relative;min-width:100%;min-height:560px"><svg class="edges" id="edges"></svg><div id="nodes"></div></div></div>
         </div>
         <aside class="card inspector" id="inspector"></aside>
       </div>
@@ -98,6 +99,10 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     </div>`}
     </div>`, readonly ? back : `
       ${can("operator") ? `<span class="small muted" id="wf-status" role="status" aria-live="polite">${h("all_changes_saved")}</span><button class="btn" id="wf-save" type="button">${h("save")}</button><button class="btn primary" id="wf-launch" type="button">${h("launch")}</button>` : ""}`);
+
+  document.title = readonly
+    ? `${t("run_2")} ${workflow.name} – Koreograf`
+    : `${workflow.name} – ${t("workflow")} – Koreograf`;
 
   const canvas = document.querySelector("#canvas");
   const board = document.querySelector("#board");
@@ -209,8 +214,41 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       const end = { x: to.x, y: to.y + 36 };
       const dx = Math.max(48, Math.abs(end.x - start.x) / 2);
       const klass = ["success", "failure", "always"].includes(edge.when) ? edge.when : "always";
-      return `<path class="${klass}${selectedEdge === index ? " selected" : ""}" data-edge="${index}" d="M ${start.x} ${start.y} C ${start.x + dx} ${start.y}, ${end.x - dx} ${end.y}, ${end.x} ${end.y}"></path>`;
+      const label = `${edgeWhenText(klass)}: ${from.name} → ${to.name}`;
+      const role = editable ? ` role="button" tabindex="0"` : ` role="img"`;
+      return `<path class="${klass}${selectedEdge === index ? " selected" : ""}" data-edge="${index}"${role} aria-label="${esc(label)}" d="M ${start.x} ${start.y} C ${start.x + dx} ${start.y}, ${end.x - dx} ${end.y}, ${end.x} ${end.y}"></path>`;
     }).join("");
+  }
+
+  function focusEdge(index) {
+    const path = svg.querySelector(`path[data-edge="${index}"]`);
+    if (path) path.focus();
+  }
+
+  function selectEdge(index, focus) {
+    if (!flushNode()) return;
+    selectedEdge = index;
+    selected = null;
+    connecting = null;
+    connectDrag = null;
+    clearConnectPreview();
+    drawEdges();
+    renderInspector();
+    if (focus) focusEdge(index);
+  }
+
+  function removeEdgeAt(index) {
+    const edge = graph.edges[index];
+    if (!edge) return false;
+    graph.edges.splice(index, 1);
+    if (selectedEdge === index) selectedEdge = null;
+    else if (selectedEdge !== null && selectedEdge > index) selectedEdge -= 1;
+    markDirty();
+    setHint("edge_removed");
+    drawEdges();
+    renderNodes();
+    renderInspector();
+    return true;
   }
 
   function edgeExists(fromId, toId, when) {
@@ -443,7 +481,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     markDirty();
     selected = fromNode.id;
     selectedEdge = null;
-    setHint("edge_added");
+    setHint("edge_added", { when: edgeWhenText(when), from: fromNode.name, to: toNode.name });
     renderNodes();
     renderInspector();
   }
@@ -454,6 +492,14 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     connect: startConnect,
   };
 
+  function nodeLabel(node) {
+    const template = templates.find((item) => item.id === node.template_id);
+    const parts = [node.name];
+    if (template) parts.push(template.name);
+    if (readonly) parts.push(statusLabel((phases[node.id] && phases[node.id].phase) || "pending"));
+    return parts.filter(Boolean).join(" · ");
+  }
+
   function renderNodes() {
     nodes.innerHTML = graph.nodes.map((node) => {
       const phase = phases[node.id];
@@ -462,7 +508,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       const runClass = readonly ? " run-node" : "";
       const connectClass = connecting && connecting.from === node.id ? " connecting" : "";
       const menu = editable ? `<button class="btn ghost compact node-menu-button" type="button" data-node-menu aria-haspopup="menu" aria-expanded="false" aria-label="${h("node_actions", { name: node.name })}">⋯</button>` : "";
-      return `<div class="wf-node${selectedClass}${connectClass}${phaseClass}${runClass}" data-id="${esc(node.id)}" style="left:${Number(node.x) || 0}px;top:${Number(node.y) || 0}px" tabindex="0" role="group" aria-label="${esc(node.name)}">${menu}<strong>${esc(node.name)}</strong><span class="small muted">${esc(nodeCaption(node))}</span></div>`;
+      return `<div class="wf-node${selectedClass}${connectClass}${phaseClass}${runClass}" data-id="${esc(node.id)}" style="left:${Number(node.x) || 0}px;top:${Number(node.y) || 0}px" tabindex="0" role="group" aria-label="${esc(nodeLabel(node))}">${menu}<strong>${esc(node.name)}</strong><span class="small muted">${esc(nodeCaption(node))}</span></div>`;
     }).join("");
     nodes.querySelectorAll(".wf-node").forEach((element) => {
       const node = graph.nodes.find((item) => item.id === element.dataset.id);
@@ -556,6 +602,10 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
             if (onNode) onNode(node, phases[node.id] || null);
             return;
           }
+          if (connecting) {
+            if (node.id !== connecting.from) finishConnect(node.id);
+            return;
+          }
           if (!flushNode()) return;
           selected = node.id;
           selectedEdge = null;
@@ -568,6 +618,11 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
           return;
         }
         if (!editable) return;
+        if (event.key === "Delete" || event.key === "Backspace") {
+          event.preventDefault();
+          removeNode(node);
+          return;
+        }
         const step = event.shiftKey ? 40 : 10;
         const delta = {
           ArrowLeft: [-step, 0],
@@ -592,6 +647,12 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     if (when === "failure") return h("error.generic");
     if (when === "always") return h("always");
     return h("success");
+  }
+
+  function edgeWhenText(when) {
+    if (when === "failure") return t("error.generic");
+    if (when === "always") return t("always");
+    return t("success");
   }
 
   function targetOptions(fromId, current, placeholder) {
@@ -653,7 +714,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     connectDrag = null;
     clearConnectPreview();
     markDirty();
-    setHint("edge_added");
+    setHint("edge_added", { when: edgeWhenText(when), from: node.name, to: graph.nodes.find((item) => item.id === toId).name });
     drawEdges();
     renderNodes();
     renderInspector();
@@ -829,13 +890,10 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         edge.when = next;
         drawEdges();
         markDirty();
+        setHint("edge_changed");
       });
       host.querySelector("#edge-delete").addEventListener("click", () => {
-        graph.edges.splice(selectedEdge, 1);
-        selectedEdge = null;
-        markDirty();
-        renderInspector();
-        renderNodes();
+        if (removeEdgeAt(selectedEdge)) canvas.focus();
       });
       return;
     }
@@ -928,14 +986,21 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   svg.addEventListener("click", (event) => {
     const path = event.target.closest("path");
     if (!path || readonly) return;
-    if (!flushNode()) return;
-    selectedEdge = Number(path.dataset.edge);
-    selected = null;
-    connecting = null;
-    connectDrag = null;
-    clearConnectPreview();
-    drawEdges();
-    renderInspector();
+    selectEdge(Number(path.dataset.edge), true);
+  });
+  svg.addEventListener("keydown", (event) => {
+    const path = event.target.closest("path");
+    if (!path || !editable) return;
+    const index = Number(path.dataset.edge);
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      selectEdge(index, true);
+      return;
+    }
+    if (event.key === "Delete" || event.key === "Backspace") {
+      event.preventDefault();
+      if (removeEdgeAt(index)) canvas.focus();
+    }
   });
   board.addEventListener("pointerdown", (event) => {
     if (readonly || !editable) return;
@@ -958,6 +1023,11 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   });
   canvas.addEventListener("keydown", (event) => {
     if (!editable || event.target !== canvas) return;
+    if (event.key === "Escape" && connecting) {
+      event.preventDefault();
+      cancelConnect();
+      return;
+    }
     if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
     event.preventDefault();
     if (!flushNode()) return;
@@ -1021,7 +1091,12 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   if (editable) appState.setLeaveGuard(leaveGuard);
 
   const nameField = document.querySelector("#wf-name");
-  if (nameField) nameField.addEventListener("input", markDirty);
+  if (nameField) {
+    nameField.addEventListener("input", () => {
+      markDirty();
+      document.title = `${nameField.value} – ${t("workflow")} – Koreograf`;
+    });
+  }
   const descriptionField = document.querySelector("#wf-description");
   if (descriptionField) descriptionField.addEventListener("input", markDirty);
 
@@ -1135,9 +1210,11 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
 
   function applyPhases() {
     nodes.querySelectorAll(".wf-node").forEach((element) => {
+      const node = graph.nodes.find((item) => item.id === element.dataset.id);
       const phase = phases[element.dataset.id];
       const phaseClass = phase ? ` phase-${phase.phase}` : "";
       element.className = `wf-node run-node${phaseClass}`;
+      if (node) element.setAttribute("aria-label", nodeLabel(node));
     });
   }
 

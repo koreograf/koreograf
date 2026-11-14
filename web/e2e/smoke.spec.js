@@ -20,6 +20,42 @@ const catalog = {
   },
 };
 
+async function signInInEnglish(page) {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Sprache" }).click();
+  await page.getByRole("option", { name: /English/ }).click();
+  await page.getByLabel("Username").fill(username);
+  await page.getByLabel("Password").fill(password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByRole("navigation")).toBeVisible();
+}
+
+async function focusCanvas(page) {
+  await page.locator("#canvas").focus();
+  await expect(page.locator("#canvas")).toBeFocused();
+}
+
+async function addNodeWithKeyboard(page, name) {
+  await focusCanvas(page);
+  await page.keyboard.press("Shift+F10");
+  await expect(page.getByRole("menuitem", { name: "Add node", exact: true })).toBeFocused();
+  await page.keyboard.press("Enter");
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "Add node" })).toBeVisible();
+  await expect(dialog.locator("#node-name")).toBeFocused();
+  await page.keyboard.type(name);
+  await page.keyboard.press("Enter");
+  await expect(dialog).toHaveCount(0);
+}
+
+async function pressUntilFocused(page, key, predicate, attempts = 40) {
+  for (let index = 0; index < attempts; index += 1) {
+    if (await page.evaluate(predicate)) return;
+    await page.keyboard.press(key);
+  }
+  throw new Error(`focus did not reach the expected control after ${attempts} ${key} presses`);
+}
+
 test("an administrator navigates every route, launches the demo shell job and switches language", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("button", { name: catalog.de.signIn })).toBeVisible();
@@ -186,4 +222,53 @@ test("an administrator navigates every route, launches the demo shell job and sw
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.locator("#wf-status")).toHaveText("Unsaved changes");
   expect(new URL(page.url()).hash).toMatch(/^#\/workflows\/[^?]+$/);
+});
+
+test("the workflow editor connects, retypes and removes an edge with the keyboard", async ({ page }) => {
+  await signInInEnglish(page);
+  await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
+  await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
+  await expect(page).toHaveTitle(/Self-Heal Ablauf/);
+  await expect(page).toHaveTitle(/Workflow/);
+
+  const edgeCount = await page.locator("#edges path").count();
+  await addNodeWithKeyboard(page, "Keyboard Alpha");
+  await addNodeWithKeyboard(page, "Keyboard Beta");
+  await expect(page.locator(".wf-node", { hasText: "Keyboard Beta" })).toBeVisible();
+
+  await page.locator(".wf-node", { hasText: "Keyboard Beta" }).focus();
+  await page.keyboard.press("Shift+F10");
+  await expect(page.getByRole("menuitem", { name: "Edit", exact: true })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("menuitem", { name: "Connect", exact: true })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#wf-hint")).toContainText("Connecting from Keyboard Beta");
+
+  await pressUntilFocused(page, "Shift+Tab", () => {
+    const active = document.activeElement;
+    return Boolean(active && active.classList.contains("wf-node") && active.textContent.includes("Keyboard Alpha"));
+  });
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.locator("#wf-hint")).toContainText("added");
+
+  await focusCanvas(page);
+  await pressUntilFocused(page, "Tab", () => {
+    const active = document.activeElement;
+    const label = active && active.getAttribute("aria-label");
+    return Boolean(active && active.closest("#edges") && label && label.includes("Keyboard Beta") && label.includes("Keyboard Alpha"));
+  });
+  await page.keyboard.press("Enter");
+  await pressUntilFocused(page, "Tab", () => document.activeElement && document.activeElement.id === "edge-when");
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator("#wf-hint")).toHaveText("Edge changed.");
+
+  await page.keyboard.press("Tab");
+  await expect(page.locator("#edge-delete")).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#wf-hint")).toHaveText("Edge removed.");
+  await expect(page.locator("#edges path")).toHaveCount(edgeCount);
 });

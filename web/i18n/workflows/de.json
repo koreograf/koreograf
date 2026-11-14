@@ -15,7 +15,7 @@
   "colors_show_the_run_a_click_shows_the": "Farben zeigen den Lauf. Ein Klick zeigt die Ausgabe.",
   "connect": "Verbinden",
   "connect_cancelled": "Verbindung abgebrochen.",
-  "connect_click_or_drag_target": "Verbindung von {name}. Klicke einen Zielknoten an oder ziehe von der Quelle dorthin. Klicke auf die Fläche, um abzubrechen.",
+  "connect_click_or_drag_target": "Verbindung von {name}. Klicke einen Zielknoten an, drücke dort Enter oder Leertaste oder ziehe von der Quelle dorthin. Escape oder ein Klick auf die Fläche bricht ab.",
   "connect_help": "Wähle ein Ziel per Klick oder Ziehen und entscheide dann über den Kantentyp. Jede Kante steht unten in einer eigenen Zeile; dort änderst du das Ziel oder entfernst die Kante.",
   "connect_nodes": "{from} mit {to} verbinden",
   "convergence": "Zusammenführung",
@@ -27,7 +27,7 @@
   "delete_this_workflow": "Workflow \"{name}\" löschen? Die zugehörigen Zeitpläne werden entfernt.",
   "drag_nodes_and_use_the_canvas_menus": "Ziehe Knoten oder verschiebe sie mit den Pfeiltasten. Rechtsklick auf die freie Fläche fügt einen Knoten hinzu. Rechtsklick auf einen Knoten oder sein Menü bearbeitet, löscht oder verbindet ihn; Enter öffnet Bearbeiten.",
   "edge": "Kante",
-  "edge_added": "Kante gesetzt.",
+  "edge_added": "Kante {when} {from} → {to} hinzugefügt.",
   "edge_changed": "Kante geändert.",
   "edge_removed": "Kante entfernt.",
   "edit_node": "Knoten bearbeiten",
@@ -45,6 +45,7 @@
   "nodes": "Knoten",
   "open_the_job": "Auftrag öffnen",
   "right_click_empty_canvas_to_add_a_node": "Rechtsklick auf die freie Fläche fügt einen Knoten hinzu.",
+  "run_keyboard_help": "Tastatur: Mit Tab zu einem Knoten und mit Enter oder Leertaste seine Ausgabe öffnen.",
   "save_and_launch": "Speichern und starten",
   "search_workflows": "Workflows suchen",
   "select_a_node_to_connect_it": "Wähle einen Knoten, um ihn zu verbinden.",
@@ -54,5 +55,7 @@
   "unsaved_changes": "Ungespeicherte Änderungen",
   "view": "Ansicht",
   "when": "Wann",
-  "workflow_2": "+ Workflow"
+  "workflow_2": "+ Workflow",
+  "workflow_graph": "Workflow-Diagramm",
+  "workflow_keyboard_help": "Tastatur: Mit Tab zu einem Knoten oder einer Kante. Enter oder Leertaste öffnet oder wählt, Entf entfernt die fokussierte Kante oder den Knoten. Im Verbindungsmodus verbindet Enter oder Leertaste auf dem Ziel, Escape bricht ab. Umschalt+F10 öffnet das Flächenmenü."
 }
