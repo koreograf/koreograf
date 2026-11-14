@@ -116,6 +116,9 @@ test("a run node shows its status text, duration and status in its accessible na
   const running = document.querySelector('[data-id="d"]');
   assert.equal(running.querySelector(".wf-node-status-text").innerHTML, "Läuft");
   assert.ok(running.querySelector(".wf-node-spinner"), "a running node has no spinner");
+  const top = document.querySelector("#run-state-top");
+  assert.ok(top, "the narrow run view has no status above the canvas");
+  assert.equal(top.innerHTML, "Erfolgreich");
 });
 
 test("taken and untaken edges get distinct classes and the legend includes skipped", async () => {

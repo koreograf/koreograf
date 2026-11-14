@@ -390,6 +390,32 @@ test("the node panel edits in place and fits at 1024 px", async ({ page }) => {
   expect(overflow).toBeLessThanOrEqual(1);
 });
 
+test("the workflow editor reflows at 375 px and opens the inspector on selection", async ({ page }) => {
+  await signInInEnglish(page);
+  await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
+  await expect(page.locator("#canvas")).toBeVisible();
+
+  const pageWidth = async () => page.evaluate(() => ({
+    content: document.documentElement.scrollWidth,
+    viewport: window.innerWidth,
+  }));
+  await expect.poll(async () => (await pageWidth()).content).toBeLessThanOrEqual(375);
+
+  const toggle = page.locator("#inspector-toggle");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  const node = page.locator('.wf-node[data-id="check"]');
+  await node.scrollIntoViewIfNeeded();
+  await node.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(page.locator("#inspector #node-name")).toBeVisible();
+  const after = await pageWidth();
+  expect(after.content).toBeLessThanOrEqual(after.viewport);
+  const inspector = await page.locator("#inspector").boundingBox();
+  expect(inspector.y).toBeLessThan(812);
+});
+
 test("an empty workflow builds a success chain without the context menu", async ({ page }) => {
   await signInInEnglish(page);
   await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
@@ -497,6 +523,13 @@ test("a finished workflow run shows its path, closes output on Escape and is rea
   await expect(runLink).toBeVisible();
   await runLink.click();
   await expect(page).toHaveURL(new RegExp(`${runHash.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  const topStatus = page.locator("#run-state-top");
+  await expect(topStatus).toBeVisible();
+  const statusBox = await topStatus.boundingBox();
+  expect(statusBox.y).toBeLessThan(812);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
 });
 
 test("a viewer inspects a workflow node without edit controls", async ({ page }) => {

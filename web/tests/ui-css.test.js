@@ -2,7 +2,7 @@
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { stylesheet, withoutComments } = require("./css.js");
+const { stylesheet, withoutComments, mediaBlock } = require("./css.js");
 
 function ruleSelectors(css) {
   const selectors = [];
@@ -44,4 +44,15 @@ test("form control rules do not start with id selectors", () => {
     .flatMap((rule) => rule.split(",").map((part) => part.trim()))
     .filter((selector) => selector.startsWith("#") && mentionsFormControl(selector));
   assert.deepEqual(offenders, []);
+});
+
+test("the narrow workflow editor keeps the board inside the page", () => {
+  const css = stylesheet();
+  const narrow = mediaBlock(css, "@media (max-width: 900px)");
+  assert.match(narrow, /\.editor-body\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+  assert.match(narrow, /\.inspector-panel\s*\{[^}]*position:\s*fixed/);
+  assert.match(narrow, /\.run-status-bar\s*\{\s*display:\s*flex/);
+  const wide = mediaBlock(css, "@media (min-width: 1024px)");
+  assert.match(wide, /\.canvas-column \.canvas\s*\{[^}]*min-height:\s*max\(560px,\s*70vh\)/);
+  assert.match(css, /\.editor-body\.inspector-collapsed/);
 });

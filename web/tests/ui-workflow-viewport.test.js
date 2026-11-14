@@ -205,6 +205,39 @@ test("the minimap appears for more than 12 nodes", async () => {
   assert.equal(document.querySelectorAll("#minimap .minimap-node").length, 0);
 });
 
+test("the node panel starts collapsed on a narrow screen and opens on selection", async () => {
+  const previous = window.innerWidth;
+  window.innerWidth = 375;
+  try {
+    await mount(grid(2, 2));
+    const toggle = document.querySelector("#inspector-toggle");
+    const inspector = document.querySelector("#inspector");
+    assert.ok(toggle, "the node panel has no collapse control");
+    assert.equal(inspector.hidden, true, "the node panel covers the narrow canvas on open");
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+
+    toggle.dispatchEvent({ type: "click" });
+    assert.equal(inspector.hidden, false, "the collapse control did not open the panel");
+    assert.equal(toggle.getAttribute("aria-expanded"), "true");
+
+    toggle.dispatchEvent({ type: "click" });
+    assert.equal(inspector.hidden, true, "the collapse control did not close the panel");
+
+    document.querySelector('[data-id="n0-0"]').dispatchEvent({
+      type: "pointerdown",
+      preventDefault() {},
+      stopPropagation() {},
+      clientX: 20,
+      clientY: 20,
+      pointerId: 1,
+    });
+    assert.equal(inspector.hidden, false, "selecting a node did not open the panel");
+    assert.ok(inspector.querySelector("#node-name"), "the opened panel has no node details");
+  } finally {
+    window.innerWidth = previous;
+  }
+});
+
 test("the canvas styles expose the viewport controls and full-height layout", () => {
   const css = stylesheet();
   assert.match(css, /\.canvas\s*\{[^}]*overflow:\s*hidden/);
