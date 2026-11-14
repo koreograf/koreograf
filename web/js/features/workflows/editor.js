@@ -709,7 +709,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
           const target = document.elementFromPoint(event.clientX, event.clientY);
           const hit = target && target.closest(".wf-node");
           if (hit && hit.dataset.id !== node.id) finishConnect(hit.dataset.id);
-          else if (!target || target.closest("#canvas")) connectToNew(node, localPoint(event));
+          else if (!hit && (!target || (target.closest("#canvas") && !target.closest(".canvas-controls, .minimap")))) connectToNew(node, localPoint(event));
           else setHint("connect_click_or_drag_target", { name: node.name });
           return;
         }
@@ -1355,13 +1355,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
 
   const addFirst = document.querySelector("#wf-add-first");
   if (addFirst) {
-    const addFirstStep = () => openAddNode(viewport.screenToGraph(centerPoint()));
-    addFirst.addEventListener("click", addFirstStep);
-    addFirst.addEventListener("keydown", (event) => {
-      if (event.key !== "Enter" && event.key !== " ") return;
-      event.preventDefault();
-      addFirstStep();
-    });
+    addFirst.addEventListener("click", () => openAddNode(viewport.screenToGraph(centerPoint())));
   }
 
   const nameField = document.querySelector("#wf-name");
