@@ -55,6 +55,9 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   const lists = catalogs || { inventories: [], credentials: [] };
   const runs = lists.runs || [];
   const editable = !readonly && can("operator");
+  const team = ((appState.me && appState.me.teams) || []).find((item) => item.id === appState.teamId);
+  const teamName = team ? team.name : "";
+  const readOnlyHint = () => (teamName ? t("read_only_hint", { team: teamName }) : t("read_only_hint_no_team"));
   const graph = {
     nodes: (workflow.graph.nodes || []).map((node) => ({ ...node })),
     edges: (workflow.graph.edges || []).map((edge) => ({ ...edge })),
@@ -107,8 +110,8 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
               <label class="field"><span>${h("name")}</span><input class="fit" id="wf-name" value="${esc(workflow.name)}" ${can("operator") ? "" : "disabled"}></label>
               <label class="field"><span>${h("description")}</span><input class="fit" id="wf-description" maxlength="1000" value="${esc(workflow.description)}" ${can("operator") ? "" : "disabled"}></label>
             </div>`}
-          <p class="small muted" id="wf-hint" role="status" aria-live="polite">${readonly ? h("colors_show_the_run_a_click_shows_the") : h("drag_nodes_and_use_the_canvas_menus")}</p>
-          <p class="small muted" id="wf-keyboard-help">${h(readonly ? "run_keyboard_help" : "workflow_keyboard_help")}</p>
+          <p class="small muted" id="wf-hint" role="status" aria-live="polite">${readonly ? h("colors_show_the_run_a_click_shows_the") : editable ? h("drag_nodes_and_use_the_canvas_menus") : esc(readOnlyHint())}</p>
+          <p class="small muted" id="wf-keyboard-help">${h(readonly ? "run_keyboard_help" : editable ? "workflow_keyboard_help" : "viewer_keyboard_help")}</p>
           <div class="canvas" id="canvas" tabindex="0" role="application" aria-label="${h("workflow_graph")}" aria-describedby="wf-keyboard-help">
             <div class="canvas-controls" role="group" aria-label="${h("canvas_controls")}">
               <button class="btn compact ghost" type="button" data-canvas-zoom-in aria-label="${h("zoom_in")}">+</button>
@@ -149,8 +152,8 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       </section>
     </div>`}
     ${editable ? `<div class="toast" id="wf-toast" role="status" aria-live="polite" hidden></div>` : ""}
-    </div>`, readonly ? `${back}${runActions}` : `
-      ${can("operator") ? `<span class="row" role="group" aria-label="${h("history")}"><button class="btn" id="wf-undo" type="button" aria-keyshortcuts="Control+Z Meta+Z" disabled>${h("undo")}</button><button class="btn" id="wf-redo" type="button" aria-keyshortcuts="Control+Shift+Z Control+Y Meta+Shift+Z" disabled>${h("redo")}</button></span><span class="small muted" id="wf-status" role="status" aria-live="polite">${h("all_changes_saved")}</span><span class="small wf-validation" id="wf-validation" role="status" aria-live="polite"></span><button class="btn" id="wf-save" type="button">${h("save")}</button><button class="btn primary" id="wf-launch" type="button" aria-describedby="wf-validation">${h("launch")}</button>` : ""}`);
+    </div>`, readonly ? `${back}${runActions}` : can("operator") ? `
+      <span class="row" role="group" aria-label="${h("history")}"><button class="btn" id="wf-undo" type="button" aria-keyshortcuts="Control+Z Meta+Z" disabled>${h("undo")}</button><button class="btn" id="wf-redo" type="button" aria-keyshortcuts="Control+Shift+Z Control+Y Meta+Shift+Z" disabled>${h("redo")}</button></span><span class="small muted" id="wf-status" role="status" aria-live="polite">${h("all_changes_saved")}</span><span class="small wf-validation" id="wf-validation" role="status" aria-live="polite"></span><button class="btn" id="wf-save" type="button">${h("save")}</button><button class="btn primary" id="wf-launch" type="button" aria-describedby="wf-validation">${h("launch")}</button>` : `<span class="pill read-only">${h("read_only")}</span>`);
 
   document.title = readonly
     ? `${t("run_2")} ${workflow.name} – Koreograf`
@@ -158,6 +161,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
 
   const canvas = document.querySelector("#canvas");
   canvas.classList.toggle("editable", editable);
+  canvas.classList.toggle("inspectable", !readonly);
   const board = document.querySelector("#board");
   const svg = document.querySelector("#edges");
   const nodes = document.querySelector("#nodes");
@@ -384,18 +388,25 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   }
 
   function openShortcuts() {
+    const rows = editable
+      ? [
+        ["Ctrl/Cmd+Z", "shortcut_undo"],
+        ["Ctrl/Cmd+Shift+Z · Ctrl+Y", "shortcut_redo"],
+        ["Delete / Backspace", "shortcut_delete"],
+        ["Enter / Space", "shortcut_connect"],
+        ["Ctrl/Cmd+S", "shortcut_save"],
+        ["Shift+F10", "shortcut_canvas"],
+        ["?", "shortcut_help"],
+      ]
+      : [
+        ["Tab · Enter · Space", readonly ? "run_keyboard_help" : "viewer_keyboard_help"],
+        ["+ − 0 F · Ctrl+wheel", "shortcut_view"],
+        ["?", "shortcut_help"],
+      ];
     openDialog({
       id: "shortcuts-dialog",
       title: t("keyboard_shortcuts"),
-      body: `<ul class="shortcut-list small">
-        <li><span class="mono">Ctrl/Cmd+Z</span><span>${h("shortcut_undo")}</span></li>
-        <li><span class="mono">Ctrl/Cmd+Shift+Z · Ctrl+Y</span><span>${h("shortcut_redo")}</span></li>
-        <li><span class="mono">Delete / Backspace</span><span>${h("shortcut_delete")}</span></li>
-        <li><span class="mono">Enter / Space</span><span>${h("shortcut_connect")}</span></li>
-        <li><span class="mono">Ctrl/Cmd+S</span><span>${h("shortcut_save")}</span></li>
-        <li><span class="mono">Shift+F10</span><span>${h("shortcut_canvas")}</span></li>
-        <li><span class="mono">?</span><span>${h("shortcut_help")}</span></li>
-      </ul>`,
+      body: `<ul class="shortcut-list small">${rows.map(([keys, key]) => `<li><span class="mono">${keys}</span><span>${h(key)}</span></li>`).join("")}</ul>`,
       form: false,
       actions: false,
     });
@@ -639,7 +650,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     svg.innerHTML = `${defs}${edges.map(({ edge, index, from, to, klass, geometry, d, invalid, warning, server, reason }) => {
       const label = `${edgeWhenText(klass)}: ${from.name} → ${to.name}`;
       const chip = `${PORT_SYMBOLS[klass]} ${edgeWhenText(klass)}`;
-      const role = editable ? ` role="button" tabindex="0"` : ` role="img"`;
+      const role = readonly ? ` role="img"` : ` role="button" tabindex="0"`;
       const runClass = readonly ? (edgeTaken(edge) ? " taken" : " untaken") : "";
       const classes = `edge-line ${klass}${runClass}${selectedEdge === index ? " selected" : ""}${invalid ? " invalid" : ""}${warning ? " warning" : ""}${server ? " server-invalid" : ""}`;
       const groupClass = `edge-group ${klass}${runClass}${invalid ? " invalid" : ""}`;
@@ -1538,6 +1549,120 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     return true;
   }
 
+  function detailRow(label, value) {
+    return `<dt>${esc(label)}</dt><dd>${value}</dd>`;
+  }
+
+  function detailList(rows) {
+    return `<dl class="kv readonly-kv">${rows.join("")}</dl>`;
+  }
+
+  function nodeNameById(id) {
+    const node = graph.nodes.find((item) => item.id === id);
+    return node ? node.name : id;
+  }
+
+  function inventoryLabel(id) {
+    if (!id) return t("no_inventory");
+    const inventory = lists.inventories.find((item) => item.id === id);
+    return inventory ? inventory.name : id;
+  }
+
+  function credentialLabel(id) {
+    if (!id) return t("none");
+    const credential = lists.credentials.find((item) => item.id === id);
+    return credential ? `${credential.name} (${credentialKindLabel(credential.kind)})` : id;
+  }
+
+  function viewerParamRows(node, template) {
+    if (!template) return `<p class="small muted">${h("node_template_missing_badge")}</p>`;
+    const over = node.overrides || {};
+    const spec = { ...(template.spec || {}), ...(over.spec || {}) };
+    const inventoryId = over.inventory_id !== undefined ? over.inventory_id : (template.inventory_id || "");
+    const credentialId = over.credential_id !== undefined ? over.credential_id : (template.credential_id || "");
+    const extra = over.extra_vars || template.extra_vars || {};
+    const rows = [];
+    if (template.tool === "ansible") {
+      rows.push(detailRow(t("inventory"), esc(inventoryLabel(inventoryId))));
+      rows.push(detailRow(t("type"), esc(spec.job_type === "check" ? t("check_dry_run") : t("run_2"))));
+      rows.push(detailRow(t("verbosity"), esc(t(verbosityLabel(Number(spec.verbosity) || 0)))));
+      rows.push(detailRow(t("forks"), esc(spec.forks ?? t("none"))));
+      rows.push(detailRow(t("diff"), esc(spec.diff ? t("yes") : t("no"))));
+      rows.push(detailRow(t("tags"), esc(spec.tags || t("none"))));
+      rows.push(detailRow(t("skip_tags"), esc(spec.skip_tags || t("none"))));
+      rows.push(detailRow(t("limit"), esc(spec.limit || t("none"))));
+    } else if (template.tool === "opentofu") {
+      rows.push(detailRow(t("action"), esc(spec.action === "apply" ? t("apply") : "plan")));
+    }
+    rows.push(detailRow(t("nav.access"), esc(credentialLabel(credentialId))));
+    rows.push(`<dt>${esc(t("extra_variables_json"))}</dt><dd><pre class="vars">${esc(JSON.stringify(extra, null, 2))}</pre></dd>`);
+    return detailList(rows);
+  }
+
+  function viewerConnections(node) {
+    const edgeRow = (when, other) => {
+      const kind = ["success", "failure", "always"].includes(when) ? when : "always";
+      return `<div class="edge-row readonly-edge"><span class="pill ${kind}">${h(edgeWhenLabel(kind))}</span><span class="readonly-target">${esc(other)}</span></div>`;
+    };
+    const outgoing = graph.edges.filter((edge) => edge.from === node.id).map((edge) => edgeRow(edge.when, nodeNameById(edge.to)));
+    const incoming = graph.edges.filter((edge) => edge.to === node.id).map((edge) => edgeRow(edge.when, nodeNameById(edge.from)));
+    const group = (label, rows) => `<p class="small muted">${h(label)}</p>${rows.length ? `<div class="edge-list">${rows.join("")}</div>` : `<p class="small muted">${h("none")}</p>`}`;
+    return `${group("outgoing", outgoing)}${group("incoming", incoming)}`;
+  }
+
+  function renderViewerInspector(host) {
+    const badge = `<span class="pill read-only">${h("read_only")}</span>`;
+    const hint = `<p class="small muted">${esc(readOnlyHint())}</p>`;
+    if (selectedEdge !== null && graph.edges[selectedEdge]) {
+      const edge = graph.edges[selectedEdge];
+      const when = ["success", "failure", "always"].includes(edge.when) ? edge.when : "always";
+      host.innerHTML = `<div class="inspector-block">
+        <div class="spread"><h2>${h("edge")}</h2>${badge}</div>
+        <p class="edge-ends"><span class="mono">${esc(nodeNameById(edge.from))}</span><span aria-hidden="true">→</span><span class="mono">${esc(nodeNameById(edge.to))}</span></p>
+        ${detailList([detailRow(t("when"), `<span class="pill ${when}">${h(edgeWhenLabel(when))}</span>`)])}
+        ${hint}
+      </div>`;
+      return;
+    }
+    const node = graph.nodes.find((item) => item.id === selected);
+    if (!node) {
+      host.innerHTML = `<div class="inspector-block">
+        <div class="spread"><h2>${h("view")}</h2>${badge}</div>
+        <p class="small muted">${h("select_a_node_or_an_edge_to_see_its_details")}</p>
+        ${hint}
+      </div>`;
+      return;
+    }
+    const template = templates.find((item) => item.id === node.template_id);
+    const tool = template ? toolKey(template.tool) : "";
+    host.innerHTML = `<div class="node-panel">
+      <div class="node-panel-head">
+        <div class="spread"><h2>${esc(node.name)}</h2>${badge}</div>
+        ${hint}
+      </div>
+      <details class="node-section" open>
+        <summary>${h("general")}</summary>
+        <div class="node-section-body">
+          ${detailList([
+            detailRow(t("name"), esc(node.name)),
+            detailRow(t("template"), esc(template ? template.name : t("node_template_missing_badge"))),
+            detailRow(t("tool"), esc(tool ? t(tool) : t("none"))),
+            detailRow(t("convergence"), esc(t(node.convergence === "all" ? "all_predecessors" : "any_predecessor"))),
+          ])}
+          ${predecessorCount(node) < 2 ? `<p class="small muted">${h("convergence_needs_two_predecessors")}</p>` : ""}
+        </div>
+      </details>
+      <details class="node-section" open>
+        <summary>${h("parameters")}</summary>
+        <div class="node-section-body">${viewerParamRows(node, template)}</div>
+      </details>
+      <details class="node-section" open>
+        <summary>${h("connections")}</summary>
+        <div class="node-section-body">${viewerConnections(node)}</div>
+      </details>
+    </div>`;
+  }
+
   function renderInspector() {
     if (!flushNode()) return;
     flushNode = () => true;
@@ -1548,7 +1673,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       return;
     }
     if (!editable) {
-      host.innerHTML = `<h2>${h("view")}</h2><p class="small muted">${h("changes_are_reserved_for_operators")}</p>`;
+      renderViewerInspector(host);
       return;
     }
     const node = graph.nodes.find((item) => item.id === selected);
@@ -1722,7 +1847,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   });
   svg.addEventListener("keydown", (event) => {
     const path = event.target.closest("path");
-    if (!path || !editable) return;
+    if (!path || readonly) return;
     historyShortcut(event);
     if (event.defaultPrevented) return;
     const index = Number(path.dataset.edge);
@@ -1731,6 +1856,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       selectEdge(index, true);
       return;
     }
+    if (!editable) return;
     if (event.key === "Delete" || event.key === "Backspace") {
       event.preventDefault();
       if (removeEdgeAt(index)) canvas.focus();

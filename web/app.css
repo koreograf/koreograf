@@ -861,9 +861,9 @@ button.run-line:hover { outline: 1px solid var(--line); }
 .edges path.edge-line.untaken { opacity: 0.22; }
 .edge-group.untaken .edge-chip { opacity: 0.35; }
 .edges path.edge-hit { stroke: transparent; stroke-width: 24; stroke-dasharray: none; pointer-events: none; }
-.canvas.editable .edges path.edge-hit { pointer-events: stroke; cursor: pointer; }
-.canvas.editable .edge-group:hover .edge-line { stroke-width: 3; }
-.canvas.editable .edge-group:hover .edge-line.selected { stroke-width: 4; }
+.canvas.inspectable .edges path.edge-hit { pointer-events: stroke; cursor: pointer; }
+.canvas.inspectable .edge-group:hover .edge-line { stroke-width: 3; }
+.canvas.inspectable .edge-group:hover .edge-line.selected { stroke-width: 4; }
 .edge-arrow { stroke: none; }
 .edge-arrow.success { fill: var(--good); }
 .edge-arrow.failure { fill: var(--bad); }
@@ -1115,6 +1115,10 @@ button.run-line:hover { outline: 1px solid var(--line); }
 .edge-row .pill.always { background: var(--panel); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line); }
 .edge-add { display: grid; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
 .inspector-block + .inspector-block { border-top: 1px solid var(--line); padding-top: 12px; }
+.inspector .readonly-kv { grid-template-columns: minmax(5.5rem, 38%) minmax(0, 1fr); gap: 8px 12px; margin: 0; }
+.inspector .readonly-kv pre.vars { margin: 0; }
+.readonly-target { flex: 1 1 auto; min-width: 0; overflow-wrap: break-word; }
+.pill.read-only { background: var(--accent-soft); color: var(--accent); }
 .node-params { display: flex; flex-direction: column; gap: 10px; }
 .node-params summary { cursor: pointer; font-weight: 600; }
 .node-params textarea { min-height: 72px; }
