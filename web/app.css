@@ -812,6 +812,14 @@ button.run-line:hover { outline: 1px solid var(--line); }
 .edges path.connecting { stroke: var(--accent); stroke-dasharray: 6 4; pointer-events: none; }
 .inspector { display: flex; flex-direction: column; gap: 12px; }
 .inspector-block { display: flex; flex-direction: column; gap: 10px; }
+.edge-list { display: flex; flex-direction: column; gap: 8px; }
+.edge-row { display: flex; align-items: center; gap: 8px; }
+.edge-row select { flex: 1 1 auto; width: 100%; min-width: 0; }
+.edge-row .pill { flex: none; }
+.edge-row .pill.success { background: var(--good-bg); color: var(--good); }
+.edge-row .pill.failure { background: var(--bad-bg); color: var(--bad); }
+.edge-row .pill.always { background: var(--panel); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line); }
+.edge-add { display: grid; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
 .inspector-block + .inspector-block { border-top: 1px solid var(--line); padding-top: 12px; }
 .node-params { display: flex; flex-direction: column; gap: 10px; }
 .node-params summary { cursor: pointer; font-weight: 600; }

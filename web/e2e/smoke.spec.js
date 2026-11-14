@@ -127,6 +127,30 @@ test("an administrator navigates every route, launches the demo shell job and sw
   await expect(page.locator("#node-extra")).toHaveValue(/"alert": "added"/);
   await expect(page.locator("#inspector #add-node")).toHaveCount(0);
 
+  await page.locator('.wf-node[data-id="check"]').click();
+  await expect(page.locator("#outgoing-edges .edge-row")).toHaveCount(2);
+  await page.locator("#link-when").selectOption("success");
+  await page.locator("#link-target").selectOption({ label: "Extra check" });
+  await page.locator("#link-add").click();
+  await expect(page.locator("#outgoing-edges .edge-row")).toHaveCount(3);
+  await expect(page.locator("#edges path.success")).toHaveCount(2);
+
+  const successRows = page.locator('#outgoing-edges .edge-row[data-edge-when="success"]');
+  await expect(successRows).toHaveCount(2);
+  await successRows.nth(0).locator(".edge-target").selectOption("escalate");
+  await expect(page.locator("#wf-hint")).toHaveText("Edge changed.");
+  await expect(page.locator("#outgoing-edges .edge-row")).toHaveCount(3);
+  await expect(page.locator("#edges path.success")).toHaveCount(2);
+  await expect(page.locator('#outgoing-edges .edge-row[data-edge-when="success"] .edge-target option:checked')).toHaveText(["Eskalation", "Extra check"]);
+
+  await successRows.nth(1).locator("[data-remove-edge]").click();
+  await expect(page.locator("#wf-hint")).toHaveText("Edge removed.");
+  await expect(page.locator("#outgoing-edges .edge-row")).toHaveCount(2);
+  await expect(page.locator("#edges path.success")).toHaveCount(1);
+  await expect(page.locator("#edges path.failure")).toHaveCount(1);
+  await expect(page.locator('#outgoing-edges .edge-row[data-edge-when="success"] .edge-target option:checked')).toHaveText("Eskalation");
+
+  await added.click();
   await page.locator("#node-name").fill("Extra check edited");
   await expect(page.locator("#wf-status")).toHaveText("Unsaved changes");
 
