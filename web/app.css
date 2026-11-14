@@ -703,12 +703,20 @@ pre.vars .vars-comment { color: var(--side-muted); }
 .wf-validation { color: var(--muted); }
 .wf-validation.error { color: var(--bad); }
 .wf-validation.warn { color: var(--warn); }
-.editor-body { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 12px; min-height: 560px; }
+.editor-body { display: grid; grid-template-columns: minmax(0, 1fr) 6px var(--inspector-width, 320px); gap: 12px; min-height: 560px; }
+.inspector-resizer {
+  align-self: stretch;
+  border-radius: 999px;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+}
+.inspector-resizer:hover,
+.inspector-resizer:focus-visible { background: var(--accent-soft); outline: none; }
 @media (min-width: 1920px) {
   .editor-body { height: calc(100vh - 190px); min-height: 640px; align-items: stretch; }
   .canvas-column { display: flex; flex-direction: column; min-height: 0; }
   .canvas-column .canvas { flex: 1; min-height: 420px; }
-  .inspector { overflow-y: auto; }
 }
 .run-lines { display: flex; flex-direction: column; gap: 4px; overflow-x: auto; }
 .run-line {
@@ -871,6 +879,20 @@ button.run-line:hover { outline: 1px solid var(--line); }
   line-height: 1.4;
 }
 .wf-node-badge.warning { background: var(--warn-bg); color: var(--warn); }
+.wf-join-badge {
+  position: absolute;
+  left: -10px;
+  top: 8px;
+  transform: translateX(-100%);
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  pointer-events: none;
+}
 .wf-node.phase-successful { box-shadow: inset 3px 0 0 var(--good); }
 .wf-node.phase-failed { box-shadow: inset 3px 0 0 var(--bad); }
 .wf-node.phase-running { box-shadow: inset 3px 0 0 var(--info); }
@@ -942,14 +964,37 @@ button.run-line:hover { outline: 1px solid var(--line); }
 }
 .node-menu-pop .btn { justify-content: flex-start; }
 .edges path.connecting { stroke: var(--accent); stroke-dasharray: 6 4; pointer-events: none; }
-.inspector { display: flex; flex-direction: column; gap: 12px; }
+.inspector { display: flex; flex-direction: column; gap: 12px; max-height: calc(100vh - 190px); overflow-y: auto; }
+.inspector input,
+.inspector select,
+.inspector textarea { width: 100%; min-width: 0; max-width: 100%; }
+.inspector select.fit { width: 100%; min-width: 0; justify-self: stretch; }
+.inspector input.tiny { width: 6.5rem; }
+.inspector .field { min-width: 0; }
 .inspector-block { display: flex; flex-direction: column; gap: 10px; }
+.node-panel { display: flex; flex-direction: column; gap: 12px; }
+.node-panel-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.node-section { border-top: 1px solid var(--line); padding-top: 10px; }
+.node-section:first-of-type { border-top: 0; padding-top: 0; }
+.node-section summary { cursor: pointer; font-weight: 600; }
+.node-section-body { display: flex; flex-direction: column; gap: 10px; padding-top: 10px; }
 .edge-ends { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; }
 .edge-ends .btn { min-width: 0; }
 .edge-list { display: flex; flex-direction: column; gap: 8px; }
 .edge-row { display: flex; align-items: center; gap: 8px; }
 .edge-row select { flex: 1 1 auto; width: 100%; min-width: 0; }
 .edge-row .pill { flex: none; }
+.edge-row .btn { flex: none; }
 .edge-row .pill.success { background: var(--good-bg); color: var(--good); }
 .edge-row .pill.failure { background: var(--bad-bg); color: var(--bad); }
 .edge-row .pill.always { background: var(--panel); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line); }
@@ -999,6 +1044,8 @@ code, .mono { font-family: var(--mono); font-size: 13px; word-break: break-all; 
   }
   .side.open { transform: none; visibility: visible; }
   .grid-3, .charts, .editor-body { grid-template-columns: 1fr; }
+  .inspector-resizer { display: none; }
+  .inspector { max-height: none; overflow: visible; }
   .main { padding: 16px; }
   .schedule-body { overflow: auto; }
   .schedule-layout { grid-template-columns: 1fr; height: auto; }
