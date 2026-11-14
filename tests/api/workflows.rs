@@ -446,3 +446,247 @@ async fn workflow_node_can_override_template_parameters() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+async fn shell_workflow(
+    app: &axum::Router,
+    cookie: &str,
+    team: &str,
+    name: &str,
+    script: &str,
+) -> String {
+    let (status, template, _) = call(
+        app,
+        "POST",
+        "/api/templates",
+        Some(cookie),
+        Some(team),
+        Some(json!({
+            "name": format!("{name} template"),
+            "tool": "shell",
+            "entrypoint": "",
+            "spec": {"script": script}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().unwrap().to_string();
+    let (status, workflow, _) = call(
+        app,
+        "POST",
+        "/api/workflows",
+        Some(cookie),
+        Some(team),
+        Some(json!({
+            "name": name,
+            "description": "",
+            "graph": {
+                "nodes": [{"id": "one", "template_id": template_id, "name": "one"}],
+                "edges": []
+            }
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{workflow}");
+    workflow["id"].as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn a_running_workflow_run_can_be_canceled() {
+    let harness = TestApp::boot("workflow-cancel", Options::default());
+    let app = harness.app.clone();
+    let dir = harness.dir.clone();
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+    let workflow_id = shell_workflow(&app, &cookie, &team, "Workflow sleeper", "sleep 30\n").await;
+
+    let (status, run, _) = call(
+        &app,
+        "POST",
+        &format!("/api/workflows/{workflow_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"extra_vars": {}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{run}");
+    let run_id = run["id"].as_str().unwrap().to_string();
+
+    let mut job_id = None;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let (status, live, _) = call(
+            &app,
+            "GET",
+            &format!("/api/workflow-jobs/{run_id}"),
+            Some(&cookie),
+            Some(&team),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{live}");
+        job_id = live["nodes"][0]["job_id"].as_str().map(str::to_string);
+        if job_id.is_some() {
+            break;
+        }
+    }
+    let job_id = job_id.expect("the workflow did not start its node job");
+
+    let (status, denied, _) = call(
+        &app,
+        "POST",
+        &format!("/api/workflow-jobs/{run_id}/relaunch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{denied}");
+    assert_eq!(
+        denied["error"],
+        "only_a_finished_workflow_run_can_be_relaunched"
+    );
+
+    let (status, canceled, _) = call(
+        &app,
+        "POST",
+        &format!("/api/workflow-jobs/{run_id}/cancel"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{canceled}");
+    assert_eq!(canceled["status"], "canceled");
+
+    let (status, child, _) = call(
+        &app,
+        "GET",
+        &format!("/api/jobs/{job_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{child}");
+    assert_eq!(child["status"], "canceled", "{child}");
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (status, settled, _) = call(
+        &app,
+        "GET",
+        &format!("/api/workflow-jobs/{run_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{settled}");
+    assert_eq!(settled["status"], "canceled", "{settled}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn a_finished_workflow_run_can_be_listed_and_relaunched() {
+    let harness = TestApp::boot("workflow-relaunch", Options::default());
+    let app = harness.app.clone();
+    let dir = harness.dir.clone();
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+    let workflow_id =
+        shell_workflow(&app, &cookie, &team, "Workflow echo", "echo workflow-ok\n").await;
+
+    let (status, run, _) = call(
+        &app,
+        "POST",
+        &format!("/api/workflows/{workflow_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"extra_vars": {}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{run}");
+    let run_id = run["id"].as_str().unwrap().to_string();
+    let finished = wait_for_workflow(&app, &cookie, &team, &run_id).await;
+    assert_eq!(finished["status"], "successful", "{finished}");
+
+    let (status, listed, _) = call(
+        &app,
+        "GET",
+        &format!("/api/workflow-jobs?workflow_id={workflow_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let items = listed.as_array().expect("run list");
+    assert!(items.iter().any(|item| item["id"] == run_id), "{listed}");
+    assert_eq!(items[0]["trigger"], "manual", "{listed}");
+
+    let (status, copy, _) = call(
+        &app,
+        "POST",
+        &format!("/api/workflow-jobs/{run_id}/relaunch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{copy}");
+    assert_ne!(copy["id"], finished["id"]);
+    assert_eq!(copy["trigger"], "relaunch");
+    let copy_id = copy["id"].as_str().unwrap().to_string();
+
+    let (status, listed, _) = call(
+        &app,
+        "GET",
+        &format!("/api/workflow-jobs?workflow_id={workflow_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(listed.as_array().map(Vec::len), Some(2), "{listed}");
+
+    let copy = wait_for_workflow(&app, &cookie, &team, &copy_id).await;
+    assert_eq!(copy["status"], "successful", "{copy}");
+
+    let (status, workflow, _) = call(
+        &app,
+        "GET",
+        &format!("/api/workflows/{workflow_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{workflow}");
+    assert_eq!(workflow["last_run_status"], "successful", "{workflow}");
+    assert!(workflow["last_run_id"].is_string(), "{workflow}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

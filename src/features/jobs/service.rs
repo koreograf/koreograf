@@ -792,6 +792,51 @@ pub fn cancel(state: &Shared, job_id: &str) -> AppResult<()> {
     Ok(())
 }
 
+pub fn relaunch_workflow(state: &Shared, source_id: &str, launched_by: &str) -> AppResult<String> {
+    let (team_id, workflow_id, extra) = {
+        let db = state.store();
+        let run = db.workflow_job(source_id)?.ok_or(ApiError::NotFound)?;
+        if !matches!(run.status.as_str(), "successful" | "failed" | "canceled") {
+            return Err(ApiError::bad(
+                "only_a_finished_workflow_run_can_be_relaunched",
+            ));
+        }
+        let workflow_id = run
+            .workflow_id
+            .clone()
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| ApiError::bad("this_run_s_workflow_is_missing"))?;
+        (run.team_id, workflow_id, db::json_object(&run.extra_vars))
+    };
+    launch_workflow(
+        state,
+        &team_id,
+        &workflow_id,
+        extra,
+        launched_by,
+        "relaunch",
+    )
+}
+
+pub fn cancel_workflow(state: &Shared, run_id: &str) -> AppResult<()> {
+    let job_ids = {
+        let db = state.store();
+        let run = db.workflow_job(run_id)?.ok_or(ApiError::NotFound)?;
+        if matches!(run.status.as_str(), "successful" | "failed" | "canceled") {
+            return Ok(());
+        }
+        db.set_workflow_status(run_id, "canceled", true)?;
+        db.workflow_nodes(run_id)?
+            .into_iter()
+            .filter_map(|node| node.job_id)
+            .collect::<Vec<_>>()
+    };
+    for job_id in job_ids {
+        cancel(state, &job_id)?;
+    }
+    Ok(())
+}
+
 pub fn launch_workflow(
     state: &Shared,
     team_id: &str,
@@ -864,6 +909,13 @@ async fn drive(state: Shared, wf_job_id: String) -> AppResult<()> {
         (graph, run.team_id, db::json_object(&run.extra_vars))
     };
     for _ in 0..4_000 {
+        if state
+            .store()
+            .workflow_job(&wf_job_id)?
+            .is_some_and(|run| run.status == "canceled")
+        {
+            return Ok(());
+        }
         let phase = refresh(&state, &wf_job_id, &graph)?;
         if workflow::settled(&graph, &phase) {
             let status = workflow::final_status(&graph, &phase);
@@ -932,6 +984,13 @@ fn apply_step(
     extra: &Value,
     step: workflow::Step,
 ) -> AppResult<()> {
+    if state
+        .store()
+        .workflow_job(wf_job_id)?
+        .is_some_and(|run| run.status == "canceled")
+    {
+        return Ok(());
+    }
     match step {
         workflow::Step::Skip(node_id) => {
             let db = state.store();

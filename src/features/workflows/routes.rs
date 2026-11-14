@@ -1,4 +1,6 @@
-use axum::extract::{Path, State};
+use std::collections::HashMap;
+
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use axum::routing::{delete, get, post};
@@ -32,7 +34,10 @@ pub(crate) fn routes() -> Router<Shared> {
                 .delete(delete_workflow),
         )
         .route("/workflows/{id}/launch", post(launch_workflow))
+        .route("/workflow-jobs", get(list_workflow_jobs))
         .route("/workflow-jobs/{id}", get(get_workflow_job))
+        .route("/workflow-jobs/{id}/cancel", post(cancel_workflow_job))
+        .route("/workflow-jobs/{id}/relaunch", post(relaunch_workflow_job))
         .route("/hooks", get(list_hooks).post(create_hook))
         .route("/hooks/{id}", delete(delete_hook).put(update_hook))
         .route("/hooks/{id}/test", post(test_hook))
@@ -64,10 +69,16 @@ pub(super) struct WorkflowResponse {
     description: String,
     graph: Value,
     created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_run_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_run_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_run_at: Option<String>,
 }
 
 impl WorkflowResponse {
-    fn new(item: &Workflow) -> Self {
+    fn new(item: &Workflow, last: Option<&db::WorkflowJob>) -> Self {
         Self {
             id: item.id.clone(),
             team_id: item.team_id.clone(),
@@ -75,6 +86,9 @@ impl WorkflowResponse {
             description: item.description.clone(),
             graph: db::json_object(&item.graph),
             created_at: item.created_at.clone(),
+            last_run_id: last.map(|run| run.id.clone()),
+            last_run_status: last.map(|run| run.status.clone()),
+            last_run_at: last.map(|run| run.created_at.clone()),
         }
     }
 }
@@ -160,6 +174,48 @@ impl WorkflowJobResponse {
     }
 }
 
+#[derive(Serialize)]
+pub(super) struct WorkflowRunResponse {
+    id: String,
+    workflow_id: Option<String>,
+    team_id: String,
+    name: String,
+    status: String,
+    launched_by: String,
+    trigger: String,
+    created_at: String,
+    finished_at: Option<String>,
+}
+
+impl WorkflowRunResponse {
+    fn new(run: &db::WorkflowJob) -> Self {
+        Self {
+            id: run.id.clone(),
+            workflow_id: run.workflow_id.clone(),
+            team_id: run.team_id.clone(),
+            name: run.name.clone(),
+            status: run.status.clone(),
+            launched_by: run.launched_by.clone(),
+            trigger: run.trigger.clone(),
+            created_at: run.created_at.clone(),
+            finished_at: run.finished_at.clone(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(transparent)]
+pub(super) struct WorkflowRunListResponse(Vec<WorkflowRunResponse>);
+
+#[derive(Deserialize, Default)]
+pub struct WorkflowJobsQuery {
+    workflow_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowRelaunchBody {}
+
 pub(crate) async fn list_workflows(
     State(state): State<Shared>,
     headers: HeaderMap,
@@ -169,8 +225,17 @@ pub(crate) async fn list_workflows(
     gate(&state, &user, &team, Role::Viewer)?;
     let db = state.store();
     let items = db.list_workflows(&team)?;
+    let mut latest: HashMap<String, db::WorkflowJob> = HashMap::new();
+    for run in db.list_workflow_jobs(&team, "", 1000)? {
+        if let Some(workflow_id) = run.workflow_id.clone() {
+            latest.entry(workflow_id).or_insert(run);
+        }
+    }
     Ok(Json(WorkflowListResponse(
-        items.iter().map(WorkflowResponse::new).collect(),
+        items
+            .iter()
+            .map(|item| WorkflowResponse::new(item, latest.get(&item.id)))
+            .collect(),
     )))
 }
 
@@ -182,7 +247,8 @@ pub(crate) async fn get_workflow(
     let db = state.store();
     let item = db.workflow(&id)?.ok_or(ApiError::NotFound)?;
     crate::features::identity::authorize(db, &user, &item.team_id, Role::Viewer)?;
-    Ok(Json(WorkflowResponse::new(&item)))
+    let last = db.list_workflow_jobs(&item.team_id, &item.id, 1)?;
+    Ok(Json(WorkflowResponse::new(&item, last.first())))
 }
 
 pub(crate) async fn create_workflow(
@@ -197,7 +263,10 @@ pub(crate) async fn create_workflow(
     item.admin_saved = user.is_admin;
     let db = state.store();
     db.insert_workflow(&item)?;
-    Ok((StatusCode::CREATED, Json(WorkflowResponse::new(&item))))
+    Ok((
+        StatusCode::CREATED,
+        Json(WorkflowResponse::new(&item, None)),
+    ))
 }
 
 pub(crate) async fn update_workflow(
@@ -213,7 +282,8 @@ pub(crate) async fn update_workflow(
     item.admin_saved = user.is_admin;
     let db = state.store();
     db.update_workflow(&item)?;
-    Ok(Json(WorkflowResponse::new(&item)))
+    let last = db.list_workflow_jobs(&item.team_id, &item.id, 1)?;
+    Ok(Json(WorkflowResponse::new(&item, last.first())))
 }
 
 pub(crate) async fn delete_workflow(
@@ -262,6 +332,67 @@ pub(crate) async fn get_workflow_job(
     let run = db.workflow_job(&id)?.ok_or(ApiError::NotFound)?;
     crate::features::identity::authorize(db, &user, &run.team_id, Role::Viewer)?;
     Ok(Json(WorkflowJobResponse::new(db, &run)?))
+}
+
+pub(crate) async fn list_workflow_jobs(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Query(query): Query<WorkflowJobsQuery>,
+) -> AppResult<Json<WorkflowRunListResponse>> {
+    let team = team_header(&headers)?;
+    gate(&state, &user, &team, Role::Viewer)?;
+    let workflow_id = query
+        .workflow_id
+        .map(|id| id.trim().to_string())
+        .unwrap_or_default();
+    let db = state.store();
+    if !workflow_id.is_empty() {
+        let owner = db.workflow_team(&workflow_id)?.ok_or(ApiError::NotFound)?;
+        if owner != team {
+            return Err(ApiError::NotFound);
+        }
+    }
+    let runs = db.list_workflow_jobs(&team, &workflow_id, 100)?;
+    Ok(Json(WorkflowRunListResponse(
+        runs.iter().map(WorkflowRunResponse::new).collect(),
+    )))
+}
+
+pub(crate) async fn cancel_workflow_job(
+    State(state): State<Shared>,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Json<WorkflowJobResponse>> {
+    {
+        let db = state.store();
+        let run = db.workflow_job(&id)?.ok_or(ApiError::NotFound)?;
+        crate::features::identity::authorize(db, &user, &run.team_id, Role::Operator)?;
+    }
+    jobs::cancel_workflow(&state, &id)?;
+    let db = state.store();
+    let run = db.workflow_job(&id)?.ok_or(ApiError::NotFound)?;
+    Ok(Json(WorkflowJobResponse::new(db, &run)?))
+}
+
+pub(crate) async fn relaunch_workflow_job(
+    State(state): State<Shared>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    ApiJson(_body): ApiJson<WorkflowRelaunchBody>,
+) -> AppResult<(StatusCode, Json<WorkflowJobResponse>)> {
+    {
+        let db = state.store();
+        let run = db.workflow_job(&id)?.ok_or(ApiError::NotFound)?;
+        crate::features::identity::authorize(db, &user, &run.team_id, Role::Operator)?;
+    }
+    let run_id = jobs::relaunch_workflow(&state, &id, &user.username)?;
+    let db = state.store();
+    let run = db.workflow_job(&run_id)?.ok_or(ApiError::NotFound)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(WorkflowJobResponse::new(db, &run)?),
+    ))
 }
 
 fn check_node_overrides(

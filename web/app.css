@@ -628,6 +628,8 @@ textarea { min-height: 88px; resize: vertical; }
 .log div.stderr { color: #fda4af; }
 .log div.warn { color: #fbbf24; }
 .log div.fail { color: #fb7185; font-weight: 700; }
+.log-setup { margin-bottom: 8px; }
+.log-setup summary { cursor: pointer; color: #fdba74; }
 .result-summary {
   margin: 0 0 8px;
   overflow-x: auto;
@@ -855,6 +857,9 @@ button.run-line:hover { outline: 1px solid var(--line); }
 .edges path.invalid { stroke: var(--bad); stroke-width: 4; }
 .edges path.warning { stroke: var(--warn); }
 .edges path:focus-visible { outline: none; stroke-width: 4; filter: drop-shadow(0 0 2px var(--accent)); }
+.edges path.edge-line.taken { stroke-width: 3.5; opacity: 1; }
+.edges path.edge-line.untaken { opacity: 0.22; }
+.edge-group.untaken .edge-chip { opacity: 0.35; }
 .edges path.edge-hit { stroke: transparent; stroke-width: 24; stroke-dasharray: none; pointer-events: none; }
 .canvas.editable .edges path.edge-hit { pointer-events: stroke; cursor: pointer; }
 .canvas.editable .edge-group:hover .edge-line { stroke-width: 3; }
@@ -915,6 +920,52 @@ button.run-line:hover { outline: 1px solid var(--line); }
 .wf-node.phase-failed { box-shadow: inset 3px 0 0 var(--bad); }
 .wf-node.phase-running { box-shadow: inset 3px 0 0 var(--info); }
 .wf-node.phase-skipped { opacity: 0.55; }
+.wf-node-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.wf-node-status.successful { color: var(--good); }
+.wf-node-status.failed { color: var(--bad); }
+.wf-node-status.running { color: var(--info); }
+.wf-node-status.skipped { color: var(--muted); }
+.wf-node-state-icon { flex: 0 0 auto; width: 1em; text-align: center; }
+.wf-node-duration { margin-left: auto; font-weight: 400; }
+.wf-node-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: wf-spin 0.8s linear infinite;
+}
+@keyframes wf-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .wf-node-spinner { animation: none; }
+}
+.run-summary { color: var(--good); }
+.run-legend {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+.run-legend li { display: flex; align-items: center; gap: 8px; }
+.run-legend-icon { width: 1em; text-align: center; font-weight: 700; }
+.run-legend-icon.successful { color: var(--good); }
+.run-legend-icon.failed { color: var(--bad); }
+.run-legend-icon.running { color: var(--info); }
+.run-legend-icon.skipped { color: var(--muted); }
+.run-legend-edge { width: 28px; height: 0; border-top: 3px solid var(--ink); }
+.run-legend-edge.untaken { border-top-color: var(--line); opacity: 0.6; }
 .wf-node strong { display: block; }
 .wf-node-meta {
   display: flex;

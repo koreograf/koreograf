@@ -469,3 +469,32 @@ test("Delete removes a connected node and Ctrl+Z restores it with its edge", asy
   await expect(page.locator(".wf-node", { hasText: "Undo target" })).toBeVisible();
   await expect(page.locator("#edges path.edge-line")).toHaveCount(edgeCount + 1);
 });
+
+test("a finished workflow run shows its path, closes output on Escape and is reachable from the Runs tab", async ({ page }) => {
+  await signInInEnglish(page);
+  await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
+  await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
+  await page.locator("#wf-launch").click();
+  await expect(page).toHaveURL(/#\/runs\/[0-9a-f-]+$/);
+
+  const state = page.locator("#run-state");
+  await expect(state).toHaveText(/Successful|Failed/, { timeout: 90000 });
+  const node = page.locator('.wf-node[data-id="check"]');
+  await expect(node.locator(".wf-node-status-text")).toHaveText(/Successful|Failed/);
+  await expect(page.getByRole("link", { name: "Back to the workflow", exact: true })).toHaveCount(1);
+
+  await node.click();
+  const overlay = page.locator("#node-output");
+  await expect(overlay).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(overlay).toHaveCount(0);
+  await expect(node).toBeFocused();
+
+  const runHash = new URL(page.url()).hash;
+  await page.getByRole("link", { name: "Back to the workflow", exact: true }).click();
+  await page.getByRole("tab", { name: "Runs", exact: true }).click();
+  const runLink = page.locator(`#wf-panel-runs a[href="${runHash}"]`).first();
+  await expect(runLink).toBeVisible();
+  await runLink.click();
+  await expect(page).toHaveURL(new RegExp(`${runHash.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
+});
