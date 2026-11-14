@@ -238,6 +238,41 @@ test("the node panel starts collapsed on a narrow screen and opens on selection"
   }
 });
 
+test("the node panel follows a viewport change across the narrow breakpoint", async () => {
+  const listeners = [];
+  let narrow = false;
+  const previous = window.matchMedia;
+  window.matchMedia = (query) => ({
+    media: query,
+    matches: narrow,
+    addEventListener(type, listener) {
+      if (type === "change") listeners.push(listener);
+    },
+    removeEventListener(type, listener) {
+      const index = listeners.indexOf(listener);
+      if (index >= 0) listeners.splice(index, 1);
+    },
+  });
+  try {
+    await mount(grid(2, 2));
+    const inspector = document.querySelector("#inspector");
+    const toggle = document.querySelector("#inspector-toggle");
+    assert.equal(inspector.hidden, false, "the panel starts open on a wide screen");
+
+    narrow = true;
+    listeners.forEach((listener) => listener({ matches: true }));
+    assert.equal(inspector.hidden, true, "shrinking the window left the sheet open");
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+
+    narrow = false;
+    listeners.forEach((listener) => listener({ matches: false }));
+    assert.equal(inspector.hidden, false, "growing the window left the sheet closed");
+    assert.equal(toggle.getAttribute("aria-expanded"), "true");
+  } finally {
+    window.matchMedia = previous;
+  }
+});
+
 test("the canvas styles expose the viewport controls and full-height layout", () => {
   const css = stylesheet();
   assert.match(css, /\.canvas\s*\{[^}]*overflow:\s*hidden/);
