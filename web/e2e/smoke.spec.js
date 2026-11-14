@@ -498,3 +498,70 @@ test("a finished workflow run shows its path, closes output on Escape and is rea
   await runLink.click();
   await expect(page).toHaveURL(new RegExp(`${runHash.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
 });
+
+test("a viewer inspects a workflow node without edit controls", async ({ page }) => {
+  await signInInEnglish(page);
+  const teams = await (await page.request.get("/api/v1/teams")).json();
+  const team = teams.find((item) => item.name === "Plattform") || teams[0];
+  const users = await (await page.request.get("/api/v1/users")).json();
+  if (!users.some((user) => user.username === "carol")) {
+    const created = await page.request.post("/api/v1/users", {
+      data: { username: "carol", password: "carol-viewer-pass", display_name: "Carol Viewer" },
+    });
+    expect(created.status()).toBe(201);
+  }
+  const member = await page.request.post(`/api/v1/teams/${team.id}/members`, {
+    data: { username: "carol", role: "viewer" },
+  });
+  expect(member.status()).toBe(201);
+
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
+  await page.getByLabel("Username").fill("carol");
+  await page.getByLabel("Password").fill("carol-viewer-pass");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page.getByRole("navigation")).toBeVisible();
+  await page.locator("#team-select").selectOption(team.id);
+
+  await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
+  await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
+  await expect(page.locator(".top .pill.read-only")).toHaveText("Read-only");
+  await expect(page.locator("#wf-hint")).toHaveText(`Read-only. Operators of team ${team.name} can edit.`);
+  await expect(page.getByRole("button", { name: "Save", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Launch", exact: true })).toHaveCount(0);
+  await expect(page.locator("#wf-add-first")).toHaveCount(0);
+
+  const node = page.locator('.wf-node[data-id="heal"]');
+  await node.click();
+  const inspector = page.locator("#inspector");
+  await expect(inspector).toContainText("Self-Heal");
+  await expect(inspector).toContainText("Inventory");
+  await expect(inspector).toContainText("Limit");
+  await expect(inspector).toContainText("Tags");
+  await expect(inspector).toContainText("Extra variables");
+  await expect(inspector).toContainText("Connections");
+  await expect(inspector).toContainText("Outgoing");
+  await expect(inspector).toContainText("Incoming");
+  await expect(page.locator("#node-name")).toHaveCount(0);
+  await expect(page.locator("#node-delete")).toHaveCount(0);
+  await expect(page.locator("#node-connect")).toHaveCount(0);
+  await expect(page.locator("[data-node-menu]")).toHaveCount(0);
+  await expect(page.locator("[data-add-port]")).toHaveCount(0);
+
+  const failure = page.locator("#edges path.failure");
+  const point = await failure.evaluate((element) => {
+    const middle = element.getPointAtLength(element.getTotalLength() / 2);
+    const matrix = element.getScreenCTM();
+    return {
+      x: middle.x * matrix.a + middle.y * matrix.c + matrix.e,
+      y: middle.x * matrix.b + middle.y * matrix.d + matrix.f,
+    };
+  });
+  await page.mouse.click(point.x + 5, point.y + 5);
+  await expect(inspector).toContainText("On failure");
+  await expect(page.locator("#edge-when")).toHaveCount(0);
+  await expect(page.locator("#edge-delete")).toHaveCount(0);
+
+  await page.locator("#board").click({ button: "right", position: { x: 40, y: 40 } });
+  await expect(page.getByRole("menuitem", { name: "Add node", exact: true })).toHaveCount(0);
+});
