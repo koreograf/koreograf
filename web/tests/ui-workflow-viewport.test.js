@@ -29,14 +29,14 @@ function grid(columns, rows) {
   return nodes;
 }
 
-async function mount(nodes) {
+async function mount(nodes, readonly = false) {
   const state = await load("core/state.js");
   state.setMe({ is_admin: true, display_name: "Admin", teams: [{ id: "t1", name: "Team", role: "owner" }] });
   state.setTeamId("t1");
   globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => "[]" });
   const editor = await load("features/workflows/editor.js");
   const workflow = { id: "w1", name: "Deploy", description: "", graph: { nodes, edges: [] } };
-  const mounted = editor.mountEditor(workflow, [{ id: "t1", name: "Shell", tool: "shell", spec: {} }], false, {}, { inventories: [], credentials: [] }, {});
+  const mounted = editor.mountEditor(workflow, [{ id: "t1", name: "Shell", tool: "shell", spec: {} }], readonly, {}, { inventories: [], credentials: [] }, {});
   return { editor, workflow, mounted };
 }
 
@@ -146,6 +146,34 @@ function viewportInside(mounted, node) {
   const screen = mounted.viewport.graphToScreen(node);
   return screen.x >= -0.001 && screen.y >= -0.001 && screen.x + width <= size.width + 0.001 && screen.y + height <= size.height + 0.001;
 }
+
+test("two touch pointers pinch to zoom", async () => {
+  const { mounted } = await mount(grid(3, 3));
+  const canvas = document.querySelector("#canvas");
+  const before = mounted.viewport.view.scale;
+  canvas.dispatchEvent({ type: "pointerdown", pointerId: 11, pointerType: "touch", clientX: 300, clientY: 300 });
+  canvas.dispatchEvent({ type: "pointerdown", pointerId: 12, pointerType: "touch", clientX: 500, clientY: 300 });
+  canvas.dispatchEvent({ type: "pointermove", pointerId: 12, pointerType: "touch", clientX: 600, clientY: 300 });
+  assert.ok(mounted.viewport.view.scale > before, "pinching did not zoom");
+  canvas.dispatchEvent({ type: "pointerup", pointerId: 11, pointerType: "touch", clientX: 300, clientY: 300 });
+  canvas.dispatchEvent({ type: "pointerup", pointerId: 12, pointerType: "touch", clientX: 600, clientY: 300 });
+});
+
+test("the canvas leaves browser shortcuts alone and zooms in the run view", async () => {
+  const { mounted } = await mount(grid(3, 3));
+  const canvas = document.querySelector("#canvas");
+  const before = mounted.viewport.view.scale;
+  canvas.dispatchEvent({ type: "keydown", key: "f", ctrlKey: true, preventDefault() {} });
+  canvas.dispatchEvent({ type: "keydown", key: "0", ctrlKey: true, preventDefault() {} });
+  canvas.dispatchEvent({ type: "keydown", key: "-", ctrlKey: true, preventDefault() {} });
+  assert.equal(mounted.viewport.view.scale, before, "a browser shortcut zoomed the canvas");
+
+  const readonly = await mount(grid(3, 3), true);
+  const runCanvas = document.querySelector("#canvas");
+  const runBefore = readonly.mounted.viewport.view.scale;
+  runCanvas.dispatchEvent({ type: "keydown", key: "+", preventDefault() {} });
+  assert.ok(readonly.mounted.viewport.view.scale > runBefore, "the run view does not zoom from the keyboard");
+});
 
 test("the editor pans the empty canvas and auto pans a node at the edge", async () => {
   const { mounted } = await mount(grid(3, 3));
