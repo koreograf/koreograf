@@ -1,0 +1,15 @@
+{
+  "alert_name": "Alertname",
+  "delete_this_webhook": "Webhook \"{name}\" löschen? Seine URL funktioniert danach nicht mehr.",
+  "deliveries": "Eingänge",
+  "edit_webhook": "Webhook bearbeiten",
+  "hook_status_any": "beliebig",
+  "hook_status_firing": "ausgelöst",
+  "hook_status_resolved": "behoben",
+  "new_webhook": "Webhook anlegen",
+  "search_webhooks": "Webhooks suchen",
+  "select": "Auswählen",
+  "test": "Test",
+  "token_is_visible_to_operators": "Token nur für Operatoren",
+  "webhook_2": "+ Webhook"
+}

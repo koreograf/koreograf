@@ -1,7 +1,7 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use axum::http::StatusCode;
+use axum::http::{header, StatusCode};
 use serde_json::{json, Value};
 
 use crate::common::{call_cookie as call, call_raw_headers as call_raw};
@@ -129,12 +129,8 @@ async fn a_request_without_json_returns_a_catalog_error() {
 #[test]
 fn message_catalogs_match_and_cover_the_ui() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let de_path = root.join("web/i18n/de.json");
-    let en_path = root.join("web/i18n/en.json");
-    assert_catalog_sorted(&de_path);
-    assert_catalog_sorted(&en_path);
-    let de = load_catalog(&de_path);
-    let en = load_catalog(&en_path);
+    let de = load_catalogs(&root.join("web/i18n"), "de");
+    let en = load_catalogs(&root.join("web/i18n"), "en");
     assert_eq!(
         de.keys().collect::<Vec<_>>(),
         en.keys().collect::<Vec<_>>(),
@@ -179,10 +175,49 @@ fn message_catalogs_match_and_cover_the_ui() {
 }
 
 #[test]
+fn catalogs_are_split_per_feature_without_duplicates() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dir = root.join("web/i18n");
+    let directories = catalog_directories(&dir);
+    assert!(!directories.is_empty(), "no catalog directories");
+    for entry in std::fs::read_dir(&dir).expect("catalog directory") {
+        let path = entry.expect("catalog entry").path();
+        assert!(
+            path.is_dir(),
+            "{} is outside a feature directory",
+            path.display()
+        );
+    }
+    for directory in directories {
+        let de_path = directory.join("de.json");
+        let en_path = directory.join("en.json");
+        assert!(de_path.is_file(), "{} is missing", de_path.display());
+        assert!(en_path.is_file(), "{} is missing", en_path.display());
+        assert_catalog_sorted(&de_path);
+        assert_catalog_sorted(&en_path);
+        let de = load_catalog(&de_path);
+        let en = load_catalog(&en_path);
+        assert_eq!(
+            de.keys().collect::<Vec<_>>(),
+            en.keys().collect::<Vec<_>>(),
+            "{} keys differ between de and en",
+            directory.display()
+        );
+    }
+    let de = load_catalogs(&dir, "de");
+    let en = load_catalogs(&dir, "en");
+    assert_eq!(
+        de.keys().collect::<Vec<_>>(),
+        en.keys().collect::<Vec<_>>(),
+        "merged catalog keys differ"
+    );
+}
+
+#[test]
 fn dynamic_catalog_prefixes_have_their_keys() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let de = load_catalog(&root.join("web/i18n/de.json"));
-    let en = load_catalog(&root.join("web/i18n/en.json"));
+    let de = load_catalogs(&root.join("web/i18n"), "de");
+    let en = load_catalogs(&root.join("web/i18n"), "en");
     for (prefix, keys) in DYNAMIC_PREFIX_KEYS {
         assert!(!keys.is_empty(), "{prefix} has no expected keys");
         for key in keys {
@@ -201,20 +236,28 @@ fn dynamic_catalog_prefixes_have_their_keys() {
     }
 }
 
+fn any_value_contains(catalog: &BTreeMap<String, String>, needle: &str) -> bool {
+    catalog.values().any(|value| value.contains(needle))
+}
+
 #[test]
 fn auto_mode_copy_names_the_missing_runtime() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let runner = std::fs::read_to_string(root.join("src/runner.rs")).expect("runner.rs");
     assert!(runner
         .contains("Mount the Docker socket, or set the runner mode to docker to fail instead."));
-    let en = std::fs::read_to_string(root.join("web/i18n/en.json")).expect("en");
-    let de = std::fs::read_to_string(root.join("web/i18n/de.json")).expect("de");
-    assert!(
-        en.contains("Mount the Docker socket, or set the runner mode to docker to fail instead.")
-    );
-    assert!(en.contains("In automatic mode a set image is also ignored"));
-    assert!(de.contains("Docker-Socket"));
-    assert!(de.contains("Im automatischen Modus"));
+    let en = load_catalogs(&root.join("web/i18n"), "en");
+    let de = load_catalogs(&root.join("web/i18n"), "de");
+    assert!(any_value_contains(
+        &en,
+        "Mount the Docker socket, or set the runner mode to docker to fail instead."
+    ));
+    assert!(any_value_contains(
+        &en,
+        "In automatic mode a set image is also ignored"
+    ));
+    assert!(any_value_contains(&de, "Docker-Socket"));
+    assert!(any_value_contains(&de, "Im automatischen Modus"));
     let docs = std::fs::read_to_string(root.join("docs/configuration.md")).expect("docs");
     assert!(docs.contains("mount the Docker socket"));
     assert!(docs.contains("stops after ten seconds"));
@@ -224,18 +267,41 @@ fn auto_mode_copy_names_the_missing_runtime() {
 #[test]
 fn source_control_token_hints_are_in_the_forms_and_catalogs() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let en = std::fs::read_to_string(root.join("web/i18n/en.json")).expect("en");
-    let de = std::fs::read_to_string(root.join("web/i18n/de.json")).expect("de");
+    let en = load_catalogs(&root.join("web/i18n"), "en");
+    let de = load_catalogs(&root.join("web/i18n"), "de");
     for catalog in [&en, &de] {
-        assert!(catalog.contains("x-access-token"));
-        assert!(catalog.contains("oauth2"));
-        assert!(catalog.contains("source_control_credential_hint"));
-        assert!(catalog.contains("source_control_username_hint"));
-        assert!(catalog.contains("source_control_project_hint"));
+        assert!(any_value_contains(catalog, "x-access-token"));
+        assert!(any_value_contains(catalog, "oauth2"));
+        assert!(catalog.contains_key("source_control_credential_hint"));
+        assert!(catalog.contains_key("source_control_username_hint"));
+        assert!(catalog.contains_key("source_control_project_hint"));
     }
     let docs = std::fs::read_to_string(root.join("docs/jobs.md")).expect("docs");
     assert!(docs.contains("https://github.com/example/project.git"));
     assert!(docs.contains("x-access-token"));
     assert!(docs.contains("https://gitlab.com/example/project.git"));
     assert!(docs.contains("oauth2"));
+}
+
+#[tokio::test]
+async fn the_catalog_routes_serve_the_merged_catalogs() {
+    let harness = TestApp::boot("catalog-http", Options::default());
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for language in ["de", "en"] {
+        let expected = load_catalogs(&root.join("web/i18n"), language);
+        let path = format!("/i18n/{language}.json");
+        let (status, headers, body) = request(&harness.app, "GET", &path, &[], None).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert_eq!(
+            headers
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json; charset=utf-8"),
+            "{path}"
+        );
+        let served: BTreeMap<String, String> = serde_json::from_slice(&body).expect("json");
+        assert_eq!(served, expected, "{path}");
+    }
+    let dir = harness.dir.clone();
+    let _ = std::fs::remove_dir_all(&dir);
 }

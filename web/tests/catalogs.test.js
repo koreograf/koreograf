@@ -5,7 +5,8 @@ const { readFileSync, readdirSync, statSync } = require("node:fs");
 const { join } = require("node:path");
 const test = require("node:test");
 
-const catalog = (id) => JSON.parse(readFileSync(join(__dirname, "..", "i18n", `${id}.json`), "utf8"));
+const { catalog, directories, readCatalog } = require("./catalog.js");
+
 const de = catalog("de");
 const en = catalog("en");
 
@@ -132,6 +133,25 @@ function placeholders(value) {
 
 test("the German and English catalogs share the same keys", () => {
   assert.deepEqual(Object.keys(de).sort(), Object.keys(en).sort());
+});
+
+test("every feature catalog has both languages with the same sorted keys", () => {
+  const found = directories();
+  assert.ok(found.length > 0, "no catalog directories");
+  for (const directory of found) {
+    assert.deepEqual(readdirSync(directory).sort(), ["de.json", "en.json"], directory);
+    const german = readCatalog(directory, "de");
+    const english = readCatalog(directory, "en");
+    assert.deepEqual(Object.keys(german), Object.keys(english), directory);
+    assert.deepEqual(Object.keys(german), Object.keys(german).sort(), directory);
+    assert.deepEqual(Object.keys(english), Object.keys(english).sort(), directory);
+  }
+});
+
+test("no catalog key appears in more than one file", () => {
+  for (const id of ["de", "en"]) {
+    assert.doesNotThrow(() => catalog(id), id);
+  }
 });
 
 test("every catalog value is a trimmed non-empty string", () => {

@@ -1,0 +1,15 @@
+{
+  "add_member": "Add member",
+  "cn_or_dn_for_example_platform": "CN or DN, for example Platform",
+  "ldap_group_group": "LDAP group: {group}",
+  "ldap_or_ad_group": "LDAP or AD group",
+  "member": "+ Member",
+  "members": "Members",
+  "move_organization": "Move organization",
+  "new_organization_named_after_the_team": "New organization named after the team",
+  "new_team_2": "New team",
+  "no_team_selected": "No team selected.",
+  "organization_name_2": "Organization: {name}",
+  "save_team": "Save team",
+  "team_2": "+ Team"
+}

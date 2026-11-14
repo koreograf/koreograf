@@ -1,0 +1,22 @@
+{
+  "all_teams_in_the_organization": "Alle Teams der Organisation",
+  "assignment": "Zuweisung",
+  "branch_tag_or_commit": "Branch, Tag oder Commit",
+  "count_teams": "{count} Teams",
+  "delete_this_project": "Projekt \"{name}\" löschen? Vorlagen, die es verwenden, können nicht mehr starten.",
+  "edit_project": "Projekt bearbeiten",
+  "https_or_file": "https://… oder file://…",
+  "last_synced_value": "Zuletzt synchronisiert: {time} · Commit {commit} · {status}",
+  "loading_teams": "Teams werden geladen.",
+  "search_projects": "Projekte suchen",
+  "source_2": "Quelle",
+  "source_control_credential": "Quellcode-Zugang",
+  "source_control_key_hint": "Für ssh://- und git@-Adressen einen Quellcode-Zugang mit privatem Schlüssel wählen.",
+  "source_control_project_hint": "Für ein öffentliches Repository leer lassen. Ein Token-Zugang ist ein Quellcode-Zugang: Erstelle ihn hier und trage den Token in sein Passwortfeld ein.",
+  "sync": "Synchronisieren",
+  "sync_failed": "Sync fehlgeschlagen.",
+  "synced": "Synchron",
+  "this_organization_has_no_team_yet": "In dieser Organisation gibt es noch kein Team.",
+  "visibility": "Sichtbarkeit",
+  "with_no_team_checked_every_team_in_the": "Ohne angehaktes Team dürfen alle Teams der Organisation das Projekt nutzen."
+}

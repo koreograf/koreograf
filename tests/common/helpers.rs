@@ -1,7 +1,7 @@
 #![allow(clippy::panic)]
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use axum::http::StatusCode;
@@ -660,6 +660,43 @@ pub fn load_catalog(path: &Path) -> BTreeMap<String, String> {
         catalog.insert(key.clone(), text.to_string());
     }
     catalog
+}
+
+pub fn catalog_directories(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for entry in
+        std::fs::read_dir(dir).unwrap_or_else(|err| panic!("read {}: {err}", dir.display()))
+    {
+        let path = entry.unwrap_or_else(|err| panic!("{err}")).path();
+        if path.is_dir() {
+            out.push(path);
+        }
+    }
+    out.sort();
+    out
+}
+
+pub fn load_catalogs(dir: &Path, language: &str) -> BTreeMap<String, String> {
+    let mut merged = BTreeMap::new();
+    let mut sources: BTreeMap<String, PathBuf> = BTreeMap::new();
+    for directory in catalog_directories(dir) {
+        let path = directory.join(format!("{language}.json"));
+        if !path.is_file() {
+            continue;
+        }
+        for (key, value) in load_catalog(&path) {
+            if let Some(first) = sources.get(&key) {
+                panic!(
+                    "duplicate catalog key {key} in {} and {}",
+                    first.display(),
+                    path.display()
+                );
+            }
+            sources.insert(key.clone(), path.clone());
+            merged.insert(key, value);
+        }
+    }
+    merged
 }
 
 pub fn has_umlaut(line: &str) -> bool {

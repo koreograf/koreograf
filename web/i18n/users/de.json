@@ -1,0 +1,9 @@
+{
+  "add_to_a_team": "Zum Team hinzufügen",
+  "delete_this_account": "Konto \"{name}\" löschen? Der Benutzer wird aus allen Teams entfernt.",
+  "disable_account": "Konto deaktivieren",
+  "new_user": "Benutzer anlegen",
+  "permissions": "Rechte",
+  "search_users": "Benutzer suchen",
+  "the_user_is_in_every_team": "Der Benutzer ist in jedem Team."
+}

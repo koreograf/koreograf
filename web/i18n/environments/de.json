@@ -1,0 +1,18 @@
+{
+  "applies_to": "Gilt für",
+  "cached_collections": "Collections im Cache",
+  "cached_roles": "Rollen im Cache",
+  "edit_environment": "Umgebung bearbeiten",
+  "environment": "+ Umgebung",
+  "global_applies_to_every_team_the_organization_applies": "Global gilt für jedes Team. Die Organisation gilt für alle Teams darin. Ein Team bleibt privat.",
+  "id": "Id",
+  "image": "Image",
+  "local_jobs": "Lokaler Runner für",
+  "new_environment": "Umgebung anlegen",
+  "pull": "Pull",
+  "search_environments": "Umgebungen suchen",
+  "the_network_is_passed_to_the_container_run_an_empty": "Das Netzwerk wird an den Container-Lauf übergeben. Leer nutzt den Standard des Daemons. container:<name> tritt dem Netzwerk dieses Containers bei.",
+  "this_organization": "Diese Organisation",
+  "this_team": "Dieses Team",
+  "tools": "Werkzeuge"
+}

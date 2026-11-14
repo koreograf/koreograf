@@ -1,0 +1,15 @@
+{
+  "alert_name": "Alert name",
+  "delete_this_webhook": "Delete webhook \"{name}\"? Its URL stops working.",
+  "deliveries": "Deliveries",
+  "edit_webhook": "Edit webhook",
+  "hook_status_any": "any",
+  "hook_status_firing": "firing",
+  "hook_status_resolved": "resolved",
+  "new_webhook": "New webhook",
+  "search_webhooks": "Search webhooks",
+  "select": "Select",
+  "test": "Test",
+  "token_is_visible_to_operators": "Token is visible to operators",
+  "webhook_2": "+ Webhook"
+}

@@ -1,0 +1,11 @@
+{
+  "backup_restored_the_previous_installation_is_restore_previous": "Backup restored. The previous installation is restore-previous.zip in the data directory. Sign in again.",
+  "download_backup": "Download backup",
+  "file": "File",
+  "include_opentofu_state": "Include OpenTofu state",
+  "koreograf_stores_data_in_sqlite_the_backup_contains": "Koreograf stores data in one database. The backup contains the database and the key for credentials. Cache, git checkouts and job directories stay out.",
+  "opentofu_state_can_contain_secrets": "The OpenTofu state can contain secrets.",
+  "restore_backup": "Restore backup",
+  "the_current_installation_will_be_replaced": "The current installation will be replaced.",
+  "this_replaces_organizations_teams_users_projects_inventories_credentials": "This replaces organizations, teams, users, projects, inventories, credentials, templates, workflows and webhooks. Finish running jobs first. A new sign-in is required afterwards."
+}

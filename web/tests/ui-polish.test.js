@@ -6,6 +6,7 @@ const { join } = require("node:path");
 const { pathToFileURL } = require("node:url");
 const test = require("node:test");
 const { rule, stylesheet } = require("./css.js");
+const { catalog } = require("./catalog.js");
 
 const load = (path) => import(pathToFileURL(join(__dirname, "..", "js", path)).href);
 
@@ -92,9 +93,8 @@ test("long values and pills stay on one line", () => {
 });
 
 test("dynamic labels are in both catalogs", () => {
-  const { readFileSync } = require("node:fs");
-  const de = JSON.parse(readFileSync(join(__dirname, "..", "i18n", "de.json"), "utf8"));
-  const en = JSON.parse(readFileSync(join(__dirname, "..", "i18n", "en.json"), "utf8"));
+  const de = catalog("de");
+  const en = catalog("en");
   for (const key of ["manual", "schedule", "hook", "workflow", "relaunch", "ansible", "opentofu", "shell", "once", "hourly", "daily", "weekly", "monthly"]) {
     assert.ok(de[key] && de[key].trim(), `${key} is missing from de.json`);
     assert.ok(en[key] && en[key].trim(), `${key} is missing from en.json`);

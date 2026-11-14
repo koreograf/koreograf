@@ -18,6 +18,7 @@ mod features;
 mod health;
 mod hooks;
 mod http;
+mod i18n;
 pub mod llm {
     pub use crate::features::assistant::{
         complete, config_for, from_env, parse, ChatBody, ChatMessage, LlmConfig, LlmConfigError,
@@ -66,6 +67,7 @@ pub struct AppState {
     /// Jobs whose later output is discarded. Set when cancel commits.
     pub(crate) canceled: Mutex<HashSet<String>>,
     pub(crate) preflight: Mutex<Option<preflight::Report>>,
+    pub(crate) catalogs: i18n::Catalogs,
 }
 
 pub type Shared = Arc<AppState>;
@@ -222,6 +224,7 @@ pub fn boot_with(mut cfg: Config, database: DatabaseConfig) -> anyhow::Result<Sh
     cfg.data_dir = std::path::absolute(&cfg.data_dir)?;
     crate::http::warn_public_urls(&cfg);
     runner::scrub_job_dirs(&cfg.data_dir);
+    let catalogs = i18n::load(&cfg.web_dir)?;
     let backend = backend::open(&database, &cfg.data_dir)?;
     let cipher = crypto::load_cipher(&cfg.data_dir)?;
     seed::seed(backend.as_ref(), &cfg)?;
@@ -236,6 +239,7 @@ pub fn boot_with(mut cfg: Config, database: DatabaseConfig) -> anyhow::Result<Sh
         procs: Mutex::new(HashMap::new()),
         canceled: Mutex::new(HashSet::new()),
         preflight: Mutex::new(None),
+        catalogs,
     });
     if state.engine() == "sqlite" {
         features::credentials::backfill_netbox_urls(&state)?;

@@ -1,0 +1,9 @@
+{
+  "add_to_a_team": "Add to a team",
+  "delete_this_account": "Delete account \"{name}\"? The user is removed from every team.",
+  "disable_account": "Disable account.",
+  "new_user": "New user",
+  "permissions": "Permissions",
+  "search_users": "Search users",
+  "the_user_is_in_every_team": "The user is in every team."
+}

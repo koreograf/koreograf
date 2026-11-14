@@ -1,0 +1,23 @@
+{
+  "collections_roles_and_opentofu_providers_stay_between_runs": "Collections, Rollen und OpenTofu-Provider bleiben zwischen den Läufen liegen.",
+  "dashboard": "Dashboard",
+  "dependency_cache": "Abhängigkeits-Cache",
+  "get_started": "Erste Schritte",
+  "get_started_help": "Ein Projekt liefert die Playbooks, ein Inventar die Hosts, und eine Vorlage verbindet beides. Danach startest du die Vorlage.",
+  "imported_paths_need_a_mount_or_a_change": "Importierte Pfade fehlen in diesem Container und brauchen einen Mount oder eine Anpassung:",
+  "jobs_finished_per_day": "Abgeschlossene Aufträge pro Tag",
+  "jobs_started_per_day": "Gestartete Aufträge pro Tag",
+  "last_14_days": "14 Tage",
+  "last_7_days": "7 Tage",
+  "ldap_is_configured": "LDAP ist konfiguriert.",
+  "local_accounts": "Lokale Konten.",
+  "no_container_runtime": "keine Container-Laufzeit",
+  "no_jobs_in_this_range": "Keine Aufträge in diesem Zeitraum.",
+  "range": "Zeitraum",
+  "recent_jobs": "Letzte Aufträge",
+  "success_edges_and_failure_edges_start_the_next": "Erfolgskanten und Fehlerkanten starten die nächsten Vorlagen.",
+  "test_alert": "Test-Alert",
+  "today": "Heute",
+  "webhook": "Webhook",
+  "webhook_deliveries": "Webhook-Eingänge"
+}
