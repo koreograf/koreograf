@@ -230,6 +230,12 @@ pub(crate) trait Backend: Send + Sync {
     fn events_bytes(&self, job_id: &str) -> AppResult<i64>;
     fn events_last(&self, job_id: &str, limit: i64) -> AppResult<Vec<JobEvent>>;
     fn workflow_job(&self, id: &str) -> AppResult<Option<WorkflowJob>>;
+    fn list_workflow_jobs(
+        &self,
+        team_id: &str,
+        workflow_id: &str,
+        limit: i64,
+    ) -> AppResult<Vec<WorkflowJob>>;
     fn insert_workflow_job(&self, item: &WorkflowJob) -> AppResult<()>;
     fn set_workflow_status(&self, id: &str, status: &str, finish: bool) -> AppResult<()>;
     fn insert_workflow_node(&self, workflow_job_id: &str, node_id: &str) -> AppResult<()>;
@@ -1033,6 +1039,16 @@ impl Backend for SqliteBackend {
     fn workflow_job(&self, id: &str) -> AppResult<Option<WorkflowJob>> {
         let conn = lock(&self.conn)?;
         workflows::store::workflow_job(&conn, id)
+    }
+
+    fn list_workflow_jobs(
+        &self,
+        team_id: &str,
+        workflow_id: &str,
+        limit: i64,
+    ) -> AppResult<Vec<WorkflowJob>> {
+        let conn = lock(&self.conn)?;
+        workflows::store::list_workflow_jobs(&conn, team_id, workflow_id, limit)
     }
 
     fn insert_workflow_job(&self, item: &WorkflowJob) -> AppResult<()> {
@@ -3435,6 +3451,27 @@ impl Backend for PostgresBackend {
             row.as_ref()
                 .map(workflows::store::row_workflow_job)
                 .transpose()
+        })
+    }
+
+    fn list_workflow_jobs(
+        &self,
+        team_id: &str,
+        workflow_id: &str,
+        limit: i64,
+    ) -> AppResult<Vec<WorkflowJob>> {
+        let limit = limit.clamp(1, 1000);
+        self.run(async {
+            let client = self.pool.get().await.map_err(pool_error)?;
+            let rows = client
+                .query(
+                    &store::sql::postgres(&workflows::store::list_workflow_jobs_sql()),
+                    &[&team_id, &workflow_id, &limit],
+                )
+                .await?;
+            rows.iter()
+                .map(workflows::store::row_workflow_job)
+                .collect()
         })
     }
 

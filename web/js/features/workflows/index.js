@@ -2,6 +2,7 @@ import { api } from "../../core/api.js";
 import { can, go, handle, markCreated, needTeam, shell } from "../../core/app.js";
 import { addLink, emptyState, esc, h, table } from "../../core/dom.js";
 import { editQuery, openEditDialog } from "../../core/edit.js";
+import { pill, relativeTime, when } from "../../core/format.js";
 import { t } from "../../core/i18n.js";
 import { registerRedirect, registerRoute } from "../../core/router.js";
 import { confirmTofuApply } from "../../core/tofu.js";
@@ -39,9 +40,12 @@ async function pageWorkflows() {
       <tr>
         <td><a href="#/workflows/${esc(item.id)}">${esc(item.name)}</a><div class="small muted">${esc(item.description)}</div></td>
         <td>${h("count_nodes", { count: (item.graph.nodes || []).length })}</td>
+        <td>${item.last_run_id
+          ? `<a class="row" href="#/runs/${esc(item.last_run_id)}" title="${esc(when(item.last_run_at))}">${pill(item.last_run_status)} <span class="small muted">${esc(relativeTime(item.last_run_at))}</span></a>`
+          : `<span class="muted">—</span>`}</td>
         <td>${can("operator") ? `<button class="btn primary" type="button" data-launch="${esc(item.id)}">${h("launch")}</button>` : ""}</td>
       </tr>`);
-    host.innerHTML = table([t("name"), t("nodes"), ""], filtered);
+    host.innerHTML = table([t("name"), t("nodes"), t("last_run"), ""], filtered);
     document.querySelectorAll("[data-launch]").forEach((button) => {
       button.addEventListener("click", async () => {
         const item = items.find((row) => row.id === button.dataset.launch);
@@ -89,13 +93,14 @@ export function openWorkflowDialog() {
 
 async function pageWorkflow(id) {
   if (!needTeam()) return;
-  const [workflow, templates, inventories, credentials] = await Promise.all([
+  const [workflow, templates, inventories, credentials, runs] = await Promise.all([
     api("GET", `/api/v1/workflows/${encodeURIComponent(id)}`),
     api("GET", "/api/v1/templates"),
     api("GET", "/api/v1/inventories"),
     api("GET", "/api/v1/credentials"),
+    api("GET", `/api/v1/workflow-jobs?workflow_id=${encodeURIComponent(id)}`).catch(() => []),
   ]);
-  mountEditor(workflow, templates, false, {}, { inventories, credentials });
+  mountEditor(workflow, templates, false, {}, { inventories, credentials, runs });
 }
 
 registerRedirect("#/workflows/new", "#/workflows?new=1");

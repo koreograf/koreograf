@@ -4,6 +4,7 @@ import { t } from "./i18n.js";
 let focusTrigger = null;
 let dialogSerial = 0;
 let handle = () => {};
+const modalStack = [];
 
 export function configureDialogs(onError) {
   handle = onError;
@@ -34,19 +35,29 @@ export function focusReturn(node) {
   }
 }
 
-export function makeModal(overlay, close) {
-  const opener = focusOpener();
+export function makeModal(overlay, close, opener = focusOpener()) {
   const dismiss = async () => {
     if (await close() === false) return;
+    cleanup();
     focusReturn(opener);
     focusTrigger = null;
   };
   const card = overlay.querySelector(".overlay-card");
   const focusables = () => [...card.querySelectorAll("input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], button:not([disabled])")].filter((node) => node.offsetParent !== null);
   const initial = focusables().find((node) => node.matches("input, select, textarea")) || focusables()[0];
-  if (initial) initial.focus();
-  overlay.addEventListener("keydown", (event) => {
+  if (initial) {
+    initial.focus();
+    window.setTimeout(() => {
+      if (document.contains(overlay) && !overlay.contains(document.activeElement)) initial.focus();
+    }, 0);
+  }
+  const onKeydown = (event) => {
+    if (event.koreografModalHandled) return;
+    if (modalStack[modalStack.length - 1] !== overlay) return;
+    event.koreografModalHandled = true;
     if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
       dismiss();
       return;
     }
@@ -62,11 +73,20 @@ export function makeModal(overlay, close) {
       event.preventDefault();
       items[0].focus();
     }
-  });
+  };
+  const cleanup = () => {
+    const index = modalStack.lastIndexOf(overlay);
+    if (index >= 0) modalStack.splice(index, 1);
+    overlay.removeEventListener("keydown", onKeydown);
+    document.removeEventListener("keydown", onKeydown, true);
+  };
+  modalStack.push(overlay);
+  overlay.addEventListener("keydown", onKeydown);
+  document.addEventListener("keydown", onKeydown, true);
   return dismiss;
 }
 
-export function openDialog({ id, formId, title, body, submit, onSubmit, danger, form = Boolean(onSubmit), actions = true, wide = false, bodyClass = "", footer = "", tabs = "", onClose, onError }) {
+export function openDialog({ id, formId, title, body, submit, onSubmit, danger, form = Boolean(onSubmit), actions = true, wide = false, bodyClass = "", footer = "", tabs = "", opener, onClose, onError }) {
   const serial = ++dialogSerial;
   const titleId = `dialog-title-${serial}`;
   const shellTag = form ? "form" : "div";
@@ -109,7 +129,7 @@ export function openDialog({ id, formId, title, body, submit, onSubmit, danger, 
     if (dirty && !(await confirmDialog({ title: t("discard_unsaved_changes"), confirmLabel: t("ok") }))) return false;
     return remove();
   };
-  const dismiss = makeModal(overlay, requestClose);
+  const dismiss = makeModal(overlay, requestClose, opener);
   overlay.querySelector(".dialog-close").addEventListener("click", dismiss);
   const cancel = overlay.querySelector("[data-dialog-cancel]");
   if (cancel) cancel.addEventListener("click", dismiss);

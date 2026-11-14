@@ -1,7 +1,7 @@
 import * as appState from "../../core/state.js";
 import { api } from "../../core/api.js";
 import { openDialog } from "../../core/dialog.js";
-import { handle } from "../../core/app.js";
+import { can, go, handle } from "../../core/app.js";
 import { esc, h } from "../../core/dom.js";
 import { pill, spanText, statusLabel } from "../../core/format.js";
 import { currentLanguage, t } from "../../core/i18n.js";
@@ -25,8 +25,10 @@ export async function pageRun(id) {
   const phases = {};
   let editor = null;
   let openNodeId = null;
+  let openNodeElement = null;
   let shownJob = "";
   let outputToken = 0;
+  let templates = [];
 
   function adopt(run) {
     Object.keys(phases).forEach((key) => delete phases[key]);
@@ -44,6 +46,47 @@ export async function pageRun(id) {
   function nodeStart(phase) {
     if (!phase) return "";
     return phase.started_at || (phase.phase === "running" ? phase.job_created_at : "") || "";
+  }
+
+  function renderActions(run) {
+    const host = document.querySelector("#run-actions");
+    if (!host) return;
+    if (!can("operator")) {
+      host.innerHTML = "";
+      return;
+    }
+    const running = run.status === "pending" || run.status === "running";
+    host.innerHTML = running
+      ? `<button class="btn danger" type="button" data-run-action="cancel">${h("cancel")}</button>`
+      : `<button class="btn primary" type="button" data-run-action="relaunch">${h("relaunch")}</button>`;
+    const cancel = host.querySelector('[data-run-action="cancel"]');
+    if (cancel) {
+      cancel.addEventListener("click", async () => {
+        cancel.disabled = true;
+        try {
+          const next = await api("POST", `/api/v1/workflow-jobs/${encodeURIComponent(id)}/cancel`, {});
+          if (live !== appState.generation) return;
+          paint(next);
+        } catch (error) {
+          cancel.disabled = false;
+          handle(error);
+        }
+      });
+    }
+    const relaunch = host.querySelector('[data-run-action="relaunch"]');
+    if (relaunch) {
+      relaunch.addEventListener("click", async () => {
+        relaunch.disabled = true;
+        try {
+          const copy = await api("POST", `/api/v1/workflow-jobs/${encodeURIComponent(id)}/relaunch`, {});
+          if (live !== appState.generation) return;
+          go(`#/runs/${copy.id}`);
+        } catch (error) {
+          relaunch.disabled = false;
+          handle(error);
+        }
+      });
+    }
   }
 
   function renderLog(run) {
@@ -86,7 +129,7 @@ export async function pageRun(id) {
     host.querySelectorAll("[data-run-node]").forEach((row) => {
       row.addEventListener("click", () => {
         const node = graphNodes.find((item) => item.id === row.dataset.runNode);
-        if (node) openOutput(node, phases[node.id] || null);
+        if (node) openOutput(node, phases[node.id] || null, row);
       });
     });
   }
@@ -105,6 +148,7 @@ export async function pageRun(id) {
   function closeOutput() {
     outputToken += 1;
     openNodeId = null;
+    openNodeElement = null;
     shownJob = "";
     const overlay = document.querySelector("#node-output");
     if (overlay) overlay.remove();
@@ -114,10 +158,11 @@ export async function pageRun(id) {
     }
   }
 
-  async function openOutput(node, phase) {
+  async function openOutput(node, phase, opener) {
     if (live !== appState.generation) return;
     const token = ++outputToken;
     openNodeId = node.id;
+    openNodeElement = opener || openNodeElement;
     const jobId = phase && phase.job_id ? phase.job_id : "";
     shownJob = jobId;
     if (appState.source) {
@@ -129,10 +174,11 @@ export async function pageRun(id) {
       overlay = openDialog({
         id: "node-output",
         title: node.name,
-        body: `<p class="small row" id="overlay-meta"></p><div class="log" id="log"></div>`,
+        body: `<p class="small row" id="overlay-meta"></p><div class="log wrap" id="log"></div>`,
         form: false,
         actions: false,
         wide: true,
+        opener: openNodeElement,
         onClose: closeOutput,
       }).overlay;
     }
@@ -141,6 +187,7 @@ export async function pageRun(id) {
     const log = document.querySelector("#log");
     log.replaceChildren();
     delete log.dataset.galaxy;
+    delete log.koreografLog;
     const note = (text) => {
       const line = document.createElement("div");
       line.className = "system";
@@ -157,7 +204,8 @@ export async function pageRun(id) {
       const job = await api("GET", `/api/v1/jobs/${encodeURIComponent(jobId)}`);
       if (token !== outputToken || live !== appState.generation) return;
       (job.events || []).forEach(appendLog);
-      if (!log.childNodes.length) note(t("this_node_has_no_output_yet"));
+      if (!log.children.length) note(t("this_node_has_no_output_yet"));
+      revealFirstError(log);
       const running = job.status === "pending" || job.status === "running";
       if (!running) return;
       const last = (job.events || []).reduce((max, event) => Math.max(max, event.id), 0);
@@ -174,6 +222,7 @@ export async function pageRun(id) {
           badge.className = `pill ${payload.status}`;
           badge.textContent = statusLabel(payload.status);
         }
+        revealFirstError(log);
         appState.source.close();
         appState.setSource(null);
       });
@@ -182,37 +231,60 @@ export async function pageRun(id) {
     }
   }
 
-  function paint(run, templates) {
+  function revealFirstError(log) {
+    if (log.querySelector(".log-setup")) return;
+    const first = log.querySelector(".fail");
+    if (!first) return;
+    const children = [...log.children];
+    const before = children.slice(0, children.indexOf(first));
+    if (before.length) {
+      const setup = document.createElement("details");
+      setup.className = "log-setup";
+      const summary = document.createElement("summary");
+      summary.textContent = t("setup");
+      setup.appendChild(summary);
+      before.forEach((item) => setup.appendChild(item));
+      log.insertBefore(setup, first);
+    }
+    log.scrollTop = Math.max(0, (Number(first.offsetTop) || 0) - (Number(log.offsetTop) || 0));
+  }
+
+  function paint(run) {
     const view = adopt(run);
     if (!editor) {
-      editor = mountEditor(view, templates || [], true, phases, null, { onNode: openOutput });
-    } else if (editor) {
-      editor.applyPhases();
+      editor = mountEditor(view, templates, true, phases, null, {
+        onNode: openOutput,
+        runActions: `<span class="row" id="run-actions"></span>`,
+      });
+    } else {
+      editor.applyPhases(run.status);
       const badge = document.querySelector("#run-state");
       if (badge) {
         badge.className = `pill ${run.status || "pending"}`;
         badge.textContent = statusLabel(run.status || "pending");
       }
     }
+    renderActions(run);
     renderLog(run);
     if (!openNodeId || !document.querySelector("#node-output")) return;
     const node = ((run.graph && run.graph.nodes) || []).find((item) => item.id === openNodeId);
     const phase = phases[openNodeId] || null;
     if (!node) return;
     const jobId = phase && phase.job_id ? phase.job_id : "";
-    if (jobId && jobId !== shownJob) openOutput(node, phase);
+    if (jobId && jobId !== shownJob) openOutput(node, phase, openNodeElement);
     else {
       const meta = document.querySelector("#overlay-meta");
       if (meta) meta.innerHTML = overlayMeta(phase);
     }
   }
 
-  const [run, templates] = await Promise.all([
+  const [run, loadedTemplates] = await Promise.all([
     api("GET", `/api/v1/workflow-jobs/${encodeURIComponent(id)}`),
     api("GET", "/api/v1/templates").catch(() => []),
   ]);
+  templates = loadedTemplates || [];
   if (live !== appState.generation) return;
-  paint(run, templates);
+  paint(run);
   if (["successful", "failed", "canceled"].includes(run.status)) return;
   appState.setPollTimer(setInterval(async () => {
     if (live !== appState.generation) return;

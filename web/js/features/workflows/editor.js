@@ -3,8 +3,8 @@ import { api } from "../../core/api.js";
 import { confirmDialog, openDialog } from "../../core/dialog.js";
 import { can, go, handle, shell } from "../../core/app.js";
 import { credentialKindLabel } from "../../core/credentials.js";
-import { esc, h, selectOptions } from "../../core/dom.js";
-import { statusLabel, verbosityLabel } from "../../core/format.js";
+import { esc, h, selectOptions, table } from "../../core/dom.js";
+import { spanText, statusLabel, verbosityLabel, when } from "../../core/format.js";
 import { jsonObject } from "../../core/forms.js";
 import { t } from "../../core/i18n.js";
 import { confirmTofuApply } from "../../core/tofu.js";
@@ -39,7 +39,7 @@ export function edgePoint(node, when) {
 export function workflowTab(hash = location.hash || "") {
   const params = new URLSearchParams((hash || "").split("?")[1] || "");
   const tab = params.get("tab");
-  return tab === "schedules" || tab === "danger" ? tab : "editor";
+  return tab === "schedules" || tab === "runs" || tab === "danger" ? tab : "editor";
 }
 
 export function workflowAddress(tab, id) {
@@ -51,7 +51,9 @@ export function workflowAddress(tab, id) {
 
 export function mountEditor(workflow, templates, readonly, phases, catalogs, hooks) {
   const onNode = hooks && hooks.onNode;
+  const runActions = hooks && hooks.runActions ? hooks.runActions : "";
   const lists = catalogs || { inventories: [], credentials: [] };
+  const runs = lists.runs || [];
   const editable = !readonly && can("operator");
   const graph = {
     nodes: (workflow.graph.nodes || []).map((node) => ({ ...node })),
@@ -78,13 +80,22 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   const tabbed = !readonly;
   const canDelete = can("operator");
   const tabItems = tabbed
-    ? [["editor", "editor"], ["schedules", "schedules"], ...(canDelete ? [["danger", "danger_zone"]] : [])]
+    ? [["editor", "editor"], ["schedules", "schedules"], ["runs", "runs"], ...(canDelete ? [["danger", "danger_zone"]] : [])]
     : [];
   let activeTab = tabbed ? workflowTab() : "editor";
   if (activeTab === "danger" && !canDelete) activeTab = "editor";
   const tabBar = tabbed
     ? `<div class="spread tab-bar"><div class="tabs" role="tablist" aria-label="${h("workflow")}">${tabItems.map(([id, label]) => `<button class="btn pill${id === activeTab ? " primary" : ""}" type="button" role="tab" id="wf-tab-${id}" aria-selected="${id === activeTab}" aria-controls="wf-panel-${id}" tabindex="${id === activeTab ? "0" : "-1"}" data-workflow-tab="${id}">${h(label)}</button>`).join("")}</div></div>`
     : "";
+  const runRows = runs.map((run) => `
+    <tr>
+      <td><a href="#/runs/${esc(run.id)}">${esc(run.name)}</a></td>
+      <td><span class="pill ${esc(run.status)}">${esc(statusLabel(run.status))}</span></td>
+      <td><span class="mono">${esc(when(run.created_at))}</span></td>
+      <td class="mono">${esc(spanText(run.created_at, run.finished_at, run.status))}</td>
+      <td>${esc(run.trigger)}</td>
+      <td>${esc(run.launched_by)}</td>
+    </tr>`);
   shell(readonly ? workflow.name : t("workflow"), `
     <div class="editor-stack">
     ${tabBar}
@@ -122,6 +133,14 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     ${readonly ? "" : `<div id="wf-panel-schedules" role="tabpanel" aria-labelledby="wf-tab-schedules"${activeTab === "schedules" ? "" : " hidden"}>
       <section class="card" id="schedule-card" data-kind="workflow" data-target="${esc(workflow.id)}"></section>
     </div>`}
+    ${readonly ? "" : `<div id="wf-panel-runs" role="tabpanel" aria-labelledby="wf-tab-runs"${activeTab === "runs" ? "" : " hidden"}>
+      <section class="card">
+        <h2>${h("runs")}</h2>
+        ${runs.length
+          ? table([t("name"), t("status"), t("start"), t("duration"), t("trigger"), t("who")], runRows)
+          : `<p class="small muted">${h("no_runs_yet")}</p>`}
+      </section>
+    </div>`}
     ${!tabbed || !canDelete ? "" : `<div id="wf-panel-danger" role="tabpanel" aria-labelledby="wf-tab-danger"${activeTab === "danger" ? "" : " hidden"}>
       <section class="card danger-zone">
         <h2>${h("danger_zone")}</h2>
@@ -130,7 +149,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       </section>
     </div>`}
     ${editable ? `<div class="toast" id="wf-toast" role="status" aria-live="polite" hidden></div>` : ""}
-    </div>`, readonly ? back : `
+    </div>`, readonly ? `${back}${runActions}` : `
       ${can("operator") ? `<span class="row" role="group" aria-label="${h("history")}"><button class="btn" id="wf-undo" type="button" aria-keyshortcuts="Control+Z Meta+Z" disabled>${h("undo")}</button><button class="btn" id="wf-redo" type="button" aria-keyshortcuts="Control+Shift+Z Control+Y Meta+Shift+Z" disabled>${h("redo")}</button></span><span class="small muted" id="wf-status" role="status" aria-live="polite">${h("all_changes_saved")}</span><span class="small wf-validation" id="wf-validation" role="status" aria-live="polite"></span><button class="btn" id="wf-save" type="button">${h("save")}</button><button class="btn primary" id="wf-launch" type="button" aria-describedby="wf-validation">${h("launch")}</button>` : ""}`);
 
   document.title = readonly
@@ -617,12 +636,13 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     board.style.height = `${height}px`;
     svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
     const defs = `<defs>${["success", "failure", "always"].map((when) => `<marker id="edge-arrow-${when}" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto"><polygon class="edge-arrow ${when}" points="0,0 12,6 0,12"></polygon></marker>`).join("")}</defs>`;
-    svg.innerHTML = `${defs}${edges.map(({ index, from, to, klass, geometry, d, invalid, warning, server, reason }) => {
+    svg.innerHTML = `${defs}${edges.map(({ edge, index, from, to, klass, geometry, d, invalid, warning, server, reason }) => {
       const label = `${edgeWhenText(klass)}: ${from.name} → ${to.name}`;
       const chip = `${PORT_SYMBOLS[klass]} ${edgeWhenText(klass)}`;
       const role = editable ? ` role="button" tabindex="0"` : ` role="img"`;
-      const classes = `edge-line ${klass}${selectedEdge === index ? " selected" : ""}${invalid ? " invalid" : ""}${warning ? " warning" : ""}${server ? " server-invalid" : ""}`;
-      const groupClass = `edge-group ${klass}${invalid ? " invalid" : ""}`;
+      const runClass = readonly ? (edgeTaken(edge) ? " taken" : " untaken") : "";
+      const classes = `edge-line ${klass}${runClass}${selectedEdge === index ? " selected" : ""}${invalid ? " invalid" : ""}${warning ? " warning" : ""}${server ? " server-invalid" : ""}`;
+      const groupClass = `edge-group ${klass}${runClass}${invalid ? " invalid" : ""}`;
       const described = reason ? `${label} – ${reason}` : label;
       const invalidAttr = invalid ? ` aria-invalid="true"` : "";
       return `<g class="${groupClass}" data-edge-group="${index}">
@@ -1038,8 +1058,87 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       const key = toolKey(template.tool);
       if (key) parts.push(t(key));
     }
-    if (readonly) parts.push(statusLabel((phases[node.id] && phases[node.id].phase) || "pending"));
+    if (readonly) {
+      const phase = phases[node.id];
+      const status = phase ? phase.phase : "pending";
+      parts.push(statusLabel(status));
+      const duration = spanText(phaseStart(phase), phase && phase.finished_at, status);
+      if (duration !== "—") parts.push(duration);
+    }
     return parts.filter(Boolean).join(" · ");
+  }
+
+  function phaseStart(phase) {
+    if (!phase) return "";
+    return phase.started_at || (phase.phase === "running" ? phase.job_created_at : "") || "";
+  }
+
+  function statusMark(status) {
+    return {
+      successful: "✓",
+      failed: "✕",
+      skipped: "⊘",
+      running: "",
+      pending: "○",
+    }[status] || "○";
+  }
+
+  function nodeStatusInner(phase) {
+    const status = phase ? phase.phase : "pending";
+    const icon = status === "running"
+      ? `<span class="wf-node-spinner" aria-hidden="true"></span>`
+      : `<span class="wf-node-state-icon" aria-hidden="true">${statusMark(status)}</span>`;
+    const duration = spanText(phaseStart(phase), phase && phase.finished_at, status);
+    return `${icon}<span class="wf-node-status-text">${esc(statusLabel(status))}</span><span class="mono wf-node-duration">${esc(duration)}</span>`;
+  }
+
+  function nodeStatus(phase) {
+    const status = phase ? phase.phase : "pending";
+    return `<span class="wf-node-status ${esc(status)}" data-status="${esc(status)}">${nodeStatusInner(phase)}</span>`;
+  }
+
+  function paintNodeStatus(element) {
+    const phase = phases[element.dataset.id];
+    const status = phase ? phase.phase : "pending";
+    const host = element.querySelector(".wf-node-status");
+    if (!host) return;
+    host.className = `wf-node-status ${status}`;
+    host.dataset.status = status;
+    host.innerHTML = nodeStatusInner(phase);
+  }
+
+  function edgeTaken(edge) {
+    const phase = phases[edge.from];
+    if (!phase) return false;
+    if (edge.when === "success") return phase.phase === "successful";
+    if (edge.when === "failure") return phase.phase === "failed";
+    if (edge.when === "always") return phase.phase === "successful" || phase.phase === "failed";
+    return false;
+  }
+
+  function handledFailureCount() {
+    return graph.nodes.filter((node) => {
+      const phase = phases[node.id];
+      return phase && phase.phase === "failed" && graph.edges.some((edge) => edge.from === node.id && (edge.when === "failure" || edge.when === "always"));
+    }).length;
+  }
+
+  function runSummary() {
+    if (workflow.status !== "successful") return "";
+    const handled = handledFailureCount();
+    if (!handled) return "";
+    return `<p class="small run-summary" id="run-summary">${h(handled === 1 ? "successful_one_failure_handled" : "successful_failures_handled", { count: handled })}</p>`;
+  }
+
+  function runLegend() {
+    return `<ul class="run-legend">
+      <li><span class="run-legend-icon successful" aria-hidden="true">✓</span>${h("successful")}</li>
+      <li><span class="run-legend-icon failed" aria-hidden="true">✕</span>${h("failed")}</li>
+      <li><span class="run-legend-icon running" aria-hidden="true"><span class="wf-node-spinner"></span></span>${h("running")}</li>
+      <li><span class="run-legend-icon skipped" aria-hidden="true">⊘</span>${h("skipped")}</li>
+      <li><span class="run-legend-edge taken" aria-hidden="true"></span>${h("taken_path")}</li>
+      <li><span class="run-legend-edge untaken" aria-hidden="true"></span>${h("not_taken_path")}</li>
+    </ul>`;
   }
 
   function renderNodes() {
@@ -1062,7 +1161,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         const add = editable ? `<button class="wf-port-add" type="button" data-add-port="${when}" aria-label="${h("add_step_after", { name: node.name, when: edgeWhenText(when) })}" title="${h("add_step_after", { name: node.name, when: edgeWhenText(when) })}">+</button>` : "";
         return `<div class="wf-port ${when}"><span class="wf-port-symbol" aria-hidden="true">${PORT_SYMBOLS[when]}</span>${add}</div>`;
       }).join("")}</div>`;
-      return `<div class="wf-node${selectedClass}${connectClass}${phaseClass}${runClass}${issueClass}" data-id="${esc(node.id)}" style="left:${Number(node.x) || 0}px;top:${Number(node.y) || 0}px" tabindex="0" role="group" aria-label="${esc(nodeLabel(node))}">${joinBadge(node)}${menu}<strong>${esc(node.name)}</strong><span class="wf-node-meta">${nodeMeta(template)}</span>${nodeBadge(node)}<span class="wf-node-chips">${nodeChips(node, template)}</span>${ports}</div>`;
+      return `<div class="wf-node${selectedClass}${connectClass}${phaseClass}${runClass}${issueClass}" data-id="${esc(node.id)}" style="left:${Number(node.x) || 0}px;top:${Number(node.y) || 0}px" tabindex="0" role="group" aria-label="${esc(nodeLabel(node))}">${joinBadge(node)}${menu}<strong>${esc(node.name)}</strong><span class="wf-node-meta">${nodeMeta(template)}</span>${readonly ? nodeStatus(phase) : ""}${nodeBadge(node)}<span class="wf-node-chips">${nodeChips(node, template)}</span>${ports}</div>`;
     }).join("");
     nodes.querySelectorAll(".wf-node").forEach((element) => {
       const node = graph.nodes.find((item) => item.id === element.dataset.id);
@@ -1070,7 +1169,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       element.addEventListener("pointerdown", (event) => {
         if (event.target.closest(".node-menu-button, .wf-port")) return;
         if (readonly) {
-          if (onNode) onNode(node, phases[node.id] || null);
+          if (onNode) onNode(node, phases[node.id] || null, element);
           return;
         }
         if (!editable) {
@@ -1445,7 +1544,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     nameHistoryOpen = false;
     const host = document.querySelector("#inspector");
     if (readonly) {
-      host.innerHTML = `<h2>${h("run_2")}</h2><p class="small"><span id="run-state" class="pill ${esc(workflow.status || "pending")}">${esc(statusLabel(workflow.status || "pending"))}</span></p>${back}<p class="small muted">${h("green_is_successful_red_is_failed_blue_is")}</p>`;
+      host.innerHTML = `<h2>${h("run_2")}</h2><p class="small"><span id="run-state" class="pill ${esc(workflow.status || "pending")}">${esc(statusLabel(workflow.status || "pending"))}</span></p>${runSummary()}${runLegend()}`;
       return;
     }
     if (!editable) {
@@ -1817,6 +1916,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     const panels = {
       editor: document.querySelector("#wf-panel-editor"),
       schedules: document.querySelector("#wf-panel-schedules"),
+      runs: document.querySelector("#wf-panel-runs"),
       danger: document.querySelector("#wf-panel-danger"),
     };
     const choose = (next, focus) => {
@@ -2011,14 +2111,18 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     });
   }
 
-  function applyPhases() {
+  function applyPhases(status) {
+    if (status) workflow.status = status;
     nodes.querySelectorAll(".wf-node").forEach((element) => {
       const node = graph.nodes.find((item) => item.id === element.dataset.id);
       const phase = phases[element.dataset.id];
       const phaseClass = phase ? ` phase-${phase.phase}` : "";
       element.className = `wf-node run-node${phaseClass}`;
       if (node) element.setAttribute("aria-label", nodeLabel(node));
+      paintNodeStatus(element);
     });
+    drawEdges();
+    renderInspector();
   }
 
   return { applyPhases, viewport };

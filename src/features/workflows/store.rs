@@ -38,6 +38,14 @@ pub(crate) fn workflow_job_by_id_sql() -> String {
     format!("SELECT {WORKFLOW_JOB_COLUMNS} FROM workflow_jobs WHERE id = ?1")
 }
 
+pub(crate) fn list_workflow_jobs_sql() -> String {
+    format!(
+        "SELECT {WORKFLOW_JOB_COLUMNS} FROM workflow_jobs
+         WHERE team_id = ?1 AND (?2 = '' OR workflow_id = ?2)
+         ORDER BY created_at DESC, id DESC LIMIT ?3"
+    )
+}
+
 pub(crate) const WORKFLOW_TEAM: &str = "SELECT team_id FROM workflows WHERE id = ?1";
 
 pub(crate) const INSERT_WORKFLOW_JOB: &str = "INSERT INTO workflow_jobs (
@@ -143,6 +151,20 @@ pub(crate) fn insert_workflow_job(c: &Connection, item: &WorkflowJob) -> AppResu
 
 pub(crate) fn workflow_job(c: &Connection, id: &str) -> AppResult<Option<WorkflowJob>> {
     sql::sqlite_opt(c, &workflow_job_by_id_sql(), [id], sqlite_row_workflow_job)
+}
+
+pub(crate) fn list_workflow_jobs(
+    c: &Connection,
+    team_id: &str,
+    workflow_id: &str,
+    limit: i64,
+) -> AppResult<Vec<WorkflowJob>> {
+    sql::sqlite_all(
+        c,
+        &list_workflow_jobs_sql(),
+        params![team_id, workflow_id, limit.clamp(1, 1000)],
+        sqlite_row_workflow_job,
+    )
 }
 
 pub(crate) fn set_workflow_status(
