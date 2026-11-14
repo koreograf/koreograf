@@ -193,6 +193,8 @@ test("an administrator navigates every route, launches the demo shell job and sw
   await added.click();
   await page.locator("#node-name").fill("Extra check edited");
   await expect(page.locator("#wf-status")).toHaveText("Unsaved changes");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Edit node" })).toHaveCount(0);
 
   await nav.getByRole("link", { name: "Jobs", exact: true }).click();
   const discard = page.getByRole("dialog");
@@ -341,6 +343,27 @@ test("the workflow canvas fits, zooms and pans", async ({ page }) => {
   await page.mouse.move(box.x + 90, box.y + 50, { steps: 5 });
   await page.mouse.up();
   await expect.poll(async () => Number(await page.locator("#board").getAttribute("data-view-x"))).toBeGreaterThan(viewBefore);
+});
+
+test("the node panel edits in place and fits at 1024 px", async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await signInInEnglish(page);
+  await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
+  await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
+
+  const node = page.locator('.wf-node[data-id="check"]');
+  await node.click();
+  await expect(page.locator("#inspector #node-name")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Edit node" })).toHaveCount(0);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+
+  await page.locator("#inspector #node-name").fill("Panel edited");
+  await expect(node.locator("strong")).toHaveText("Panel edited");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.locator("#wf-status")).toHaveText("Unsaved changes");
+
+  const overflow = await page.locator("#inspector").evaluate((element) => element.scrollWidth - element.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
 });
 
 test("an empty workflow builds a success chain without the context menu", async ({ page }) => {

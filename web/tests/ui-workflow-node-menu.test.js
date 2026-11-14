@@ -65,21 +65,73 @@ test("the inspector adds nodes only through the canvas menu", async () => {
   const node = document.querySelector('[data-id="n1"]');
   node.dispatchEvent({ type: "pointerdown", clientX: 20, clientY: 20, pointerId: 1 });
   assert.ok(inspector.querySelector("#node-connect"), "the inspector has no Connect action");
-  assert.ok(inspector.querySelector("#node-join"), "the inspector has no convergence field");
+  assert.equal(inspector.querySelector("#node-join"), null, "a node with fewer than two predecessors shows convergence");
   assert.match(inspector.innerHTML, /node-inventory/);
+  assert.match(inspector.innerHTML, /node-panel-head/);
+  assert.match(inspector.innerHTML, /node-section/);
 
   node.dispatchEvent({ type: "keydown", key: "Enter" });
-  const edit = document.querySelector("#node-edit-dialog");
-  assert.ok(edit, "Edit node does not use the shared overlay");
-  assert.ok(edit.querySelector("#node-join"), "Edit node has no convergence field");
-  assert.match(edit.innerHTML, /node-inventory/);
-  edit.dispatchEvent({ type: "keydown", key: "Escape", preventDefault() {} });
-  await tick();
-  assert.equal(document.querySelector("#node-edit-dialog"), null, "cancel left the Edit node dialog open");
+  assert.equal(document.querySelector("#node-edit-dialog"), null, "Enter opened the Edit node dialog");
+  assert.equal(document.activeElement.id, "node-name", "Enter did not focus the panel's first field");
 
   document.querySelector("#edges").dispatchEvent({ type: "click", target: document.querySelector("#edges path") });
   assert.ok(inspector.querySelector("#edge-when"), "an existing edge cannot change its type");
   assert.ok(inspector.querySelector("#edge-delete"), "an existing edge cannot be deleted");
+});
+
+test("the node menu edit action opens the side panel instead of a dialog", async () => {
+  await mount();
+  document.querySelector('[data-id="n2"] [data-node-menu]').dispatchEvent({ type: "click" });
+  document.querySelector("[data-edit-node]").dispatchEvent({ type: "click" });
+  assert.equal(document.querySelector("#node-edit-dialog"), null, "Edit node opened a dialog");
+  assert.equal(document.activeElement.id, "node-name", "Edit did not focus the panel's first field");
+  assert.equal(document.querySelector('[data-id="n2"]').classList.contains("selected"), true, "Edit did not select the node");
+});
+
+test("changing a field in the panel updates the graph", async () => {
+  await mount();
+  document.querySelector('[data-id="n1"]').dispatchEvent({ type: "pointerdown", clientX: 20, clientY: 20, pointerId: 1 });
+  const name = document.querySelector("#node-name");
+  name.value = "Renamed";
+  name.dispatchEvent({ type: "input", target: name });
+  assert.equal(document.querySelector('[data-id="n1"] strong').textContent, "Renamed", "the canvas did not take the new name");
+  assert.equal(document.querySelector("#wf-status").textContent, "unsaved_changes");
+
+  const template = document.querySelector("#node-template");
+  template.value = "t2";
+  template.dispatchEvent({ type: "change", target: template });
+  assert.match(document.querySelector("#inspector").innerHTML, /value="t2" selected/, "the panel did not take the new template");
+});
+
+test("the convergence control needs two predecessors and explains skipped branches", async () => {
+  await mount();
+  document.querySelector('[data-id="n2"]').dispatchEvent({ type: "pointerdown", clientX: 320, clientY: 20, pointerId: 1 });
+  assert.equal(document.querySelector("#node-join"), null, "one predecessor shows convergence");
+  assert.equal(document.querySelector('[data-id="n2"] .wf-join-badge'), null, "one predecessor shows a join badge");
+
+  await mount({
+    graph: {
+      nodes: [
+        { id: "n1", template_id: "t1", name: "One", x: 20, y: 20, convergence: "any" },
+        { id: "n2", template_id: "t1", name: "Two", x: 320, y: 20, convergence: "any" },
+        { id: "n3", template_id: "t1", name: "Three", x: 20, y: 220, convergence: "any" },
+      ],
+      edges: [
+        { from: "n1", to: "n2", when: "success" },
+        { from: "n3", to: "n2", when: "failure" },
+      ],
+    },
+  });
+  document.querySelector('[data-id="n2"]').dispatchEvent({ type: "pointerdown", clientX: 320, clientY: 20, pointerId: 1 });
+  const join = document.querySelector("#node-join");
+  assert.ok(join, "two predecessors hide convergence");
+  assert.match(document.querySelector("#inspector").innerHTML, /convergence_help/, "the convergence help text is missing");
+  const badge = document.querySelector('[data-id="n2"] .wf-join-badge');
+  assert.ok(badge, "two predecessors show no join badge");
+  assert.equal(badge.innerHTML, "join_badge_any");
+  join.value = "all";
+  join.dispatchEvent({ type: "change", target: join });
+  assert.equal(document.querySelector('[data-id="n2"] .wf-join-badge').textContent, "join_badge_all");
 });
 
 test("Add node creates one node with the chosen fields at the clicked point", async () => {
@@ -204,7 +256,7 @@ test("viewers get no add path", async () => {
 test("workflow node menu copy is in both catalogs", () => {
   for (const id of ["de", "en"]) {
     const values = catalog(id);
-    for (const key of ["add_node", "edit_node", "right_click_empty_canvas_to_add_a_node", "add_first_step", "add_step_after", "empty_canvas_hint"]) {
+    for (const key of ["add_node", "connections", "convergence_help", "convergence_needs_two_predecessors", "join_badge_all", "join_badge_any", "resize_node_panel", "right_click_empty_canvas_to_add_a_node", "add_first_step", "add_step_after", "empty_canvas_hint"]) {
       assert.ok(typeof values[key] === "string" && values[key].trim(), `${key} is missing from ${id}.json`);
     }
     assert.ok(!Object.prototype.hasOwnProperty.call(values, "name_optional"), `name_optional is still in ${id}.json`);

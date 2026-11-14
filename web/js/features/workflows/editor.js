@@ -103,6 +103,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
             </div>` : ""}
           </div>
         </div>
+        <div class="inspector-resizer" id="inspector-resizer" role="separator" aria-orientation="vertical" aria-label="${h("resize_node_panel")}" tabindex="0"></div>
         <aside class="card inspector" id="inspector"></aside>
       </div>
       ${readonly ? `<section class="card run-log" id="run-log" aria-live="polite"></section>` : ""}
@@ -246,21 +247,38 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     return JSON.stringify(norm(left)) === JSON.stringify(norm(right));
   }
 
+  function predecessorCount(node) {
+    return new Set(graph.edges.filter((edge) => edge.to === node.id).map((edge) => edge.from)).size;
+  }
+
   function nodeCaption(node) {
-    const count = new Set(graph.edges.filter((edge) => edge.to === node.id).map((edge) => edge.from)).size;
-    let join = "";
-    if (count >= 2) {
-      join = node.convergence === "all"
-        ? t("all_of_n_predecessors", { count })
-        : t("any_of_n_predecessors", { count });
-    }
     const inventoryId = node.overrides && Object.prototype.hasOwnProperty.call(node.overrides, "inventory_id")
       ? node.overrides.inventory_id
       : undefined;
-    if (inventoryId === undefined) return join;
-    if (!inventoryId) return [join, t("no_inventory")].filter(Boolean).join(" · ");
+    if (inventoryId === undefined) return "";
+    if (!inventoryId) return t("no_inventory");
     const inventory = lists.inventories.find((item) => item.id === inventoryId);
-    return inventory ? [join, inventory.name].filter(Boolean).join(" · ") : join;
+    return inventory ? inventory.name : "";
+  }
+
+  function joinBadge(node) {
+    const count = predecessorCount(node);
+    if (count < 2) return "";
+    const all = node.convergence === "all";
+    const label = t(all ? "all_of_n_predecessors" : "any_of_n_predecessors", { count });
+    return `<span class="wf-join-badge ${all ? "all" : "any"}" title="${esc(label)}" aria-label="${esc(label)}">${h(all ? "join_badge_all" : "join_badge_any")}</span>`;
+  }
+
+  function paintJoin(node) {
+    const badge = nodes.querySelector(`[data-id="${CSS.escape(node.id)}"] .wf-join-badge`);
+    if (!badge) return;
+    const count = predecessorCount(node);
+    const all = node.convergence === "all";
+    const label = t(all ? "all_of_n_predecessors" : "any_of_n_predecessors", { count });
+    badge.className = `wf-join-badge ${all ? "all" : "any"}`;
+    badge.textContent = t(all ? "join_badge_all" : "join_badge_any");
+    badge.setAttribute("title", label);
+    badge.setAttribute("aria-label", label);
   }
 
   function paintCaption(node) {
@@ -268,7 +286,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     if (label) label.textContent = nodeCaption(node);
   }
 
-  function nodeParams(node, template) {
+  function nodeParamFields(node, template) {
     if (!template) return "";
     const over = node.overrides || {};
     const spec = { ...(template.spec || {}), ...(over.spec || {}) };
@@ -308,14 +326,30 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         </label>
         <p class="small muted">${h("opentofu_plan_reads_state_apply_keeps_it")}</p>`;
     }
-    return `
-      <details class="node-params" open>
-        <summary>${h("parameters")}</summary>
-        <p class="small muted">${h("applies_only_to_this_node_the_template_stays")}</p>
-        ${toolFields}
-        <label class="field"><span>${h("nav.access")}</span><select class="fit" id="node-credential">${selectOptions(lists.credentials, credentialId, true, (row) => `${row.name} (${credentialKindLabel(row.kind)})`)}</select></label>
-        <label class="field"><span>${h("extra_variables_json")}</span><textarea id="node-extra">${esc(JSON.stringify(extra, null, 2))}</textarea></label>
-      </details>`;
+    return `${toolFields}
+      <label class="field"><span>${h("nav.access")}</span><select class="fit" id="node-credential">${selectOptions(lists.credentials, credentialId, true, (row) => `${row.name} (${credentialKindLabel(row.kind)})`)}</select></label>
+      <label class="field"><span>${h("extra_variables_json")}</span><textarea id="node-extra">${esc(JSON.stringify(extra, null, 2))}</textarea></label>`;
+  }
+
+  function nodeParams(node, template) {
+    if (!template) return "";
+    return `<details class="node-params" open>
+      <summary>${h("parameters")}</summary>
+      <p class="small muted">${h("applies_only_to_this_node_the_template_stays")}</p>
+      ${nodeParamFields(node, template)}
+    </details>`;
+  }
+
+  function convergenceField(node) {
+    const count = predecessorCount(node);
+    if (count < 2) return `<p class="small muted">${h("convergence_needs_two_predecessors")}</p>`;
+    return `<label class="field"><span>${h("convergence")}</span>
+      <select class="fit" id="node-join">
+        <option value="any"${node.convergence !== "all" ? " selected" : ""}>${h("any_predecessor")}</option>
+        <option value="all"${node.convergence === "all" ? " selected" : ""}>${h("all_predecessors")}</option>
+      </select>
+      <span class="small muted">${h("convergence_help")}</span>
+    </label>`;
   }
 
   function edgeOffsets() {
@@ -583,7 +617,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       return;
     }
     const template = templates[0];
-    openNodeEditor({
+    openAddNodeEditor({
       id: `n${Math.random().toString(16).slice(2, 10)}`,
       template_id: template.id,
       name: template.name,
@@ -644,9 +678,8 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       ${nodeParams(node, template)}`;
   }
 
-  function openNodeEditor(node, point, link) {
+  function openAddNodeEditor(node, point, link) {
     if (!editable || !flushNode()) return;
-    const adding = Boolean(point);
     const draftFor = (templateId, name, convergence) => {
       const draft = { ...node, name, convergence, template_id: templateId };
       if (!node.overrides) return draft;
@@ -660,9 +693,9 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       return draft;
     };
     const dialog = openDialog({
-      id: adding ? "add-node-dialog" : "node-edit-dialog",
-      title: adding ? t("add_node") : t("edit_node"),
-      submit: adding ? t("create") : t("save"),
+      id: "add-node-dialog",
+      title: t("add_node"),
+      submit: t("create"),
       body: nodeEditorFields(node),
       onSubmit: ({ form, close }) => {
         const name = form.querySelector("#node-name").value.trim();
@@ -672,15 +705,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         const convergence = form.querySelector("#node-join").value === "all" ? "all" : "any";
         const draft = draftFor(templateId, name, convergence);
         if (!readOverrides(draft, form)) return;
-        if (adding) {
-          addNode(draft, point, link);
-        } else {
-          Object.assign(node, draft);
-          flushNode = () => true;
-          markDirty();
-          renderNodes();
-          renderInspector();
-        }
+        addNode(draft, point, link);
         close();
       },
     });
@@ -787,8 +812,19 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     openAddNode(point, { from: node.id, when: "success" });
   }
 
+  function focusNodePanel(id) {
+    if (selected !== id) return;
+    const field = document.querySelector("#node-name");
+    if (field) field.focus();
+  }
+
+  function editNode(node) {
+    selectNodeById(node.id);
+    focusNodePanel(node.id);
+  }
+
   const nodeMenuActions = {
-    edit: openNodeEditor,
+    edit: editNode,
     remove: removeNode,
     connect: startConnect,
   };
@@ -820,7 +856,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         const add = editable ? `<button class="wf-port-add" type="button" data-add-port="${when}" aria-label="${h("add_step_after", { name: node.name, when: edgeWhenText(when) })}" title="${h("add_step_after", { name: node.name, when: edgeWhenText(when) })}">+</button>` : "";
         return `<div class="wf-port ${when}"><span class="wf-port-symbol" aria-hidden="true">${PORT_SYMBOLS[when]}</span>${add}</div>`;
       }).join("")}</div>`;
-      return `<div class="wf-node${selectedClass}${connectClass}${phaseClass}${runClass}${issueClass}" data-id="${esc(node.id)}" style="left:${Number(node.x) || 0}px;top:${Number(node.y) || 0}px" tabindex="0" role="group" aria-label="${esc(nodeLabel(node))}">${menu}<strong>${esc(node.name)}</strong>${nodeBadge(node)}<span class="small muted">${esc(nodeCaption(node))}</span>${ports}</div>`;
+      return `<div class="wf-node${selectedClass}${connectClass}${phaseClass}${runClass}${issueClass}" data-id="${esc(node.id)}" style="left:${Number(node.x) || 0}px;top:${Number(node.y) || 0}px" tabindex="0" role="group" aria-label="${esc(nodeLabel(node))}">${joinBadge(node)}${menu}<strong>${esc(node.name)}</strong>${nodeBadge(node)}<span class="small muted">${esc(nodeCaption(node))}</span>${ports}</div>`;
     }).join("");
     nodes.querySelectorAll(".wf-node").forEach((element) => {
       const node = graph.nodes.find((item) => item.id === element.dataset.id);
@@ -941,12 +977,12 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
             return;
           }
           if (!flushNode()) return;
-          selected = node.id;
-          selectedEdge = null;
           if (event.key === "Enter") {
-            openNodeEditor(node);
+            editNode(node);
             return;
           }
+          selected = node.id;
+          selectedEdge = null;
           renderInspector();
           nodes.querySelectorAll(".wf-node").forEach((item) => item.classList.toggle("selected", item.dataset.id === selected));
           return;
@@ -1247,31 +1283,40 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         <p class="small muted">${h("select_a_node_to_connect_it")}</p>`;
       return;
     }
-    host.innerHTML = `<div class="inspector-block">
-        <h2>${h("this_node")}</h2>
-        <label class="field"><span>${h("name")}</span><input id="node-name" value="${esc(node.name)}"></label>
-        <label class="field"><span>${h("template")}</span><select class="fit" id="node-template">${selectOptions(templates, node.template_id, false, (row) => row.name)}</select></label>
-        <label class="field"><span>${h("convergence")}</span>
-          <select class="fit" id="node-join">
-            <option value="any"${node.convergence !== "all" ? " selected" : ""}>${h("any_predecessor")}</option>
-            <option value="all"${node.convergence === "all" ? " selected" : ""}>${h("all_predecessors")}</option>
-          </select>
-        </label>
-        ${nodeParams(node, templates.find((item) => item.id === node.template_id))}
-        <h2>${h("connect")}</h2>
-        <button class="btn pill primary" id="node-connect" type="button">${h("connect")}</button>
-        <p class="small muted">${h("connect_help")}</p>
-        <div class="edge-list" id="outgoing-edges">${outgoingRows(node)}</div>
-        <div class="edge-add">
-          <label class="field"><span>${h("when")}</span>
-            <select class="fit" id="link-when">
-              ${["success", "failure", "always"].map((when) => `<option value="${when}">${h(edgeWhenLabel(when))}</option>`).join("")}
-            </select>
-          </label>
-          <label class="field"><span>${h("target")}</span><select class="fit" id="link-target">${targetOptions(node.id, "", true)}</select></label>
-          <button class="btn" id="link-add" type="button">${h("add_edge")}</button>
+    host.innerHTML = `<div class="node-panel">
+        <div class="node-panel-head">
+          <label class="field required"><span>${h("name")}</span><input id="node-name" value="${esc(node.name)}" required></label>
+          <label class="field"><span>${h("template")}</span><select class="fit" id="node-template">${selectOptions(templates, node.template_id, false, (row) => row.name)}</select></label>
+          <button class="btn danger compact" id="node-delete" type="button">${h("delete_node")}</button>
         </div>
-        <button class="btn danger" id="node-delete" type="button">${h("delete_node")}</button>
+        <details class="node-section" open>
+          <summary>${h("general")}</summary>
+          <div class="node-section-body">${convergenceField(node)}</div>
+        </details>
+        <details class="node-section" open>
+          <summary>${h("parameters")}</summary>
+          <div class="node-section-body">
+            <p class="small muted">${h("applies_only_to_this_node_the_template_stays")}</p>
+            ${nodeParamFields(node, templates.find((item) => item.id === node.template_id))}
+          </div>
+        </details>
+        <details class="node-section" open>
+          <summary>${h("connections")}</summary>
+          <div class="node-section-body">
+            <button class="btn pill primary" id="node-connect" type="button">${h("connect")}</button>
+            <p class="small muted">${h("connect_help")}</p>
+            <div class="edge-list" id="outgoing-edges">${outgoingRows(node)}</div>
+            <div class="edge-add">
+              <label class="field"><span>${h("when")}</span>
+                <select class="fit" id="link-when">
+                  ${["success", "failure", "always"].map((when) => `<option value="${when}">${h(edgeWhenLabel(when))}</option>`).join("")}
+                </select>
+              </label>
+              <label class="field"><span>${h("target")}</span><select class="fit" id="link-target">${targetOptions(node.id, "", true)}</select></label>
+              <button class="btn" id="link-add" type="button">${h("add_edge")}</button>
+            </div>
+          </div>
+        </details>
       </div>`;
     host.querySelector("#node-connect").addEventListener("click", () => startConnect(node));
     host.querySelector("#node-name").addEventListener("input", (event) => {
@@ -1298,11 +1343,14 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       markDirty();
       renderInspector();
     });
-    host.querySelector("#node-join").addEventListener("change", (event) => {
-      node.convergence = event.target.value;
-      paintCaption(node);
-      markDirty();
-    });
+    const join = host.querySelector("#node-join");
+    if (join) {
+      join.addEventListener("change", (event) => {
+        node.convergence = event.target.value;
+        paintJoin(node);
+        markDirty();
+      });
+    }
     flushNode = () => readOverrides(node);
     ["#node-inventory", "#node-credential", "#node-job-type", "#node-verbosity", "#node-diff", "#node-action", "#node-forks", "#node-tags", "#node-skip-tags", "#node-limit", "#node-extra"].forEach((id) => {
       const element = host.querySelector(id);
@@ -1439,6 +1487,38 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   if (fitButton) fitButton.addEventListener("click", fitGraph);
   const resetButton = document.querySelector("[data-canvas-reset]");
   if (resetButton) resetButton.addEventListener("click", () => viewport.reset());
+
+  const resizer = document.querySelector("#inspector-resizer");
+  const editorBody = document.querySelector(".editor-body");
+  const inspector = document.querySelector("#inspector");
+  if (resizer && editorBody && inspector) {
+    let resizePointer = null;
+    const setPanelWidth = (width) => {
+      const limit = Math.max(260, Math.min(560, editorBody.getBoundingClientRect().width - 320));
+      editorBody.style.setProperty("--inspector-width", `${Math.round(Math.min(Math.max(width, 260), limit))}px`);
+    };
+    resizer.addEventListener("pointerdown", (event) => {
+      resizePointer = event.pointerId;
+      resizer.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    });
+    resizer.addEventListener("pointermove", (event) => {
+      if (resizePointer !== event.pointerId) return;
+      setPanelWidth(editorBody.getBoundingClientRect().right - event.clientX);
+    });
+    const endResize = (event) => {
+      if (resizePointer !== event.pointerId) return;
+      resizePointer = null;
+    };
+    resizer.addEventListener("pointerup", endResize);
+    resizer.addEventListener("pointercancel", endResize);
+    resizer.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      const step = event.key === "ArrowLeft" ? 20 : -20;
+      setPanelWidth(inspector.getBoundingClientRect().width + step);
+    });
+  }
 
   canvas.addEventListener("keydown", (event) => {
     if (event.target !== canvas) return;
