@@ -844,6 +844,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     ["#node-inventory", "#node-credential", "#node-job-type", "#node-verbosity", "#node-diff", "#node-action", "#node-forks", "#node-tags", "#node-skip-tags", "#node-limit", "#node-extra"].forEach((id) => {
       const element = host.querySelector(id);
       if (!element) return;
+      element.addEventListener("input", markDirty);
       element.addEventListener("change", () => { if (flushNode()) markDirty(); });
     });
     ["success", "failure", "always"].forEach((when) => {
@@ -1031,6 +1032,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       try {
         if (mode === "save" && !(await saveGraph())) return;
         const run = await api("POST", `/api/v1/workflows/${encodeURIComponent(workflow.id)}/launch`, { extra_vars: {} });
+        appState.setLeaveGuard(null);
         go(`#/runs/${run.id}`);
       } catch (error) {
         handle(error);
