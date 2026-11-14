@@ -51,10 +51,10 @@ test("edges leave from the right side at the port of their kind", async () => {
   assert.deepEqual(edgePoint(node, "unknown"), { x: 210, y: 60 });
 });
 
-test("edge kinds use the error label for a failure edge", async () => {
+test("edge kinds share the on_success, on_failure and always labels", async () => {
   const { edgeWhenLabel } = await loadMenus();
-  assert.equal(edgeWhenLabel("success"), "success");
-  assert.equal(edgeWhenLabel("failure"), "error.generic");
+  assert.equal(edgeWhenLabel("success"), "on_success");
+  assert.equal(edgeWhenLabel("failure"), "on_failure");
   assert.equal(edgeWhenLabel("always"), "always");
 });
 

@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const { join } = require("node:path");
 const { pathToFileURL } = require("node:url");
 const test = require("node:test");
+const { catalog } = require("./catalog.js");
 const { stylesheet } = require("./css.js");
 
 const load = (path) => import(pathToFileURL(join(__dirname, "..", "js", path)).href);
@@ -132,7 +133,7 @@ test("a handle plus adds exactly one node connected on that output", async () =>
     await tick();
     assert.equal(document.querySelectorAll("#nodes .wf-node").length, 2, `${when} handle did not add exactly one node`);
     assert.equal(document.querySelectorAll(`#edges path.${when}`).length, 1, `${when} handle did not add one ${when} edge`);
-    assert.equal(document.querySelectorAll("#edges path").length, 1, `${when} handle added another edge`);
+    assert.equal(document.querySelectorAll("#edges path.edge-line").length, 1, `${when} handle added another edge`);
   }
 });
 
@@ -333,7 +334,7 @@ test("a focused edge is selectable and removable from the keyboard", async () =>
   const path = document.querySelector('#edges path[data-edge="0"]');
   assert.equal(path.getAttribute("tabindex"), "0", "the edge is not focusable");
   assert.equal(path.getAttribute("role"), "button", "the edge has no button role");
-  assert.equal(path.getAttribute("aria-label"), "success: One → Two");
+  assert.equal(path.getAttribute("aria-label"), "on_success: One → Two");
 
   document.querySelector("#edges").dispatchEvent({ type: "keydown", key: "Enter", target: path });
   assert.equal(document.activeElement.getAttribute("data-edge"), "0", "the selected edge lost focus");
@@ -344,6 +345,65 @@ test("a focused edge is selectable and removable from the keyboard", async () =>
   assert.equal(document.querySelectorAll("#edges path").length, 0, "Delete did not remove the edge");
   assert.equal(document.querySelector("#wf-hint").textContent, "edge_removed");
   assert.equal(document.activeElement, document.querySelector("#canvas"));
+});
+
+test("an edge carries a marker, a type chip and a wide hit path", async () => {
+  await mountGraph({
+    nodes: [node("n1", "One", 20, 20), node("n2", "Two", 320, 20)],
+    edges: [
+      { from: "n1", to: "n2", when: "success" },
+      { from: "n1", to: "n2", when: "failure" },
+      { from: "n1", to: "n2", when: "always" },
+    ],
+  });
+  for (const [when, key] of [["success", "on_success"], ["failure", "on_failure"], ["always", "always"]]) {
+    const line = document.querySelector(`#edges path.edge-line.${when}`);
+    assert.ok(line, `the ${when} edge has no visible line`);
+    assert.equal(line.getAttribute("marker-end"), `url(#edge-arrow-${when})`, `the ${when} edge has no arrow`);
+    assert.ok(document.querySelector(`#edges marker#edge-arrow-${when} .edge-arrow.${when}`), `the ${when} arrow marker is missing`);
+    assert.ok(document.querySelector(`#edges path.edge-hit[data-edge="${line.dataset.edge}"]`), `the ${when} edge has no hit path`);
+    const chip = line.closest(".edge-group").querySelector(".edge-chip-text");
+    assert.ok(chip, `the ${when} edge has no type chip`);
+    assert.match(chip.innerHTML, new RegExp(key), `the ${when} edge chip has no label`);
+  }
+  const labels = [...document.querySelectorAll("#edges .edge-chip-text")].map((chip) => chip.innerHTML);
+  assert.equal(new Set(labels).size, 3, "parallel edges share one chip label");
+  assert.equal(document.querySelectorAll("#edges path.edge-hit").length, 3, "the edges share no separate hit paths");
+  assert.ok(stylesheet().includes(".edges path.edge-hit"));
+  assert.match(stylesheet(), /\.edges path\.edge-hit \{[^}]*stroke-width: 24/);
+});
+
+test("a failure edge uses the shared failure label instead of the error label", () => {
+  for (const id of ["de", "en"]) {
+    const values = catalog(id);
+    assert.ok(values.on_failure && values.on_success, `${id} has no edge type labels`);
+    assert.notEqual(values.on_failure, values["error.generic"], `${id} labels a failure edge as an error`);
+  }
+  assert.equal(catalog("en").on_failure, "On failure");
+  assert.equal(catalog("en").on_success, "On success");
+});
+
+test("the edge inspector names both nodes and can select either", async () => {
+  await mountGraph({
+    nodes: [node("n1", "One", 20, 20), node("n2", "Two", 320, 20)],
+    edges: [{ from: "n1", to: "n2", when: "failure" }],
+  });
+  document.querySelector("#edges").dispatchEvent({ type: "click", target: document.querySelector("#edges path.edge-line") });
+  const inspector = document.querySelector("#inspector");
+  assert.match(inspector.innerHTML, /One/);
+  assert.match(inspector.innerHTML, /Two/);
+  assert.match(inspector.innerHTML, /→/);
+  assert.equal(inspector.querySelector("#edge-when").value, "failure");
+  assert.match(inspector.innerHTML, /on_failure/);
+  assert.doesNotMatch(inspector.innerHTML, /error\.generic/);
+
+  inspector.querySelector('[data-edge-node="from"]').dispatchEvent({ type: "click" });
+  assert.equal(document.querySelector('[data-id="n1"]').classList.contains("selected"), true);
+  assert.ok(document.querySelector("#node-connect"), "selecting the source did not show the node inspector");
+
+  document.querySelector("#edges").dispatchEvent({ type: "click", target: document.querySelector("#edges path.edge-line") });
+  document.querySelector('#inspector [data-edge-node="to"]').dispatchEvent({ type: "click" });
+  assert.equal(document.querySelector('[data-id="n2"]').classList.contains("selected"), true);
 });
 
 test("the workflow fields are labelled and the canvas is described", async () => {

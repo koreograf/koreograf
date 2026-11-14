@@ -108,7 +108,9 @@ export function openCanvasMenu(point, x, y, onAdd) {
 }
 
 export function edgeWhenLabel(when) {
-  return when === "failure" ? "error.generic" : when;
+  if (when === "failure") return "on_failure";
+  if (when === "always") return "always";
+  return "on_success";
 }
 
 export function chooseEdgeType(fromNode, toNode) {
