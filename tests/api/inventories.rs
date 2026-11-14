@@ -1764,6 +1764,9 @@ async fn netbox_automatic_credentials_become_normal_and_get_their_url() {
             ],
         )
         .unwrap();
+        db.execute("ALTER TABLE workflows DROP COLUMN version", [])
+            .unwrap();
+        db.pragma_update(None, "user_version", 1).unwrap();
         db.execute(
             "DELETE FROM schema_meta WHERE key = 'legacy_reconciled'",
             [],

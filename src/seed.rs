@@ -587,6 +587,7 @@ fn seed_demo<S: SeedStore + ?Sized>(store: &S, cfg: &Config) -> AppResult<()> {
         graph: graph.to_string(),
         created_at: db::now(),
         admin_saved: true,
+        version: 1,
     })?;
 
     store.insert_hook(&Hook {

@@ -478,6 +478,7 @@ fn insert_override_workflow(
             graph: graph.to_string(),
             created_at: db::now(),
             admin_saved,
+            version: 1,
         },
     )
     .expect("workflow");

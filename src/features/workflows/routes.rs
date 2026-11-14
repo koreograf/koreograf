@@ -59,6 +59,8 @@ pub struct WorkflowBody {
     description: String,
     #[serde(default)]
     graph: Graph,
+    #[serde(default)]
+    version: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -69,6 +71,7 @@ pub(super) struct WorkflowResponse {
     description: String,
     graph: Value,
     created_at: String,
+    version: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_run_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -86,6 +89,7 @@ impl WorkflowResponse {
             description: item.description.clone(),
             graph: db::json_object(&item.graph),
             created_at: item.created_at.clone(),
+            version: item.version,
             last_run_id: last.map(|run| run.id.clone()),
             last_run_status: last.map(|run| run.status.clone()),
             last_run_at: last.map(|run| run.created_at.clone()),
@@ -278,10 +282,23 @@ pub(crate) async fn update_workflow(
 ) -> AppResult<Json<WorkflowResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
+    let expected_version = body.version;
+    let db = state.store();
+    let current = db.workflow(&id)?.ok_or(ApiError::NotFound)?;
+    if current.team_id != team {
+        return Err(ApiError::NotFound);
+    }
+    if expected_version.is_some_and(|version| version != current.version) {
+        return Err(ApiError::conflict_vars(
+            "workflow_changed",
+            [("version", current.version.to_string())],
+        ));
+    }
     let mut item = build_workflow(&state, &team, Some(id), body)?;
     item.admin_saved = user.is_admin;
-    let db = state.store();
-    db.update_workflow(&item)?;
+    item.version = current.version;
+    db.update_workflow(&item, expected_version)?;
+    let item = db.workflow(&item.id)?.ok_or(ApiError::NotFound)?;
     let last = db.list_workflow_jobs(&item.team_id, &item.id, 1)?;
     Ok(Json(WorkflowResponse::new(&item, last.first())))
 }
@@ -482,6 +499,7 @@ fn build_workflow(
             .map_err(|err| ApiError::Internal(err.to_string()))?,
         created_at,
         admin_saved: false,
+        version: 1,
     })
 }
 #[derive(Serialize)]

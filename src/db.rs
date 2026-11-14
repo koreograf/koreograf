@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::error::{ApiError, AppResult};
 
-pub(crate) const SCHEMA_VERSION: u32 = 1;
+pub(crate) const SCHEMA_VERSION: u32 = 2;
 const BASELINE_VERSION: u32 = 1;
 
 pub fn now() -> String {
@@ -27,17 +27,31 @@ pub(crate) struct Migration {
     pub(crate) sql: &'static str,
 }
 
-pub(crate) const SQLITE_MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "0001_baseline",
-    sql: include_str!("../migrations/sqlite/0001_baseline.sql"),
-}];
+pub(crate) const SQLITE_MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "0001_baseline",
+        sql: include_str!("../migrations/sqlite/0001_baseline.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "0002_workflow_version",
+        sql: include_str!("../migrations/sqlite/0002_workflow_version.sql"),
+    },
+];
 
-pub(crate) const POSTGRES_MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "0001_baseline",
-    sql: include_str!("../migrations/postgres/0001_baseline.sql"),
-}];
+pub(crate) const POSTGRES_MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "0001_baseline",
+        sql: include_str!("../migrations/postgres/0001_baseline.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "0002_workflow_version",
+        sql: include_str!("../migrations/postgres/0002_workflow_version.sql"),
+    },
+];
 
 const META_TABLE: &str = "CREATE TABLE IF NOT EXISTS schema_meta (
   key TEXT PRIMARY KEY,
@@ -789,6 +803,7 @@ pub struct Workflow {
     pub created_at: String,
     /// True when an administrator last saved this workflow.
     pub admin_saved: bool,
+    pub version: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -950,6 +965,13 @@ mod tests {
 
     fn forget_legacy_marker(conn: &Connection) {
         conn.execute("DELETE FROM schema_meta WHERE key = ?1", [LEGACY_MARKER])
+            .unwrap();
+    }
+
+    fn rewind_to_legacy(conn: &Connection) {
+        conn.execute("ALTER TABLE workflows DROP COLUMN version", [])
+            .unwrap();
+        conn.pragma_update(None, "user_version", BASELINE_VERSION)
             .unwrap();
     }
 
@@ -1138,6 +1160,7 @@ mod tests {
         )
         .unwrap();
         forget_legacy_marker(&conn);
+        rewind_to_legacy(&conn);
         ensure_schema(&conn).unwrap();
         let old: i64 = conn
             .query_row(
@@ -1184,6 +1207,7 @@ mod tests {
         )
         .unwrap();
         forget_legacy_marker(&conn);
+        rewind_to_legacy(&conn);
         ensure_schema(&conn).unwrap();
         let value: i64 = conn
             .query_row(
@@ -1240,6 +1264,7 @@ mod tests {
         )
         .unwrap();
         forget_legacy_marker(&conn);
+        rewind_to_legacy(&conn);
         ensure_schema(&conn).unwrap();
         let inventory = inventory(&conn, "i1").unwrap().unwrap();
         let workflow = workflow(&conn, "w1").unwrap().unwrap();
@@ -1306,6 +1331,7 @@ mod tests {
         )
         .unwrap();
         forget_legacy_marker(&conn);
+        rewind_to_legacy(&conn);
         ensure_schema(&conn).unwrap();
         let insecure: Option<String> = conn
             .query_row(
@@ -1596,6 +1622,7 @@ mod tests {
             .ok();
         assert_eq!(kept.as_deref(), Some("/keep"));
         forget_legacy_marker(&conn);
+        rewind_to_legacy(&conn);
         ensure_schema(&conn).unwrap();
         let removed: Option<String> = conn
             .query_row(

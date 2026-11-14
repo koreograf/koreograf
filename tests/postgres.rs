@@ -441,6 +441,48 @@ async fn postgres_serves_workflows_hooks_and_project_sync() {
     .await;
     assert_eq!(status, StatusCode::OK, "{updated}");
     assert_eq!(updated["graph"]["edges"].as_array().map(Vec::len), Some(1));
+    assert_eq!(updated["version"], 2, "{updated}");
+
+    let stale_graph = json!({
+        "nodes": [
+            {"id": "start", "template_id": template_id, "name": "Start"},
+            {"id": "finish", "template_id": template_id, "name": "Finish"}
+        ],
+        "edges": [{"from": "start", "to": "finish", "when": "success"}]
+    });
+    let (status, stale) = call(
+        &app,
+        "PUT",
+        &format!("/api/workflows/{workflow_id}"),
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({
+            "name": format!("Workflow {nanos} stale"),
+            "description": "Postgres workflow",
+            "graph": stale_graph,
+            "version": 1
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{stale}");
+    assert_eq!(stale["error"], "workflow_changed", "{stale}");
+
+    let (status, retried) = call(
+        &app,
+        "PUT",
+        &format!("/api/workflows/{workflow_id}"),
+        Some(&cookie),
+        Some(&team_id),
+        Some(json!({
+            "name": format!("Workflow {nanos} retried"),
+            "description": "Postgres workflow",
+            "graph": stale_graph,
+            "version": 2
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{retried}");
+    assert_eq!(retried["version"], 3, "{retried}");
 
     let (status, cycle) = call(
         &app,

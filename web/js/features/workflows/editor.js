@@ -2209,13 +2209,89 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   const descriptionField = document.querySelector("#wf-description");
   if (descriptionField) descriptionField.addEventListener("input", markDirty);
 
-  async function saveGraph() {
+  function applyWorkflow(current) {
+    const nextGraph = current.graph || { nodes: [], edges: [] };
+    workflow.name = current.name;
+    workflow.description = current.description;
+    workflow.graph = JSON.parse(JSON.stringify(nextGraph));
+    if (typeof current.version === "number") workflow.version = current.version;
+    graph.nodes = (nextGraph.nodes || []).map((node) => ({ ...node }));
+    graph.edges = (nextGraph.edges || []).map((edge) => ({ ...edge }));
+    const nameField = document.querySelector("#wf-name");
+    if (nameField) nameField.value = current.name;
+    const descriptionField = document.querySelector("#wf-description");
+    if (descriptionField) descriptionField.value = current.description;
+    selected = null;
+    selectedEdge = null;
+    connecting = null;
+    connectDrag = null;
+    clearConnectPreview();
+    serverIssues = [];
+    flushNode = () => true;
+    historyStack = [snapshotGraph()];
+    historyIndex = 0;
+    baseline = currentState();
+    recomputeValidation();
+    renderNodes();
+    renderInspector();
+    drawEdges();
+    setDirty(false);
+    updateHistoryButtons();
+  }
+
+  async function reloadWorkflow() {
+    try {
+      const current = await api("GET", `/api/v1/workflows/${encodeURIComponent(workflow.id)}`);
+      applyWorkflow(current);
+      return true;
+    } catch (error) {
+      handle(error);
+      return false;
+    }
+  }
+
+  function chooseConflictAction() {
+    return new Promise((resolve) => {
+      let settled = false;
+      const decide = (value) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      const dialog = openDialog({
+        id: "workflow-conflict-dialog",
+        title: t("workflow_changed_title"),
+        body: `<p class="small muted">${h("workflow_changed_hint")}</p><div class="choice-row"><button class="btn pill primary" type="button" data-conflict-reload>${h("reload")}</button><button class="btn" type="button" data-conflict-overwrite>${h("overwrite")}</button><button class="btn" type="button" data-conflict-cancel>${h("cancel")}</button></div>`,
+        form: false,
+        actions: false,
+        onClose: () => decide("cancel"),
+      });
+      dialog.overlay.querySelector("[data-conflict-reload]").addEventListener("click", () => {
+        decide("reload");
+        dialog.close();
+      });
+      dialog.overlay.querySelector("[data-conflict-overwrite]").addEventListener("click", () => {
+        decide("overwrite");
+        dialog.close();
+      });
+      dialog.overlay.querySelector("[data-conflict-cancel]").addEventListener("click", () => dialog.close());
+    });
+  }
+
+  async function saveGraph(overwrite = false) {
     const saveButton = document.querySelector("#wf-save");
     if (saveButton) saveButton.disabled = true;
     try {
       const name = document.querySelector("#wf-name").value;
       const description = document.querySelector("#wf-description").value;
-      await api("PUT", `/api/v1/workflows/${encodeURIComponent(workflow.id)}`, { name, description, graph });
+      if (overwrite) {
+        const current = await api("GET", `/api/v1/workflows/${encodeURIComponent(workflow.id)}`);
+        if (typeof current.version === "number") workflow.version = current.version;
+      }
+      const body = { name, description, graph };
+      if (typeof workflow.version === "number") body.version = workflow.version;
+      const saved = await api("PUT", `/api/v1/workflows/${encodeURIComponent(workflow.id)}`, body);
+      if (saved && typeof saved.version === "number") workflow.version = saved.version;
       workflow.name = name;
       workflow.description = description;
       workflow.graph = JSON.parse(JSON.stringify(graph));
@@ -2225,6 +2301,15 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       setDirty(false);
       return true;
     } catch (error) {
+      if (error && (error.status === 409 || error.status === 412)) {
+        const choice = await chooseConflictAction();
+        if (choice === "reload") {
+          await reloadWorkflow();
+          return false;
+        }
+        if (choice === "overwrite") return saveGraph(true);
+        return false;
+      }
       const issues = issuesForServerError(graph, error && error.message, error && error.vars);
       serverIssues = issues;
       if (issues.length) {

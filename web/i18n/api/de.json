@@ -282,6 +282,7 @@
   "workflow.node_duplicate": "Doppelte Knoten-ID {id}.",
   "workflow.node_name": "Knoten {id} hat keinen Namen.",
   "workflow.node_template": "Knoten {id} hat keine Auftragsvorlage.",
+  "workflow_changed": "Der Workflow wurde seit dem Laden geändert.",
   "x_team_id_is_missing": "X-Team-Id fehlt.",
   "you_are_not_allowed_to_do_this": "Keine Berechtigung für diese Aktion.",
   "you_cannot_delete_your_own_account": "Du kannst dein eigenes Konto nicht löschen.",
