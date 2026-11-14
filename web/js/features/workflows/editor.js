@@ -370,7 +370,6 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   }
 
   function drawEdges() {
-    recomputeValidation();
     const offsets = edgeOffsets();
     const edges = graph.edges.map((edge, index) => {
       const from = graph.nodes.find((node) => node.id === edge.from);
@@ -378,7 +377,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       if (!from || !to) return null;
       const klass = ["success", "failure", "always"].includes(edge.when) ? edge.when : "always";
       const geometry = edgeGeometry(from, to, klass, offsets.get(edge) || 0);
-      const issues = combinedEdgeIssues(index);
+      const issues = readonly ? [] : combinedEdgeIssues(index);
       const invalid = issues.some((issue) => issue.severity === "error");
       const warning = issues.some((issue) => issue.severity === "warning");
       const server = issues.some((issue) => issue.server);
@@ -494,6 +493,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   }
 
   function nodeBadge(node) {
+    if (readonly) return "";
     const issues = combinedNodeIssues(node.id);
     if (!issues.length) return "";
     const primary = issues.find((issue) => issue.severity === "error") || issues[0];
@@ -802,7 +802,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   }
 
   function renderNodes() {
-    recomputeValidation();
+    if (!readonly) recomputeValidation();
     const empty = document.querySelector("#wf-empty");
     if (empty) empty.hidden = graph.nodes.length > 0;
     nodes.innerHTML = graph.nodes.map((node) => {
@@ -811,7 +811,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       const selectedClass = selected === node.id ? " selected" : "";
       const runClass = readonly ? " run-node" : "";
       const connectClass = connecting && connecting.from === node.id ? " connecting" : "";
-      const nodeIssues = combinedNodeIssues(node.id);
+      const nodeIssues = readonly ? [] : combinedNodeIssues(node.id);
       const issueClass = nodeIssues.some((issue) => issue.severity === "error")
         ? " invalid"
         : nodeIssues.some((issue) => issue.severity === "warning") ? " warning" : "";
