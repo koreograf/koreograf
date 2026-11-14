@@ -330,7 +330,8 @@ test("an empty workflow builds a success chain without the context menu", async 
   await expect(page.locator("#wf-add-first")).toBeVisible();
   await expect(page.locator("[data-add-port]")).toHaveCount(0);
 
-  await page.locator("#wf-add-first").click();
+  await page.locator("#wf-add-first").focus();
+  await page.keyboard.press("Enter");
   const first = page.getByRole("dialog");
   await expect(first.getByRole("heading", { name: "Add node" })).toBeVisible();
   await first.locator("#node-name").fill("First step");

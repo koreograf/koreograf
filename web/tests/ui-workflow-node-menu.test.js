@@ -108,20 +108,15 @@ test("an empty canvas adds the first step from the call to action", async () => 
   const cta = document.querySelector("#wf-add-first");
   assert.ok(cta, "the empty canvas has no Add first step action");
   assert.equal(cta.tagName, "BUTTON", "the first step action is not a button");
+  cta.focus();
+  assert.equal(document.activeElement, cta, "the first step action cannot take focus");
 
   cta.dispatchEvent({ type: "click" });
-  let dialog = document.querySelector("#add-node-dialog");
+  const dialog = document.querySelector("#add-node-dialog");
   assert.ok(dialog, "Add first step does not open the node editor");
   for (const id of ["node-name", "node-template", "node-join", "node-inventory", "node-credential", "node-extra"]) {
     assert.ok(dialog.querySelector(`#${id}`), `Add first step has no ${id} field`);
   }
-  dialog.dispatchEvent({ type: "keydown", key: "Escape", preventDefault() {} });
-  await tick();
-  assert.equal(document.querySelector("#add-node-dialog"), null, "cancel left the Add node dialog open");
-
-  cta.dispatchEvent({ type: "keydown", key: "Enter", preventDefault() {} });
-  dialog = document.querySelector("#add-node-dialog");
-  assert.ok(dialog, "Enter on Add first step did not open the node editor");
   dialog.dispatchEvent({ type: "keydown", key: "Escape", preventDefault() {} });
   await tick();
   assert.equal(document.querySelector("#add-node-dialog"), null, "cancel left the Add node dialog open");

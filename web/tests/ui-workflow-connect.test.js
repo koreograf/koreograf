@@ -153,6 +153,27 @@ test("dropping a connection on empty canvas adds a connected node", async () => 
   assert.equal(document.querySelectorAll("#edges path.success").length, 1, "the dropped connection did not add a success edge");
 });
 
+test("releasing a connection on the source or controls keeps connect mode", async () => {
+  await mountGraph({ nodes: [node("n1", "One", 20, 20), node("n2", "Two", 320, 20)], edges: [] });
+  document.querySelector('[data-id="n1"] [data-node-menu]').dispatchEvent({ type: "click" });
+  document.querySelector("[data-connect-node]").dispatchEvent({ type: "click" });
+  const source = document.querySelector('[data-id="n1"]');
+  const original = document.elementFromPoint;
+  document.elementFromPoint = () => source;
+  source.dispatchEvent({ type: "pointerdown", preventDefault() {}, stopPropagation() {}, clientX: 20, clientY: 20, pointerId: 1 });
+  source.dispatchEvent({ type: "pointerup", clientX: 20, clientY: 20, pointerId: 1 });
+  assert.equal(document.querySelector("#add-node-dialog"), null, "a click on the source opened Add node");
+  assert.equal(document.querySelector("#wf-hint").textContent, "connect_click_or_drag_target");
+  assert.ok(source.classList.contains("connecting"), "the source left connect mode");
+
+  document.elementFromPoint = () => document.querySelector("[data-canvas-fit]");
+  source.dispatchEvent({ type: "pointerdown", preventDefault() {}, stopPropagation() {}, clientX: 20, clientY: 20, pointerId: 2 });
+  source.dispatchEvent({ type: "pointerup", clientX: 20, clientY: 20, pointerId: 2 });
+  document.elementFromPoint = original;
+  assert.equal(document.querySelector("#add-node-dialog"), null, "a drop on the canvas controls opened Add node");
+  assert.equal(document.querySelector("#wf-hint").textContent, "connect_click_or_drag_target");
+});
+
 async function mountGraph(graph, { readonly = false, phases = {}, templates } = {}) {
   const { editor } = await setup();
   const workflow = { id: "w1", name: "Deploy", description: "", graph };
