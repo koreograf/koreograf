@@ -10,6 +10,7 @@ import { t } from "../../core/i18n.js";
 import { confirmTofuApply } from "../../core/tofu.js";
 import { mountSchedules } from "../schedules.js";
 import { chooseEdgeType, edgeWhenLabel, openCanvasMenu, openNodeMenu } from "./menus.js";
+import { GRID_SIZE, layoutGraph, snapToGrid } from "./layout.js";
 import { analyzeGraph, issuesForServerError, wouldCreateCycle } from "./validation.js";
 import { autoPan, createViewport, minimapLayout, zoomAt } from "./viewport.js";
 
@@ -119,6 +120,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
               <button class="btn compact ghost" type="button" data-canvas-zoom-out aria-label="${h("zoom_out")}">−</button>
               <button class="btn compact ghost" type="button" data-canvas-fit>${h("fit_view")}</button>
               <button class="btn compact ghost" type="button" data-canvas-reset>${h("zoom_reset")}</button>
+              ${editable ? `<button class="btn compact ghost" type="button" id="wf-auto-layout" aria-keyshortcuts="Shift+Alt+T" title="${h("auto_layout")}" aria-label="${h("auto_layout")}">${h("auto_layout")}</button>` : ""}
               <button class="btn compact ghost" type="button" id="wf-shortcuts" aria-haspopup="dialog" aria-label="${h("keyboard_shortcuts")}" title="${h("keyboard_shortcuts")}">?</button>
             </div>
             <div class="minimap" id="minimap" role="img" aria-label="${h("minimap")}" hidden></div>
@@ -423,6 +425,37 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     restoreGraph(historyStack[historyIndex]);
   }
 
+  function autoLayoutGraph() {
+    if (!editable || !flushNode()) return;
+    if (!graph.nodes.length) return;
+    const before = snapshotGraph();
+    const positions = new Map(layoutGraph(graph).map((position) => [String(position.id), position]));
+    graph.nodes.forEach((node) => {
+      const position = positions.get(String(node.id));
+      if (!position) return;
+      node.x = position.x;
+      node.y = position.y;
+    });
+    if (!sameJson(before, snapshotGraph())) {
+      recordHistory();
+      markDirty();
+      renderNodes();
+      renderInspector();
+    }
+    fitGraph();
+    setHint("auto_layout_done");
+    canvas.focus();
+  }
+
+  function layoutShortcut(event) {
+    if (event.defaultPrevented || !editable || document.querySelector(".overlay")) return;
+    if (!event.shiftKey || !event.altKey) return;
+    if (String(event.key).toLowerCase() !== "t") return;
+    if (isFormField(event.target) || Boolean(event.target && event.target.isContentEditable)) return;
+    event.preventDefault();
+    autoLayoutGraph();
+  }
+
   function openShortcuts() {
     const rows = editable
       ? [
@@ -431,6 +464,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         ["Delete / Backspace", "shortcut_delete"],
         ["Enter / Space", "shortcut_connect"],
         ["Ctrl/Cmd+S", "shortcut_save"],
+        ["Shift+Alt+T", "shortcut_layout"],
         ["Shift+F10", "shortcut_canvas"],
         ["?", "shortcut_help"],
       ]
@@ -1264,8 +1298,8 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         }
         if (!drag || drag.id !== node.id) return;
         const point = localPoint(event);
-        node.x = Math.max(0, Math.round(point.x - drag.ox));
-        node.y = Math.max(0, Math.round(point.y - drag.oy));
+        node.x = Math.max(0, snapToGrid(point.x - drag.ox));
+        node.y = Math.max(0, snapToGrid(point.y - drag.oy));
         element.style.left = `${node.x}px`;
         element.style.top = `${node.y}px`;
         drag.screen = canvasPoint(event);
@@ -1286,6 +1320,13 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
           return;
         }
         stopAutoPan();
+        if (drag && drag.id === node.id) {
+          node.x = Math.max(0, snapToGrid(node.x));
+          node.y = Math.max(0, snapToGrid(node.y));
+          element.style.left = `${node.x}px`;
+          element.style.top = `${node.y}px`;
+          drawEdges();
+        }
         recordHistory();
         drag = null;
       });
@@ -1324,6 +1365,8 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         if (event.target !== element) return;
         historyShortcut(event);
         if (event.defaultPrevented) return;
+        layoutShortcut(event);
+        if (event.defaultPrevented) return;
         if (event.key === "Escape" && connecting) {
           event.preventDefault();
           cancelConnect();
@@ -1357,7 +1400,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
           removeNode(node);
           return;
         }
-        const step = event.shiftKey ? 40 : 10;
+        const step = event.shiftKey ? GRID_SIZE * 4 : GRID_SIZE;
         const delta = {
           ArrowLeft: [-step, 0],
           ArrowRight: [step, 0],
@@ -1366,8 +1409,8 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         }[event.key];
         if (!delta) return;
         event.preventDefault();
-        node.x = Math.max(0, (Number(node.x) || 0) + delta[0]);
-        node.y = Math.max(0, (Number(node.y) || 0) + delta[1]);
+        node.x = Math.max(0, snapToGrid((Number(node.x) || 0) + delta[0]));
+        node.y = Math.max(0, snapToGrid((Number(node.y) || 0) + delta[1]));
         element.style.left = `${node.x}px`;
         element.style.top = `${node.y}px`;
         drawEdges();
@@ -2001,6 +2044,8 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   if (fitButton) fitButton.addEventListener("click", fitGraph);
   const resetButton = document.querySelector("[data-canvas-reset]");
   if (resetButton) resetButton.addEventListener("click", () => viewport.reset());
+  const autoLayoutButton = document.querySelector("#wf-auto-layout");
+  if (autoLayoutButton) autoLayoutButton.addEventListener("click", autoLayoutGraph);
   const shortcutsButton = document.querySelector("#wf-shortcuts");
   if (shortcutsButton) shortcutsButton.addEventListener("click", openShortcuts);
   const undoButton = document.querySelector("#wf-undo");
@@ -2272,9 +2317,11 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   if (editorStack) {
     editorStack.addEventListener("keydown", saveShortcut);
     editorStack.addEventListener("keydown", historyShortcut);
+    editorStack.addEventListener("keydown", layoutShortcut);
   }
   canvas.addEventListener("keydown", saveShortcut);
   canvas.addEventListener("keydown", historyShortcut);
+  canvas.addEventListener("keydown", layoutShortcut);
 
   const remove = document.querySelector("#wf-delete");
   if (remove) {

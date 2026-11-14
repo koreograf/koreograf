@@ -539,8 +539,7 @@ test("a finished workflow run shows its path, closes output on Escape and is rea
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
 });
 
-test("a viewer inspects a workflow node without edit controls", async ({ page }) => {
-  await signInInEnglish(page);
+test("a viewer inspects a workflow node without edit controls", async ({ page }) => {  await signInInEnglish(page);
   const teams = await (await page.request.get("/api/v1/teams")).json();
   const team = teams.find((item) => item.name === "Plattform") || teams[0];
   const users = await (await page.request.get("/api/v1/users")).json();
@@ -604,4 +603,45 @@ test("a viewer inspects a workflow node without edit controls", async ({ page })
 
   await page.locator("#board").click({ button: "right", position: { x: 40, y: 40 } });
   await expect(page.getByRole("menuitem", { name: "Add node", exact: true })).toHaveCount(0);
+});
+
+test("a dragged workflow node snaps to the grid and tidy up avoids overlaps", async ({ page }) => {
+  await signInInEnglish(page);
+  await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
+  await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
+
+  const node = page.locator('.wf-node[data-id="check"]');
+  await node.scrollIntoViewIfNeeded();
+  const box = await node.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 37, box.y + box.height / 2 + 23, { steps: 5 });
+  await page.mouse.up();
+
+  const dragged = await node.evaluate((element) => ({
+    x: Number.parseFloat(element.style.left),
+    y: Number.parseFloat(element.style.top),
+  }));
+  expect(dragged.x % 22).toBe(0);
+  expect(dragged.y % 22).toBe(0);
+
+  await page.locator("#wf-auto-layout").click();
+  await expect(page.locator("#wf-status")).toHaveText("Unsaved changes");
+  const positions = await page.locator(".wf-node").evaluateAll((elements) => elements.map((element) => ({
+    x: Number.parseFloat(element.style.left),
+    y: Number.parseFloat(element.style.top),
+    width: element.offsetWidth,
+    height: element.offsetHeight,
+  })));
+  for (let left = 0; left < positions.length; left += 1) {
+    for (let right = left + 1; right < positions.length; right += 1) {
+      const first = positions[left];
+      const second = positions[right];
+      const overlap = first.x < second.x + second.width
+        && first.x + first.width > second.x
+        && first.y < second.y + second.height
+        && first.y + first.height > second.y;
+      expect(overlap).toBe(false);
+    }
+  }
 });

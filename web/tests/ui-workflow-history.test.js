@@ -77,7 +77,7 @@ test("moving a node is undoable and redoable from the toolbar and the keyboard",
   assert.equal(document.querySelector("#wf-redo").disabled, true, "Redo starts enabled");
 
   keydown(nodeElement("n1"), "ArrowRight");
-  assert.equal(leftOf("n1"), "30px");
+  assert.equal(leftOf("n1"), "44px");
   assert.equal(document.querySelector("#wf-undo").disabled, false, "moving a node did not enable Undo");
   assert.equal(document.querySelector("#wf-status").textContent, "unsaved_changes");
 
@@ -88,17 +88,17 @@ test("moving a node is undoable and redoable from the toolbar and the keyboard",
   assert.equal(document.querySelector("#wf-redo").disabled, false, "Undo did not enable Redo");
 
   redo();
-  assert.equal(leftOf("n1"), "30px", "Redo did not move the node again");
+  assert.equal(leftOf("n1"), "44px", "Redo did not move the node again");
   assert.equal(document.querySelector("#wf-status").textContent, "unsaved_changes");
 
   const canvas = document.querySelector("#canvas");
   keydown(canvas, "z", { ctrlKey: true });
   assert.equal(leftOf("n1"), "20px", "Ctrl+Z did not undo");
   keydown(canvas, "Z", { ctrlKey: true, shiftKey: true });
-  assert.equal(leftOf("n1"), "30px", "Ctrl+Shift+Z did not redo");
+  assert.equal(leftOf("n1"), "44px", "Ctrl+Shift+Z did not redo");
   keydown(canvas, "z", { ctrlKey: true });
   keydown(canvas, "y", { ctrlKey: true });
-  assert.equal(leftOf("n1"), "30px", "Ctrl+Y did not redo");
+  assert.equal(leftOf("n1"), "44px", "Ctrl+Y did not redo");
 });
 
 test("adding a connected node is one history entry that removes the node and its edge", async () => {
@@ -215,13 +215,13 @@ test("Ctrl+Z inside a text field keeps the graph history", async () => {
   nodeElement("n1").dispatchEvent({ type: "pointerdown", clientX: 20, clientY: 20, pointerId: 1 });
   const stack = document.querySelector(".editor-stack");
   keydown(nodeElement("n1"), "ArrowRight");
-  assert.equal(leftOf("n1"), "30px");
+  assert.equal(leftOf("n1"), "44px");
   assert.equal(document.querySelector("#wf-undo").disabled, false);
 
   const extra = document.querySelector("#node-extra");
   assert.ok(extra, "the node panel has no extra variables field");
   keydown(stack, "z", { ctrlKey: true, target: extra });
-  assert.equal(leftOf("n1"), "30px", "Ctrl+Z in a node field undid the graph");
+  assert.equal(leftOf("n1"), "44px", "Ctrl+Z in a node field undid the graph");
   assert.equal(document.querySelector("#wf-undo").disabled, false, "Ctrl+Z in a node field consumed the history");
   assert.equal(document.querySelector("#wf-redo").disabled, true, "Ctrl+Z in a node field enabled Redo");
 
@@ -230,7 +230,7 @@ test("Ctrl+Z inside a text field keeps the graph history", async () => {
   name.dispatchEvent({ type: "input", target: name });
   keydown(stack, "z", { ctrlKey: true, target: name });
   assert.equal(name.value, "Renamed", "Ctrl+Z in the workflow name field changed the text");
-  assert.equal(leftOf("n1"), "30px", "Ctrl+Z in the workflow name field undid the graph");
+  assert.equal(leftOf("n1"), "44px", "Ctrl+Z in the workflow name field undid the graph");
   assert.equal(document.querySelector("#wf-undo").disabled, false, "Ctrl+Z in the workflow name field consumed the history");
 });
 
