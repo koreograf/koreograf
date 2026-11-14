@@ -86,7 +86,7 @@ test("nodes connect from the menu and duplicate edges are refused", async () => 
   const templates = [{ id: "t1", name: "Shell", tool: "shell", spec: {} }];
   editor.mountEditor(workflow, templates, false, {}, { inventories: [], credentials: [] }, {});
   assert.match(document.querySelector("#nodes").innerHTML, /data-node-menu/);
-  assert.ok(document.querySelector("#add-node"));
+  assert.ok(!document.querySelector("#add-node"), "the inspector still has an Add node button");
   assert.ok(!document.querySelector("#nodes").innerHTML.includes("data-port"));
 
   document.querySelector('[data-id="n1"] [data-node-menu]').dispatchEvent({ type: "click" });

@@ -78,7 +78,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
               <input id="wf-description" maxlength="1000" value="${esc(workflow.description)}" placeholder="${h("description")}" ${can("operator") ? "" : "disabled"}>
             </div>`}
           <p class="small muted" id="wf-hint">${readonly ? h("colors_show_the_run_a_click_shows_the") : h("drag_nodes_and_use_the_canvas_menus")}</p>
-          <div class="canvas" id="canvas"><div id="board" style="position:relative;min-width:100%;min-height:560px"><svg class="edges" id="edges"></svg><div id="nodes"></div></div></div>
+          <div class="canvas" id="canvas" tabindex="0" role="group" aria-label="${h("workflow")}"><div id="board" style="position:relative;min-width:100%;min-height:560px"><svg class="edges" id="edges"></svg><div id="nodes"></div></div></div>
         </div>
         <aside class="card inspector" id="inspector"></aside>
       </div>
@@ -97,6 +97,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     </div>`, readonly ? back : `
       ${can("operator") ? `<button class="btn" id="wf-save" type="button">${h("save")}</button><button class="btn primary" id="wf-launch" type="button">${h("launch")}</button>` : ""}`);
 
+  const canvas = document.querySelector("#canvas");
   const board = document.querySelector("#board");
   const svg = document.querySelector("#edges");
   const nodes = document.querySelector("#nodes");
@@ -237,50 +238,35 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     preview.setAttribute("d", `M ${start.x} ${start.y} C ${start.x + dx} ${start.y}, ${point.x - dx} ${point.y}, ${point.x} ${point.y}`);
   }
 
-  function openAddNodeDialog(point) {
+  function openAddNode(point) {
     if (!editable) return;
     if (!templates.length) {
       setHint("create_a_template_or_a_workflow_first");
       return;
     }
-    openDialog({
-      id: "add-node-dialog",
-      title: t("add_node"),
-      submit: t("create"),
-      body: `<label class="field required"><span>${h("template")}</span><select class="fit" id="add-template" required>${selectOptions(templates, "", false, (row) => `${row.name} · ${row.tool}`)}</select></label>
-        <label class="field"><span>${h("name_optional")}</span><input id="add-name" placeholder="${h("name")}"></label>`,
-      onSubmit: ({ form, close }) => {
-        const templateId = form.querySelector("#add-template").value;
-        const template = templates.find((item) => item.id === templateId);
-        if (!template) throw new Error("create_a_template_or_a_workflow_first");
-        const name = form.querySelector("#add-name").value.trim() || template.name;
-        addNode(template, name, point);
-        close();
-      },
-    });
+    const template = templates[0];
+    openNodeEditor({
+      id: `n${Math.random().toString(16).slice(2, 10)}`,
+      template_id: template.id,
+      name: template.name,
+      convergence: "any",
+    }, point);
   }
 
-  function addNode(template, name, point) {
-    const id = `n${Math.random().toString(16).slice(2, 10)}`;
+  function addNode(draft, point) {
     const spot = point
       ? { x: Math.max(0, Math.round(point.x - 20)), y: Math.max(0, Math.round(point.y - 20)) }
       : freeNodePosition();
-    graph.nodes.push({
-      id,
-      template_id: template.id,
-      name,
-      x: spot.x,
-      y: spot.y,
-      convergence: "any",
-    });
-    selected = id;
+    const node = { ...draft, x: spot.x, y: spot.y };
+    graph.nodes.push(node);
+    selected = node.id;
     selectedEdge = null;
     connecting = null;
     connectDrag = null;
     clearConnectPreview();
     renderNodes();
     renderInspector();
-    const created = nodes.querySelector(`[data-id="${CSS.escape(id)}"]`);
+    const created = nodes.querySelector(`[data-id="${CSS.escape(node.id)}"]`);
     if (created) created.focus();
   }
 
@@ -311,8 +297,9 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       ${nodeParams(node, template)}`;
   }
 
-  function openNodeEditor(node) {
+  function openNodeEditor(node, point) {
     if (!editable || !flushNode()) return;
+    const adding = Boolean(point);
     const draftFor = (templateId, name, convergence) => {
       const draft = { ...node, name, convergence, template_id: templateId };
       if (!node.overrides) return draft;
@@ -326,9 +313,9 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       return draft;
     };
     const dialog = openDialog({
-      id: "node-edit-dialog",
-      title: t("edit_node"),
-      submit: t("save"),
+      id: adding ? "add-node-dialog" : "node-edit-dialog",
+      title: adding ? t("add_node") : t("edit_node"),
+      submit: adding ? t("create") : t("save"),
       body: nodeEditorFields(node),
       onSubmit: ({ form, close }) => {
         const name = form.querySelector("#node-name").value.trim();
@@ -338,10 +325,14 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         const convergence = form.querySelector("#node-join").value === "all" ? "all" : "any";
         const draft = draftFor(templateId, name, convergence);
         if (!readOverrides(draft, form)) return;
-        Object.assign(node, draft);
-        flushNode = () => true;
-        renderNodes();
-        renderInspector();
+        if (adding) {
+          addNode(draft, point);
+        } else {
+          Object.assign(node, draft);
+          flushNode = () => true;
+          renderNodes();
+          renderInspector();
+        }
         close();
       },
     });
@@ -595,20 +586,6 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     return options.join("");
   }
 
-  function addNodeControls() {
-    return `<button class="btn" id="add-node" type="button">${h("add_node")}</button>
-      <p class="small muted">${h("right_click_empty_canvas_to_add_a_node")}</p>`;
-  }
-
-  function bindAddNode(host) {
-    const button = host.querySelector("#add-node");
-    if (!button) return;
-    button.addEventListener("click", () => {
-      if (!flushNode()) return;
-      openAddNodeDialog(null);
-    });
-  }
-
   function freeNodePosition() {
     const width = 200;
     const height = 150;
@@ -747,8 +724,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     const node = graph.nodes.find((item) => item.id === selected);
     if (selectedEdge !== null && graph.edges[selectedEdge]) {
       const edge = graph.edges[selectedEdge];
-      host.innerHTML = `${addNodeControls()}
-        <div class="inspector-block">
+      host.innerHTML = `<div class="inspector-block">
           <h2>${h("edge")}</h2>
           <label class="field"><span>${h("when")}</span>
             <select class="fit" id="edge-when">
@@ -759,7 +735,6 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
           </label>
           <button class="btn danger" id="edge-delete" type="button">${h("delete_edge")}</button>
         </div>`;
-      bindAddNode(host);
       host.querySelector("#edge-when").addEventListener("change", (event) => {
         const next = event.target.value;
         if (next !== edge.when && graph.edges.some((item, index) => index !== selectedEdge && item.from === edge.from && item.to === edge.to && item.when === next)) {
@@ -779,14 +754,12 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       return;
     }
     if (!node) {
-      host.innerHTML = `${addNodeControls()}
+      host.innerHTML = `<p class="small muted">${h("right_click_empty_canvas_to_add_a_node")}</p>
         <p class="small muted">${h("an_empty_graph_can_be_saved_but_not")}</p>
         <p class="small muted">${h("select_a_node_to_connect_it")}</p>`;
-      bindAddNode(host);
       return;
     }
-    host.innerHTML = `${addNodeControls()}
-      <div class="inspector-block">
+    host.innerHTML = `<div class="inspector-block">
         <h2>${h("this_node")}</h2>
         <label class="field"><span>${h("name")}</span><input id="node-name" value="${esc(node.name)}"></label>
         <label class="field"><span>${h("template")}</span><select class="fit" id="node-template">${selectOptions(templates, node.template_id, false, (row) => row.name)}</select></label>
@@ -806,7 +779,6 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         <p class="small muted">${h("the_edge_starts_at_this_node")}</p>
         <button class="btn danger" id="node-delete" type="button">${h("delete_node")}</button>
       </div>`;
-    bindAddNode(host);
     host.querySelector("#node-connect").addEventListener("click", () => startConnect(node));
     host.querySelector("#node-name").addEventListener("input", (event) => {
       node.name = event.target.value;
@@ -878,7 +850,16 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     if (!editable || !flushNode()) return;
     if (event.target.closest(".wf-node")) return;
     event.preventDefault();
-    openCanvasMenu(localPoint(event), event.clientX, event.clientY, openAddNodeDialog);
+    openCanvasMenu(localPoint(event), event.clientX, event.clientY, openAddNode);
+  });
+  canvas.addEventListener("keydown", (event) => {
+    if (!editable || event.target !== canvas) return;
+    if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+    event.preventDefault();
+    if (!flushNode()) return;
+    const point = freeNodePosition();
+    const rect = board.getBoundingClientRect();
+    openCanvasMenu(point, rect.left + point.x, rect.top + point.y, openAddNode);
   });
 
   function bindWorkflowTabs() {
