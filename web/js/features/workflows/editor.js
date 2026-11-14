@@ -10,6 +10,7 @@ import { t } from "../../core/i18n.js";
 import { confirmTofuApply } from "../../core/tofu.js";
 import { mountSchedules } from "../schedules.js";
 import { chooseEdgeType, edgeWhenLabel, openCanvasMenu, openNodeMenu } from "./menus.js";
+import { analyzeGraph, issuesForServerError, wouldCreateCycle } from "./validation.js";
 import { autoPan, createViewport, minimapLayout, zoomAt } from "./viewport.js";
 
 export function workflowTofuApply(graph, templates) {
@@ -51,6 +52,8 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     nodes: (workflow.graph.nodes || []).map((node) => ({ ...node })),
     edges: (workflow.graph.edges || []).map((edge) => ({ ...edge })),
   };
+  let validation = analyzeGraph(graph, templates);
+  let serverIssues = [];
   let selected = null;
   let selectedEdge = null;
   let connecting = null;
@@ -115,7 +118,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       </section>
     </div>`}
     </div>`, readonly ? back : `
-      ${can("operator") ? `<span class="small muted" id="wf-status" role="status" aria-live="polite">${h("all_changes_saved")}</span><button class="btn" id="wf-save" type="button">${h("save")}</button><button class="btn primary" id="wf-launch" type="button">${h("launch")}</button>` : ""}`);
+      ${can("operator") ? `<span class="small muted" id="wf-status" role="status" aria-live="polite">${h("all_changes_saved")}</span><span class="small wf-validation" id="wf-validation" role="status" aria-live="polite"></span><button class="btn" id="wf-save" type="button">${h("save")}</button><button class="btn primary" id="wf-launch" type="button" aria-describedby="wf-validation">${h("launch")}</button>` : ""}`);
 
   document.title = readonly
     ? `${t("run_2")} ${workflow.name} – Koreograf`
@@ -367,6 +370,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   }
 
   function drawEdges() {
+    recomputeValidation();
     const offsets = edgeOffsets();
     const edges = graph.edges.map((edge, index) => {
       const from = graph.nodes.find((node) => node.id === edge.from);
@@ -374,7 +378,12 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       if (!from || !to) return null;
       const klass = ["success", "failure", "always"].includes(edge.when) ? edge.when : "always";
       const geometry = edgeGeometry(from, to, klass, offsets.get(edge) || 0);
-      return { edge, index, from, to, klass, geometry, d: edgePath(geometry) };
+      const issues = combinedEdgeIssues(index);
+      const invalid = issues.some((issue) => issue.severity === "error");
+      const warning = issues.some((issue) => issue.severity === "warning");
+      const server = issues.some((issue) => issue.server);
+      const reason = issues.map(issueReason).join(" · ");
+      return { edge, index, from, to, klass, geometry, d: edgePath(geometry), invalid, warning, server, reason };
     }).filter(Boolean);
     const width = Math.max(640, ...graph.nodes.map((node) => (Number(node.x) || 0) + 260), ...edges.map(({ geometry }) => Math.max(geometry.start.x, geometry.end.x, geometry.c1.x, geometry.c2.x) + 20));
     const height = Math.max(400, ...graph.nodes.map((node) => (Number(node.y) || 0) + 140), ...edges.map(({ geometry }) => Math.max(geometry.start.y, geometry.end.y, geometry.c1.y, geometry.c2.y) + 20));
@@ -382,12 +391,16 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     board.style.height = `${height}px`;
     svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
     const defs = `<defs>${["success", "failure", "always"].map((when) => `<marker id="edge-arrow-${when}" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto"><polygon class="edge-arrow ${when}" points="0,0 12,6 0,12"></polygon></marker>`).join("")}</defs>`;
-    svg.innerHTML = `${defs}${edges.map(({ index, from, to, klass, geometry, d }) => {
+    svg.innerHTML = `${defs}${edges.map(({ index, from, to, klass, geometry, d, invalid, warning, server, reason }) => {
       const label = `${edgeWhenText(klass)}: ${from.name} → ${to.name}`;
       const chip = `${PORT_SYMBOLS[klass]} ${edgeWhenText(klass)}`;
       const role = editable ? ` role="button" tabindex="0"` : ` role="img"`;
-      return `<g class="edge-group ${klass}" data-edge-group="${index}">
-        <path class="edge-line ${klass}${selectedEdge === index ? " selected" : ""}" data-edge="${index}"${role} aria-label="${esc(label)}" d="${d}" marker-end="url(#edge-arrow-${klass})"></path>
+      const classes = `edge-line ${klass}${selectedEdge === index ? " selected" : ""}${invalid ? " invalid" : ""}${warning ? " warning" : ""}${server ? " server-invalid" : ""}`;
+      const groupClass = `edge-group ${klass}${invalid ? " invalid" : ""}`;
+      const described = reason ? `${label} – ${reason}` : label;
+      const invalidAttr = invalid ? ` aria-invalid="true"` : "";
+      return `<g class="${groupClass}" data-edge-group="${index}">
+        <path class="${classes}" data-edge="${index}"${role} aria-label="${esc(described)}"${invalidAttr} d="${d}" marker-end="url(#edge-arrow-${klass})"></path>
         <path class="edge-hit" data-edge="${index}" d="${d}"></path>
         ${edgeChip(geometry, klass, chip)}
       </g>`;
@@ -449,12 +462,86 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     if (hint) hint.textContent = t(key, vars);
   }
 
+  function combinedNodeIssues(id) {
+    return [
+      ...(validation.nodeIssues[id] || []),
+      ...serverIssues.filter((issue) => issue.nodes.includes(id)),
+    ];
+  }
+
+  function combinedEdgeIssues(index) {
+    return [
+      ...(validation.edgeIssues[index] || []),
+      ...serverIssues.filter((issue) => issue.edges.includes(index)),
+    ];
+  }
+
+  function combinedIssues() {
+    return [...validation.issues, ...serverIssues];
+  }
+
+  function issueReason(issue) {
+    return t(issue.key, issue.vars);
+  }
+
+  function badgeLabel(issue) {
+    if (issue.key === "template.missing_named" || issue.key === "workflow.node_template") return t("node_template_missing_badge");
+    if (issue.key === "workflow.node_name") return t("node_name_missing_badge");
+    if (issue.key === "workflow.node_duplicate") return t("node_duplicate_badge");
+    if (issue.key === "node_is_unconnected") return t("node_unconnected_badge");
+    if (issue.key === "node_is_unreachable") return t("node_unreachable_badge");
+    return t("node_issue_badge");
+  }
+
+  function nodeBadge(node) {
+    const issues = combinedNodeIssues(node.id);
+    if (!issues.length) return "";
+    const primary = issues.find((issue) => issue.severity === "error") || issues[0];
+    const reason = issues.map(issueReason).join(" · ");
+    return `<span class="wf-node-badge ${primary.severity}" title="${esc(reason)}" aria-label="${esc(reason)}">${esc(badgeLabel(primary))}</span>`;
+  }
+
+  function summaryText(errors, warnings, issues) {
+    if (!issues.length) return t("graph_is_valid");
+    if (issues.length === 1) return issueReason(issues[0]);
+    const parts = [];
+    if (errors.length) parts.push(t("graph_error_count", { count: errors.length }));
+    if (warnings.length) parts.push(t("graph_warning_count", { count: warnings.length }));
+    return parts.join(" · ");
+  }
+
+  function paintValidation() {
+    const issues = combinedIssues();
+    const errors = issues.filter((issue) => issue.severity === "error");
+    const warnings = issues.filter((issue) => issue.severity === "warning");
+    const summary = document.querySelector("#wf-validation");
+    const launchButton = document.querySelector("#wf-launch");
+    if (summary) {
+      summary.textContent = summaryText(errors, warnings, issues);
+      summary.classList.toggle("error", errors.length > 0);
+      summary.classList.toggle("warn", errors.length === 0 && warnings.length > 0);
+      if (issues.length) summary.setAttribute("title", issues.map(issueReason).join(" · "));
+      else summary.removeAttribute("title");
+    }
+    if (launchButton) {
+      launchButton.disabled = errors.length > 0;
+      if (errors.length) launchButton.setAttribute("title", issueReason(errors[0]));
+      else launchButton.removeAttribute("title");
+    }
+    paintDirty();
+  }
+
+  function recomputeValidation() {
+    validation = analyzeGraph(graph, templates);
+    paintValidation();
+  }
+
   function paintDirty() {
     const saveButton = document.querySelector("#wf-save");
     const launchButton = document.querySelector("#wf-launch");
     const status = document.querySelector("#wf-status");
     if (saveButton) saveButton.classList.toggle("primary", dirty);
-    if (launchButton) launchButton.classList.toggle("primary", !dirty);
+    if (launchButton) launchButton.classList.toggle("primary", !dirty && !launchButton.disabled);
     if (status) status.textContent = t(dirty ? "unsaved_changes" : "all_changes_saved");
   }
 
@@ -466,6 +553,8 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
 
   function markDirty() {
     if (!editable) return;
+    serverIssues = [];
+    recomputeValidation();
     setDirty(true);
   }
 
@@ -660,6 +749,12 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       renderInspector();
       return;
     }
+    if (wouldCreateCycle(graph, fromNode.id, toNode.id)) {
+      setHint("connection_would_create_a_cycle");
+      renderNodes();
+      renderInspector();
+      return;
+    }
     const when = await chooseEdgeType(fromNode, toNode);
     if (!when) {
       setHint("connect_cancelled");
@@ -707,6 +802,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   }
 
   function renderNodes() {
+    recomputeValidation();
     const empty = document.querySelector("#wf-empty");
     if (empty) empty.hidden = graph.nodes.length > 0;
     nodes.innerHTML = graph.nodes.map((node) => {
@@ -715,12 +811,16 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       const selectedClass = selected === node.id ? " selected" : "";
       const runClass = readonly ? " run-node" : "";
       const connectClass = connecting && connecting.from === node.id ? " connecting" : "";
+      const nodeIssues = combinedNodeIssues(node.id);
+      const issueClass = nodeIssues.some((issue) => issue.severity === "error")
+        ? " invalid"
+        : nodeIssues.some((issue) => issue.severity === "warning") ? " warning" : "";
       const menu = editable ? `<button class="btn ghost compact node-menu-button" type="button" data-node-menu aria-haspopup="menu" aria-expanded="false" aria-label="${h("node_actions", { name: node.name })}">⋯</button>` : "";
       const ports = `<div class="wf-ports">${["success", "failure", "always"].map((when) => {
         const add = editable ? `<button class="wf-port-add" type="button" data-add-port="${when}" aria-label="${h("add_step_after", { name: node.name, when: edgeWhenText(when) })}" title="${h("add_step_after", { name: node.name, when: edgeWhenText(when) })}">+</button>` : "";
         return `<div class="wf-port ${when}"><span class="wf-port-symbol" aria-hidden="true">${PORT_SYMBOLS[when]}</span>${add}</div>`;
       }).join("")}</div>`;
-      return `<div class="wf-node${selectedClass}${connectClass}${phaseClass}${runClass}" data-id="${esc(node.id)}" style="left:${Number(node.x) || 0}px;top:${Number(node.y) || 0}px" tabindex="0" role="group" aria-label="${esc(nodeLabel(node))}">${menu}<strong>${esc(node.name)}</strong><span class="small muted">${esc(nodeCaption(node))}</span>${ports}</div>`;
+      return `<div class="wf-node${selectedClass}${connectClass}${phaseClass}${runClass}${issueClass}" data-id="${esc(node.id)}" style="left:${Number(node.x) || 0}px;top:${Number(node.y) || 0}px" tabindex="0" role="group" aria-label="${esc(nodeLabel(node))}">${menu}<strong>${esc(node.name)}</strong>${nodeBadge(node)}<span class="small muted">${esc(nodeCaption(node))}</span>${ports}</div>`;
     }).join("");
     nodes.querySelectorAll(".wf-node").forEach((element) => {
       const node = graph.nodes.find((item) => item.id === element.dataset.id);
@@ -742,7 +842,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
           if (node.id === connecting.from) {
             event.preventDefault();
             if (!flushNode()) return;
-            connectDrag = { id: node.id, pointerId: event.pointerId };
+            connectDrag = { id: node.id, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, moved: false };
             element.setPointerCapture(event.pointerId);
             drawConnectPreview(node, localPoint(event));
             return;
@@ -763,6 +863,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       });
       element.addEventListener("pointermove", (event) => {
         if (connectDrag && connectDrag.id === node.id) {
+          if (Math.hypot(event.clientX - connectDrag.startX, event.clientY - connectDrag.startY) > 4) connectDrag.moved = true;
           drawConnectPreview(node, localPoint(event));
           return;
         }
@@ -779,11 +880,12 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       });
       element.addEventListener("pointerup", (event) => {
         if (connectDrag && connectDrag.id === node.id) {
+          const moved = connectDrag.moved;
           connectDrag = null;
           clearConnectPreview();
           const target = document.elementFromPoint(event.clientX, event.clientY);
           const hit = target && target.closest(".wf-node");
-          if (hit && hit.dataset.id !== node.id) finishConnect(hit.dataset.id);
+          if (hit && (hit.dataset.id !== node.id || moved)) finishConnect(hit.dataset.id);
           else if (!hit && (!target || (target.closest("#canvas") && !target.closest(".canvas-controls, .minimap")))) connectToNew(node, localPoint(event));
           else setHint("connect_click_or_drag_target", { name: node.name });
           return;
@@ -913,6 +1015,10 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       setHint("the_same_edge_is_present_twice");
       return false;
     }
+    if (wouldCreateCycle(graph, edge.from, toId, index)) {
+      setHint("connection_would_create_a_cycle");
+      return false;
+    }
     edge.to = toId;
     markDirty();
     setHint("edge_changed");
@@ -931,6 +1037,10 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     }
     if (edgeExists(node.id, toId, when)) {
       setHint("the_same_edge_is_present_twice");
+      return;
+    }
+    if (wouldCreateCycle(graph, node.id, toId)) {
+      setHint("connection_would_create_a_cycle");
       return;
     }
     graph.edges.push({ from: node.id, to: toId, when });
@@ -1453,9 +1563,21 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       workflow.name = name;
       workflow.description = description;
       workflow.graph = JSON.parse(JSON.stringify(graph));
+      serverIssues = [];
+      recomputeValidation();
       setDirty(false);
       return true;
     } catch (error) {
+      const issues = issuesForServerError(graph, error && error.message, error && error.vars);
+      serverIssues = issues;
+      if (issues.length) {
+        renderNodes();
+        renderInspector();
+        const primary = issues.find((issue) => issue.severity === "error") || issues[0];
+        setHint(primary.key, primary.vars);
+      } else {
+        recomputeValidation();
+      }
       handle(error);
       return false;
     } finally {
@@ -1506,7 +1628,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   const launch = document.querySelector("#wf-launch");
   if (launch) {
     launch.addEventListener("click", async () => {
-      if (!flushNode()) return;
+      if (launch.disabled || !flushNode()) return;
       let mode = "current";
       if (dirty) {
         mode = await chooseLaunchMode();
