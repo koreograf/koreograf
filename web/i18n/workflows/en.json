@@ -1,6 +1,8 @@
 {
   "add_edge": "Add edge",
+  "add_first_step": "Add first step",
   "add_node": "Add node",
+  "add_step_after": "Add the next step after {name} on {when}",
   "all_changes_saved": "All changes saved",
   "all_of_n_predecessors": "all of {count} predecessors",
   "all_predecessors": "All predecessors",
@@ -33,6 +35,7 @@
   "edge_removed": "Edge removed.",
   "edit_node": "Edit node",
   "editor": "Editor",
+  "empty_canvas_hint": "Start with a step, then add the next one from its output.",
   "empty_workflows": "Workflows chain templates with success, failure, and always edges.",
   "extra_variables_are_not_valid_json": "Extra variables are not valid JSON.",
   "fit_view": "Fit",

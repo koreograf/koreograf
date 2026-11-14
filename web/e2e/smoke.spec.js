@@ -146,6 +146,10 @@ test("an administrator navigates every route, launches the demo shell job and sw
   await page.mouse.up();
   await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
   await expect(page.locator("#connect-preview")).toHaveCount(0);
+  const dropped = page.getByRole("dialog");
+  await expect(dropped.getByRole("heading", { name: "Add node" })).toBeVisible();
+  await dropped.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
 
   await page.locator("#board").click({ button: "right", position: { x: boardBox.width - 80, y: boardBox.height - 80 } });
   await page.getByRole("menuitem", { name: "Add node", exact: true }).click();
@@ -311,4 +315,38 @@ test("the workflow canvas fits, zooms and pans", async ({ page }) => {
   await page.mouse.move(box.x + 90, box.y + 50, { steps: 5 });
   await page.mouse.up();
   await expect.poll(async () => Number(await page.locator("#board").getAttribute("data-view-x"))).toBeGreaterThan(viewBefore);
+});
+
+test("an empty workflow builds a success chain without the context menu", async ({ page }) => {
+  await signInInEnglish(page);
+  await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
+  await page.getByRole("link", { name: "+ Workflow", exact: true }).click();
+  const create = page.getByRole("dialog");
+  await expect(create.getByRole("heading", { name: "New workflow" })).toBeVisible();
+  await create.getByRole("textbox", { name: /^Name/ }).fill("Handle chain");
+  await create.getByRole("button", { name: "Create and open", exact: true }).click();
+  await expect(create).toHaveCount(0);
+
+  await expect(page.locator("#wf-add-first")).toBeVisible();
+  await expect(page.locator("[data-add-port]")).toHaveCount(0);
+
+  await page.locator("#wf-add-first").click();
+  const first = page.getByRole("dialog");
+  await expect(first.getByRole("heading", { name: "Add node" })).toBeVisible();
+  await first.locator("#node-name").fill("First step");
+  await first.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(first).toHaveCount(0);
+  await expect(page.locator(".wf-node")).toHaveCount(1);
+  await expect(page.locator("#wf-add-first")).toBeHidden();
+
+  const firstNode = page.locator(".wf-node", { hasText: "First step" });
+  await firstNode.locator('[data-add-port="success"]').click();
+  const second = page.getByRole("dialog");
+  await expect(second.getByRole("heading", { name: "Add node" })).toBeVisible();
+  await second.locator("#node-name").fill("Second step");
+  await second.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(second).toHaveCount(0);
+
+  await expect(page.locator(".wf-node")).toHaveCount(2);
+  await expect(page.locator("#edges path.success")).toHaveCount(1);
 });

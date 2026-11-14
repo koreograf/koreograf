@@ -45,10 +45,10 @@ test("a workflow needs an apply node for the OpenTofu confirmation", async () =>
 test("edges leave from the right side at the port of their kind", async () => {
   const { edgePoint } = await loadEditor();
   const node = { x: 10, y: 20 };
-  assert.deepEqual(edgePoint(node, "success"), { x: 210, y: 44 });
-  assert.deepEqual(edgePoint(node, "failure"), { x: 210, y: 74 });
-  assert.deepEqual(edgePoint(node, "always"), { x: 210, y: 59 });
-  assert.deepEqual(edgePoint(node, "unknown"), { x: 210, y: 44 });
+  assert.deepEqual(edgePoint(node, "success"), { x: 210, y: 60 });
+  assert.deepEqual(edgePoint(node, "failure"), { x: 210, y: 96 });
+  assert.deepEqual(edgePoint(node, "always"), { x: 210, y: 78 });
+  assert.deepEqual(edgePoint(node, "unknown"), { x: 210, y: 60 });
 });
 
 test("edge kinds use the error label for a failure edge", async () => {

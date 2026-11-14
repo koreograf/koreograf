@@ -87,7 +87,13 @@ test("nodes connect from the menu and duplicate edges are refused", async () => 
   editor.mountEditor(workflow, templates, false, {}, { inventories: [], credentials: [] }, {});
   assert.match(document.querySelector("#nodes").innerHTML, /data-node-menu/);
   assert.ok(!document.querySelector("#add-node"), "the inspector still has an Add node button");
-  assert.ok(!document.querySelector("#nodes").innerHTML.includes("data-port"));
+  assert.equal(document.querySelectorAll('[data-id="n1"] [data-add-port]').length, 3, "the node has no output handles");
+  for (const [when, symbol] of [["success", "✓"], ["failure", "✗"], ["always", "↻"]]) {
+    const port = document.querySelector(`[data-id="n1"] [data-add-port="${when}"]`);
+    assert.ok(port, `the node has no ${when} handle`);
+    assert.ok(port.getAttribute("aria-label"), `the ${when} handle has no text alternative`);
+    assert.ok(port.closest(".wf-port").innerHTML.includes(symbol), `the ${when} handle has no ${symbol} symbol`);
+  }
 
   document.querySelector('[data-id="n1"] [data-node-menu]').dispatchEvent({ type: "click" });
   document.querySelector("[data-connect-node]").dispatchEvent({ type: "click" });
@@ -110,6 +116,41 @@ test("nodes connect from the menu and duplicate edges are refused", async () => 
   await tick();
   assert.equal(document.querySelectorAll("#edges path.success").length, 1, "the same edge was added twice");
   assert.equal(document.querySelector("#wf-hint").textContent, "the_same_edge_is_present_twice");
+});
+
+test("a handle plus adds exactly one node connected on that output", async () => {
+  for (const when of ["success", "failure", "always"]) {
+    await mountGraph({ nodes: [node("n1", "One", 20, 20)], edges: [] });
+    const port = document.querySelector(`[data-id="n1"] [data-add-port="${when}"]`);
+    assert.ok(port, `the node has no ${when} handle`);
+    port.dispatchEvent({ type: "click" });
+    const dialog = document.querySelector("#add-node-dialog");
+    assert.ok(dialog, "the handle does not open the full node editor");
+    const name = dialog.querySelector("#node-name");
+    name.value = "Next";
+    dialog.querySelector(".dialog-form").dispatchEvent({ type: "submit", preventDefault() {} });
+    await tick();
+    assert.equal(document.querySelectorAll("#nodes .wf-node").length, 2, `${when} handle did not add exactly one node`);
+    assert.equal(document.querySelectorAll(`#edges path.${when}`).length, 1, `${when} handle did not add one ${when} edge`);
+    assert.equal(document.querySelectorAll("#edges path").length, 1, `${when} handle added another edge`);
+  }
+});
+
+test("dropping a connection on empty canvas adds a connected node", async () => {
+  await mountGraph({ nodes: [node("n1", "One", 20, 20)], edges: [] });
+  document.querySelector('[data-id="n1"] [data-node-menu]').dispatchEvent({ type: "click" });
+  document.querySelector("[data-connect-node]").dispatchEvent({ type: "click" });
+  const source = document.querySelector('[data-id="n1"]');
+  source.dispatchEvent({ type: "pointerdown", preventDefault() {}, stopPropagation() {}, clientX: 20, clientY: 20, pointerId: 1 });
+  source.dispatchEvent({ type: "pointerup", clientX: 500, clientY: 300, pointerId: 1 });
+  const dialog = document.querySelector("#add-node-dialog");
+  assert.ok(dialog, "dropping on empty canvas did not open the Add node editor");
+  const name = dialog.querySelector("#node-name");
+  name.value = "Next";
+  dialog.querySelector(".dialog-form").dispatchEvent({ type: "submit", preventDefault() {} });
+  await tick();
+  assert.equal(document.querySelectorAll("#nodes .wf-node").length, 2, "the drop added more than one node");
+  assert.equal(document.querySelectorAll("#edges path.success").length, 1, "the dropped connection did not add a success edge");
 });
 
 async function mountGraph(graph, { readonly = false, phases = {}, templates } = {}) {
@@ -338,4 +379,7 @@ test("the workflow connect styles are present", () => {
   assert.ok(css.includes(".edges path.connecting"));
   assert.ok(css.includes(".edge-row"));
   assert.ok(css.includes(".edge-add"));
+  assert.ok(css.includes(".canvas-empty"));
+  assert.ok(css.includes(".wf-port"));
+  assert.ok(css.includes(".wf-port-add"));
 });
