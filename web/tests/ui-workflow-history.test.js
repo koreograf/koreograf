@@ -193,6 +193,47 @@ test("editing a node name is undoable and redoable", async () => {
   assert.equal(nameOf("n1"), "Renamed", "Redo did not restore the node name");
 });
 
+test("typing a node name is one history entry", async () => {
+  await mount();
+  nodeElement("n1").dispatchEvent({ type: "pointerdown", clientX: 20, clientY: 20, pointerId: 1 });
+  const name = document.querySelector("#node-name");
+  for (const value of ["R", "Re", "Ren"]) {
+    name.value = value;
+    name.dispatchEvent({ type: "input", target: name });
+  }
+  assert.equal(nameOf("n1"), "Ren");
+
+  undo();
+  assert.equal(nameOf("n1"), "One", "Undo did not revert the whole name");
+  assert.equal(document.querySelector("#wf-undo").disabled, true, "name typing created several history entries");
+  redo();
+  assert.equal(nameOf("n1"), "Ren", "Redo did not restore the typed name");
+});
+
+test("Ctrl+Z inside a text field keeps the graph history", async () => {
+  await mount();
+  nodeElement("n1").dispatchEvent({ type: "pointerdown", clientX: 20, clientY: 20, pointerId: 1 });
+  const stack = document.querySelector(".editor-stack");
+  keydown(nodeElement("n1"), "ArrowRight");
+  assert.equal(leftOf("n1"), "30px");
+  assert.equal(document.querySelector("#wf-undo").disabled, false);
+
+  const extra = document.querySelector("#node-extra");
+  assert.ok(extra, "the node panel has no extra variables field");
+  keydown(stack, "z", { ctrlKey: true, target: extra });
+  assert.equal(leftOf("n1"), "30px", "Ctrl+Z in a node field undid the graph");
+  assert.equal(document.querySelector("#wf-undo").disabled, false, "Ctrl+Z in a node field consumed the history");
+  assert.equal(document.querySelector("#wf-redo").disabled, true, "Ctrl+Z in a node field enabled Redo");
+
+  const name = document.querySelector("#wf-name");
+  name.value = "Renamed";
+  name.dispatchEvent({ type: "input", target: name });
+  keydown(stack, "z", { ctrlKey: true, target: name });
+  assert.equal(name.value, "Renamed", "Ctrl+Z in the workflow name field changed the text");
+  assert.equal(leftOf("n1"), "30px", "Ctrl+Z in the workflow name field undid the graph");
+  assert.equal(document.querySelector("#wf-undo").disabled, false, "Ctrl+Z in the workflow name field consumed the history");
+});
+
 test("editing an edge type is undoable and redoable", async () => {
   await mount();
   document.querySelector("#edges").dispatchEvent({ type: "click", target: document.querySelector("#edges path.edge-line") });
