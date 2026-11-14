@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.1.0-alpha.12](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.11...v0.1.0-alpha.12) (2026-11-14)
+
+
+### Features
+
+* add numbered schema migrations with an upgrade test ([#418](https://github.com/koreograf/koreograf/issues/418)) ([0bf20ac](https://github.com/koreograf/koreograf/commit/0bf20ac5d915a0eba3a0f62683fa3e9e2efe6911))
+* join the docker socket group without a manual gid ([#443](https://github.com/koreograf/koreograf/issues/443)) ([20aad4e](https://github.com/koreograf/koreograf/commit/20aad4e6d63538f22eed7ec87d1e89bd6bfc46ad))
+* serve the http api under /api/v1 and keep /api as an alias ([#423](https://github.com/koreograf/koreograf/issues/423)) ([3c7315f](https://github.com/koreograf/koreograf/commit/3c7315f12240614ade4e07cce37acdac5ebfcc4d))
+* serve web assets compressed with etag caching ([#415](https://github.com/koreograf/koreograf/issues/415)) ([5f733c5](https://github.com/koreograf/koreograf/commit/5f733c5927868ce1a3bf8b1f12b1a59f3d42f866))
+
+
+### Bug Fixes
+
+* clear the drag state after a cancelled connection ([#449](https://github.com/koreograf/koreograf/issues/449)) ([e4d2411](https://github.com/koreograf/koreograf/commit/e4d2411540c8ec33d31ef1c94190f797aa667614))
+* walk the data dir without following symlinks ([#445](https://github.com/koreograf/koreograf/issues/445)) ([b581e83](https://github.com/koreograf/koreograf/commit/b581e83aceca213f3c3e286aa55e4392c01ae16d))
+
 ## [0.1.0-alpha.11](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.10...v0.1.0-alpha.11) (2026-11-11)
 
 

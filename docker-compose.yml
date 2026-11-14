@@ -1,7 +1,7 @@
 services:
   koreograf:
     # Published image. A local build uses docker-compose.build.yml and the tag koreograf:local.
-    image: ghcr.io/koreograf/koreograf:0.1.0-alpha.11 # x-release-please-version
+    image: ghcr.io/koreograf/koreograf:0.1.0-alpha.12 # x-release-please-version
     pull_policy: missing
     user: "10001:10001"
     read_only: true

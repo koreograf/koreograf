@@ -104,7 +104,7 @@ RUN apt-get update \
 
 FROM scratch
 # x-release-please-start-version
-ARG VERSION=0.1.0-alpha.11
+ARG VERSION=0.1.0-alpha.12
 # x-release-please-end
 ARG SOURCE=https://github.com/koreograf/koreograf
 ARG GIT_SHA
