@@ -69,6 +69,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   let baseline = null;
   let historyStack = [snapshotGraph()];
   let historyIndex = 0;
+  let nameHistoryOpen = false;
   let toastTimer = null;
   const leaveGuard = () => dirty;
   const back = readonly && workflow.workflow_id
@@ -388,15 +389,16 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   function historyShortcut(event) {
     if (event.defaultPrevented || document.querySelector(".overlay")) return;
     const key = String(event.key).toLowerCase();
+    const inTextField = isFormField(event.target) || Boolean(event.target && event.target.isContentEditable);
     if ((event.ctrlKey || event.metaKey) && key === "z") {
-      if (!editable) return;
+      if (!editable || inTextField) return;
       event.preventDefault();
       if (event.shiftKey) redo();
       else undo();
       return;
     }
     if ((event.ctrlKey || event.metaKey) && key === "y") {
-      if (!editable) return;
+      if (!editable || inTextField) return;
       event.preventDefault();
       redo();
       return;
@@ -1440,6 +1442,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   function renderInspector() {
     if (!flushNode()) return;
     flushNode = () => true;
+    nameHistoryOpen = false;
     const host = document.querySelector("#inspector");
     if (readonly) {
       host.innerHTML = `<h2>${h("run_2")}</h2><p class="small"><span id="run-state" class="pill ${esc(workflow.status || "pending")}">${esc(statusLabel(workflow.status || "pending"))}</span></p>${back}<p class="small muted">${h("green_is_successful_red_is_failed_blue_is")}</p>`;
@@ -1537,8 +1540,25 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       node.name = event.target.value;
       const label = nodes.querySelector(`[data-id="${CSS.escape(node.id)}"] strong`);
       if (label) label.textContent = node.name;
-      recordHistory();
+      if (nameHistoryOpen) {
+        historyStack = historyStack.slice(0, historyIndex + 1);
+        historyStack[historyIndex] = snapshotGraph();
+        if (historyIndex > 0 && sameJson(historyStack[historyIndex], historyStack[historyIndex - 1])) {
+          historyStack.pop();
+          historyIndex -= 1;
+        }
+        updateHistoryButtons();
+      } else {
+        recordHistory();
+        nameHistoryOpen = true;
+      }
       markDirty();
+    });
+    host.querySelector("#node-name").addEventListener("change", () => {
+      nameHistoryOpen = false;
+    });
+    host.querySelector("#node-name").addEventListener("blur", () => {
+      nameHistoryOpen = false;
     });
     host.querySelector("#node-template").addEventListener("change", (event) => {
       const next = event.target.value;
