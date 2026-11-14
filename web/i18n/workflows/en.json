@@ -32,7 +32,6 @@
   "extra_variables_are_not_valid_json": "Extra variables are not valid JSON.",
   "forks_is_a_number_from_1_to_50": "Forks is a number from 1 to 50.",
   "green_is_successful_red_is_failed_blue_is": "Green is successful, red is failed, blue is running.",
-  "name_optional": "Name (optional)",
   "nav.access": "Access",
   "new_workflow": "New workflow",
   "no_inventory": "No inventory",

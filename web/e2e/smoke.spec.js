@@ -110,4 +110,20 @@ test("an administrator navigates every route, launches the demo shell job and sw
   await page.mouse.up();
   await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
   await expect(page.locator("#connect-preview")).toHaveCount(0);
+
+  await page.locator("#board").click({ button: "right", position: { x: boardBox.width - 80, y: boardBox.height - 80 } });
+  await page.getByRole("menuitem", { name: "Add node", exact: true }).click();
+  const addDialog = page.getByRole("dialog");
+  await expect(addDialog.getByRole("heading", { name: "Add node" })).toBeVisible();
+  await addDialog.locator("#node-name").fill("Extra check");
+  await addDialog.locator("#node-template").selectOption({ label: "Healthcheck" });
+  await addDialog.locator("#node-extra").fill('{"alert":"added"}');
+  await addDialog.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(addDialog).toHaveCount(0);
+  const added = page.locator(".wf-node", { hasText: "Extra check" });
+  await expect(added).toBeVisible();
+  await expect(page.locator("#node-name")).toHaveValue("Extra check");
+  await expect(page.locator("#node-template option:checked")).toHaveText("Healthcheck");
+  await expect(page.locator("#node-extra")).toHaveValue(/"alert": "added"/);
+  await expect(page.locator("#inspector #add-node")).toHaveCount(0);
 });
