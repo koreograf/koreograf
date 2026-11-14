@@ -824,9 +824,10 @@ button.run-line:hover { outline: 1px solid var(--line); }
 .edges path.always { stroke: #78716c; stroke-dasharray: 6 4; }
 .edges path.selected { stroke-width: 4; }
 .edges path:focus-visible { outline: none; stroke-width: 4; filter: drop-shadow(0 0 2px var(--accent)); }
-.edges path.edge-hit { stroke: transparent; stroke-width: 24; stroke-dasharray: none; pointer-events: stroke; cursor: pointer; }
-.edge-group:hover .edge-line { stroke-width: 3; }
-.edge-group:hover .edge-line.selected { stroke-width: 4; }
+.edges path.edge-hit { stroke: transparent; stroke-width: 24; stroke-dasharray: none; pointer-events: none; }
+.canvas.editable .edges path.edge-hit { pointer-events: stroke; cursor: pointer; }
+.canvas.editable .edge-group:hover .edge-line { stroke-width: 3; }
+.canvas.editable .edge-group:hover .edge-line.selected { stroke-width: 4; }
 .edge-arrow { stroke: none; }
 .edge-arrow.success { fill: var(--good); }
 .edge-arrow.failure { fill: var(--bad); }

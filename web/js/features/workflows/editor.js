@@ -122,6 +122,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     : `${workflow.name} – ${t("workflow")} – Koreograf`;
 
   const canvas = document.querySelector("#canvas");
+  canvas.classList.toggle("editable", editable);
   const board = document.querySelector("#board");
   const svg = document.querySelector("#edges");
   const nodes = document.querySelector("#nodes");
@@ -349,8 +350,20 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   function edgeChip(geometry, klass, label) {
     const x = (geometry.start.x + 3 * geometry.c1.x + 3 * geometry.c2.x + geometry.end.x) / 8;
     const y = (geometry.start.y + 3 * geometry.c1.y + 3 * geometry.c2.y + geometry.end.y) / 8;
-    const width = Math.max(56, label.length * 6.5 + 14);
+    const width = Math.max(56, label.length * 7 + 18);
     return `<g class="edge-chip" aria-hidden="true" pointer-events="none"><rect class="edge-chip-bg" x="${x - width / 2}" y="${y - 10}" width="${width}" height="20" rx="10" pointer-events="none"></rect><text class="edge-chip-text ${klass}" x="${x}" y="${y}" text-anchor="middle" dominant-baseline="central" pointer-events="none">${esc(label)}</text></g>`;
+  }
+
+  function paintEdgeChips() {
+    svg.querySelectorAll(".edge-chip").forEach((chip) => {
+      const text = chip.querySelector(".edge-chip-text");
+      const rect = chip.querySelector(".edge-chip-bg");
+      if (!text || !rect || typeof text.getComputedTextLength !== "function") return;
+      const width = Math.max(56, text.getComputedTextLength() + 18);
+      const x = Number(text.getAttribute("x"));
+      rect.setAttribute("width", String(width));
+      rect.setAttribute("x", String(x - width / 2));
+    });
   }
 
   function drawEdges() {
@@ -379,6 +392,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         ${edgeChip(geometry, klass, chip)}
       </g>`;
     }).join("")}`;
+    paintEdgeChips();
     paintMinimap();
   }
 
@@ -883,7 +897,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         const target = graph.nodes.find((item) => item.id === edge.to);
         const targetName = target ? target.name : edge.to;
         return `<div class="edge-row" data-edge-index="${index}" data-edge-when="${when}">
-          <span class="pill ${when}">${edgeWhenLabel(when)}</span>
+          <span class="pill ${when}">${h(edgeWhenLabel(when))}</span>
           <select class="fit edge-target" data-edge-index="${index}" aria-label="${h("target")}: ${esc(targetName)}">${targetOptions(node.id, edge.to, false)}</select>
           <button class="btn compact ghost" type="button" data-remove-edge="${index}" aria-label="${h("delete_edge")}: ${esc(targetName)}">${h("remove")}</button>
         </div>`;
