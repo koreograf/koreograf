@@ -414,6 +414,13 @@ test("the workflow editor reflows at 375 px and opens the inspector on selection
   expect(after.content).toBeLessThanOrEqual(after.viewport);
   const inspector = await page.locator("#inspector").boundingBox();
   expect(inspector.y).toBeLessThan(812);
+
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(page.locator("#inspector")).toBeVisible();
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator("#inspector")).toBeHidden();
 });
 
 test("an empty workflow builds a success chain without the context menu", async ({ page }) => {

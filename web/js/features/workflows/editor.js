@@ -182,8 +182,10 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   let autoPanTimer = null;
   const touchPointers = new Map();
 
+  const narrowQuery = typeof window.matchMedia === "function" ? window.matchMedia("(max-width: 900px)") : null;
+
   function narrowScreen() {
-    if (typeof window.matchMedia === "function") return window.matchMedia("(max-width: 900px)").matches;
+    if (narrowQuery) return narrowQuery.matches;
     return Number(window.innerWidth) <= 900;
   }
 
@@ -2134,6 +2136,12 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   renderNodes();
   renderInspector();
   if (narrowScreen()) setInspectorCollapsed(true, false);
+  if (narrowQuery) {
+    narrowQuery.addEventListener("change", (event) => {
+      if (!editorBody || !editorBody.isConnected) return;
+      setInspectorCollapsed(event.matches, false);
+    });
+  }
   fitOnOpen();
   bindWorkflowTabs();
   mountSchedules(document.querySelector("#schedule-card"));

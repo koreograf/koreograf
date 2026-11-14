@@ -1179,6 +1179,7 @@ code, .mono { font-family: var(--mono); font-size: 13px; word-break: break-all; 
   .tab-bar .tabs { flex-wrap: wrap; }
   .editor-body { grid-template-columns: minmax(0, 1fr); min-height: 0; }
   .editor-body.inspector-collapsed { grid-template-columns: minmax(0, 1fr); }
+  .editor-stack { padding-bottom: 56px; }
   .inspector-resizer { display: none; }
   .inspector-panel {
     position: fixed;
