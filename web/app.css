@@ -700,6 +700,9 @@ pre.vars .vars-value { color: var(--good-bg); }
 pre.vars .vars-comment { color: var(--side-muted); }
 
 .editor-stack { display: flex; flex-direction: column; gap: 12px; }
+.wf-validation { color: var(--muted); }
+.wf-validation.error { color: var(--bad); }
+.wf-validation.warn { color: var(--warn); }
 .editor-body { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 12px; min-height: 560px; }
 @media (min-width: 1920px) {
   .editor-body { height: calc(100vh - 190px); min-height: 640px; align-items: stretch; }
@@ -823,6 +826,8 @@ button.run-line:hover { outline: 1px solid var(--line); }
 .edges path.failure { stroke: var(--bad); stroke-dasharray: 2 4; }
 .edges path.always { stroke: #78716c; stroke-dasharray: 6 4; }
 .edges path.selected { stroke-width: 4; }
+.edges path.invalid { stroke: var(--bad); stroke-width: 4; }
+.edges path.warning { stroke: var(--warn); }
 .edges path:focus-visible { outline: none; stroke-width: 4; filter: drop-shadow(0 0 2px var(--accent)); }
 .edges path.edge-hit { stroke: transparent; stroke-width: 24; stroke-dasharray: none; pointer-events: none; }
 .canvas.editable .edges path.edge-hit { pointer-events: stroke; cursor: pointer; }
@@ -852,6 +857,20 @@ button.run-line:hover { outline: 1px solid var(--line); }
 }
 .wf-node.selected { border-color: var(--accent); }
 .wf-node.connecting { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.wf-node.invalid { border-color: var(--bad); }
+.wf-node.warning { border-color: var(--warn); }
+.wf-node-badge {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bad-bg);
+  color: var(--bad);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.wf-node-badge.warning { background: var(--warn-bg); color: var(--warn); }
 .wf-node.phase-successful { box-shadow: inset 3px 0 0 var(--good); }
 .wf-node.phase-failed { box-shadow: inset 3px 0 0 var(--bad); }
 .wf-node.phase-running { box-shadow: inset 3px 0 0 var(--info); }

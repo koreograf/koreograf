@@ -355,6 +355,8 @@ test("an empty workflow builds a success chain without the context menu", async 
 
   await expect(page.locator("#wf-add-first")).toBeVisible();
   await expect(page.locator("[data-add-port]")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Launch", exact: true })).toBeDisabled();
+  await expect(page.locator("#wf-validation")).toHaveText("The workflow has no nodes yet.");
 
   await page.locator("#wf-add-first").focus();
   await page.keyboard.press("Enter");
@@ -376,4 +378,17 @@ test("an empty workflow builds a success chain without the context menu", async 
 
   await expect(page.locator(".wf-node")).toHaveCount(2);
   await expect(page.locator("#edges path.success")).toHaveCount(1);
+
+  await page.locator(".wf-node", { hasText: "Second step" }).click();
+  await page.getByRole("button", { name: "Actions for Second step", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Connect", exact: true }).click();
+  const sourceBox = await page.locator(".wf-node", { hasText: "Second step" }).boundingBox();
+  const targetBox = await page.locator(".wf-node", { hasText: "First step" }).boundingBox();
+  await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2, { steps: 5 });
+  await page.mouse.up();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.locator("#wf-hint")).toHaveText("This connection would create a cycle.");
+  await expect(page.locator("#edges path.edge-line")).toHaveCount(1);
 });
