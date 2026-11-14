@@ -10,6 +10,7 @@ import { t } from "../../core/i18n.js";
 import { confirmTofuApply } from "../../core/tofu.js";
 import { mountSchedules } from "../schedules.js";
 import { chooseEdgeType, openCanvasMenu, openNodeMenu } from "./menus.js";
+import { autoPan, createViewport, minimapLayout } from "./viewport.js";
 
 export function workflowTofuApply(graph, templates) {
   return ((graph && graph.nodes) || []).some((node) => {
@@ -73,7 +74,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     ${tabBar}
     <div id="wf-panel-editor"${tabbed ? ` role="tabpanel" aria-labelledby="wf-tab-editor"${activeTab === "editor" ? "" : " hidden"}` : ""}>
       <div class="editor-body">
-        <div>
+        <div class="canvas-column">
           ${readonly ? "" : `
             <div class="field-row" style="margin-bottom:10px">
               <label class="field"><span>${h("name")}</span><input class="fit" id="wf-name" value="${esc(workflow.name)}" ${can("operator") ? "" : "disabled"}></label>
@@ -81,7 +82,16 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
             </div>`}
           <p class="small muted" id="wf-hint" role="status" aria-live="polite">${readonly ? h("colors_show_the_run_a_click_shows_the") : h("drag_nodes_and_use_the_canvas_menus")}</p>
           <p class="small muted" id="wf-keyboard-help">${h(readonly ? "run_keyboard_help" : "workflow_keyboard_help")}</p>
-          <div class="canvas" id="canvas" tabindex="0" role="application" aria-label="${h("workflow_graph")}" aria-describedby="wf-keyboard-help"><div id="board" style="position:relative;min-width:100%;min-height:560px"><svg class="edges" id="edges"></svg><div id="nodes"></div></div></div>
+          <div class="canvas" id="canvas" tabindex="0" role="application" aria-label="${h("workflow_graph")}" aria-describedby="wf-keyboard-help">
+            <div class="canvas-controls" role="group" aria-label="${h("canvas_controls")}">
+              <button class="btn compact ghost" type="button" data-canvas-zoom-in aria-label="${h("zoom_in")}">+</button>
+              <button class="btn compact ghost" type="button" data-canvas-zoom-out aria-label="${h("zoom_out")}">−</button>
+              <button class="btn compact ghost" type="button" data-canvas-fit>${h("fit_view")}</button>
+              <button class="btn compact ghost" type="button" data-canvas-reset>${h("zoom_reset")}</button>
+            </div>
+            <div class="minimap" id="minimap" role="img" aria-label="${h("minimap")}" hidden></div>
+            <div id="board" style="position:absolute;left:0;top:0;transform-origin:0 0"><svg class="edges" id="edges"></svg><div id="nodes"></div></div>
+          </div>
         </div>
         <aside class="card inspector" id="inspector"></aside>
       </div>
@@ -108,10 +118,105 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   const board = document.querySelector("#board");
   const svg = document.querySelector("#edges");
   const nodes = document.querySelector("#nodes");
+  const minimap = document.querySelector("#minimap");
+  let fitted = false;
+  let pan = null;
+  let autoPanTimer = null;
+
+  const viewport = createViewport({
+    canvas,
+    board,
+    onChange: (view, size) => drawMinimap(view, size),
+  });
+
+  function canvasPoint(event) {
+    const rect = canvas.getBoundingClientRect();
+    return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+  }
 
   function localPoint(event) {
-    const rect = board.getBoundingClientRect();
-    return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    return viewport.screenToGraph(canvasPoint(event));
+  }
+
+  function centerPoint() {
+    const size = viewport.size();
+    return { x: size.width / 2, y: size.height / 2 };
+  }
+
+  function zoomBy(factor) {
+    viewport.zoom(factor, centerPoint());
+  }
+
+  function fitGraph() {
+    viewport.fit(graph.nodes);
+    fitted = true;
+  }
+
+  function fitOnOpen() {
+    if (canvas.offsetParent === null) return;
+    const size = viewport.size();
+    if (size.width < 240 || size.height < 240) return;
+    fitGraph();
+  }
+
+  function paintMinimap() {
+    drawMinimap(viewport.view, viewport.size());
+  }
+
+  function drawMinimap(view, size) {
+    if (!minimap) return;
+    const visible = graph.nodes.length > 12;
+    minimap.hidden = !visible;
+    if (!visible) {
+      minimap.innerHTML = "";
+      return;
+    }
+    const layout = minimapLayout(graph.nodes, view, size);
+    const rects = layout.nodes.map((rect) => `<rect class="minimap-node" x="${rect.x}" y="${rect.y}" width="${rect.width}" height="${rect.height}"></rect>`).join("");
+    const frame = `<rect class="minimap-view" x="${layout.viewport.x}" y="${layout.viewport.y}" width="${layout.viewport.width}" height="${layout.viewport.height}"></rect>`;
+    minimap.innerHTML = `<svg viewBox="0 0 ${layout.width} ${layout.height}" aria-hidden="true">${rects}${frame}</svg>`;
+  }
+
+  function stopAutoPan() {
+    if (autoPanTimer) window.clearInterval(autoPanTimer);
+    autoPanTimer = null;
+  }
+
+  function autoPanStep() {
+    if (!drag || !drag.screen) {
+      stopAutoPan();
+      return;
+    }
+    const result = autoPan(viewport.view, drag.screen, viewport.size());
+    if (!result.dx && !result.dy) {
+      stopAutoPan();
+      return;
+    }
+    const node = graph.nodes.find((item) => item.id === drag.id);
+    if (node) {
+      const scale = viewport.view.scale;
+      node.x = Math.max(0, node.x - result.dx / scale);
+      node.y = Math.max(0, node.y - result.dy / scale);
+      const element = nodes.querySelector(`[data-id="${CSS.escape(node.id)}"]`);
+      if (element) {
+        element.style.left = `${node.x}px`;
+        element.style.top = `${node.y}px`;
+      }
+    }
+    viewport.set(result.view);
+    drawEdges();
+    markDirty();
+  }
+
+  function scheduleAutoPan() {
+    if (!drag || !drag.screen) return;
+    const result = autoPan(viewport.view, drag.screen, viewport.size());
+    if (!result.dx && !result.dy) {
+      stopAutoPan();
+      return;
+    }
+    autoPanStep();
+    if (!autoPanTimer) autoPanTimer = window.setInterval(autoPanStep, 60);
   }
 
   function sameJson(left, right) {
@@ -201,8 +306,8 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   }
 
   function drawEdges() {
-    const width = Math.max(board.parentElement.clientWidth, ...graph.nodes.map((node) => node.x + 260), 640);
-    const height = Math.max(560, ...graph.nodes.map((node) => node.y + 140));
+    const width = Math.max(...graph.nodes.map((node) => (Number(node.x) || 0) + 260), 640);
+    const height = Math.max(...graph.nodes.map((node) => (Number(node.y) || 0) + 140), 400);
     board.style.width = `${width}px`;
     board.style.height = `${height}px`;
     svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
@@ -218,6 +323,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       const role = editable ? ` role="button" tabindex="0"` : ` role="img"`;
       return `<path class="${klass}${selectedEdge === index ? " selected" : ""}" data-edge="${index}"${role} aria-label="${esc(label)}" d="M ${start.x} ${start.y} C ${start.x + dx} ${start.y}, ${end.x - dx} ${end.y}, ${end.x} ${end.y}"></path>`;
     }).join("");
+    paintMinimap();
   }
 
   function focusEdge(index) {
@@ -544,7 +650,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         selected = node.id;
         selectedEdge = null;
         const point = localPoint(event);
-        drag = { id: node.id, ox: point.x - node.x, oy: point.y - node.y };
+        drag = { id: node.id, ox: point.x - node.x, oy: point.y - node.y, screen: canvasPoint(event) };
         element.setPointerCapture(event.pointerId);
         renderInspector();
         nodes.querySelectorAll(".wf-node").forEach((item) => item.classList.toggle("selected", item.dataset.id === selected));
@@ -560,8 +666,10 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         node.y = Math.max(0, Math.round(point.y - drag.oy));
         element.style.left = `${node.x}px`;
         element.style.top = `${node.y}px`;
+        drag.screen = canvasPoint(event);
         drawEdges();
         markDirty();
+        scheduleAutoPan();
       });
       element.addEventListener("pointerup", (event) => {
         if (connectDrag && connectDrag.id === node.id) {
@@ -573,6 +681,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
           else setHint("connect_click_or_drag_target", { name: node.name });
           return;
         }
+        stopAutoPan();
         drag = null;
       });
       element.addEventListener("contextmenu", (event) => {
@@ -1002,25 +1111,74 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       if (removeEdgeAt(index)) canvas.focus();
     }
   });
-  board.addEventListener("pointerdown", (event) => {
-    if (readonly || !editable) return;
-    if (event.target.closest(".wf-node, path")) return;
+  function canvasPointerDown(event) {
+    if (event.target.closest(".wf-node, path, .canvas-controls, .minimap, button")) return;
     if (connecting) {
       cancelConnect();
       return;
     }
     if (!flushNode()) return;
-    selected = null;
-    selectedEdge = null;
-    renderNodes();
-    renderInspector();
-  });
-  board.addEventListener("contextmenu", (event) => {
+    if (editable) {
+      selected = null;
+      selectedEdge = null;
+      renderNodes();
+      renderInspector();
+    }
+    pan = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, viewX: viewport.view.x, viewY: viewport.view.y };
+    if (canvas.setPointerCapture) canvas.setPointerCapture(event.pointerId);
+    canvas.classList.add("panning");
+  }
+
+  function canvasPointerMove(event) {
+    if (!pan || pan.pointerId !== event.pointerId) return;
+    viewport.set({
+      x: pan.viewX + (event.clientX - pan.x),
+      y: pan.viewY + (event.clientY - pan.y),
+      scale: viewport.view.scale,
+    });
+  }
+
+  function endPan(event) {
+    if (!pan || (event.pointerId !== undefined && pan.pointerId !== event.pointerId)) return;
+    pan = null;
+    canvas.classList.remove("panning");
+  }
+
+  function canvasContextMenu(event) {
     if (!editable || !flushNode()) return;
-    if (event.target.closest(".wf-node")) return;
+    if (event.target.closest(".wf-node, .canvas-controls, .minimap")) return;
     event.preventDefault();
     openCanvasMenu(localPoint(event), event.clientX, event.clientY, openAddNode);
+  }
+
+  canvas.addEventListener("pointerdown", canvasPointerDown);
+  canvas.addEventListener("pointermove", canvasPointerMove);
+  canvas.addEventListener("pointerup", endPan);
+  canvas.addEventListener("pointercancel", endPan);
+  canvas.addEventListener("contextmenu", canvasContextMenu);
+  board.addEventListener("pointerdown", (event) => {
+    canvasPointerDown(event);
+    event.stopPropagation();
   });
+  board.addEventListener("contextmenu", (event) => {
+    canvasContextMenu(event);
+    event.stopPropagation();
+  });
+  canvas.addEventListener("wheel", (event) => {
+    if (!(event.ctrlKey || event.metaKey)) return;
+    event.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    viewport.zoom(event.deltaY < 0 ? 1.15 : 1 / 1.15, { x: event.clientX - rect.left, y: event.clientY - rect.top });
+  }, { passive: false });
+  const zoomInButton = document.querySelector("[data-canvas-zoom-in]");
+  if (zoomInButton) zoomInButton.addEventListener("click", () => zoomBy(1.2));
+  const zoomOutButton = document.querySelector("[data-canvas-zoom-out]");
+  if (zoomOutButton) zoomOutButton.addEventListener("click", () => zoomBy(1 / 1.2));
+  const fitButton = document.querySelector("[data-canvas-fit]");
+  if (fitButton) fitButton.addEventListener("click", fitGraph);
+  const resetButton = document.querySelector("[data-canvas-reset]");
+  if (resetButton) resetButton.addEventListener("click", () => viewport.reset());
+
   canvas.addEventListener("keydown", (event) => {
     if (!editable || event.target !== canvas) return;
     if (event.key === "Escape" && connecting) {
@@ -1028,12 +1186,34 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       cancelConnect();
       return;
     }
+    const key = String(event.key);
+    if (key === "+" || key === "=") {
+      event.preventDefault();
+      zoomBy(1.2);
+      return;
+    }
+    if (key === "-" || key === "_") {
+      event.preventDefault();
+      zoomBy(1 / 1.2);
+      return;
+    }
+    if (key === "0") {
+      event.preventDefault();
+      viewport.reset();
+      return;
+    }
+    if (key.toLowerCase() === "f") {
+      event.preventDefault();
+      fitGraph();
+      return;
+    }
     if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
     event.preventDefault();
     if (!flushNode()) return;
     const point = freeNodePosition();
-    const rect = board.getBoundingClientRect();
-    openCanvasMenu(point, rect.left + point.x, rect.top + point.y, openAddNode);
+    const screen = viewport.graphToScreen(point);
+    const rect = canvas.getBoundingClientRect();
+    openCanvasMenu(point, rect.left + screen.x, rect.top + screen.y, openAddNode);
   });
 
   function bindWorkflowTabs() {
@@ -1056,7 +1236,10 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       });
       history.replaceState({ idx: (history.state && history.state.idx) || 0 }, "", workflowAddress(next, workflow.id));
       appState.setShownHash(location.hash);
-      if (next === "editor") drawEdges();
+      if (next === "editor") {
+        if (!fitted) fitOnOpen();
+        drawEdges();
+      }
       if (focus) {
         const active = buttons.find((button) => button.dataset.workflowTab === next);
         if (active) active.focus();
@@ -1085,6 +1268,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
 
   renderNodes();
   renderInspector();
+  fitOnOpen();
   bindWorkflowTabs();
   mountSchedules(document.querySelector("#schedule-card"));
   paintDirty();
@@ -1218,5 +1402,5 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     });
   }
 
-  return { applyPhases };
+  return { applyPhases, viewport };
 }
