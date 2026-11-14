@@ -113,7 +113,7 @@ test("a dirty launch asks first and Cancel keeps the graph unsaved", async () =>
 });
 
 test("the last saved launch skips the PUT and the save choice persists first", async () => {
-  const { calls } = await mount();
+  const { state, calls } = await mount();
   moveNode();
   document.querySelector("#wf-launch").dispatchEvent({ type: "click" });
   await settle();
@@ -122,6 +122,7 @@ test("the last saved launch skips the PUT and the save choice persists first", a
 
   assert.equal(calls.filter((call) => call.method === "PUT").length, 0, "the last saved launch persisted the graph");
   assert.equal(calls.filter((call) => call.method === "POST").length, 1, "the last saved launch did not start a run");
+  assert.equal(state.leaveGuard, null, "the run navigation still asks to discard the unsaved graph");
 
   moveNode("n2");
   document.querySelector("#wf-launch").dispatchEvent({ type: "click" });
@@ -151,6 +152,22 @@ test("Ctrl+S and Cmd+S save a dirty editor and do nothing while clean", async ()
   await settle();
   assert.equal(calls.filter((call) => call.method === "PUT").length, 2, "Cmd+S did not save");
   assert.equal(statusText(), "all_changes_saved");
+});
+
+test("typing an override marks the editor dirty before the field loses focus", async () => {
+  const { calls } = await mount();
+  selectNode();
+  const extra = document.querySelector("#node-extra");
+  extra.value = '{"typed": true}';
+  extra.dispatchEvent({ type: "input", target: extra });
+  assert.equal(statusText(), "unsaved_changes", "typing an override does not mark the editor dirty");
+
+  document.querySelector("#canvas").dispatchEvent({ type: "keydown", key: "s", ctrlKey: true, preventDefault() {} });
+  await settle();
+  const puts = calls.filter((call) => call.method === "PUT");
+  assert.equal(puts.length, 1, "Ctrl+S did not save the focused override");
+  const saved = JSON.parse(puts[0].body).graph.nodes.find((node) => node.id === "n1");
+  assert.deepEqual(saved.overrides.extra_vars, { typed: true });
 });
 
 test("creating a workflow shows Created once instead of a lingering Saved banner", async () => {
