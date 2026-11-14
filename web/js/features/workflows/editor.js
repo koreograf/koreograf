@@ -22,8 +22,11 @@ export function workflowTofuApply(graph, templates) {
   });
 }
 
+const PORT_OFFSETS = { success: 40, failure: 76, always: 58 };
+const PORT_SYMBOLS = { success: "✓", failure: "✗", always: "↻" };
+
 export function edgePoint(node, when) {
-  const y = when === "failure" ? 54 : when === "always" ? 39 : 24;
+  const y = PORT_OFFSETS[when] || PORT_OFFSETS.success;
   return { x: node.x + 200, y: node.y + y };
 }
 
@@ -91,6 +94,10 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
             </div>
             <div class="minimap" id="minimap" role="img" aria-label="${h("minimap")}" hidden></div>
             <div id="board" style="position:absolute;left:0;top:0;transform-origin:0 0"><svg class="edges" id="edges"></svg><div id="nodes"></div></div>
+            ${editable ? `<div class="canvas-empty" id="wf-empty" hidden>
+              <p class="small muted">${h("empty_canvas_hint")}</p>
+              <button class="btn pill primary" type="button" id="wf-add-first">${h("add_first_step")}</button>
+            </div>` : ""}
           </div>
         </div>
         <aside class="card inspector" id="inspector"></aside>
@@ -406,7 +413,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     preview.setAttribute("d", `M ${start.x} ${start.y} C ${start.x + dx} ${start.y}, ${point.x - dx} ${point.y}, ${point.x} ${point.y}`);
   }
 
-  function openAddNode(point) {
+  function openAddNode(point, link) {
     if (!editable) return;
     if (!templates.length) {
       setHint("create_a_template_or_a_workflow_first");
@@ -418,15 +425,22 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       template_id: template.id,
       name: template.name,
       convergence: "any",
-    }, point);
+    }, point, link);
   }
 
-  function addNode(draft, point) {
+  function addNode(draft, point, link) {
     const spot = point
       ? { x: Math.max(0, Math.round(point.x - 20)), y: Math.max(0, Math.round(point.y - 20)) }
       : freeNodePosition();
     const node = { ...draft, x: spot.x, y: spot.y };
     graph.nodes.push(node);
+    if (link && link.from && link.when) {
+      const from = graph.nodes.find((item) => item.id === link.from);
+      if (from && from.id !== node.id && !edgeExists(from.id, node.id, link.when)) {
+        graph.edges.push({ from: from.id, to: node.id, when: link.when });
+        setHint("edge_added", { when: edgeWhenText(link.when), from: from.name, to: node.name });
+      }
+    }
     markDirty();
     selected = node.id;
     selectedEdge = null;
@@ -467,7 +481,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       ${nodeParams(node, template)}`;
   }
 
-  function openNodeEditor(node, point) {
+  function openNodeEditor(node, point, link) {
     if (!editable || !flushNode()) return;
     const adding = Boolean(point);
     const draftFor = (templateId, name, convergence) => {
@@ -496,7 +510,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         const draft = draftFor(templateId, name, convergence);
         if (!readOverrides(draft, form)) return;
         if (adding) {
-          addNode(draft, point);
+          addNode(draft, point, link);
         } else {
           Object.assign(node, draft);
           flushNode = () => true;
@@ -594,6 +608,16 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     renderInspector();
   }
 
+  function connectToNew(node, point) {
+    if (!editable) return;
+    connecting = null;
+    connectDrag = null;
+    clearConnectPreview();
+    renderNodes();
+    setHint("drag_nodes_and_use_the_canvas_menus");
+    openAddNode(point, { from: node.id, when: "success" });
+  }
+
   const nodeMenuActions = {
     edit: openNodeEditor,
     remove: removeNode,
@@ -609,6 +633,8 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   }
 
   function renderNodes() {
+    const empty = document.querySelector("#wf-empty");
+    if (empty) empty.hidden = graph.nodes.length > 0;
     nodes.innerHTML = graph.nodes.map((node) => {
       const phase = phases[node.id];
       const phaseClass = phase ? ` phase-${esc(phase.phase)}` : "";
@@ -616,13 +642,16 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       const runClass = readonly ? " run-node" : "";
       const connectClass = connecting && connecting.from === node.id ? " connecting" : "";
       const menu = editable ? `<button class="btn ghost compact node-menu-button" type="button" data-node-menu aria-haspopup="menu" aria-expanded="false" aria-label="${h("node_actions", { name: node.name })}">⋯</button>` : "";
-      return `<div class="wf-node${selectedClass}${connectClass}${phaseClass}${runClass}" data-id="${esc(node.id)}" style="left:${Number(node.x) || 0}px;top:${Number(node.y) || 0}px" tabindex="0" role="group" aria-label="${esc(nodeLabel(node))}">${menu}<strong>${esc(node.name)}</strong><span class="small muted">${esc(nodeCaption(node))}</span></div>`;
+      const ports = editable
+        ? `<div class="wf-ports">${["success", "failure", "always"].map((when) => `<div class="wf-port ${when}"><span class="wf-port-symbol" aria-hidden="true">${PORT_SYMBOLS[when]}</span><button class="wf-port-add" type="button" data-add-port="${when}" aria-label="${h("add_step_after", { name: node.name, when: edgeWhenText(when) })}" title="${h("add_step_after", { name: node.name, when: edgeWhenText(when) })}">+</button></div>`).join("")}</div>`
+        : "";
+      return `<div class="wf-node${selectedClass}${connectClass}${phaseClass}${runClass}" data-id="${esc(node.id)}" style="left:${Number(node.x) || 0}px;top:${Number(node.y) || 0}px" tabindex="0" role="group" aria-label="${esc(nodeLabel(node))}">${menu}<strong>${esc(node.name)}</strong><span class="small muted">${esc(nodeCaption(node))}</span>${ports}</div>`;
     }).join("");
     nodes.querySelectorAll(".wf-node").forEach((element) => {
       const node = graph.nodes.find((item) => item.id === element.dataset.id);
       const menuButton = element.querySelector("[data-node-menu]");
       element.addEventListener("pointerdown", (event) => {
-        if (event.target.closest(".node-menu-button")) return;
+        if (event.target.closest(".node-menu-button, .wf-port")) return;
         if (readonly) {
           if (onNode) onNode(node, phases[node.id] || null);
           return;
@@ -680,6 +709,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
           const target = document.elementFromPoint(event.clientX, event.clientY);
           const hit = target && target.closest(".wf-node");
           if (hit && hit.dataset.id !== node.id) finishConnect(hit.dataset.id);
+          else if (!target || target.closest("#canvas")) connectToNew(node, localPoint(event));
           else setHint("connect_click_or_drag_target", { name: node.name });
           return;
         }
@@ -706,6 +736,16 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
           openNodeMenu(node, rect.left, rect.bottom + 4, menuButton, nodeMenuActions);
         });
       }
+      element.querySelectorAll("[data-add-port]").forEach((button) => {
+        button.addEventListener("pointerdown", (event) => event.stopPropagation());
+        button.addEventListener("click", (event) => {
+          event.stopPropagation();
+          if (!flushNode()) return;
+          const when = button.dataset.addPort;
+          const offset = PORT_OFFSETS[when] || PORT_OFFSETS.success;
+          openAddNode({ x: node.x + 260, y: node.y + offset }, { from: node.id, when });
+        });
+      });
       element.addEventListener("keydown", (event) => {
         if (event.target !== element) return;
         if (event.key === "Escape" && connecting) {
@@ -1312,6 +1352,17 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   mountSchedules(document.querySelector("#schedule-card"));
   paintDirty();
   if (editable) appState.setLeaveGuard(leaveGuard);
+
+  const addFirst = document.querySelector("#wf-add-first");
+  if (addFirst) {
+    const addFirstStep = () => openAddNode(viewport.screenToGraph(centerPoint()));
+    addFirst.addEventListener("click", addFirstStep);
+    addFirst.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      addFirstStep();
+    });
+  }
 
   const nameField = document.querySelector("#wf-name");
   if (nameField) {

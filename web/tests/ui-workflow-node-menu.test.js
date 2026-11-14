@@ -11,9 +11,9 @@ const { catalog } = require("./catalog.js");
 const load = (path) => import(pathToFileURL(join(__dirname, "..", "js", path)).href);
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
-async function mount({ readonly = false, templates } = {}) {
+async function mount({ readonly = false, templates, graph, role = "owner" } = {}) {
   const state = await load("core/state.js");
-  state.setMe({ is_admin: true, display_name: "Admin", teams: [{ id: "t1", name: "Team", role: "owner" }] });
+  state.setMe({ is_admin: false, display_name: "Admin", teams: [{ id: "t1", name: "Team", role }] });
   state.setTeamId("t1");
   globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => "[]" });
   const editor = await load("features/workflows/editor.js");
@@ -21,7 +21,7 @@ async function mount({ readonly = false, templates } = {}) {
     id: "w1",
     name: "Deploy",
     description: "",
-    graph: {
+    graph: graph || {
       nodes: [
         { id: "n1", template_id: "t1", name: "One", x: 20, y: 20, convergence: "any" },
         { id: "n2", template_id: "t1", name: "Two", x: 320, y: 20, convergence: "any" },
@@ -103,6 +103,49 @@ test("Add node creates one node with the chosen fields at the clicked point", as
   assert.match(inspector.innerHTML, /&quot;answer&quot;: 42/, "the chosen override is not kept");
 });
 
+test("an empty canvas adds the first step from the call to action", async () => {
+  await mount({ graph: { nodes: [], edges: [] } });
+  const cta = document.querySelector("#wf-add-first");
+  assert.ok(cta, "the empty canvas has no Add first step action");
+  assert.equal(cta.tagName, "BUTTON", "the first step action is not a button");
+
+  cta.dispatchEvent({ type: "click" });
+  let dialog = document.querySelector("#add-node-dialog");
+  assert.ok(dialog, "Add first step does not open the node editor");
+  for (const id of ["node-name", "node-template", "node-join", "node-inventory", "node-credential", "node-extra"]) {
+    assert.ok(dialog.querySelector(`#${id}`), `Add first step has no ${id} field`);
+  }
+  dialog.dispatchEvent({ type: "keydown", key: "Escape", preventDefault() {} });
+  await tick();
+  assert.equal(document.querySelector("#add-node-dialog"), null, "cancel left the Add node dialog open");
+
+  cta.dispatchEvent({ type: "keydown", key: "Enter", preventDefault() {} });
+  dialog = document.querySelector("#add-node-dialog");
+  assert.ok(dialog, "Enter on Add first step did not open the node editor");
+  dialog.dispatchEvent({ type: "keydown", key: "Escape", preventDefault() {} });
+  await tick();
+  assert.equal(document.querySelector("#add-node-dialog"), null, "cancel left the Add node dialog open");
+});
+
+test("the first step action is hidden once a node exists", async () => {
+  await mount();
+  assert.equal(document.querySelector("#wf-empty").hidden, true, "a graph with nodes still shows Add first step");
+});
+
+test("viewers get no first step action and no output handles", async () => {
+  await mount({ role: "viewer", graph: { nodes: [], edges: [] } });
+  assert.equal(document.querySelector("#wf-add-first"), null, "a viewer sees Add first step");
+
+  await mount({
+    role: "viewer",
+    graph: {
+      nodes: [{ id: "n1", template_id: "t1", name: "One", x: 20, y: 20, convergence: "any" }],
+      edges: [],
+    },
+  });
+  assert.equal(document.querySelectorAll("[data-add-port]").length, 0, "a viewer sees output handles");
+});
+
 test("the keyboard opens the canvas menu without a mouse", async () => {
   await mount();
   const canvas = document.querySelector("#canvas");
@@ -166,7 +209,7 @@ test("viewers get no add path", async () => {
 test("workflow node menu copy is in both catalogs", () => {
   for (const id of ["de", "en"]) {
     const values = catalog(id);
-    for (const key of ["add_node", "edit_node", "right_click_empty_canvas_to_add_a_node"]) {
+    for (const key of ["add_node", "edit_node", "right_click_empty_canvas_to_add_a_node", "add_first_step", "add_step_after", "empty_canvas_hint"]) {
       assert.ok(typeof values[key] === "string" && values[key].trim(), `${key} is missing from ${id}.json`);
     }
     assert.ok(!Object.prototype.hasOwnProperty.call(values, "name_optional"), `name_optional is still in ${id}.json`);

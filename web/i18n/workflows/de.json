@@ -1,6 +1,8 @@
 {
   "add_edge": "Kante hinzufügen",
+  "add_first_step": "Ersten Schritt hinzufügen",
   "add_node": "Knoten hinzufügen",
+  "add_step_after": "Nächsten Schritt nach {name} bei {when} hinzufügen",
   "all_changes_saved": "Alle Änderungen gespeichert",
   "all_of_n_predecessors": "alle {count} Vorgänger",
   "all_predecessors": "Alle Vorgänger",
@@ -33,6 +35,7 @@
   "edge_removed": "Kante entfernt.",
   "edit_node": "Knoten bearbeiten",
   "editor": "Editor",
+  "empty_canvas_hint": "Beginne mit einem Schritt und füge den nächsten über seine Ausgabe hinzu.",
   "empty_workflows": "Workflows verketten Vorlagen über Erfolgs-, Fehler- und Immer-Kanten.",
   "extra_variables_are_not_valid_json": "Extra-Variablen ist kein gültiges JSON.",
   "fit_view": "Einpassen",
