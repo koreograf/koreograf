@@ -5,18 +5,19 @@ use crate::error::{ApiError, AppResult};
 use crate::store::sql::{self, SqlRow};
 
 pub(crate) const WORKFLOW_COLUMNS: &str =
-    "id, team_id, name, description, graph, created_at, admin_saved";
+    "id, team_id, name, description, graph, created_at, admin_saved, version";
 pub(crate) const WORKFLOW_JOB_COLUMNS: &str =
     "id, workflow_id, team_id, name, status, extra_vars, launched_by, trigger, created_at, \
      finished_at";
 
 pub(crate) const INSERT_WORKFLOW: &str = "INSERT INTO workflows (
-        id, team_id, name, description, graph, created_at, admin_saved
-     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
+        id, team_id, name, description, graph, created_at, admin_saved, version
+     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
 
 pub(crate) const UPDATE_WORKFLOW: &str = "UPDATE workflows
-     SET name = ?3, description = ?4, graph = ?5, admin_saved = ?6
-     WHERE id = ?1 AND team_id = ?2";
+     SET name = ?3, description = ?4, graph = ?5, admin_saved = ?6,
+         version = version + 1
+     WHERE id = ?1 AND team_id = ?2 AND (?7 IS NULL OR version = ?7)";
 
 pub(crate) const DELETE_WORKFLOW: &str = "DELETE FROM workflows WHERE id = ?1 AND team_id = ?2";
 
@@ -82,13 +83,18 @@ pub(crate) fn insert_workflow(c: &Connection, item: &Workflow) -> AppResult<()> 
             item.description,
             item.graph,
             item.created_at,
-            item.admin_saved as i64
+            item.admin_saved as i64,
+            item.version
         ],
     )?;
     Ok(())
 }
 
-pub(crate) fn update_workflow(c: &Connection, item: &Workflow) -> AppResult<()> {
+pub(crate) fn update_workflow(
+    c: &Connection,
+    item: &Workflow,
+    expected_version: Option<i64>,
+) -> AppResult<()> {
     let changed = c.execute(
         UPDATE_WORKFLOW,
         params![
@@ -97,10 +103,19 @@ pub(crate) fn update_workflow(c: &Connection, item: &Workflow) -> AppResult<()> 
             item.name,
             item.description,
             item.graph,
-            item.admin_saved as i64
+            item.admin_saved as i64,
+            expected_version
         ],
     )?;
     if changed == 0 {
+        if let Some(current) = workflow(c, &item.id)? {
+            if current.team_id == item.team_id {
+                return Err(ApiError::conflict_vars(
+                    "workflow_changed",
+                    [("version", current.version.to_string())],
+                ));
+            }
+        }
         return Err(ApiError::NotFound);
     }
     Ok(())
@@ -228,6 +243,7 @@ pub(crate) fn row_workflow<R: SqlRow>(row: &R) -> AppResult<Workflow> {
         graph: row.get(4)?,
         created_at: row.get(5)?,
         admin_saved: row.get(6)?,
+        version: row.get(7)?,
     })
 }
 

@@ -282,6 +282,7 @@
   "workflow.node_duplicate": "Duplicate node id {id}.",
   "workflow.node_name": "Node {id} has no name.",
   "workflow.node_template": "Node {id} has no job template.",
+  "workflow_changed": "The workflow changed since you loaded it.",
   "x_team_id_is_missing": "X-Team-Id is missing.",
   "you_are_not_allowed_to_do_this": "You are not allowed to do this.",
   "you_cannot_delete_your_own_account": "You cannot delete your own account.",

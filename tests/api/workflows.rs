@@ -690,3 +690,163 @@ async fn a_finished_workflow_run_can_be_listed_and_relaunched() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn a_stale_workflow_save_is_rejected_and_keeps_the_first_writer() {
+    let harness = TestApp::boot("workflow-conflict", Options::default());
+    let app = harness.app.clone();
+    let dir = harness.dir.clone();
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/v1/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/v1/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Conflict shell",
+            "description": "",
+            "tool": "shell",
+            "no_environment": true,
+            "spec": {"script": ":"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().unwrap().to_string();
+
+    let graph = |name: &str| {
+        json!({
+            "nodes": [{"id": "one", "template_id": template_id, "name": name}],
+            "edges": []
+        })
+    };
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/v1/workflows",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Conflict workflow", "description": "", "graph": graph("First")})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let workflow_id = created["id"].as_str().unwrap().to_string();
+    assert_eq!(created["version"], 1, "{created}");
+
+    let (status, first, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/v1/workflows/{workflow_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Conflict workflow",
+            "description": "",
+            "graph": graph("First"),
+            "version": 1
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(first["version"], 2, "{first}");
+
+    let (status, stale, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/v1/workflows/{workflow_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Conflict workflow 2",
+            "description": "",
+            "graph": graph("Second"),
+            "version": 1
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{stale}");
+    assert_eq!(stale["error"], "workflow_changed");
+    assert_eq!(stale["vars"]["version"], "2", "{stale}");
+
+    let (status, kept, _) = call(
+        &app,
+        "GET",
+        &format!("/api/v1/workflows/{workflow_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{kept}");
+    assert_eq!(kept["version"], 2, "{kept}");
+    assert_eq!(kept["name"], "Conflict workflow", "{kept}");
+    assert_eq!(kept["graph"]["nodes"][0]["name"], "First", "{kept}");
+
+    let (status, second, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/v1/workflows/{workflow_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Conflict workflow 2",
+            "description": "",
+            "graph": graph("Second"),
+            "version": 2
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(second["version"], 3, "{second}");
+    assert_eq!(second["graph"]["nodes"][0]["name"], "Second", "{second}");
+
+    let (status, listed, _) = call(
+        &app,
+        "GET",
+        "/api/v1/workflows",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let item = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == workflow_id)
+        .expect("workflow in list");
+    assert_eq!(item["version"], 3, "{listed}");
+
+    let (status, legacy, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/v1/workflows/{workflow_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Conflict workflow 3",
+            "description": "",
+            "graph": graph("Third")
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{legacy}");
+    assert_eq!(legacy["version"], 4, "{legacy}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

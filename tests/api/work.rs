@@ -472,6 +472,7 @@ fn workflow_shape(value: &Value, team: &str, name: &str, description: &str) -> V
         "description": description,
         "graph": value["graph"].clone(),
         "created_at": value["created_at"].clone(),
+        "version": value["version"].clone(),
     })
 }
 

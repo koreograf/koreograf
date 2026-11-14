@@ -255,7 +255,7 @@ pub(crate) trait Backend: Send + Sync {
     fn list_workflows(&self, team_id: &str) -> AppResult<Vec<Workflow>>;
     fn workflow(&self, id: &str) -> AppResult<Option<Workflow>>;
     fn insert_workflow(&self, item: &Workflow) -> AppResult<()>;
-    fn update_workflow(&self, item: &Workflow) -> AppResult<()>;
+    fn update_workflow(&self, item: &Workflow, expected_version: Option<i64>) -> AppResult<()>;
     fn delete_workflow(&self, id: &str, team_id: &str) -> AppResult<()>;
     fn workflow_team(&self, id: &str) -> AppResult<Option<String>>;
     fn list_team_schedules(&self, team_id: &str) -> AppResult<Vec<(Schedule, String)>>;
@@ -1122,9 +1122,9 @@ impl Backend for SqliteBackend {
         workflows::store::insert_workflow(&conn, item)
     }
 
-    fn update_workflow(&self, item: &Workflow) -> AppResult<()> {
+    fn update_workflow(&self, item: &Workflow, expected_version: Option<i64>) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        workflows::store::update_workflow(&conn, item)
+        workflows::store::update_workflow(&conn, item, expected_version)
     }
 
     fn delete_workflow(&self, id: &str, team_id: &str) -> AppResult<()> {
@@ -3674,6 +3674,7 @@ impl Backend for PostgresBackend {
                         &item.graph,
                         &item.created_at,
                         &(item.admin_saved as i32),
+                        &item.version,
                     ],
                 )
                 .await?;
@@ -3681,7 +3682,7 @@ impl Backend for PostgresBackend {
         })
     }
 
-    fn update_workflow(&self, item: &Workflow) -> AppResult<()> {
+    fn update_workflow(&self, item: &Workflow, expected_version: Option<i64>) -> AppResult<()> {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
             let changed = client
@@ -3694,10 +3695,26 @@ impl Backend for PostgresBackend {
                         &item.description,
                         &item.graph,
                         &(item.admin_saved as i32),
+                        &expected_version,
                     ],
                 )
                 .await?;
             if changed == 0 {
+                let row = client
+                    .query_opt(
+                        &store::sql::postgres(&workflows::store::workflow_by_id_sql()),
+                        &[&item.id],
+                    )
+                    .await?;
+                if let Some(row) = row {
+                    let current = workflows::store::row_workflow(&row)?;
+                    if current.team_id == item.team_id {
+                        return Err(ApiError::conflict_vars(
+                            "workflow_changed",
+                            [("version", current.version.to_string())],
+                        ));
+                    }
+                }
                 return Err(ApiError::NotFound);
             }
             Ok(())
