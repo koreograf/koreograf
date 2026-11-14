@@ -112,10 +112,10 @@ test("nodes connect from the menu and duplicate edges are refused", async () => 
   assert.equal(document.querySelector("#wf-hint").textContent, "the_same_edge_is_present_twice");
 });
 
-async function mountGraph(graph) {
+async function mountGraph(graph, { readonly = false, phases = {}, templates } = {}) {
   const { editor } = await setup();
   const workflow = { id: "w1", name: "Deploy", description: "", graph };
-  editor.mountEditor(workflow, [{ id: "t1", name: "Shell", tool: "shell", spec: {} }], false, {}, { inventories: [], credentials: [] }, {});
+  editor.mountEditor(workflow, templates || [{ id: "t1", name: "Shell", tool: "shell", spec: {} }], readonly, phases, { inventories: [], credentials: [] }, {});
   return { editor, workflow };
 }
 
@@ -213,6 +213,122 @@ test("adding a row inserts exactly one edge and duplicate rows are refused", asy
   document.querySelector("#link-add").dispatchEvent({ type: "click" });
   assert.equal(document.querySelector("#wf-hint").textContent, "the_same_edge_is_present_twice");
   assert.equal(outgoingRows().length, 3, "a duplicate add changed the edge count");
+});
+
+test("Enter on a target in connect mode connects instead of opening Edit node", async () => {
+  await mountGraph({
+    nodes: [node("n1", "One", 20, 20), node("n2", "Two", 320, 20)],
+    edges: [],
+  });
+  document.querySelector('[data-id="n1"] [data-node-menu]').dispatchEvent({ type: "click" });
+  document.querySelector("[data-connect-node]").dispatchEvent({ type: "click" });
+  assert.equal(document.querySelector("#wf-hint").textContent, "connect_click_or_drag_target");
+
+  document.querySelector('[data-id="n2"]').dispatchEvent({ type: "keydown", key: "Enter" });
+  assert.equal(document.querySelector("#node-edit-dialog"), null, "connect mode opened Edit node");
+  const dialog = document.querySelector("#edge-type-dialog");
+  assert.ok(dialog, "Enter on the target did not open the edge type choice");
+  dialog.querySelector('[data-edge-when="success"]').dispatchEvent({ type: "click" });
+  await tick();
+  await tick();
+  assert.equal(document.querySelectorAll("#edges path.success").length, 1, "Enter did not add the edge");
+  assert.equal(document.querySelector("#wf-hint").textContent, "edge_added");
+});
+
+test("Space on a target in connect mode connects instead of opening Edit node", async () => {
+  await mountGraph({
+    nodes: [node("n1", "One", 20, 20), node("n2", "Two", 320, 20)],
+    edges: [],
+  });
+  document.querySelector('[data-id="n1"] [data-node-menu]').dispatchEvent({ type: "click" });
+  document.querySelector("[data-connect-node]").dispatchEvent({ type: "click" });
+
+  document.querySelector('[data-id="n2"]').dispatchEvent({ type: "keydown", key: " " });
+  assert.equal(document.querySelector("#node-edit-dialog"), null, "connect mode opened Edit node");
+  document.querySelector('#edge-type-dialog [data-edge-when="failure"]').dispatchEvent({ type: "click" });
+  await tick();
+  await tick();
+  assert.equal(document.querySelectorAll("#edges path.failure").length, 1, "Space did not add the edge");
+});
+
+test("Escape cancels connect mode and restores the default hint", async () => {
+  await mountGraph({
+    nodes: [node("n1", "One", 20, 20), node("n2", "Two", 320, 20)],
+    edges: [],
+  });
+  document.querySelector('[data-id="n1"] [data-node-menu]').dispatchEvent({ type: "click" });
+  document.querySelector("[data-connect-node]").dispatchEvent({ type: "click" });
+  document.querySelector('[data-id="n1"]').dispatchEvent({ type: "keydown", key: "Escape", preventDefault() {} });
+  assert.equal(document.querySelector('[data-id="n1"]').classList.contains("connecting"), false);
+  assert.equal(document.querySelector("#wf-hint").textContent, "drag_nodes_and_use_the_canvas_menus");
+});
+
+test("a focused edge is selectable and removable from the keyboard", async () => {
+  await mountGraph({
+    nodes: [node("n1", "One", 20, 20), node("n2", "Two", 320, 20)],
+    edges: [{ from: "n1", to: "n2", when: "success" }],
+  });
+  const path = document.querySelector('#edges path[data-edge="0"]');
+  assert.equal(path.getAttribute("tabindex"), "0", "the edge is not focusable");
+  assert.equal(path.getAttribute("role"), "button", "the edge has no button role");
+  assert.equal(path.getAttribute("aria-label"), "success: One → Two");
+
+  document.querySelector("#edges").dispatchEvent({ type: "keydown", key: "Enter", target: path });
+  assert.equal(document.activeElement.getAttribute("data-edge"), "0", "the selected edge lost focus");
+  assert.ok(document.querySelector("#edge-when"), "Enter did not select the edge");
+
+  const selected = document.querySelector('#edges path[data-edge="0"]');
+  document.querySelector("#edges").dispatchEvent({ type: "keydown", key: "Delete", target: selected });
+  assert.equal(document.querySelectorAll("#edges path").length, 0, "Delete did not remove the edge");
+  assert.equal(document.querySelector("#wf-hint").textContent, "edge_removed");
+  assert.equal(document.activeElement, document.querySelector("#canvas"));
+});
+
+test("the workflow fields are labelled and the canvas is described", async () => {
+  await mountGraph({
+    nodes: [node("n1", "One", 20, 20)],
+    edges: [],
+  });
+  const hint = document.querySelector("#wf-hint");
+  assert.equal(hint.getAttribute("role"), "status");
+  assert.equal(hint.getAttribute("aria-live"), "polite");
+
+  for (const [id, key] of [["wf-name", "name"], ["wf-description", "description"]]) {
+    const input = document.querySelector(`#${id}`);
+    const label = input.closest("label");
+    assert.ok(label, `#${id} has no visible label`);
+    assert.match(label.innerHTML, new RegExp(`<span>${key}</span>`));
+  }
+
+  const canvas = document.querySelector("#canvas");
+  assert.equal(canvas.getAttribute("role"), "application");
+  assert.equal(canvas.getAttribute("aria-label"), "workflow_graph");
+  assert.equal(canvas.getAttribute("aria-describedby"), "wf-keyboard-help");
+  assert.match(document.querySelector("#wf-keyboard-help").innerHTML, /workflow_keyboard_help/);
+  assert.match(document.querySelector('[data-id="n1"]').getAttribute("aria-label"), /One · Shell/);
+});
+
+test("the editor and run views name the workflow in the tab title", async () => {
+  await mountGraph({
+    nodes: [node("n1", "One", 20, 20)],
+    edges: [],
+  });
+  assert.match(document.title, /Deploy/);
+  assert.match(document.title, /workflow/);
+
+  const app = await load("core/app.js");
+  app.showLoading("Workflows");
+  assert.equal(document.title, "Workflows – Koreograf");
+
+  await mountGraph({
+    nodes: [node("n1", "One", 20, 20)],
+    edges: [],
+  }, { readonly: true, phases: { n1: { phase: "successful" } } });
+  assert.match(document.title, /Deploy/);
+  assert.match(document.title, /run_2/);
+  const label = document.querySelector('[data-id="n1"]').getAttribute("aria-label");
+  assert.match(label, /Shell/);
+  assert.match(label, /successful/);
 });
 
 test("the workflow connect styles are present", () => {

@@ -15,7 +15,7 @@
   "colors_show_the_run_a_click_shows_the": "Colors show the run. A click shows the output.",
   "connect": "Connect",
   "connect_cancelled": "Connection cancelled.",
-  "connect_click_or_drag_target": "Connecting from {name}. Click a target node, or drag from the source to it. Click the canvas to cancel.",
+  "connect_click_or_drag_target": "Connecting from {name}. Click or press Enter or Space on a target node, or drag from the source to it. Press Escape or click the canvas to cancel.",
   "connect_help": "Pick a target by clicking it or dragging to it, then choose the edge type. Each edge has its own row below; change its target or remove it there.",
   "connect_nodes": "Connect {from} to {to}",
   "convergence": "Convergence",
@@ -27,7 +27,7 @@
   "delete_this_workflow": "Delete workflow \"{name}\"? Its schedules are removed.",
   "drag_nodes_and_use_the_canvas_menus": "Drag nodes or move them with the arrow keys. Right-click empty canvas to add a node. Right-click a node or use its menu to edit, delete, or connect it; Enter opens Edit.",
   "edge": "Edge",
-  "edge_added": "Edge added.",
+  "edge_added": "Edge {when} {from} → {to} added.",
   "edge_changed": "Edge changed.",
   "edge_removed": "Edge removed.",
   "edit_node": "Edit node",
@@ -45,6 +45,7 @@
   "nodes": "Nodes",
   "open_the_job": "Open the job",
   "right_click_empty_canvas_to_add_a_node": "Right-click empty canvas to add a node.",
+  "run_keyboard_help": "Keyboard: Tab to a node and press Enter or Space to open its output.",
   "save_and_launch": "Save and launch",
   "search_workflows": "Search workflows",
   "select_a_node_to_connect_it": "Select a node to connect it.",
@@ -54,5 +55,7 @@
   "unsaved_changes": "Unsaved changes",
   "view": "View",
   "when": "When",
-  "workflow_2": "+ Workflow"
+  "workflow_2": "+ Workflow",
+  "workflow_graph": "Workflow graph",
+  "workflow_keyboard_help": "Keyboard: Tab to a node or edge. Enter or Space opens or selects it, and Delete removes the focused edge or node. In connect mode, Enter or Space on the target connects it and Escape cancels. Shift+F10 opens the canvas menu."
 }

@@ -274,7 +274,7 @@ a.btn { display: inline-block; text-decoration: none; }
   opacity: 0.75;
 }
 .side .lang-caret { margin-left: auto; }
-.side .lang-name, .side .muted { color: var(--side-muted); }
+.side .lang-name, .side .muted, .side .field > span { color: var(--side-muted); }
 .lang-menu {
   position: absolute;
   z-index: 30;
@@ -768,6 +768,7 @@ button.run-line:hover { outline: 1px solid var(--line); }
 .edges path.failure { stroke: #9f1239; }
 .edges path.always { stroke: #78716c; }
 .edges path.selected { stroke-width: 4; }
+.edges path:focus-visible { outline: none; stroke-width: 4; filter: drop-shadow(0 0 2px var(--accent)); }
 .wf-node {
   position: absolute;
   width: 200px;

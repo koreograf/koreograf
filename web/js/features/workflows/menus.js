@@ -127,6 +127,8 @@ export function chooseEdgeType(fromNode, toNode) {
       actions: false,
       onClose: () => decide(null),
     });
+    const first = dialog.overlay.querySelector("[data-edge-when]");
+    if (first) first.focus();
     dialog.overlay.querySelectorAll("[data-edge-when]").forEach((button) => {
       button.addEventListener("click", () => {
         decide(button.dataset.edgeWhen);

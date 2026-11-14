@@ -182,10 +182,10 @@ export async function pageRun(id) {
     }
   }
 
-  function paint(run) {
+  function paint(run, templates) {
     const view = adopt(run);
     if (!editor) {
-      editor = mountEditor(view, [], true, phases, null, { onNode: openOutput });
+      editor = mountEditor(view, templates || [], true, phases, null, { onNode: openOutput });
     } else if (editor) {
       editor.applyPhases();
       const badge = document.querySelector("#run-state");
@@ -207,9 +207,12 @@ export async function pageRun(id) {
     }
   }
 
-  const run = await api("GET", `/api/v1/workflow-jobs/${encodeURIComponent(id)}`);
+  const [run, templates] = await Promise.all([
+    api("GET", `/api/v1/workflow-jobs/${encodeURIComponent(id)}`),
+    api("GET", "/api/v1/templates").catch(() => []),
+  ]);
   if (live !== appState.generation) return;
-  paint(run);
+  paint(run, templates);
   if (["successful", "failed", "canceled"].includes(run.status)) return;
   appState.setPollTimer(setInterval(async () => {
     if (live !== appState.generation) return;

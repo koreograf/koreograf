@@ -120,6 +120,33 @@ test("the keyboard opens the canvas menu without a mouse", async () => {
   assert.equal(document.querySelector("#add-node-dialog"), null, "cancel left the Add node dialog open");
 });
 
+test("Enter on a target completes the keyboard connection without editing", async () => {
+  await mount();
+  const source = document.querySelector('[data-id="n1"]');
+  source.dispatchEvent({ type: "contextmenu", preventDefault() {}, stopPropagation() {}, clientX: 10, clientY: 10 });
+  const menu = document.querySelector(".node-menu-pop");
+  menu.querySelector("[data-connect-node]").dispatchEvent({ type: "click" });
+  assert.equal(document.activeElement.dataset.id, "n1", "Connect did not focus the source node");
+
+  document.querySelector('[data-id="n2"]').dispatchEvent({ type: "keydown", key: "Enter" });
+  assert.equal(document.querySelector("#node-edit-dialog"), null, "connect mode opened Edit node");
+  assert.ok(document.querySelector("#edge-type-dialog"), "Enter on the target did not ask for the edge type");
+  document.querySelector("#edge-type-dialog [data-edge-cancel]").dispatchEvent({ type: "click" });
+  await tick();
+  assert.equal(document.querySelector("#wf-hint").textContent, "connect_cancelled");
+});
+
+test("Delete on a focused node confirms before removing it", async () => {
+  await mount();
+  document.querySelector('[data-id="n1"]').dispatchEvent({ type: "keydown", key: "Delete", preventDefault() {} });
+  const dialog = document.querySelector("#confirm-dialog");
+  assert.ok(dialog, "Delete did not ask before removing the node");
+  dialog.querySelector(".dialog-form").dispatchEvent({ type: "submit", preventDefault() {} });
+  await tick();
+  assert.equal(document.querySelectorAll("#nodes .wf-node").length, 1, "Delete did not remove exactly one node");
+  assert.equal(document.querySelector('[data-id="n1"]'), null);
+});
+
 test("the canvas menu explains when no template exists", async () => {
   await mount({ templates: [] });
   document.querySelector("#board").dispatchEvent({ type: "contextmenu", preventDefault() {}, clientX: 100, clientY: 100 });
