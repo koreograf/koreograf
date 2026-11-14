@@ -281,6 +281,9 @@ test("the workflow edge hit area selects a failure edge and names its nodes", as
   await signInInEnglish(page);
   await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
   await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
+  await page.locator('.wf-node[data-id="check"]').click();
+  await expect(page.locator('#outgoing-edges .edge-row[data-edge-when="success"] .pill')).toHaveText("On success");
+  await expect(page.locator('#outgoing-edges .edge-row[data-edge-when="failure"] .pill')).toHaveText("On failure");
   const failure = page.locator("#edges path.failure");
   await expect(failure).toHaveCount(1);
   const point = await failure.evaluate((element) => {
