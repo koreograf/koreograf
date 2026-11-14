@@ -588,31 +588,86 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     drawEdges();
   }
 
-  function outgoingTarget(fromId, when) {
-    const edge = graph.edges.find((item) => item.from === fromId && item.when === when);
-    return edge ? edge.to : "";
+  function edgeWhenLabel(when) {
+    if (when === "failure") return h("error.generic");
+    if (when === "always") return h("always");
+    return h("success");
   }
 
-  function setOutgoing(fromId, when, toId) {
-    graph.edges = graph.edges.filter((edge) => !(edge.from === fromId && edge.when === when));
-    if (toId && toId !== fromId && graph.nodes.some((item) => item.id === toId)) {
-      graph.edges.push({ from: fromId, to: toId, when });
-    }
-    connecting = null;
-    connectDrag = null;
-    clearConnectPreview();
-    drawEdges();
-    markDirty();
-  }
-
-  function targetOptions(fromId, when) {
-    const current = outgoingTarget(fromId, when);
-    const options = [`<option value="">${h("no_target")}</option>`];
+  function targetOptions(fromId, current, placeholder) {
+    const options = placeholder ? [`<option value="">${h("choose_target")}</option>`] : [];
     graph.nodes.forEach((item) => {
       if (item.id === fromId) return;
       options.push(`<option value="${esc(item.id)}"${item.id === current ? " selected" : ""}>${esc(item.name)}</option>`);
     });
     return options.join("");
+  }
+
+  function outgoingRows(node) {
+    return graph.edges
+      .map((edge, index) => ({ edge, index }))
+      .filter(({ edge }) => edge.from === node.id)
+      .map(({ edge, index }) => {
+        const when = ["success", "failure", "always"].includes(edge.when) ? edge.when : "always";
+        const target = graph.nodes.find((item) => item.id === edge.to);
+        const targetName = target ? target.name : edge.to;
+        return `<div class="edge-row" data-edge-index="${index}" data-edge-when="${when}">
+          <span class="pill ${when}">${edgeWhenLabel(when)}</span>
+          <select class="fit edge-target" data-edge-index="${index}" aria-label="${h("target")}: ${esc(targetName)}">${targetOptions(node.id, edge.to, false)}</select>
+          <button class="btn compact ghost" type="button" data-remove-edge="${index}" aria-label="${h("delete_edge")}: ${esc(targetName)}">${h("remove")}</button>
+        </div>`;
+      })
+      .join("");
+  }
+
+  function changeOutgoing(node, index, toId) {
+    const edge = graph.edges[index];
+    if (!edge || edge.from !== node.id) return false;
+    if (!toId || toId === node.id || !graph.nodes.some((item) => item.id === toId)) return false;
+    if (graph.edges.some((item, position) => position !== index && item.from === edge.from && item.to === toId && item.when === edge.when)) {
+      setHint("the_same_edge_is_present_twice");
+      return false;
+    }
+    edge.to = toId;
+    markDirty();
+    setHint("edge_changed");
+    drawEdges();
+    renderNodes();
+    return true;
+  }
+
+  function addOutgoing(node) {
+    const host = document.querySelector("#inspector");
+    const when = host.querySelector("#link-when").value;
+    const toId = host.querySelector("#link-target").value;
+    if (!toId || toId === node.id || !graph.nodes.some((item) => item.id === toId)) {
+      setHint("choose_target");
+      return;
+    }
+    if (edgeExists(node.id, toId, when)) {
+      setHint("the_same_edge_is_present_twice");
+      return;
+    }
+    graph.edges.push({ from: node.id, to: toId, when });
+    connecting = null;
+    connectDrag = null;
+    clearConnectPreview();
+    markDirty();
+    setHint("edge_added");
+    drawEdges();
+    renderNodes();
+    renderInspector();
+  }
+
+  function removeOutgoing(node, index) {
+    const edge = graph.edges[index];
+    if (!edge || edge.from !== node.id) return;
+    graph.edges.splice(index, 1);
+    markDirty();
+    setHint("edge_removed");
+    drawEdges();
+    renderNodes();
+    renderInspector();
   }
 
   function freeNodePosition() {
@@ -804,10 +859,18 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         <h2>${h("connect")}</h2>
         <button class="btn pill primary" id="node-connect" type="button">${h("connect")}</button>
         <p class="small muted">${h("connect_help")}</p>
-        <label class="field"><span>${h("on_success_go_to")}</span><select class="fit" id="link-success">${targetOptions(node.id, "success")}</select></label>
-        <label class="field"><span>${h("on_failure_go_to")}</span><select class="fit" id="link-failure">${targetOptions(node.id, "failure")}</select></label>
-        <label class="field"><span>${h("always_go_to")}</span><select class="fit" id="link-always">${targetOptions(node.id, "always")}</select></label>
-        <p class="small muted">${h("the_edge_starts_at_this_node")}</p>
+        <div class="edge-list" id="outgoing-edges">${outgoingRows(node)}</div>
+        <div class="edge-add">
+          <label class="field"><span>${h("when")}</span>
+            <select class="fit" id="link-when">
+              <option value="success">${h("success")}</option>
+              <option value="failure">${h("error.generic")}</option>
+              <option value="always">${h("always")}</option>
+            </select>
+          </label>
+          <label class="field"><span>${h("target")}</span><select class="fit" id="link-target">${targetOptions(node.id, "", true)}</select></label>
+          <button class="btn" id="link-add" type="button">${h("add_edge")}</button>
+        </div>
         <button class="btn danger" id="node-delete" type="button">${h("delete_node")}</button>
       </div>`;
     host.querySelector("#node-connect").addEventListener("click", () => startConnect(node));
@@ -847,11 +910,17 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       element.addEventListener("input", markDirty);
       element.addEventListener("change", () => { if (flushNode()) markDirty(); });
     });
-    ["success", "failure", "always"].forEach((when) => {
-      host.querySelector(`#link-${when}`).addEventListener("change", (event) => {
-        setOutgoing(node.id, when, event.target.value);
-        renderNodes();
+    host.querySelector("#link-add").addEventListener("click", () => addOutgoing(node));
+    host.querySelectorAll(".edge-target").forEach((select) => {
+      select.addEventListener("change", (event) => {
+        const index = Number(event.target.dataset.edgeIndex);
+        const edge = graph.edges[index];
+        if (!edge) return;
+        if (!changeOutgoing(node, index, event.target.value)) event.target.value = edge.to;
       });
+    });
+    host.querySelectorAll("[data-remove-edge]").forEach((button) => {
+      button.addEventListener("click", () => removeOutgoing(node, Number(button.dataset.removeEdge)));
     });
     host.querySelector("#node-delete").addEventListener("click", () => removeNode(node));
   }
