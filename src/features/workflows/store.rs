@@ -17,7 +17,8 @@ pub(crate) const INSERT_WORKFLOW: &str = "INSERT INTO workflows (
 pub(crate) const UPDATE_WORKFLOW: &str = "UPDATE workflows
      SET name = ?3, description = ?4, graph = ?5, admin_saved = ?6,
          version = version + 1
-     WHERE id = ?1 AND team_id = ?2 AND (?7 IS NULL OR version = ?7)";
+     WHERE id = ?1 AND team_id = ?2
+       AND (CAST(?7 AS BIGINT) IS NULL OR version = CAST(?7 AS BIGINT))";
 
 pub(crate) const DELETE_WORKFLOW: &str = "DELETE FROM workflows WHERE id = ?1 AND team_id = ?2";
 
