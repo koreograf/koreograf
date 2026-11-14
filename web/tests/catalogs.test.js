@@ -21,10 +21,103 @@ function files(dir, extension) {
   return out;
 }
 
+function readQuoted(source, start) {
+  const quote = source[start];
+  let index = start + 1;
+  let text = "";
+  while (index < source.length) {
+    const ch = source[index];
+    if (ch === "\\") {
+      text += source[index + 1] || "";
+      index += 2;
+      continue;
+    }
+    if (ch === quote) return { next: index + 1, text };
+    text += ch;
+    index += 1;
+  }
+  return { next: index, text };
+}
+
+function skipTemplate(source, start) {
+  let index = start + 1;
+  while (index < source.length) {
+    if (source[index] === "\\") {
+      index += 2;
+      continue;
+    }
+    if (source[index] === "`") return index + 1;
+    if (source[index] === "$" && source[index + 1] === "{") {
+      let depth = 1;
+      index += 2;
+      while (index < source.length && depth > 0) {
+        if (source[index] === '"' || source[index] === "'") {
+          index = readQuoted(source, index).next;
+          continue;
+        }
+        if (source[index] === "{") depth += 1;
+        else if (source[index] === "}") depth -= 1;
+        index += 1;
+      }
+      continue;
+    }
+    index += 1;
+  }
+  return index;
+}
+
+function firstArgStrings(source, open) {
+  const keys = [];
+  let index = open + 1;
+  let paren = 0;
+  let brace = 0;
+  let bracket = 0;
+  let seenComma = false;
+  while (index < source.length) {
+    const ch = source[index];
+    if (ch === '"' || ch === "'") {
+      const quoted = readQuoted(source, index);
+      if (ch === '"' && !seenComma && paren === 0 && brace === 0 && bracket === 0 && quoted.text) {
+        keys.push(quoted.text);
+      }
+      index = quoted.next;
+      continue;
+    }
+    if (ch === "`") {
+      index = skipTemplate(source, index);
+      continue;
+    }
+    if (ch === "/" && source[index + 1] === "/") {
+      index += 2;
+      while (index < source.length && source[index] !== "\n") index += 1;
+      continue;
+    }
+    if (ch === "/" && source[index + 1] === "*") {
+      index += 2;
+      while (index + 1 < source.length && !(source[index] === "*" && source[index + 1] === "/")) index += 1;
+      index = Math.min(index + 2, source.length);
+      continue;
+    }
+    if (ch === "(") paren += 1;
+    else if (ch === ")") {
+      if (paren > 0) paren -= 1;
+      else break;
+    } else if (ch === "{") brace += 1;
+    else if (ch === "}" && brace > 0) brace -= 1;
+    else if (ch === "[") bracket += 1;
+    else if (ch === "]" && bracket > 0) bracket -= 1;
+    else if (ch === "," && paren === 0 && brace === 0 && bracket === 0) seenComma = true;
+    index += 1;
+  }
+  return keys;
+}
+
 function uiKeys(source) {
   const keys = [];
-  const pattern = /(?<![\w$])(renderLogin|Error|t|h)\s*\(\s*"((?:\\.|[^"\\])*)"/g;
-  for (const match of source.matchAll(pattern)) if (match[2]) keys.push(match[2]);
+  const pattern = /(?<![\w$])(renderLogin|Error|t|h)\s*\(/g;
+  for (const match of source.matchAll(pattern)) {
+    keys.push(...firstArgStrings(source, match.index + match[0].length - 1));
+  }
   return keys;
 }
 
@@ -67,6 +160,12 @@ test("every key the UI and the API use exists in the catalogs", () => {
   const web = files(join(__dirname, "..", "js"), ".js").map((path) => readFileSync(path, "utf8")).join("\n");
   const missing = [...new Set(uiKeys(web))].filter((key) => !Object.prototype.hasOwnProperty.call(de, key));
   assert.deepEqual(missing, [], "js keys missing from the catalogs");
+});
+
+test("the UI key scan reads both branches of a ternary", () => {
+  assert.deepEqual(uiKeys('h(flag ? "pause_schedule" : "resume_schedule")'), ["pause_schedule", "resume_schedule"]);
+  assert.deepEqual(uiKeys('t("plain", { name })'), ["plain"]);
+  assert.deepEqual(uiKeys("h(`schedule.day.${day}`)"), []);
 });
 
 test("the web sources keep no German copy", () => {
