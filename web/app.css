@@ -816,17 +816,31 @@ button.run-line:hover { outline: 1px solid var(--line); }
 .minimap-node { fill: var(--line); stroke: var(--muted); stroke-width: 1; }
 .minimap-view { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
 #board { z-index: 1; }
-#nodes { position: absolute; inset: 0; }
+#nodes { position: absolute; inset: 0; pointer-events: none; }
 .edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .edges path { fill: none; stroke-width: 2; pointer-events: stroke; cursor: pointer; }
-.edges path.success { stroke: #3f6212; }
-.edges path.failure { stroke: #9f1239; }
-.edges path.always { stroke: #78716c; }
+.edges path.success { stroke: var(--good); }
+.edges path.failure { stroke: var(--bad); stroke-dasharray: 2 4; }
+.edges path.always { stroke: #78716c; stroke-dasharray: 6 4; }
 .edges path.selected { stroke-width: 4; }
 .edges path:focus-visible { outline: none; stroke-width: 4; filter: drop-shadow(0 0 2px var(--accent)); }
+.edges path.edge-hit { stroke: transparent; stroke-width: 24; stroke-dasharray: none; pointer-events: stroke; cursor: pointer; }
+.edge-group:hover .edge-line { stroke-width: 3; }
+.edge-group:hover .edge-line.selected { stroke-width: 4; }
+.edge-arrow { stroke: none; }
+.edge-arrow.success { fill: var(--good); }
+.edge-arrow.failure { fill: var(--bad); }
+.edge-arrow.always { fill: #78716c; }
+.edge-chip { pointer-events: none; }
+.edge-chip-bg { fill: var(--panel); stroke: var(--line); stroke-width: 1; }
+.edge-chip-text { font-family: var(--sans); font-size: 11px; font-weight: 600; }
+.edge-chip-text.success { fill: var(--good); }
+.edge-chip-text.failure { fill: var(--bad); }
+.edge-chip-text.always { fill: #78716c; }
 .wf-node {
   position: absolute;
   width: 200px;
+  pointer-events: auto;
   min-height: 96px;
   background: var(--panel);
   border: 1px solid var(--line);
@@ -910,6 +924,8 @@ button.run-line:hover { outline: 1px solid var(--line); }
 .edges path.connecting { stroke: var(--accent); stroke-dasharray: 6 4; pointer-events: none; }
 .inspector { display: flex; flex-direction: column; gap: 12px; }
 .inspector-block { display: flex; flex-direction: column; gap: 10px; }
+.edge-ends { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; }
+.edge-ends .btn { min-width: 0; }
 .edge-list { display: flex; flex-direction: column; gap: 8px; }
 .edge-row { display: flex; align-items: center; gap: 8px; }
 .edge-row select { flex: 1 1 auto; width: 100%; min-width: 0; }

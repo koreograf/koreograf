@@ -9,7 +9,7 @@ import { jsonObject } from "../../core/forms.js";
 import { t } from "../../core/i18n.js";
 import { confirmTofuApply } from "../../core/tofu.js";
 import { mountSchedules } from "../schedules.js";
-import { chooseEdgeType, openCanvasMenu, openNodeMenu } from "./menus.js";
+import { chooseEdgeType, edgeWhenLabel, openCanvasMenu, openNodeMenu } from "./menus.js";
 import { autoPan, createViewport, minimapLayout, zoomAt } from "./viewport.js";
 
 export function workflowTofuApply(graph, templates) {
@@ -314,24 +314,71 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       </details>`;
   }
 
+  function edgeOffsets() {
+    const groups = new Map();
+    graph.edges.forEach((edge) => {
+      const key = [edge.from, edge.to].sort().join("|");
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(edge);
+    });
+    const offsets = new Map();
+    groups.forEach((list) => {
+      list.forEach((edge, index) => {
+        offsets.set(edge, (index - (list.length - 1) / 2) * 28);
+      });
+    });
+    return offsets;
+  }
+
+  function edgeGeometry(from, to, when, offset) {
+    const start = edgePoint(from, when);
+    const end = { x: to.x - 2, y: to.y + 36 };
+    if (end.x < start.x + 24) {
+      const lane = Math.max(from.y + 96, to.y + 96) + 80 + offset;
+      return { start, end, c1: { x: start.x + 80, y: lane }, c2: { x: end.x - 80, y: lane } };
+    }
+    const dx = Math.max(48, Math.abs(end.x - start.x) / 2);
+    return { start, end, c1: { x: start.x + dx, y: start.y + offset }, c2: { x: end.x - dx, y: end.y + offset } };
+  }
+
+  function edgePath(geometry) {
+    const { start, c1, c2, end } = geometry;
+    return `M ${start.x} ${start.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${end.x} ${end.y}`;
+  }
+
+  function edgeChip(geometry, klass, label) {
+    const x = (geometry.start.x + 3 * geometry.c1.x + 3 * geometry.c2.x + geometry.end.x) / 8;
+    const y = (geometry.start.y + 3 * geometry.c1.y + 3 * geometry.c2.y + geometry.end.y) / 8;
+    const width = Math.max(56, label.length * 6.5 + 14);
+    return `<g class="edge-chip" aria-hidden="true" pointer-events="none"><rect class="edge-chip-bg" x="${x - width / 2}" y="${y - 10}" width="${width}" height="20" rx="10" pointer-events="none"></rect><text class="edge-chip-text ${klass}" x="${x}" y="${y}" text-anchor="middle" dominant-baseline="central" pointer-events="none">${esc(label)}</text></g>`;
+  }
+
   function drawEdges() {
-    const width = Math.max(...graph.nodes.map((node) => (Number(node.x) || 0) + 260), 640);
-    const height = Math.max(...graph.nodes.map((node) => (Number(node.y) || 0) + 140), 400);
+    const offsets = edgeOffsets();
+    const edges = graph.edges.map((edge, index) => {
+      const from = graph.nodes.find((node) => node.id === edge.from);
+      const to = graph.nodes.find((node) => node.id === edge.to);
+      if (!from || !to) return null;
+      const klass = ["success", "failure", "always"].includes(edge.when) ? edge.when : "always";
+      const geometry = edgeGeometry(from, to, klass, offsets.get(edge) || 0);
+      return { edge, index, from, to, klass, geometry, d: edgePath(geometry) };
+    }).filter(Boolean);
+    const width = Math.max(640, ...graph.nodes.map((node) => (Number(node.x) || 0) + 260), ...edges.map(({ geometry }) => Math.max(geometry.start.x, geometry.end.x, geometry.c1.x, geometry.c2.x) + 20));
+    const height = Math.max(400, ...graph.nodes.map((node) => (Number(node.y) || 0) + 140), ...edges.map(({ geometry }) => Math.max(geometry.start.y, geometry.end.y, geometry.c1.y, geometry.c2.y) + 20));
     board.style.width = `${width}px`;
     board.style.height = `${height}px`;
     svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-    svg.innerHTML = graph.edges.map((edge, index) => {
-      const from = graph.nodes.find((node) => node.id === edge.from);
-      const to = graph.nodes.find((node) => node.id === edge.to);
-      if (!from || !to) return "";
-      const start = edgePoint(from, edge.when);
-      const end = { x: to.x, y: to.y + 36 };
-      const dx = Math.max(48, Math.abs(end.x - start.x) / 2);
-      const klass = ["success", "failure", "always"].includes(edge.when) ? edge.when : "always";
+    const defs = `<defs>${["success", "failure", "always"].map((when) => `<marker id="edge-arrow-${when}" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto"><polygon class="edge-arrow ${when}" points="0,0 12,6 0,12"></polygon></marker>`).join("")}</defs>`;
+    svg.innerHTML = `${defs}${edges.map(({ index, from, to, klass, geometry, d }) => {
       const label = `${edgeWhenText(klass)}: ${from.name} → ${to.name}`;
+      const chip = `${PORT_SYMBOLS[klass]} ${edgeWhenText(klass)}`;
       const role = editable ? ` role="button" tabindex="0"` : ` role="img"`;
-      return `<path class="${klass}${selectedEdge === index ? " selected" : ""}" data-edge="${index}"${role} aria-label="${esc(label)}" d="M ${start.x} ${start.y} C ${start.x + dx} ${start.y}, ${end.x - dx} ${end.y}, ${end.x} ${end.y}"></path>`;
-    }).join("");
+      return `<g class="edge-group ${klass}" data-edge-group="${index}">
+        <path class="edge-line ${klass}${selectedEdge === index ? " selected" : ""}" data-edge="${index}"${role} aria-label="${esc(label)}" d="${d}" marker-end="url(#edge-arrow-${klass})"></path>
+        <path class="edge-hit" data-edge="${index}" d="${d}"></path>
+        ${edgeChip(geometry, klass, chip)}
+      </g>`;
+    }).join("")}`;
     paintMinimap();
   }
 
@@ -350,6 +397,19 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     drawEdges();
     renderInspector();
     if (focus) focusEdge(index);
+  }
+
+  function selectNodeById(id) {
+    if (!flushNode()) return;
+    selected = id;
+    selectedEdge = null;
+    connecting = null;
+    connectDrag = null;
+    clearConnectPreview();
+    renderNodes();
+    renderInspector();
+    const element = nodes.querySelector(`[data-id="${CSS.escape(id)}"]`);
+    if (element) element.focus();
   }
 
   function removeEdgeAt(index) {
@@ -642,9 +702,10 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       const runClass = readonly ? " run-node" : "";
       const connectClass = connecting && connecting.from === node.id ? " connecting" : "";
       const menu = editable ? `<button class="btn ghost compact node-menu-button" type="button" data-node-menu aria-haspopup="menu" aria-expanded="false" aria-label="${h("node_actions", { name: node.name })}">⋯</button>` : "";
-      const ports = editable
-        ? `<div class="wf-ports">${["success", "failure", "always"].map((when) => `<div class="wf-port ${when}"><span class="wf-port-symbol" aria-hidden="true">${PORT_SYMBOLS[when]}</span><button class="wf-port-add" type="button" data-add-port="${when}" aria-label="${h("add_step_after", { name: node.name, when: edgeWhenText(when) })}" title="${h("add_step_after", { name: node.name, when: edgeWhenText(when) })}">+</button></div>`).join("")}</div>`
-        : "";
+      const ports = `<div class="wf-ports">${["success", "failure", "always"].map((when) => {
+        const add = editable ? `<button class="wf-port-add" type="button" data-add-port="${when}" aria-label="${h("add_step_after", { name: node.name, when: edgeWhenText(when) })}" title="${h("add_step_after", { name: node.name, when: edgeWhenText(when) })}">+</button>` : "";
+        return `<div class="wf-port ${when}"><span class="wf-port-symbol" aria-hidden="true">${PORT_SYMBOLS[when]}</span>${add}</div>`;
+      }).join("")}</div>`;
       return `<div class="wf-node${selectedClass}${connectClass}${phaseClass}${runClass}" data-id="${esc(node.id)}" style="left:${Number(node.x) || 0}px;top:${Number(node.y) || 0}px" tabindex="0" role="group" aria-label="${esc(nodeLabel(node))}">${menu}<strong>${esc(node.name)}</strong><span class="small muted">${esc(nodeCaption(node))}</span>${ports}</div>`;
     }).join("");
     nodes.querySelectorAll(".wf-node").forEach((element) => {
@@ -800,16 +861,8 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     drawEdges();
   }
 
-  function edgeWhenLabel(when) {
-    if (when === "failure") return h("error.generic");
-    if (when === "always") return h("always");
-    return h("success");
-  }
-
   function edgeWhenText(when) {
-    if (when === "failure") return t("error.generic");
-    if (when === "always") return t("always");
-    return t("success");
+    return t(edgeWhenLabel(when));
   }
 
   function targetOptions(fromId, current, placeholder) {
@@ -1026,17 +1079,27 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     const node = graph.nodes.find((item) => item.id === selected);
     if (selectedEdge !== null && graph.edges[selectedEdge]) {
       const edge = graph.edges[selectedEdge];
+      const from = graph.nodes.find((item) => item.id === edge.from);
+      const to = graph.nodes.find((item) => item.id === edge.to);
+      const fromName = from ? from.name : edge.from;
+      const toName = to ? to.name : edge.to;
       host.innerHTML = `<div class="inspector-block">
           <h2>${h("edge")}</h2>
+          <p class="edge-ends">
+            <button class="btn compact ghost" type="button" data-edge-node="from" aria-label="${h("select_node", { name: fromName })}">${esc(fromName)}</button>
+            <span aria-hidden="true">→</span>
+            <button class="btn compact ghost" type="button" data-edge-node="to" aria-label="${h("select_node", { name: toName })}">${esc(toName)}</button>
+          </p>
           <label class="field"><span>${h("when")}</span>
             <select class="fit" id="edge-when">
-              <option value="success"${edge.when === "success" ? " selected" : ""}>${h("success")}</option>
-              <option value="failure"${edge.when === "failure" ? " selected" : ""}>${h("error.generic")}</option>
-              <option value="always"${edge.when === "always" ? " selected" : ""}>${h("always")}</option>
+              ${["success", "failure", "always"].map((when) => `<option value="${when}"${edge.when === when ? " selected" : ""}>${h(edgeWhenLabel(when))}</option>`).join("")}
             </select>
           </label>
           <button class="btn danger" id="edge-delete" type="button">${h("delete_edge")}</button>
         </div>`;
+      host.querySelectorAll("[data-edge-node]").forEach((button) => {
+        button.addEventListener("click", () => selectNodeById(button.dataset.edgeNode === "from" ? edge.from : edge.to));
+      });
       host.querySelector("#edge-when").addEventListener("change", (event) => {
         const next = event.target.value;
         if (next !== edge.when && graph.edges.some((item, index) => index !== selectedEdge && item.from === edge.from && item.to === edge.to && item.when === next)) {
@@ -1078,9 +1141,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         <div class="edge-add">
           <label class="field"><span>${h("when")}</span>
             <select class="fit" id="link-when">
-              <option value="success">${h("success")}</option>
-              <option value="failure">${h("error.generic")}</option>
-              <option value="always">${h("always")}</option>
+              ${["success", "failure", "always"].map((when) => `<option value="${when}">${h(edgeWhenLabel(when))}</option>`).join("")}
             </select>
           </label>
           <label class="field"><span>${h("target")}</span><select class="fit" id="link-target">${targetOptions(node.id, "", true)}</select></label>

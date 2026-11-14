@@ -277,6 +277,29 @@ test("the workflow editor connects, retypes and removes an edge with the keyboar
   await expect(page.locator("#edges path")).toHaveCount(edgeCount);
 });
 
+test("the workflow edge hit area selects a failure edge and names its nodes", async ({ page }) => {
+  await signInInEnglish(page);
+  await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
+  await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
+  const failure = page.locator("#edges path.failure");
+  await expect(failure).toHaveCount(1);
+  const point = await failure.evaluate((element) => {
+    const middle = element.getPointAtLength(element.getTotalLength() / 2);
+    const matrix = element.getScreenCTM();
+    return {
+      x: middle.x * matrix.a + middle.y * matrix.c + matrix.e,
+      y: middle.x * matrix.b + middle.y * matrix.d + matrix.f,
+    };
+  });
+  await page.mouse.click(point.x + 5, point.y + 5);
+  await expect(page.locator("#edge-when")).toHaveValue("failure");
+  await expect(page.locator("#edge-when option:checked")).toHaveText("On failure");
+  const inspector = page.locator("#inspector");
+  await expect(inspector).toContainText("Healthcheck");
+  await expect(inspector).toContainText("Eskalation");
+  await expect(inspector).not.toContainText("Error");
+});
+
 test("the workflow canvas fits, zooms and pans", async ({ page }) => {
   await signInInEnglish(page);
   await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
