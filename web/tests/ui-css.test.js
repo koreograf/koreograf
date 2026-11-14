@@ -50,6 +50,7 @@ test("the narrow workflow editor keeps the board inside the page", () => {
   const css = stylesheet();
   const narrow = mediaBlock(css, "@media (max-width: 900px)");
   assert.match(narrow, /\.editor-body\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+  assert.match(narrow, /\.editor-stack\s*\{[^}]*padding-bottom:\s*56px/);
   assert.match(narrow, /\.inspector-panel\s*\{[^}]*position:\s*fixed/);
   assert.match(narrow, /\.run-status-bar\s*\{\s*display:\s*flex/);
   const wide = mediaBlock(css, "@media (min-width: 1024px)");

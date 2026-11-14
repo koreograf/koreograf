@@ -258,11 +258,6 @@ export async function pageRun(id) {
       });
     } else {
       editor.applyPhases(run.status);
-      const badge = document.querySelector("#run-state");
-      if (badge) {
-        badge.className = `pill ${run.status || "pending"}`;
-        badge.textContent = statusLabel(run.status || "pending");
-      }
     }
     renderActions(run);
     renderLog(run);
