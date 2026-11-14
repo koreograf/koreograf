@@ -272,3 +272,43 @@ test("the workflow editor connects, retypes and removes an edge with the keyboar
   await expect(page.locator("#wf-hint")).toHaveText("Edge removed.");
   await expect(page.locator("#edges path")).toHaveCount(edgeCount);
 });
+
+test("the workflow canvas fits, zooms and pans", async ({ page }) => {
+  await signInInEnglish(page);
+  await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
+  await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
+  const canvas = page.locator("#canvas");
+  await expect(canvas).toBeVisible();
+
+  await page.locator("[data-canvas-fit]").click();
+  const box = await canvas.boundingBox();
+  const nodes = page.locator(".wf-node");
+  const count = await nodes.count();
+  expect(count).toBeGreaterThan(1);
+  for (let index = 0; index < count; index += 1) {
+    const nodeBox = await nodes.nth(index).boundingBox();
+    expect(nodeBox.x).toBeGreaterThanOrEqual(box.x - 1);
+    expect(nodeBox.y).toBeGreaterThanOrEqual(box.y - 1);
+    expect(nodeBox.x + nodeBox.width).toBeLessThanOrEqual(box.x + box.width + 1);
+    expect(nodeBox.y + nodeBox.height).toBeLessThanOrEqual(box.y + box.height + 1);
+  }
+
+  const zoom = async () => Number(await canvas.getAttribute("data-zoom"));
+  const fitted = await zoom();
+  await page.locator("[data-canvas-zoom-in]").click();
+  await expect.poll(zoom).toBeGreaterThan(fitted);
+
+  const wheelBefore = await zoom();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.keyboard.down("Control");
+  await page.mouse.wheel(0, -120);
+  await page.keyboard.up("Control");
+  await expect.poll(zoom).toBeGreaterThan(wheelBefore);
+
+  const viewBefore = Number(await page.locator("#board").getAttribute("data-view-x"));
+  await page.mouse.move(box.x + 30, box.y + 30);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 90, box.y + 50, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(async () => Number(await page.locator("#board").getAttribute("data-view-x"))).toBeGreaterThan(viewBefore);
+});
