@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.1.0-alpha.13](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.12...v0.1.0-alpha.13) (2026-11-14)
+
+
+### Features
+
+* add the next workflow step from an output handle ([#481](https://github.com/koreograf/koreograf/issues/481)) ([358a687](https://github.com/koreograf/koreograf/commit/358a687b6022336fcfd2cbf4119daabacf290402))
+* add workflow nodes with the full editor ([#458](https://github.com/koreograf/koreograf/issues/458)) ([6e7c9f8](https://github.com/koreograf/koreograf/commit/6e7c9f80459e27e8549707d82054d665c5e6440c))
+* connect and delete workflow edges from the keyboard ([#478](https://github.com/koreograf/koreograf/issues/478)) ([7394c08](https://github.com/koreograf/koreograf/commit/7394c08164c64a265ab6becba7ee6a0c6e1395f7))
+* zoom, pan and fit the workflow canvas ([#479](https://github.com/koreograf/koreograf/issues/479)) ([8e2d6dd](https://github.com/koreograf/koreograf/commit/8e2d6ddb83ac6a3271d07296e862bc187901c623))
+
+
+### Bug Fixes
+
+* finish the workflow unsaved guard follow-ups ([#476](https://github.com/koreograf/koreograf/issues/476)) ([05230f6](https://github.com/koreograf/koreograf/commit/05230f69dad187ee10bccdb7fd0d2133995398ac))
+* guard unsaved workflow edits and do not save on launch ([#475](https://github.com/koreograf/koreograf/issues/475)) ([7c404e5](https://github.com/koreograf/koreograf/commit/7c404e5562b65815a6b852ee9cd230bf39c36c06))
+* keep browser shortcuts and touch pinch on the canvas ([#480](https://github.com/koreograf/koreograf/issues/480)) ([addc82e](https://github.com/koreograf/koreograf/commit/addc82e39d39660411034677e76b6736e5064a6b))
+* keep fan-out edges when the inspector target changes ([#477](https://github.com/koreograf/koreograf/issues/477)) ([91c08d4](https://github.com/koreograf/koreograf/commit/91c08d4e0c9e90e649a269b24854075ededd0c64))
+* keep workflow connect mode on a source release ([#482](https://github.com/koreograf/koreograf/issues/482)) ([7dde7ad](https://github.com/koreograf/koreograf/commit/7dde7adc92a2a627ab22489e082c3d9914d9ad52))
+
 ## [0.1.0-alpha.12](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.11...v0.1.0-alpha.12) (2026-11-14)
 
 
