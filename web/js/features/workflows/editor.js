@@ -105,6 +105,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     <div id="wf-panel-editor"${tabbed ? ` role="tabpanel" aria-labelledby="wf-tab-editor"${activeTab === "editor" ? "" : " hidden"}` : ""}>
       <div class="editor-body">
         <div class="canvas-column">
+          ${readonly ? `<div class="run-status-bar" id="run-status-bar" role="status"><span class="small muted">${h("status")}</span><span class="pill ${esc(workflow.status || "pending")}" id="run-state-top">${esc(statusLabel(workflow.status || "pending"))}</span></div>` : ""}
           ${readonly ? "" : `
             <div class="field-row" style="margin-bottom:10px">
               <label class="field"><span>${h("name")}</span><input class="fit" id="wf-name" value="${esc(workflow.name)}" ${can("operator") ? "" : "disabled"}></label>
@@ -129,7 +130,12 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
           </div>
         </div>
         <div class="inspector-resizer" id="inspector-resizer" role="separator" aria-orientation="vertical" aria-label="${h("resize_node_panel")}" tabindex="0"></div>
-        <aside class="card inspector" id="inspector"></aside>
+        <div class="inspector-panel" id="inspector-panel">
+          <div class="inspector-bar">
+            <button class="btn compact ghost inspector-toggle" type="button" id="inspector-toggle" aria-expanded="true" aria-controls="inspector" aria-label="${h("collapse_node_panel")}" title="${h("collapse_node_panel")}">−</button>
+          </div>
+          <aside class="card inspector" id="inspector"></aside>
+        </div>
       </div>
       ${readonly ? `<section class="card run-log" id="run-log" aria-live="polite"></section>` : ""}
     </div>
@@ -166,11 +172,39 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   const svg = document.querySelector("#edges");
   const nodes = document.querySelector("#nodes");
   const minimap = document.querySelector("#minimap");
+  const editorBody = document.querySelector(".editor-body");
+  const inspector = document.querySelector("#inspector");
+  const inspectorToggle = document.querySelector("#inspector-toggle");
+  let inspectorCollapsed = false;
   let fitted = false;
   let pan = null;
   let pinch = null;
   let autoPanTimer = null;
   const touchPointers = new Map();
+
+  function narrowScreen() {
+    if (typeof window.matchMedia === "function") return window.matchMedia("(max-width: 900px)").matches;
+    return Number(window.innerWidth) <= 900;
+  }
+
+  function setInspectorCollapsed(collapsed, focus) {
+    inspectorCollapsed = Boolean(collapsed);
+    if (editorBody) editorBody.classList.toggle("inspector-collapsed", inspectorCollapsed);
+    if (inspector) inspector.hidden = inspectorCollapsed;
+    if (inspectorToggle) {
+      const key = inspectorCollapsed ? "expand_node_panel" : "collapse_node_panel";
+      inspectorToggle.setAttribute("aria-expanded", String(!inspectorCollapsed));
+      inspectorToggle.setAttribute("aria-label", t(key));
+      inspectorToggle.title = t(key);
+      inspectorToggle.textContent = inspectorCollapsed ? "+" : "−";
+    }
+    if (focus && inspectorToggle) inspectorToggle.focus();
+  }
+
+  function revealInspector() {
+    if (!narrowScreen() || !inspectorCollapsed) return;
+    setInspectorCollapsed(false, false);
+  }
 
   const viewport = createViewport({
     canvas,
@@ -679,6 +713,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     connectDrag = null;
     clearConnectPreview();
     drawEdges();
+    revealInspector();
     renderInspector();
     if (focus) focusEdge(index);
   }
@@ -691,6 +726,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     connectDrag = null;
     clearConnectPreview();
     renderNodes();
+    revealInspector();
     renderInspector();
     const element = nodes.querySelector(`[data-id="${CSS.escape(id)}"]`);
     if (element) element.focus();
@@ -872,6 +908,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     connectDrag = null;
     clearConnectPreview();
     renderNodes();
+    revealInspector();
     renderInspector();
     const created = nodes.querySelector(`[data-id="${CSS.escape(node.id)}"]`);
     if (created) created.focus();
@@ -976,6 +1013,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     selectedEdge = null;
     setHint("connect_click_or_drag_target", { name: node.name });
     renderNodes();
+    revealInspector();
     renderInspector();
     const source = nodes.querySelector(`[data-id="${CSS.escape(node.id)}"]`);
     if (source) source.focus();
@@ -1031,6 +1069,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     selectedEdge = null;
     setHint("edge_added", { when: edgeWhenText(when), from: fromNode.name, to: toNode.name });
     renderNodes();
+    revealInspector();
     renderInspector();
   }
 
@@ -1186,6 +1225,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         if (!editable) {
           selected = node.id;
           selectedEdge = null;
+          revealInspector();
           renderInspector();
           nodes.querySelectorAll(".wf-node").forEach((item) => item.classList.toggle("selected", item.dataset.id === selected));
           return;
@@ -1210,6 +1250,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         const point = localPoint(event);
         drag = { id: node.id, ox: point.x - node.x, oy: point.y - node.y, screen: canvasPoint(event) };
         element.setPointerCapture(event.pointerId);
+        revealInspector();
         renderInspector();
         nodes.querySelectorAll(".wf-node").forEach((item) => item.classList.toggle("selected", item.dataset.id === selected));
       });
@@ -1303,6 +1344,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
           }
           selected = node.id;
           selectedEdge = null;
+          revealInspector();
           renderInspector();
           nodes.querySelectorAll(".wf-node").forEach((item) => item.classList.toggle("selected", item.dataset.id === selected));
           return;
@@ -1965,8 +2007,6 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   if (redoButton) redoButton.addEventListener("click", redo);
 
   const resizer = document.querySelector("#inspector-resizer");
-  const editorBody = document.querySelector(".editor-body");
-  const inspector = document.querySelector("#inspector");
   if (resizer && editorBody && inspector) {
     let resizePointer = null;
     const setPanelWidth = (width) => {
@@ -1994,6 +2034,9 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       const step = event.key === "ArrowLeft" ? 20 : -20;
       setPanelWidth(inspector.getBoundingClientRect().width + step);
     });
+  }
+  if (inspectorToggle) {
+    inspectorToggle.addEventListener("click", () => setInspectorCollapsed(!inspectorCollapsed, false));
   }
 
   canvas.addEventListener("keydown", (event) => {
@@ -2090,6 +2133,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   baseline = currentState();
   renderNodes();
   renderInspector();
+  if (narrowScreen()) setInspectorCollapsed(true, false);
   fitOnOpen();
   bindWorkflowTabs();
   mountSchedules(document.querySelector("#schedule-card"));
@@ -2239,6 +2283,11 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
 
   function applyPhases(status) {
     if (status) workflow.status = status;
+    const currentStatus = status || workflow.status || "pending";
+    document.querySelectorAll("#run-state, #run-state-top").forEach((badge) => {
+      badge.className = `pill ${currentStatus}`;
+      badge.textContent = statusLabel(currentStatus);
+    });
     nodes.querySelectorAll(".wf-node").forEach((element) => {
       const node = graph.nodes.find((item) => item.id === element.dataset.id);
       const phase = phases[element.dataset.id];
