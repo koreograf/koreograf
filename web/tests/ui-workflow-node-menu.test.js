@@ -226,15 +226,16 @@ test("Enter on a target completes the keyboard connection without editing", asyn
   assert.equal(document.querySelector("#wf-hint").textContent, "connect_cancelled");
 });
 
-test("Delete on a focused node confirms before removing it", async () => {
+test("Delete on a focused node removes it without a dialog and shows undo", async () => {
   await mount();
   document.querySelector('[data-id="n1"]').dispatchEvent({ type: "keydown", key: "Delete", preventDefault() {} });
-  const dialog = document.querySelector("#confirm-dialog");
-  assert.ok(dialog, "Delete did not ask before removing the node");
-  dialog.querySelector(".dialog-form").dispatchEvent({ type: "submit", preventDefault() {} });
-  await tick();
+  assert.equal(document.querySelector("#confirm-dialog"), null, "Delete opened a confirmation");
   assert.equal(document.querySelectorAll("#nodes .wf-node").length, 1, "Delete did not remove exactly one node");
   assert.equal(document.querySelector('[data-id="n1"]'), null);
+  const toast = document.querySelector("#wf-toast");
+  assert.equal(toast.hidden, false, "Delete did not show the undo toast");
+  assert.match(toast.innerHTML, /node_deleted/);
+  assert.match(toast.innerHTML, /undo/);
 });
 
 test("the canvas menu explains when no template exists", async () => {

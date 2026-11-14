@@ -439,3 +439,33 @@ test("an empty workflow builds a success chain without the context menu", async 
   await expect(page.locator("#wf-hint")).toHaveText("This connection would create a cycle.");
   await expect(page.locator("#edges path.edge-line")).toHaveCount(1);
 });
+
+test("Delete removes a connected node and Ctrl+Z restores it with its edge", async ({ page }) => {
+  await signInInEnglish(page);
+  await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
+  await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
+  const source = page.locator('.wf-node[data-id="check"]');
+  await expect(source).toBeVisible();
+  await expect(page.locator("#edges path.edge-line").first()).toBeVisible();
+  const edgeCount = await page.locator("#edges path.edge-line").count();
+  await source.locator('[data-add-port="success"]').click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "Add node" })).toBeVisible();
+  await dialog.locator("#node-name").fill("Undo target");
+  await dialog.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+
+  const added = page.locator(".wf-node", { hasText: "Undo target" });
+  await expect(added).toBeVisible();
+  await expect(page.locator("#edges path.edge-line")).toHaveCount(edgeCount + 1);
+
+  await added.focus();
+  await page.keyboard.press("Delete");
+  await expect(page.locator(".wf-node", { hasText: "Undo target" })).toHaveCount(0);
+  await expect(page.locator("#edges path.edge-line")).toHaveCount(edgeCount);
+  await expect(page.locator("#wf-toast")).toContainText("Node deleted.");
+
+  await page.keyboard.press("Control+z");
+  await expect(page.locator(".wf-node", { hasText: "Undo target" })).toBeVisible();
+  await expect(page.locator("#edges path.edge-line")).toHaveCount(edgeCount + 1);
+});
