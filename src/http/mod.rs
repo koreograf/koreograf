@@ -206,6 +206,8 @@ pub fn router(state: Shared) -> Router {
         .route("/healthz", get(health))
         .route("/metrics", get(metrics))
         .route("/favicon.svg", get(favicon))
+        .route("/i18n/de.json", get(catalog_de))
+        .route("/i18n/en.json", get(catalog_en))
         .route("/", get(index))
         .route("/{*path}", any(asset))
         .route(
@@ -321,6 +323,21 @@ async fn index(State(state): State<Shared>, headers: HeaderMap) -> Response {
     asset_response(&state.cfg.web_dir, "index.html", &headers).await
 }
 
+async fn catalog_de(State(state): State<Shared>, headers: HeaderMap) -> Response {
+    catalog_response(&state, "de", &headers)
+}
+
+async fn catalog_en(State(state): State<Shared>, headers: HeaderMap) -> Response {
+    catalog_response(&state, "en", &headers)
+}
+
+fn catalog_response(state: &Shared, language: &str, request_headers: &HeaderMap) -> Response {
+    let Some(bytes) = state.catalogs.get(language) else {
+        return asset_not_found();
+    };
+    bytes_response(bytes, "application/json; charset=utf-8", request_headers)
+}
+
 async fn asset(
     State(state): State<Shared>,
     method: Method,
@@ -348,7 +365,15 @@ async fn asset_response(web_dir: &Path, requested: &str, request_headers: &Heade
         Ok(bytes) => bytes,
         Err(_) => return asset_not_found(),
     };
-    let etag = format!("\"{}\"", hex::encode(Sha256::digest(&bytes)));
+    bytes_response(&bytes, content_type, request_headers)
+}
+
+fn bytes_response(
+    bytes: &[u8],
+    content_type: &'static str,
+    request_headers: &HeaderMap,
+) -> Response {
+    let etag = format!("\"{}\"", hex::encode(Sha256::digest(bytes)));
     let Ok(etag_header) = HeaderValue::from_str(&etag) else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
@@ -360,7 +385,7 @@ async fn asset_response(web_dir: &Path, requested: &str, request_headers: &Heade
     if if_none_match(request_headers, &etag) {
         return (StatusCode::NOT_MODIFIED, headers).into_response();
     }
-    (headers, bytes).into_response()
+    (headers, bytes.to_vec()).into_response()
 }
 
 async fn asset_path(web_dir: &Path, requested: &str) -> Option<PathBuf> {

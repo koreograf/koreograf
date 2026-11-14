@@ -1,0 +1,18 @@
+{
+  "applies_to": "Applies to",
+  "cached_collections": "Cached collections",
+  "cached_roles": "Cached roles",
+  "edit_environment": "Edit environment",
+  "environment": "+ Environment",
+  "global_applies_to_every_team_the_organization_applies": "Global applies to every team. The organization applies to every team in it. A team stays private.",
+  "id": "Id",
+  "image": "Image",
+  "local_jobs": "Local runner for",
+  "new_environment": "New environment",
+  "pull": "Pull",
+  "search_environments": "Search environments",
+  "the_network_is_passed_to_the_container_run_an_empty": "The network is passed to the container run. Empty uses the daemon default. container:<name> joins the network of that container.",
+  "this_organization": "This organization",
+  "this_team": "This team",
+  "tools": "Tools"
+}

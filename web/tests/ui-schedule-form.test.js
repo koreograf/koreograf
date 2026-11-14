@@ -2,13 +2,12 @@
 
 require("./test-dom.js").install();
 const assert = require("node:assert/strict");
-const { readFileSync } = require("node:fs");
 const { join } = require("node:path");
 const { pathToFileURL } = require("node:url");
 const test = require("node:test");
+const { catalog } = require("./catalog.js");
 
 const load = (path) => import(pathToFileURL(join(__dirname, "..", "js", path)).href);
-const catalog = (id) => JSON.parse(readFileSync(join(__dirname, "..", "i18n", `${id}.json`), "utf8"));
 
 async function operator() {
   const state = await load("core/state.js");

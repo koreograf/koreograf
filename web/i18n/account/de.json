@@ -1,0 +1,13 @@
+{
+  "api_tokens": "API-Tokens",
+  "api_tokens_hint": "Das Geheimnis wird nur einmal angezeigt. Speichere es, bevor du die Seite verlässt.",
+  "copied": "Kopiert",
+  "copy": "Kopieren",
+  "create_token": "Token anlegen",
+  "delete_this_token": "Token \"{name}\" widerrufen?",
+  "last_used": "Zuletzt verwendet",
+  "my_account": "Mein Konto",
+  "name_and_email_come_from_the_directory": "Name und E-Mail kommen aus dem Verzeichnis.",
+  "prefix": "Präfix",
+  "revoke": "Widerrufen"
+}

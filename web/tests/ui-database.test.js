@@ -6,6 +6,7 @@ const { readFileSync } = require("node:fs");
 const { join } = require("node:path");
 const { pathToFileURL } = require("node:url");
 const test = require("node:test");
+const { catalog } = require("./catalog.js");
 
 const load = (path) => import(pathToFileURL(join(__dirname, "..", "js", path)).href);
 const read = (path) => readFileSync(join(__dirname, "..", "..", path), "utf8");
@@ -53,7 +54,7 @@ test("the maintenance banner follows the server state", async () => {
 });
 
 test("the wizard strings are in both catalogs in order", () => {
-  const catalogs = ["de", "en"].map((id) => JSON.parse(readFileSync(join(__dirname, "..", "i18n", `${id}.json`), "utf8")));
+  const catalogs = ["de", "en"].map(catalog);
   for (const [index, id] of ["de", "en"].entries()) {
     const values = catalogs[index];
     const keys = Object.keys(values);

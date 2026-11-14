@@ -1,0 +1,22 @@
+{
+  "all_teams_in_the_organization": "All teams in the organization",
+  "assignment": "Assignment",
+  "branch_tag_or_commit": "Branch, tag, or commit",
+  "count_teams": "{count} teams",
+  "delete_this_project": "Delete project \"{name}\"? Templates that use it can no longer run.",
+  "edit_project": "Edit project",
+  "https_or_file": "https://… or file://…",
+  "last_synced_value": "Last synced: {time} · commit {commit} · {status}",
+  "loading_teams": "Loading teams.",
+  "search_projects": "Search projects",
+  "source_2": "Source",
+  "source_control_credential": "Source control credential",
+  "source_control_key_hint": "For ssh:// and git@ addresses, choose a source control credential with a private key.",
+  "source_control_project_hint": "Leave empty for a public repository. A token credential is a source control credential: create one here and put the token in its password field.",
+  "sync": "Sync",
+  "sync_failed": "Sync failed.",
+  "synced": "Synced",
+  "this_organization_has_no_team_yet": "This organization has no team yet.",
+  "visibility": "Visibility",
+  "with_no_team_checked_every_team_in_the": "With no team checked, every team in the organization can use the project."
+}

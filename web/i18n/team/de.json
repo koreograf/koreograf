@@ -1,0 +1,15 @@
+{
+  "add_member": "Mitglied hinzufügen",
+  "cn_or_dn_for_example_platform": "CN oder DN, zum Beispiel Plattform",
+  "ldap_group_group": "LDAP-Gruppe: {group}",
+  "ldap_or_ad_group": "LDAP- oder AD-Gruppe",
+  "member": "+ Mitglied",
+  "members": "Mitglieder",
+  "move_organization": "Organisation verschieben",
+  "new_organization_named_after_the_team": "Neue Organisation mit dem Teamnamen",
+  "new_team_2": "Team anlegen",
+  "no_team_selected": "Kein Team ausgewählt.",
+  "organization_name_2": "Organisation: {name}",
+  "save_team": "Team speichern",
+  "team_2": "+ Team"
+}

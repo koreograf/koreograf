@@ -2,7 +2,7 @@
 
 ## Languages
 
-The browser UI is German by default. The language menu sits at the bottom of the sidebar and on the sign-in page. Each entry shows a flag and a short code, for example GER and ENG. Visible copy lives in `web/i18n/de.json` and `web/i18n/en.json`. The API returns a message key in `error`, and logs stay English.
+The browser UI is German by default. The language menu sits at the bottom of the sidebar and on the sign-in page. Each entry shows a flag and a short code, for example GER and ENG. Visible copy lives in `web/i18n/<feature>/de.json` and `web/i18n/<feature>/en.json`; the server merges them into `/i18n/de.json` and `/i18n/en.json`. The API returns a message key in `error`, and logs stay English.
 
 Create-lists use the same pill button, for example `+ Projekt` (English: `+ Project`). The first start on a machine is also in [Installation](installation.md#run-on-a-machine).
 

@@ -1,0 +1,11 @@
+{
+  "backup_restored_the_previous_installation_is_restore_previous": "Sicherung eingespielt. Die vorherige Installation liegt als restore-previous.zip im Datenverzeichnis. Bitte neu anmelden.",
+  "download_backup": "Sicherung herunterladen",
+  "file": "Datei",
+  "include_opentofu_state": "OpenTofu-State einschließen",
+  "koreograf_stores_data_in_sqlite_the_backup_contains": "Koreograf speichert in einer Datenbank. Die Sicherung enthält die Datenbank und den Schlüssel für die Zugänge. Cache, Git-Checkouts und Auftragsverzeichnisse bleiben außen vor.",
+  "opentofu_state_can_contain_secrets": "Der OpenTofu-State kann Geheimnisse enthalten.",
+  "restore_backup": "Sicherung einspielen",
+  "the_current_installation_will_be_replaced": "Die aktuelle Installation wird ersetzt.",
+  "this_replaces_organizations_teams_users_projects_inventories_credentials": "Das ersetzt Organisationen, Teams, Benutzer, Projekte, Inventare, Zugänge, Vorlagen, Workflows und Webhooks. Laufende Aufträge müssen vorher beendet sein. Danach ist eine neue Anmeldung nötig."
+}

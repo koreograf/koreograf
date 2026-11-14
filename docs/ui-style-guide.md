@@ -5,7 +5,7 @@ This guide describes the browser UI as it exists today. `web/app.css`, `web/js/`
 ## Principles
 
 - The UI stays quiet and readable. Content comes first, decoration second.
-- German is the default language. Every visible string is a key in `web/i18n/de.json` and `web/i18n/en.json`. Nothing is hard-coded, and the two catalogs list the same keys.
+- German is the default language. Every visible string is a key in `web/i18n/<feature>/de.json` and `web/i18n/<feature>/en.json`; the server merges them into `/i18n/de.json` and `/i18n/en.json`. Nothing is hard-coded, and the two catalogs list the same keys.
 - Use the shared helpers (`shell`, `table`, `pill`, `openDialog`, `openEditDialog`) before you write markup of your own.
 - New colors and sizes come from the tokens in `web/app.css`. Do not add raw colors or one-off spacing to a page.
 
@@ -218,7 +218,7 @@ Something stays a page when it needs its own address, a deep link to a record, a
 
 - [ ] The change uses the shared components and helpers instead of new markup.
 - [ ] No component style is scoped to an id. Form controls use `.overlay-card.dialog` and `.field`, not a dialog id.
-- [ ] New strings are keys in `web/i18n/de.json` and `web/i18n/en.json`, and the catalogs still match.
+- [ ] New strings are keys in the per-feature catalogs under `web/i18n/`, and the catalogs still match.
 - [ ] The page was checked at 1280 px and 390 px, in German and English.
 - [ ] The overlay or page follows the address, discard, error, and focus rules above.
 - [ ] The pull request carries screenshots for a visible change.

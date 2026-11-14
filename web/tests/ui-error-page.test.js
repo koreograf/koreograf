@@ -7,6 +7,7 @@ const { pathToFileURL } = require("node:url");
 const test = require("node:test");
 
 const load = (path) => import(pathToFileURL(join(__dirname, "..", "js", path)).href);
+const { catalog } = require("./catalog.js");
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
 async function setup() {
@@ -70,9 +71,8 @@ test("an overlay error keeps the banner inside the open dialog", async () => {
 });
 
 test("the route error copy is in both catalogs", () => {
-  const { readFileSync } = require("node:fs");
   for (const id of ["de", "en"]) {
-    const values = JSON.parse(readFileSync(join(__dirname, "..", "i18n", `${id}.json`), "utf8"));
+    const values = catalog(id);
     for (const key of ["back_to_overview", "retry", "route_error_explanation", "route_error_title"]) {
       assert.ok(typeof values[key] === "string" && values[key].length > 0, `${id}.json misses ${key}`);
     }

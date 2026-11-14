@@ -1,0 +1,13 @@
+{
+  "api_tokens": "API tokens",
+  "api_tokens_hint": "The secret is shown only once. Store it before you leave this page.",
+  "copied": "Copied",
+  "copy": "Copy",
+  "create_token": "Create token",
+  "delete_this_token": "Revoke token \"{name}\"?",
+  "last_used": "Last used",
+  "my_account": "My account",
+  "name_and_email_come_from_the_directory": "Name and email come from the directory.",
+  "prefix": "Prefix",
+  "revoke": "Revoke"
+}

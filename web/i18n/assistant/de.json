@@ -1,0 +1,21 @@
+{
+  "assistant_action_canceled": "Aktion abgebrochen. Es wurde nichts geändert.",
+  "assistant_action_done": "Aktion ausgeführt.",
+  "assistant_confirm_cancel_job": "Job {name} abbrechen?",
+  "assistant_confirm_launch_template": "Template {name} starten?",
+  "assistant_confirm_launch_workflow": "Workflow {name} starten?",
+  "assistant_confirm_relaunch_job": "Job {name} erneut starten?",
+  "assistant_confirm_sync_inventory": "Inventar {name} synchronisieren?",
+  "assistant_confirm_sync_project": "Projekt {name} synchronisieren?",
+  "assistant_confirmation": "Diese Aktion bestätigen",
+  "assistant_empty": "Noch keine Nachrichten.",
+  "assistant_explain_prompt": "Erkläre, warum dieser Job fehlgeschlagen ist.",
+  "assistant_hint": "Frage zu dieser Koreograf-Instanz. Der Assistent sieht nur deinen Kontonamen, deine Teams und deine Rolle.",
+  "assistant_is_not_enabled": "Der Assistent ist nicht aktiviert.",
+  "assistant_message": "Nachricht",
+  "assistant_model": "Modell: {model}",
+  "assistant_placeholder": "Stelle eine Frage…",
+  "assistant_send": "Senden",
+  "assistant_thinking": "Denkt nach…",
+  "assistant_you": "Du"
+}

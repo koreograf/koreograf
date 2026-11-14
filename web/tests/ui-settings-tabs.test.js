@@ -7,6 +7,7 @@ const { join } = require("node:path");
 const { pathToFileURL } = require("node:url");
 const test = require("node:test");
 const { stylesheet } = require("./css.js");
+const { catalog } = require("./catalog.js");
 
 const load = (path) => import(pathToFileURL(join(__dirname, "..", "js", path)).href);
 
@@ -53,7 +54,7 @@ test("settings are one form with tab panels", async () => {
 
 test("settings tab labels and panel styles are present", () => {
   for (const id of ["de", "en"]) {
-    const values = JSON.parse(readFileSync(join(__dirname, "..", "i18n", `${id}.json`), "utf8"));
+    const values = catalog(id);
     for (const key of ["directory", "proxy", "jobs"]) {
       assert.ok(typeof values[key] === "string" && values[key].trim(), `${key} is missing from ${id}.json`);
     }

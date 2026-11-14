@@ -1,0 +1,23 @@
+{
+  "collections_roles_and_opentofu_providers_stay_between_runs": "Collections, roles, and OpenTofu providers stay between runs.",
+  "dashboard": "Dashboard",
+  "dependency_cache": "Dependency cache",
+  "get_started": "Get started",
+  "get_started_help": "A project supplies the playbooks, an inventory the hosts, and a template ties them together. Then launch the template.",
+  "imported_paths_need_a_mount_or_a_change": "Imported paths do not exist in this container and need a mount or a change:",
+  "jobs_finished_per_day": "Jobs finished per day",
+  "jobs_started_per_day": "Jobs started per day",
+  "last_14_days": "14 days",
+  "last_7_days": "7 days",
+  "ldap_is_configured": "LDAP is configured.",
+  "local_accounts": "Local accounts.",
+  "no_container_runtime": "no container runtime",
+  "no_jobs_in_this_range": "No jobs in this range.",
+  "range": "Range",
+  "recent_jobs": "Recent jobs",
+  "success_edges_and_failure_edges_start_the_next": "Success edges and failure edges start the next templates.",
+  "test_alert": "Test alert",
+  "today": "Today",
+  "webhook": "Webhook",
+  "webhook_deliveries": "Webhook deliveries"
+}

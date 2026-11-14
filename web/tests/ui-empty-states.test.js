@@ -7,6 +7,7 @@ const { pathToFileURL } = require("node:url");
 const test = require("node:test");
 
 const load = (path) => import(pathToFileURL(join(__dirname, "..", "js", path)).href);
+const { catalog } = require("./catalog.js");
 
 const overview = { jobs: [], deliveries: [], cache_bytes: 0, runner_mode: "local" };
 
@@ -93,9 +94,8 @@ test("the job log is scrollable and its tools hide on the parameters tab", async
 });
 
 test("the empty state copy is in both catalogs", () => {
-  const { readFileSync } = require("node:fs");
   for (const id of ["de", "en"]) {
-    const values = JSON.parse(readFileSync(join(__dirname, "..", "i18n", `${id}.json`), "utf8"));
+    const values = catalog(id);
     for (const key of ["empty_credentials", "empty_inventories", "empty_jobs", "empty_projects", "empty_templates", "empty_workflows", "get_started", "get_started_help", "launch_a_template"]) {
       assert.ok(typeof values[key] === "string" && values[key].trim(), `${key} is missing from ${id}.json`);
     }
