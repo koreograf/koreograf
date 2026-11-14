@@ -126,4 +126,40 @@ test("an administrator navigates every route, launches the demo shell job and sw
   await expect(page.locator("#node-template option:checked")).toHaveText("Healthcheck");
   await expect(page.locator("#node-extra")).toHaveValue(/"alert": "added"/);
   await expect(page.locator("#inspector #add-node")).toHaveCount(0);
+
+  await page.locator("#node-name").fill("Extra check edited");
+  await expect(page.locator("#wf-status")).toHaveText("Unsaved changes");
+
+  await nav.getByRole("link", { name: "Jobs", exact: true }).click();
+  const discard = page.getByRole("dialog");
+  await expect(discard.getByRole("heading", { name: "Discard unsaved changes?" })).toBeVisible();
+  await discard.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(new URL(page.url()).hash).toMatch(/^#\/workflows\/[^?]+$/);
+
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.locator("#wf-status")).toHaveText("All changes saved");
+  await expect(page.getByRole("button", { name: "Launch", exact: true })).toHaveClass(/primary/);
+
+  await nav.getByRole("link", { name: "Jobs", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Jobs" })).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+
+  await nav.getByRole("link", { name: "Workflows", exact: true }).click();
+  await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
+  const saved = page.locator(".wf-node", { hasText: "Extra check edited" });
+  await expect(saved).toBeVisible();
+  await saved.click();
+  await page.locator("#node-name").fill("Unsaved check");
+  await expect(page.locator("#wf-status")).toHaveText("Unsaved changes");
+
+  await page.getByRole("button", { name: "Launch", exact: true }).click();
+  const launchChoice = page.getByRole("dialog");
+  await expect(launchChoice.getByRole("heading", { name: "Unsaved changes" })).toBeVisible();
+  await expect(launchChoice.getByRole("button", { name: "Save and launch", exact: true })).toBeVisible();
+  await expect(launchChoice.getByRole("button", { name: "Launch last saved version", exact: true })).toBeVisible();
+  await launchChoice.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.locator("#wf-status")).toHaveText("Unsaved changes");
+  expect(new URL(page.url()).hash).toMatch(/^#\/workflows\/[^?]+$/);
 });

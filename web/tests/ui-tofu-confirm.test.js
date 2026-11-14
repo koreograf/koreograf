@@ -138,7 +138,7 @@ test("the workflow list confirms an OpenTofu apply before posting", async () => 
   assert.equal(posts, 0, "cancel still launched the workflow");
 });
 
-test("the workflow editor confirms an OpenTofu apply before saving and launching", async () => {
+test("the workflow editor confirms an OpenTofu apply before launching", async () => {
   await setup();
   const { mountEditor } = await load("features/workflows/editor.js");
   const templates = [{ id: "apply", name: "apply-prod", tool: "opentofu", spec: { action: "apply" } }];
@@ -164,6 +164,20 @@ test("the workflow editor confirms an OpenTofu apply before saving and launching
   await tick();
   await tick();
   await tick();
-  assert.equal(puts, 1, "the confirmed editor launch did not save");
+  assert.equal(puts, 0, "the confirmed editor launch persisted a clean graph");
   assert.equal(posts, 1, "the confirmed editor launch did not post");
+
+  document.querySelector('[data-id="n1"]').dispatchEvent({ type: "keydown", key: "ArrowRight", preventDefault() {} });
+  location.hash = "#/workflows/w1";
+  document.querySelector("#wf-launch").dispatchEvent({ type: "click" });
+  await tick();
+  document.querySelector("#workflow-launch-dialog [data-launch-save]").dispatchEvent({ type: "click" });
+  await tick();
+  assert.ok(document.querySelector("#tofu-apply-confirm"), "the dirty launch skipped the confirmation");
+  document.querySelector("#tofu-apply-confirm .dialog-form").dispatchEvent({ type: "submit", preventDefault() {} });
+  await tick();
+  await tick();
+  await tick();
+  assert.equal(puts, 1, "the confirmed save and launch did not save");
+  assert.equal(posts, 2, "the confirmed save and launch did not post");
 });

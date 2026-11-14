@@ -1,5 +1,5 @@
 import { api } from "../../core/api.js";
-import { can, go, handle, markSaved, needTeam, shell } from "../../core/app.js";
+import { can, go, handle, markCreated, needTeam, shell } from "../../core/app.js";
 import { addLink, emptyState, esc, h, table } from "../../core/dom.js";
 import { editQuery, openEditDialog } from "../../core/edit.js";
 import { t } from "../../core/i18n.js";
@@ -80,7 +80,7 @@ export function openWorkflowDialog() {
         description: form.description.value,
         graph: { nodes: [], edges: [] },
       });
-      markSaved();
+      markCreated();
       close();
       go(`#/workflows/${created.id}`);
     },

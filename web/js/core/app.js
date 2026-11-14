@@ -155,11 +155,21 @@ export function markSaved() {
   appState.setFlashKey("saved");
 }
 
+export function markCreated() {
+  appState.setFlashKey("created");
+}
+
 export function savedBanner() {
   if (!appState.flashKey) return "";
   const key = appState.flashKey;
   appState.setFlashKey("");
-  return `<div class="banner good">${h(key)}</div>`;
+  if (key !== "created") return `<div class="banner good">${h(key)}</div>`;
+  const timer = window.setTimeout(() => {
+    const banner = document.getElementById("created-banner");
+    if (banner) banner.remove();
+  }, 4000);
+  if (timer && typeof timer.unref === "function") timer.unref();
+  return `<div class="banner good" id="created-banner" role="status">${h(key)}</div>`;
 }
 
 export function clearErrorBanners() {

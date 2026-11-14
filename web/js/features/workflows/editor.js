@@ -53,6 +53,8 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   let connectDrag = null;
   let drag = null;
   let flushNode = () => true;
+  let dirty = false;
+  const leaveGuard = () => dirty;
   const back = readonly && workflow.workflow_id
     ? `<a class="btn" href="#/workflows/${esc(workflow.workflow_id)}">${h("back_to_the_workflow")}</a>`
     : "";
@@ -95,7 +97,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       </section>
     </div>`}
     </div>`, readonly ? back : `
-      ${can("operator") ? `<button class="btn" id="wf-save" type="button">${h("save")}</button><button class="btn primary" id="wf-launch" type="button">${h("launch")}</button>` : ""}`);
+      ${can("operator") ? `<span class="small muted" id="wf-status" role="status" aria-live="polite">${h("all_changes_saved")}</span><button class="btn" id="wf-save" type="button">${h("save")}</button><button class="btn primary" id="wf-launch" type="button">${h("launch")}</button>` : ""}`);
 
   const canvas = document.querySelector("#canvas");
   const board = document.querySelector("#board");
@@ -220,6 +222,26 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     if (hint) hint.textContent = t(key, vars);
   }
 
+  function paintDirty() {
+    const saveButton = document.querySelector("#wf-save");
+    const launchButton = document.querySelector("#wf-launch");
+    const status = document.querySelector("#wf-status");
+    if (saveButton) saveButton.classList.toggle("primary", dirty);
+    if (launchButton) launchButton.classList.toggle("primary", !dirty);
+    if (status) status.textContent = t(dirty ? "unsaved_changes" : "all_changes_saved");
+  }
+
+  function setDirty(next) {
+    dirty = Boolean(next);
+    paintDirty();
+    appState.setLeaveGuard(dirty ? leaveGuard : null);
+  }
+
+  function markDirty() {
+    if (!editable) return;
+    setDirty(true);
+  }
+
   function clearConnectPreview() {
     const preview = svg.querySelector("#connect-preview");
     if (preview) preview.remove();
@@ -259,6 +281,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       : freeNodePosition();
     const node = { ...draft, x: spot.x, y: spot.y };
     graph.nodes.push(node);
+    markDirty();
     selected = node.id;
     selectedEdge = null;
     connecting = null;
@@ -275,6 +298,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     flushNode = () => true;
     graph.nodes = graph.nodes.filter((item) => item.id !== node.id);
     graph.edges = graph.edges.filter((edge) => edge.from !== node.id && edge.to !== node.id);
+    markDirty();
     selected = null;
     selectedEdge = null;
     connecting = null;
@@ -330,6 +354,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         } else {
           Object.assign(node, draft);
           flushNode = () => true;
+          markDirty();
           renderNodes();
           renderInspector();
         }
@@ -415,6 +440,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       return;
     }
     graph.edges.push({ from: fromNode.id, to: toNode.id, when });
+    markDirty();
     selected = fromNode.id;
     selectedEdge = null;
     setHint("edge_added");
@@ -489,6 +515,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         element.style.left = `${node.x}px`;
         element.style.top = `${node.y}px`;
         drawEdges();
+        markDirty();
       });
       element.addEventListener("pointerup", (event) => {
         if (connectDrag && connectDrag.id === node.id) {
@@ -555,6 +582,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         element.style.left = `${node.x}px`;
         element.style.top = `${node.y}px`;
         drawEdges();
+        markDirty();
       });
     });
     drawEdges();
@@ -574,6 +602,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     connectDrag = null;
     clearConnectPreview();
     drawEdges();
+    markDirty();
   }
 
   function targetOptions(fromId, when) {
@@ -744,10 +773,12 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         }
         edge.when = next;
         drawEdges();
+        markDirty();
       });
       host.querySelector("#edge-delete").addEventListener("click", () => {
         graph.edges.splice(selectedEdge, 1);
         selectedEdge = null;
+        markDirty();
         renderInspector();
         renderNodes();
       });
@@ -784,6 +815,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       node.name = event.target.value;
       const label = nodes.querySelector(`[data-id="${CSS.escape(node.id)}"] strong`);
       if (label) label.textContent = node.name;
+      markDirty();
     });
     host.querySelector("#node-template").addEventListener("change", (event) => {
       const next = event.target.value;
@@ -800,17 +832,19 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       }
       node.template_id = next;
       flushNode = () => true;
+      markDirty();
       renderInspector();
     });
     host.querySelector("#node-join").addEventListener("change", (event) => {
       node.convergence = event.target.value;
       paintCaption(node);
+      markDirty();
     });
     flushNode = () => readOverrides(node);
     ["#node-inventory", "#node-credential", "#node-job-type", "#node-verbosity", "#node-diff", "#node-action", "#node-forks", "#node-tags", "#node-skip-tags", "#node-limit", "#node-extra"].forEach((id) => {
       const element = host.querySelector(id);
       if (!element) return;
-      element.addEventListener("change", () => { flushNode(); });
+      element.addEventListener("change", () => { if (flushNode()) markDirty(); });
     });
     ["success", "failure", "always"].forEach((when) => {
       host.querySelector(`#link-${when}`).addEventListener("change", (event) => {
@@ -913,35 +947,89 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   renderInspector();
   bindWorkflowTabs();
   mountSchedules(document.querySelector("#schedule-card"));
+  paintDirty();
+  if (editable) appState.setLeaveGuard(leaveGuard);
+
+  const nameField = document.querySelector("#wf-name");
+  if (nameField) nameField.addEventListener("input", markDirty);
+  const descriptionField = document.querySelector("#wf-description");
+  if (descriptionField) descriptionField.addEventListener("input", markDirty);
+
+  async function saveGraph() {
+    const saveButton = document.querySelector("#wf-save");
+    if (saveButton) saveButton.disabled = true;
+    try {
+      const name = document.querySelector("#wf-name").value;
+      const description = document.querySelector("#wf-description").value;
+      await api("PUT", `/api/v1/workflows/${encodeURIComponent(workflow.id)}`, { name, description, graph });
+      workflow.name = name;
+      workflow.description = description;
+      workflow.graph = JSON.parse(JSON.stringify(graph));
+      setDirty(false);
+      return true;
+    } catch (error) {
+      handle(error);
+      return false;
+    } finally {
+      if (saveButton) saveButton.disabled = false;
+    }
+  }
+
+  async function saveWorkflow() {
+    if (!editable || !flushNode()) return false;
+    return saveGraph();
+  }
 
   const save = document.querySelector("#wf-save");
   if (save) {
-    save.addEventListener("click", async () => {
-      if (!flushNode()) return;
-      try {
-        await api("PUT", `/api/v1/workflows/${encodeURIComponent(workflow.id)}`, {
-          name: document.querySelector("#wf-name").value,
-          description: document.querySelector("#wf-description").value,
-          graph,
-        });
-        document.querySelector("#wf-hint").textContent = t("saved");
-      } catch (error) {
-        handle(error);
-      }
+    save.addEventListener("click", () => {
+      saveWorkflow();
     });
   }
+
+  function chooseLaunchMode() {
+    return new Promise((resolve) => {
+      let settled = false;
+      const decide = (value) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      const dialog = openDialog({
+        id: "workflow-launch-dialog",
+        title: t("unsaved_changes"),
+        body: `<p class="small muted">${h("launch_unsaved_changes_hint")}</p><div class="choice-row"><button class="btn pill primary" type="button" data-launch-save>${h("save_and_launch")}</button><button class="btn" type="button" data-launch-saved>${h("launch_last_saved_version")}</button><button class="btn" type="button" data-launch-cancel>${h("cancel")}</button></div>`,
+        form: false,
+        actions: false,
+        onClose: () => decide("cancel"),
+      });
+      dialog.overlay.querySelector("[data-launch-save]").addEventListener("click", () => {
+        decide("save");
+        dialog.close();
+      });
+      dialog.overlay.querySelector("[data-launch-saved]").addEventListener("click", () => {
+        decide("saved");
+        dialog.close();
+      });
+      dialog.overlay.querySelector("[data-launch-cancel]").addEventListener("click", () => dialog.close());
+    });
+  }
+
   const launch = document.querySelector("#wf-launch");
   if (launch) {
     launch.addEventListener("click", async () => {
       if (!flushNode()) return;
+      let mode = "current";
+      if (dirty) {
+        mode = await chooseLaunchMode();
+        if (mode === "cancel") return;
+      }
       const name = document.querySelector("#wf-name").value;
-      if (workflowTofuApply(graph, templates) && !(await confirmTofuApply({ name }))) return;
+      const graphToLaunch = mode === "saved" ? workflow.graph : graph;
+      const launchName = mode === "saved" ? workflow.name : name;
+      if (workflowTofuApply(graphToLaunch, templates) && !(await confirmTofuApply({ name: launchName }))) return;
       try {
-        await api("PUT", `/api/v1/workflows/${encodeURIComponent(workflow.id)}`, {
-          name: document.querySelector("#wf-name").value,
-          description: document.querySelector("#wf-description").value,
-          graph,
-        });
+        if (mode === "save" && !(await saveGraph())) return;
         const run = await api("POST", `/api/v1/workflows/${encodeURIComponent(workflow.id)}/launch`, { extra_vars: {} });
         go(`#/runs/${run.id}`);
       } catch (error) {
@@ -949,6 +1037,18 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       }
     });
   }
+
+  function saveShortcut(event) {
+    if (!(event.ctrlKey || event.metaKey) || String(event.key).toLowerCase() !== "s") return;
+    if (event.defaultPrevented || !editable || document.querySelector(".overlay")) return;
+    event.preventDefault();
+    if (dirty) saveWorkflow();
+  }
+
+  const editorStack = document.querySelector(".editor-stack");
+  if (editorStack) editorStack.addEventListener("keydown", saveShortcut);
+  canvas.addEventListener("keydown", saveShortcut);
+
   const remove = document.querySelector("#wf-delete");
   if (remove) {
     remove.addEventListener("click", async () => {
