@@ -230,6 +230,30 @@ test("an administrator navigates every route, launches the demo shell job and sw
   expect(new URL(page.url()).hash).toMatch(/^#\/workflows\/[^?]+$/);
 });
 
+test("a node card shows its template and limit override", async ({ page }) => {
+  await signInInEnglish(page);
+  await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
+  await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
+
+  await focusCanvas(page);
+  await page.keyboard.press("Shift+F10");
+  await expect(page.getByRole("menuitem", { name: "Add node", exact: true })).toBeFocused();
+  await page.keyboard.press("Enter");
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "Add node" })).toBeVisible();
+  await dialog.locator("#node-name").fill("Limited deploy");
+  await dialog.locator("#node-template").selectOption({ label: "Self-Heal" });
+  await dialog.locator("#node-limit").fill("web");
+  await dialog.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+
+  const card = page.locator(".wf-node", { hasText: "Limited deploy" });
+  await expect(card).toBeVisible();
+  await expect(card.locator(".wf-node-template")).toHaveText("Self-Heal");
+  await expect(card.locator(".wf-node-tool")).toHaveAttribute("aria-label", "Ansible");
+  await expect(card.locator('[data-chip="limit"]')).toHaveText("Limit: web");
+});
+
 test("the workflow editor connects, retypes and removes an edge with the keyboard", async ({ page }) => {
   await signInInEnglish(page);
   await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
