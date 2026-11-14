@@ -16,14 +16,14 @@ function node(id, name, x = 20, y = 20, templateId = "t1") {
   return { id, template_id: templateId, name, x, y, convergence: "any" };
 }
 
-async function mount(graph, templates) {
+async function mount(graph, templates, readonly = false) {
   const state = await load("core/state.js");
   state.setMe({ is_admin: true, display_name: "Admin", teams: [{ id: "t1", name: "Team", role: "owner" }] });
   state.setTeamId("t1");
   globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => "[]" });
   const editor = await load("features/workflows/editor.js");
   const workflow = { id: "w1", name: "Deploy", description: "", graph };
-  editor.mountEditor(workflow, templates || [{ id: "t1", name: "Shell", tool: "shell", spec: {} }], false, {}, { inventories: [], credentials: [] }, {});
+  editor.mountEditor(workflow, templates || [{ id: "t1", name: "Shell", tool: "shell", spec: {} }], readonly, {}, { inventories: [], credentials: [] }, {});
   return { editor, workflow };
 }
 
@@ -198,4 +198,15 @@ test("a server missing-template error marks the affected node", async () => {
   assert.ok(document.querySelector('[data-id="n1"] .wf-node-badge'), "the server error did not badge the node");
   assert.ok(document.querySelector('[data-id="n1"]').classList.contains("invalid"));
   assert.equal(document.querySelector("#wf-hint").textContent, "template.missing_named");
+});
+
+test("the run view leaves editor validation out", async () => {
+  await mount(
+    { nodes: [node("n1", "One", 20, 20, "gone")], edges: [] },
+    [{ id: "t1", name: "Shell", tool: "shell", spec: {} }],
+    true,
+  );
+
+  assert.equal(document.querySelector('[data-id="n1"] .wf-node-badge'), null, "the run view shows an editor badge");
+  assert.equal(document.querySelector('[data-id="n1"]').classList.contains("invalid"), false);
 });
