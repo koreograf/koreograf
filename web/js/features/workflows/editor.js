@@ -10,7 +10,7 @@ import { t } from "../../core/i18n.js";
 import { confirmTofuApply } from "../../core/tofu.js";
 import { mountSchedules } from "../schedules.js";
 import { chooseEdgeType, openCanvasMenu, openNodeMenu } from "./menus.js";
-import { autoPan, createViewport, minimapLayout } from "./viewport.js";
+import { autoPan, createViewport, minimapLayout, zoomAt } from "./viewport.js";
 
 export function workflowTofuApply(graph, templates) {
   return ((graph && graph.nodes) || []).some((node) => {
@@ -121,7 +121,9 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   const minimap = document.querySelector("#minimap");
   let fitted = false;
   let pan = null;
+  let pinch = null;
   let autoPanTimer = null;
+  const touchPointers = new Map();
 
   const viewport = createViewport({
     canvas,
@@ -684,6 +686,12 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         stopAutoPan();
         drag = null;
       });
+      element.addEventListener("pointercancel", () => {
+        connectDrag = null;
+        clearConnectPreview();
+        stopAutoPan();
+        drag = null;
+      });
       element.addEventListener("contextmenu", (event) => {
         if (!editable || !flushNode()) return;
         event.preventDefault();
@@ -1124,12 +1132,38 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       renderNodes();
       renderInspector();
     }
+    if (event.pointerType === "touch") {
+      touchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (touchPointers.size >= 2) {
+        pan = null;
+        canvas.classList.remove("panning");
+        const [first, second] = [...touchPointers.values()];
+        pinch = {
+          distance: Math.hypot(first.x - second.x, first.y - second.y),
+          view: viewport.view,
+        };
+        return;
+      }
+    }
     pan = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, viewX: viewport.view.x, viewY: viewport.view.y };
     if (canvas.setPointerCapture) canvas.setPointerCapture(event.pointerId);
     canvas.classList.add("panning");
   }
 
   function canvasPointerMove(event) {
+    if (event.pointerType === "touch" && touchPointers.has(event.pointerId)) {
+      touchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (pinch && touchPointers.size >= 2) {
+        const [first, second] = [...touchPointers.values()];
+        const distance = Math.hypot(first.x - second.x, first.y - second.y);
+        if (pinch.distance > 0) {
+          const rect = canvas.getBoundingClientRect();
+          const center = { x: (first.x + second.x) / 2 - rect.left, y: (first.y + second.y) / 2 - rect.top };
+          viewport.set(zoomAt(pinch.view, distance / pinch.distance, center));
+        }
+        return;
+      }
+    }
     if (!pan || pan.pointerId !== event.pointerId) return;
     viewport.set({
       x: pan.viewX + (event.clientX - pan.x),
@@ -1139,6 +1173,8 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   }
 
   function endPan(event) {
+    if (event.pointerType === "touch") touchPointers.delete(event.pointerId);
+    if (touchPointers.size < 2) pinch = null;
     if (!pan || (event.pointerId !== undefined && pan.pointerId !== event.pointerId)) return;
     pan = null;
     canvas.classList.remove("panning");
@@ -1180,31 +1216,34 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   if (resetButton) resetButton.addEventListener("click", () => viewport.reset());
 
   canvas.addEventListener("keydown", (event) => {
-    if (!editable || event.target !== canvas) return;
+    if (event.target !== canvas) return;
+    const key = String(event.key);
+    if (!event.ctrlKey && !event.metaKey && !event.altKey) {
+      if (key === "+" || key === "=") {
+        event.preventDefault();
+        zoomBy(1.2);
+        return;
+      }
+      if (key === "-" || key === "_") {
+        event.preventDefault();
+        zoomBy(1 / 1.2);
+        return;
+      }
+      if (key === "0") {
+        event.preventDefault();
+        viewport.reset();
+        return;
+      }
+      if (key.toLowerCase() === "f") {
+        event.preventDefault();
+        fitGraph();
+        return;
+      }
+    }
+    if (!editable) return;
     if (event.key === "Escape" && connecting) {
       event.preventDefault();
       cancelConnect();
-      return;
-    }
-    const key = String(event.key);
-    if (key === "+" || key === "=") {
-      event.preventDefault();
-      zoomBy(1.2);
-      return;
-    }
-    if (key === "-" || key === "_") {
-      event.preventDefault();
-      zoomBy(1 / 1.2);
-      return;
-    }
-    if (key === "0") {
-      event.preventDefault();
-      viewport.reset();
-      return;
-    }
-    if (key.toLowerCase() === "f") {
-      event.preventDefault();
-      fitGraph();
       return;
     }
     if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
