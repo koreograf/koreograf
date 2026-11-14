@@ -898,6 +898,52 @@ button.run-line:hover { outline: 1px solid var(--line); }
 .wf-node.phase-running { box-shadow: inset 3px 0 0 var(--info); }
 .wf-node.phase-skipped { opacity: 0.55; }
 .wf-node strong { display: block; }
+.wf-node-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.wf-node-tool {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--accent);
+}
+.wf-node-tool svg { display: block; }
+.wf-node-template {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wf-node-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 4px;
+  margin-top: 4px;
+}
+.wf-node-chips:empty { display: none; }
+.wf-node-chip {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .node-menu-button {
   position: absolute;
   top: 6px;

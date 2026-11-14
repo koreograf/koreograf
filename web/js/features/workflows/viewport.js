@@ -2,7 +2,7 @@ export const MIN_SCALE = 0.25;
 export const MAX_SCALE = 2;
 export const FIT_PADDING = 40;
 export const NODE_WIDTH = 200;
-export const NODE_HEIGHT = 96;
+export const NODE_HEIGHT = 132;
 
 export function clampScale(scale) {
   if (!Number.isFinite(scale)) return 1;

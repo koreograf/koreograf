@@ -25,6 +25,11 @@ export function workflowTofuApply(graph, templates) {
 
 const PORT_OFFSETS = { success: 40, failure: 76, always: 58 };
 const PORT_SYMBOLS = { success: "✓", failure: "✗", always: "↻" };
+const TOOL_ICONS = {
+  ansible: `<circle cx="8" cy="8" r="6.4" fill="none" stroke="currentColor" stroke-width="1.3"></circle><path d="M8 3.6 10.7 12 8 10.1 5.3 12Z" fill="currentColor"></path>`,
+  opentofu: `<path d="M8 1.6 13.3 4.7v6.6L8 14.4 2.7 11.3V4.7Z" fill="none" stroke="currentColor" stroke-width="1.3"></path><path d="M8 5.2 10.7 6.8v3.2L8 11.6 5.3 10V6.8Z" fill="currentColor"></path>`,
+  shell: `<path d="M2.6 4.4 6 8l-3.4 3.6M7.6 11.6H13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>`,
+};
 
 export function edgePoint(node, when) {
   const y = PORT_OFFSETS[when] || PORT_OFFSETS.success;
@@ -162,7 +167,18 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   }
 
   function fitGraph() {
-    viewport.fit(graph.nodes);
+    let nodeWidth = 0;
+    let nodeHeight = 0;
+    graph.nodes.forEach((node) => {
+      const element = nodes.querySelector(`[data-id="${CSS.escape(node.id)}"]`);
+      if (!element) return;
+      nodeWidth = Math.max(nodeWidth, element.offsetWidth || 0);
+      nodeHeight = Math.max(nodeHeight, element.offsetHeight || 0);
+    });
+    const options = {};
+    if (nodeWidth) options.nodeWidth = nodeWidth;
+    if (nodeHeight) options.nodeHeight = nodeHeight;
+    viewport.fit(graph.nodes, options);
     fitted = true;
   }
 
@@ -251,14 +267,40 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     return new Set(graph.edges.filter((edge) => edge.to === node.id).map((edge) => edge.from)).size;
   }
 
-  function nodeCaption(node) {
-    const inventoryId = node.overrides && Object.prototype.hasOwnProperty.call(node.overrides, "inventory_id")
-      ? node.overrides.inventory_id
-      : undefined;
-    if (inventoryId === undefined) return "";
-    if (!inventoryId) return t("no_inventory");
-    const inventory = lists.inventories.find((item) => item.id === inventoryId);
-    return inventory ? inventory.name : "";
+  function toolKey(tool) {
+    return tool === "ansible" || tool === "opentofu" || tool === "shell" ? tool : "";
+  }
+
+  function nodeMeta(template) {
+    if (!template) return "";
+    const key = toolKey(template.tool);
+    const tool = key
+      ? `<span class="wf-node-tool" role="img" aria-label="${h(key)}" title="${h(key)}" data-tool="${key}"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">${TOOL_ICONS[key]}</svg></span>`
+      : "";
+    return `${tool}<span class="wf-node-template" title="${esc(template.name)}">${esc(template.name)}</span>`;
+  }
+
+  function chip(kind, key, value) {
+    const label = t(key, { value });
+    return `<span class="wf-node-chip" data-chip="${kind}" title="${esc(label)}">${esc(label)}</span>`;
+  }
+
+  function nodeChips(node, template) {
+    const over = node.overrides || {};
+    const spec = over.spec || {};
+    const chips = [];
+    if (over.inventory_id !== undefined) {
+      const inventory = over.inventory_id ? lists.inventories.find((item) => item.id === over.inventory_id) : null;
+      const name = over.inventory_id ? (inventory ? inventory.name : over.inventory_id) : t("no_inventory");
+      chips.push(chip("inventory", "node_chip_inventory", name));
+    }
+    if (spec.limit !== undefined) chips.push(chip("limit", "node_chip_limit", spec.limit || t("none")));
+    if (spec.tags !== undefined) chips.push(chip("tags", "node_chip_tags", spec.tags || t("none")));
+    if (template && template.tool === "opentofu") {
+      const action = spec.action !== undefined ? spec.action : (template.spec || {}).action;
+      if (action === "apply") chips.push(`<span class="wf-node-chip apply" data-chip="apply" title="${h("node_chip_apply")}">${h("node_chip_apply")}</span>`);
+    }
+    return chips.join("");
   }
 
   function joinBadge(node) {
@@ -281,9 +323,14 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     badge.setAttribute("aria-label", label);
   }
 
-  function paintCaption(node) {
-    const label = nodes.querySelector(`[data-id="${CSS.escape(node.id)}"] .muted`);
-    if (label) label.textContent = nodeCaption(node);
+  function paintNodeChips(node) {
+    const element = nodes.querySelector(`[data-id="${CSS.escape(node.id)}"]`);
+    if (!element) return;
+    const template = templates.find((item) => item.id === node.template_id);
+    const chips = element.querySelector(".wf-node-chips");
+    if (!chips) return;
+    const markup = nodeChips(node, template);
+    if (chips.innerHTML !== markup) chips.innerHTML = markup;
   }
 
   function nodeParamFields(node, template) {
@@ -832,7 +879,11 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   function nodeLabel(node) {
     const template = templates.find((item) => item.id === node.template_id);
     const parts = [node.name];
-    if (template) parts.push(template.name);
+    if (template) {
+      parts.push(template.name);
+      const key = toolKey(template.tool);
+      if (key) parts.push(t(key));
+    }
     if (readonly) parts.push(statusLabel((phases[node.id] && phases[node.id].phase) || "pending"));
     return parts.filter(Boolean).join(" · ");
   }
@@ -852,11 +903,12 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         ? " invalid"
         : nodeIssues.some((issue) => issue.severity === "warning") ? " warning" : "";
       const menu = editable ? `<button class="btn ghost compact node-menu-button" type="button" data-node-menu aria-haspopup="menu" aria-expanded="false" aria-label="${h("node_actions", { name: node.name })}">⋯</button>` : "";
+      const template = templates.find((item) => item.id === node.template_id);
       const ports = `<div class="wf-ports">${["success", "failure", "always"].map((when) => {
         const add = editable ? `<button class="wf-port-add" type="button" data-add-port="${when}" aria-label="${h("add_step_after", { name: node.name, when: edgeWhenText(when) })}" title="${h("add_step_after", { name: node.name, when: edgeWhenText(when) })}">+</button>` : "";
         return `<div class="wf-port ${when}"><span class="wf-port-symbol" aria-hidden="true">${PORT_SYMBOLS[when]}</span>${add}</div>`;
       }).join("")}</div>`;
-      return `<div class="wf-node${selectedClass}${connectClass}${phaseClass}${runClass}${issueClass}" data-id="${esc(node.id)}" style="left:${Number(node.x) || 0}px;top:${Number(node.y) || 0}px" tabindex="0" role="group" aria-label="${esc(nodeLabel(node))}">${joinBadge(node)}${menu}<strong>${esc(node.name)}</strong>${nodeBadge(node)}<span class="small muted">${esc(nodeCaption(node))}</span>${ports}</div>`;
+      return `<div class="wf-node${selectedClass}${connectClass}${phaseClass}${runClass}${issueClass}" data-id="${esc(node.id)}" style="left:${Number(node.x) || 0}px;top:${Number(node.y) || 0}px" tabindex="0" role="group" aria-label="${esc(nodeLabel(node))}">${joinBadge(node)}${menu}<strong>${esc(node.name)}</strong><span class="wf-node-meta">${nodeMeta(template)}</span>${nodeBadge(node)}<span class="wf-node-chips">${nodeChips(node, template)}</span>${ports}</div>`;
     }).join("");
     nodes.querySelectorAll(".wf-node").forEach((element) => {
       const node = graph.nodes.find((item) => item.id === element.dataset.id);
@@ -1214,7 +1266,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     if (!sameJson(extra, template.extra_vars || {})) over.extra_vars = extra;
     if (Object.keys(over).length) node.overrides = over;
     else delete node.overrides;
-    paintCaption(node);
+    paintNodeChips(node);
     if (!fromDialog) {
       const hint = document.querySelector("#wf-hint");
       if (hint && (hint.textContent === t("forks_is_a_whole_number") || hint.textContent === t("forks_is_a_number_from_1_to_50") || hint.textContent === t("extra_variables_are_not_valid_json") || hint.textContent === t("extra_variables_must_be_a_json_object"))) {
@@ -1341,6 +1393,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       node.template_id = next;
       flushNode = () => true;
       markDirty();
+      renderNodes();
       renderInspector();
     });
     const join = host.querySelector("#node-join");
