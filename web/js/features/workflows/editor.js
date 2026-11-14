@@ -66,6 +66,10 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   let drag = null;
   let flushNode = () => true;
   let dirty = false;
+  let baseline = null;
+  let historyStack = [snapshotGraph()];
+  let historyIndex = 0;
+  let toastTimer = null;
   const leaveGuard = () => dirty;
   const back = readonly && workflow.workflow_id
     ? `<a class="btn" href="#/workflows/${esc(workflow.workflow_id)}">${h("back_to_the_workflow")}</a>`
@@ -99,6 +103,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
               <button class="btn compact ghost" type="button" data-canvas-zoom-out aria-label="${h("zoom_out")}">−</button>
               <button class="btn compact ghost" type="button" data-canvas-fit>${h("fit_view")}</button>
               <button class="btn compact ghost" type="button" data-canvas-reset>${h("zoom_reset")}</button>
+              <button class="btn compact ghost" type="button" id="wf-shortcuts" aria-haspopup="dialog" aria-label="${h("keyboard_shortcuts")}" title="${h("keyboard_shortcuts")}">?</button>
             </div>
             <div class="minimap" id="minimap" role="img" aria-label="${h("minimap")}" hidden></div>
             <div id="board" style="position:absolute;left:0;top:0;transform-origin:0 0"><svg class="edges" id="edges"></svg><div id="nodes"></div></div>
@@ -123,8 +128,9 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         <button class="btn danger" id="wf-delete" type="button">${h("delete")}</button>
       </section>
     </div>`}
+    ${editable ? `<div class="toast" id="wf-toast" role="status" aria-live="polite" hidden></div>` : ""}
     </div>`, readonly ? back : `
-      ${can("operator") ? `<span class="small muted" id="wf-status" role="status" aria-live="polite">${h("all_changes_saved")}</span><span class="small wf-validation" id="wf-validation" role="status" aria-live="polite"></span><button class="btn" id="wf-save" type="button">${h("save")}</button><button class="btn primary" id="wf-launch" type="button" aria-describedby="wf-validation">${h("launch")}</button>` : ""}`);
+      ${can("operator") ? `<span class="row" role="group" aria-label="${h("history")}"><button class="btn" id="wf-undo" type="button" aria-keyshortcuts="Control+Z Meta+Z" disabled>${h("undo")}</button><button class="btn" id="wf-redo" type="button" aria-keyshortcuts="Control+Shift+Z Control+Y Meta+Shift+Z" disabled>${h("redo")}</button></span><span class="small muted" id="wf-status" role="status" aria-live="polite">${h("all_changes_saved")}</span><span class="small wf-validation" id="wf-validation" role="status" aria-live="polite"></span><button class="btn" id="wf-save" type="button">${h("save")}</button><button class="btn primary" id="wf-launch" type="button" aria-describedby="wf-validation">${h("launch")}</button>` : ""}`);
 
   document.title = readonly
     ? `${t("run_2")} ${workflow.name} – Koreograf`
@@ -261,6 +267,144 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       return value;
     };
     return JSON.stringify(norm(left)) === JSON.stringify(norm(right));
+  }
+
+  function snapshotGraph() {
+    return JSON.parse(JSON.stringify({ nodes: graph.nodes, edges: graph.edges }));
+  }
+
+  function currentState() {
+    const nameField = document.querySelector("#wf-name");
+    const descriptionField = document.querySelector("#wf-description");
+    return {
+      graph: snapshotGraph(),
+      name: nameField ? nameField.value : workflow.name,
+      description: descriptionField ? descriptionField.value : workflow.description,
+    };
+  }
+
+  function updateHistoryButtons() {
+    const undoButton = document.querySelector("#wf-undo");
+    const redoButton = document.querySelector("#wf-redo");
+    if (undoButton) undoButton.disabled = !editable || historyIndex <= 0;
+    if (redoButton) redoButton.disabled = !editable || historyIndex >= historyStack.length - 1;
+  }
+
+  function recordHistory() {
+    const snapshot = snapshotGraph();
+    if (sameJson(snapshot, historyStack[historyIndex])) {
+      updateHistoryButtons();
+      return;
+    }
+    historyStack = historyStack.slice(0, historyIndex + 1);
+    historyStack.push(snapshot);
+    historyIndex = historyStack.length - 1;
+    updateHistoryButtons();
+  }
+
+  function refreshDirty() {
+    setDirty(!sameJson(currentState(), baseline));
+  }
+
+  function hideToast() {
+    const toast = document.querySelector("#wf-toast");
+    if (toastTimer) window.clearTimeout(toastTimer);
+    toastTimer = null;
+    if (!toast) return;
+    toast.hidden = true;
+    toast.innerHTML = "";
+  }
+
+  function showToast(key) {
+    const toast = document.querySelector("#wf-toast");
+    if (!toast) return;
+    if (toastTimer) window.clearTimeout(toastTimer);
+    toast.innerHTML = `<span>${h(key)}</span><button class="btn compact" type="button" data-toast-undo>${h("undo")}</button>`;
+    toast.hidden = false;
+    const button = toast.querySelector("[data-toast-undo]");
+    if (button) button.addEventListener("click", () => {
+      hideToast();
+      undo();
+    });
+    toastTimer = window.setTimeout(hideToast, 8000);
+    if (toastTimer && typeof toastTimer.unref === "function") toastTimer.unref();
+  }
+
+  function restoreGraph(snapshot) {
+    graph.nodes = JSON.parse(JSON.stringify(snapshot.nodes));
+    graph.edges = JSON.parse(JSON.stringify(snapshot.edges));
+    if (selected && !graph.nodes.some((node) => node.id === selected)) selected = null;
+    if (selectedEdge !== null && !graph.edges[selectedEdge]) selectedEdge = null;
+    connecting = null;
+    connectDrag = null;
+    clearConnectPreview();
+    serverIssues = [];
+    flushNode = () => true;
+    recomputeValidation();
+    renderNodes();
+    renderInspector();
+    refreshDirty();
+    updateHistoryButtons();
+  }
+
+  function undo() {
+    if (!editable || !flushNode()) return;
+    if (historyIndex <= 0) return;
+    historyIndex -= 1;
+    hideToast();
+    restoreGraph(historyStack[historyIndex]);
+  }
+
+  function redo() {
+    if (!editable || !flushNode()) return;
+    if (historyIndex >= historyStack.length - 1) return;
+    historyIndex += 1;
+    hideToast();
+    restoreGraph(historyStack[historyIndex]);
+  }
+
+  function openShortcuts() {
+    openDialog({
+      id: "shortcuts-dialog",
+      title: t("keyboard_shortcuts"),
+      body: `<ul class="shortcut-list small">
+        <li><span class="mono">Ctrl/Cmd+Z</span><span>${h("shortcut_undo")}</span></li>
+        <li><span class="mono">Ctrl/Cmd+Shift+Z · Ctrl+Y</span><span>${h("shortcut_redo")}</span></li>
+        <li><span class="mono">Delete / Backspace</span><span>${h("shortcut_delete")}</span></li>
+        <li><span class="mono">Enter / Space</span><span>${h("shortcut_connect")}</span></li>
+        <li><span class="mono">Ctrl/Cmd+S</span><span>${h("shortcut_save")}</span></li>
+        <li><span class="mono">Shift+F10</span><span>${h("shortcut_canvas")}</span></li>
+        <li><span class="mono">?</span><span>${h("shortcut_help")}</span></li>
+      </ul>`,
+      form: false,
+      actions: false,
+    });
+  }
+
+  function isFormField(target) {
+    return Boolean(target && target.closest && target.closest("input, textarea, select"));
+  }
+
+  function historyShortcut(event) {
+    if (event.defaultPrevented || document.querySelector(".overlay")) return;
+    const key = String(event.key).toLowerCase();
+    if ((event.ctrlKey || event.metaKey) && key === "z") {
+      if (!editable) return;
+      event.preventDefault();
+      if (event.shiftKey) redo();
+      else undo();
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && key === "y") {
+      if (!editable) return;
+      event.preventDefault();
+      redo();
+      return;
+    }
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.key !== "?" || isFormField(event.target)) return;
+    event.preventDefault();
+    openShortcuts();
   }
 
   function predecessorCount(node) {
@@ -525,11 +669,13 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     graph.edges.splice(index, 1);
     if (selectedEdge === index) selectedEdge = null;
     else if (selectedEdge !== null && selectedEdge > index) selectedEdge -= 1;
+    recordHistory();
     markDirty();
     setHint("edge_removed");
     drawEdges();
     renderNodes();
     renderInspector();
+    showToast("edge_deleted");
     return true;
   }
 
@@ -685,6 +831,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         setHint("edge_added", { when: edgeWhenText(link.when), from: from.name, to: node.name });
       }
     }
+    recordHistory();
     markDirty();
     selected = node.id;
     selectedEdge = null;
@@ -697,11 +844,13 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     if (created) created.focus();
   }
 
-  async function removeNode(node) {
-    if (!(await confirmDialog({ title: t("delete_node"), body: t("delete_this_node", { name: node.name }), confirmLabel: t("delete"), danger: true }))) return;
+  function removeNode(node) {
+    if (!editable || !flushNode()) return;
+    if (!graph.nodes.some((item) => item.id === node.id)) return;
     flushNode = () => true;
     graph.nodes = graph.nodes.filter((item) => item.id !== node.id);
     graph.edges = graph.edges.filter((edge) => edge.from !== node.id && edge.to !== node.id);
+    recordHistory();
     markDirty();
     selected = null;
     selectedEdge = null;
@@ -710,6 +859,8 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     clearConnectPreview();
     renderNodes();
     renderInspector();
+    showToast("node_deleted");
+    canvas.focus();
   }
 
   function nodeEditorFields(node) {
@@ -841,6 +992,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       return;
     }
     graph.edges.push({ from: fromNode.id, to: toNode.id, when });
+    recordHistory();
     markDirty();
     selected = fromNode.id;
     selectedEdge = null;
@@ -979,12 +1131,14 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
           return;
         }
         stopAutoPan();
+        recordHistory();
         drag = null;
       });
       element.addEventListener("pointercancel", () => {
         connectDrag = null;
         clearConnectPreview();
         stopAutoPan();
+        if (drag) recordHistory();
         drag = null;
       });
       element.addEventListener("contextmenu", (event) => {
@@ -1013,6 +1167,8 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       });
       element.addEventListener("keydown", (event) => {
         if (event.target !== element) return;
+        historyShortcut(event);
+        if (event.defaultPrevented) return;
         if (event.key === "Escape" && connecting) {
           event.preventDefault();
           cancelConnect();
@@ -1059,6 +1215,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         element.style.left = `${node.x}px`;
         element.style.top = `${node.y}px`;
         drawEdges();
+        recordHistory();
         markDirty();
       });
     });
@@ -1108,6 +1265,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       return false;
     }
     edge.to = toId;
+    recordHistory();
     markDirty();
     setHint("edge_changed");
     drawEdges();
@@ -1135,6 +1293,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     connecting = null;
     connectDrag = null;
     clearConnectPreview();
+    recordHistory();
     markDirty();
     setHint("edge_added", { when: edgeWhenText(when), from: node.name, to: graph.nodes.find((item) => item.id === toId).name });
     drawEdges();
@@ -1146,11 +1305,13 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     const edge = graph.edges[index];
     if (!edge || edge.from !== node.id) return;
     graph.edges.splice(index, 1);
+    recordHistory();
     markDirty();
     setHint("edge_removed");
     drawEdges();
     renderNodes();
     renderInspector();
+    showToast("edge_deleted");
   }
 
   function freeNodePosition() {
@@ -1320,6 +1481,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
           return;
         }
         edge.when = next;
+        recordHistory();
         drawEdges();
         markDirty();
         setHint("edge_changed");
@@ -1375,6 +1537,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       node.name = event.target.value;
       const label = nodes.querySelector(`[data-id="${CSS.escape(node.id)}"] strong`);
       if (label) label.textContent = node.name;
+      recordHistory();
       markDirty();
     });
     host.querySelector("#node-template").addEventListener("change", (event) => {
@@ -1391,6 +1554,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         delete node.overrides;
       }
       node.template_id = next;
+      recordHistory();
       flushNode = () => true;
       markDirty();
       renderNodes();
@@ -1401,10 +1565,16 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       join.addEventListener("change", (event) => {
         node.convergence = event.target.value;
         paintJoin(node);
+        recordHistory();
         markDirty();
       });
     }
-    flushNode = () => readOverrides(node);
+    flushNode = () => {
+      const before = snapshotGraph();
+      if (!readOverrides(node)) return false;
+      if (!sameJson(before, snapshotGraph())) recordHistory();
+      return true;
+    };
     ["#node-inventory", "#node-credential", "#node-job-type", "#node-verbosity", "#node-diff", "#node-action", "#node-forks", "#node-tags", "#node-skip-tags", "#node-limit", "#node-extra"].forEach((id) => {
       const element = host.querySelector(id);
       if (!element) return;
@@ -1434,6 +1604,8 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   svg.addEventListener("keydown", (event) => {
     const path = event.target.closest("path");
     if (!path || !editable) return;
+    historyShortcut(event);
+    if (event.defaultPrevented) return;
     const index = Number(path.dataset.edge);
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
@@ -1540,6 +1712,12 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   if (fitButton) fitButton.addEventListener("click", fitGraph);
   const resetButton = document.querySelector("[data-canvas-reset]");
   if (resetButton) resetButton.addEventListener("click", () => viewport.reset());
+  const shortcutsButton = document.querySelector("#wf-shortcuts");
+  if (shortcutsButton) shortcutsButton.addEventListener("click", openShortcuts);
+  const undoButton = document.querySelector("#wf-undo");
+  if (undoButton) undoButton.addEventListener("click", undo);
+  const redoButton = document.querySelector("#wf-redo");
+  if (redoButton) redoButton.addEventListener("click", redo);
 
   const resizer = document.querySelector("#inspector-resizer");
   const editorBody = document.querySelector(".editor-body");
@@ -1663,12 +1841,14 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     });
   }
 
+  baseline = currentState();
   renderNodes();
   renderInspector();
   fitOnOpen();
   bindWorkflowTabs();
   mountSchedules(document.querySelector("#schedule-card"));
   paintDirty();
+  updateHistoryButtons();
   if (editable) appState.setLeaveGuard(leaveGuard);
 
   const addFirst = document.querySelector("#wf-add-first");
@@ -1696,6 +1876,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       workflow.name = name;
       workflow.description = description;
       workflow.graph = JSON.parse(JSON.stringify(graph));
+      baseline = currentState();
       serverIssues = [];
       recomputeValidation();
       setDirty(false);
@@ -1790,8 +1971,12 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   }
 
   const editorStack = document.querySelector(".editor-stack");
-  if (editorStack) editorStack.addEventListener("keydown", saveShortcut);
+  if (editorStack) {
+    editorStack.addEventListener("keydown", saveShortcut);
+    editorStack.addEventListener("keydown", historyShortcut);
+  }
   canvas.addEventListener("keydown", saveShortcut);
+  canvas.addEventListener("keydown", historyShortcut);
 
   const remove = document.querySelector("#wf-delete");
   if (remove) {
