@@ -86,10 +86,24 @@ pub struct TestApp {
     pub dir: PathBuf,
     pub database_url: Option<String>,
     pub database_name: Option<String>,
+    pub postgres_base: Option<String>,
 }
 
 impl TestApp {
     pub fn boot(label: &str, options: Options) -> Self {
+        if postgres_backend_selected() {
+            let base = postgres_test_url()
+                .expect("KOREOGRAF_TEST_BACKEND=postgres needs KOREOGRAF_TEST_POSTGRES_URL");
+            let name = postgres_database_name(label);
+            let handle = tokio::runtime::Handle::current();
+            return tokio::task::block_in_place(|| {
+                handle.block_on(Self::boot_postgres_at(label, options, base, name))
+            });
+        }
+        Self::boot_sqlite(label, options)
+    }
+
+    pub fn boot_sqlite(label: &str, options: Options) -> Self {
         let dir = temp_dir(label);
         let state = koreograf::boot(config(&dir, &options)).expect("sqlite boot");
         Self {
@@ -98,24 +112,37 @@ impl TestApp {
             dir,
             database_url: None,
             database_name: None,
+            postgres_base: None,
         }
     }
 
     pub async fn boot_postgres(label: &str, options: Options) -> Option<Self> {
         let base = postgres_test_url()?;
         let name = postgres_database_name(label);
-        let database_url = create_database(&base, &name).await;
+        Some(Self::boot_postgres_at(label, options, base, name).await)
+    }
+
+    async fn boot_postgres_at(label: &str, options: Options, base: String, name: String) -> Self {
+        let database_url = {
+            let _guard = postgres_guard().await;
+            create_database(&base, &name).await
+        };
         let database =
             koreograf::parse_database_config(&database_url, None, None).expect("postgres url");
         let dir = temp_dir(label);
         let state = koreograf::boot_with(config(&dir, &options), database).expect("postgres boot");
-        Some(Self {
+        Self {
             app: koreograf::router(state.clone()),
             state,
             dir,
             database_url: Some(database_url),
             database_name: Some(name),
-        })
+            postgres_base: Some(base),
+        }
+    }
+
+    pub fn is_postgres(&self) -> bool {
+        self.database_url.is_some()
     }
 
     pub async fn login(&self, username: &str, password: &str) -> String {
@@ -162,7 +189,31 @@ impl TestApp {
 impl Drop for TestApp {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);
+        if let (Some(base), Some(name)) = (self.postgres_base.clone(), self.database_name.clone()) {
+            drop_database_blocking(&base, &name);
+        }
     }
+}
+
+pub fn postgres_backend_selected() -> bool {
+    matches!(
+        std::env::var("KOREOGRAF_TEST_BACKEND").as_deref(),
+        Ok("postgres")
+    )
+}
+
+fn drop_database_blocking(base: &str, name: &str) {
+    let base = base.to_string();
+    let name = name.to_string();
+    let _ = std::thread::spawn(move || {
+        if let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            runtime.block_on(drop_database(&base, &name));
+        }
+    })
+    .join();
 }
 
 pub struct Reply {

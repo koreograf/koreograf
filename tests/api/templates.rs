@@ -7,7 +7,7 @@ use crate::common::call_cookie as call;
 
 use crate::common::*;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn an_empty_template_entry_path_is_rejected_and_marked_in_the_form() {
     let harness = TestApp::boot("entry", Options::default());
     let app = harness.app.clone();
@@ -95,7 +95,7 @@ async fn an_empty_template_entry_path_is_rejected_and_marked_in_the_form() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_template_can_run_the_last_sync_offline() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

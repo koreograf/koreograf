@@ -7,7 +7,7 @@ use crate::common::call_cookie as call;
 
 use crate::common::*;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn owner_can_store_an_ssh_password_without_a_key() {
     let harness = TestApp::boot("cred", Options::default());
     let app = harness.app.clone();
@@ -184,7 +184,7 @@ async fn owner_can_store_an_ssh_password_without_a_key() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn template_accepts_one_credential_per_kind_and_many_vaults() {
     let harness = TestApp::boot("vault", Options::default());
     let app = harness.app.clone();
@@ -523,7 +523,7 @@ async fn template_accepts_one_credential_per_kind_and_many_vaults() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn template_credential_kinds_follow_the_tool() {
     let dir = temp_dir("tool-credentials");
     let state = koreograf::boot(config(&dir, &Options::default())).unwrap();
@@ -774,7 +774,7 @@ async fn template_credential_kinds_follow_the_tool() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn launch_overrides_follow_the_tool_credential_kinds() {
     let dir = temp_dir("launch-kinds");
     let state = koreograf::boot(config(&dir, &Options::default())).unwrap();

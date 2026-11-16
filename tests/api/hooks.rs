@@ -8,7 +8,7 @@ use crate::common::call_cookie as call;
 
 use crate::common::*;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_hook_delivery_is_rejected_when_local_runs_are_admin_only() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -382,7 +382,7 @@ async fn a_hook_delivery_is_rejected_when_local_runs_are_admin_only() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_hook_can_be_edited_and_keeps_its_token() {
     let harness = TestApp::boot("hook-edit", Options::default());
     let app = harness.app.clone();
@@ -437,6 +437,21 @@ async fn a_hook_can_be_edited_and_keeps_its_token() {
     let id = created["id"].as_str().unwrap();
     let token = created["token"].as_str().unwrap();
 
+    let (status, wrong_token, _) = call(
+        &app,
+        "POST",
+        &format!("/hooks/{id}/wrong-token"),
+        None,
+        None,
+        Some(json!({
+            "status": "firing",
+            "alerts": [{"status": "firing", "labels": {"alertname": "DiskSpaceLow"}}]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(wrong_token["error"], "sign_in_is_required");
+
     let (status, updated, _) = call(
         &app,
         "PUT",
@@ -458,6 +473,23 @@ async fn a_hook_can_be_edited_and_keeps_its_token() {
     assert_eq!(updated["match_status"], "resolved");
     assert_eq!(updated["token"], token);
     assert_eq!(updated["extra_vars"]["limit"], "web-1");
+
+    let (status, invalid, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/hooks/{id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "After",
+            "match_alertname": "CpuHigh",
+            "match_status": "broken",
+            "template_id": template_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(invalid["error"], "status_is_firing_resolved_or_any");
 
     let (status, hooks, _) =
         call(&app, "GET", "/api/hooks", Some(&cookie), Some(&team), None).await;

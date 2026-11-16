@@ -153,7 +153,7 @@ async fn wait_for_job(app: &axum::Router, cookie: &str, team: &str, id: &str) ->
     panic!("job {id} did not finish");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn templates_return_the_documented_shape() {
     let harness = TestApp::boot("work-templates", Options::default());
     let app = harness.app.clone();
@@ -263,7 +263,7 @@ async fn templates_return_the_documented_shape() {
     let _ = std::fs::remove_dir_all(&harness.dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn jobs_return_the_documented_shape() {
     let harness = TestApp::boot("work-jobs", Options::default());
     let app = harness.app.clone();
@@ -551,7 +551,7 @@ async fn wait_for_workflow(app: &axum::Router, cookie: &str, team: &str, id: &st
     panic!("workflow job {id} did not finish");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn workflows_and_workflow_jobs_return_the_documented_shape() {
     let harness = TestApp::boot("work-workflows", Options::default());
     let app = harness.app.clone();
@@ -706,7 +706,7 @@ fn dispatch_shape(value: &Value, summary: &str, workflow: bool) -> Value {
     })
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn hooks_and_deliveries_return_the_documented_shape() {
     let harness = TestApp::boot("work-hooks", Options::default());
     let app = harness.app.clone();

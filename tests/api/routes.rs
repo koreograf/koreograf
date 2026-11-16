@@ -30,9 +30,17 @@ async fn write_team(
     status
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn each_module_registers_its_routes() {
     let harness = TestApp::boot("http-module-routes", Options::default());
+    let (status, _, health) = request(&harness.app, "GET", "/healthz", &[], None).await;
+    assert_eq!(status, StatusCode::OK);
+    let engine = if harness.is_postgres() {
+        "postgresql"
+    } else {
+        "sqlite"
+    };
+    assert_eq!(String::from_utf8_lossy(&health), format!("ok ({engine})"));
     for prefix in API_PREFIXES {
         for (method, path) in [
             ("GET", "/maintenance"),
@@ -52,7 +60,7 @@ async fn each_module_registers_its_routes() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn both_api_prefixes_share_login_reads_writes_bearer_tokens_and_404() {
     let harness = TestApp::boot("http-prefixes", Options::default());
     let app = harness.app.clone();

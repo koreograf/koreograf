@@ -10,7 +10,7 @@ use crate::common::{
 
 use crate::common::*;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn session_cookie_secure_follows_the_setting_and_the_proxy() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -101,7 +101,7 @@ async fn session_cookie_secure_follows_the_setting_and_the_proxy() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn admin_can_list_and_update_users() {
     let harness = TestApp::boot("users", Options::default());
     let app = harness.app.clone();
@@ -431,7 +431,7 @@ async fn admin_can_list_and_update_users() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn signed_in_user_can_read_their_own_account() {
     let harness = TestApp::boot("account", Options::default());
     let app = harness.app.clone();
@@ -579,7 +579,7 @@ async fn signed_in_user_can_read_their_own_account() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_rejected_sign_in_uses_one_message_and_keeps_the_username() {
     let harness = TestApp::boot("signin", Options::default());
     let app = harness.app.clone();
@@ -623,9 +623,9 @@ async fn a_rejected_sign_in_uses_one_message_and_keeps_the_username() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn api_tokens_authenticate_and_revoke() {
-    let harness = TestApp::boot("tokens", Options::default());
+    let harness = TestApp::boot_sqlite("tokens", Options::default());
     let state = harness.state.clone();
     let app = harness.app.clone();
     let dir = harness.dir.clone();
@@ -951,7 +951,7 @@ async fn api_tokens_authenticate_and_revoke() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn api_token_follows_the_local_runner_rule() {
     let dir = temp_dir("token-local");
     let mut cfg = config(&dir, &Options::default());
@@ -1072,7 +1072,7 @@ async fn api_token_follows_the_local_runner_rule() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn session_endpoints_return_the_documented_shape() {
     let harness = TestApp::boot("session-shape", Options::default());
     let app = harness.app.clone();

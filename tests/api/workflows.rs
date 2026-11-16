@@ -29,7 +29,7 @@ fn launching_a_workflow_answers() {
     assert_eq!(health, StatusCode::OK);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_workflow_node_without_an_inventory_fails_before_launching() {
     let harness = TestApp::boot("wf-inventory", Options::default());
     let app = harness.app.clone();
@@ -63,6 +63,31 @@ async fn a_workflow_node_without_an_inventory_fails_before_launching() {
     .await;
     assert_eq!(status, StatusCode::CREATED, "{template}");
     let template_id = template["id"].as_str().unwrap();
+
+    let (status, cycle, _) = call(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Cyclic run",
+            "description": "",
+            "graph": {
+                "nodes": [
+                    {"id": "a", "template_id": template_id, "name": "A"},
+                    {"id": "b", "template_id": template_id, "name": "B"}
+                ],
+                "edges": [
+                    {"from": "a", "to": "b", "when": "success"},
+                    {"from": "b", "to": "a", "when": "success"}
+                ]
+            }
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(cycle["error"], "the_workflow_contains_a_cycle");
 
     let (status, workflow, _) = call(
         &app,
@@ -127,7 +152,7 @@ async fn a_workflow_node_without_an_inventory_fails_before_launching() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn workflow_node_can_override_template_parameters() {
     let harness = TestApp::boot("node-params", Options::default());
     let app = harness.app.clone();
@@ -490,7 +515,7 @@ async fn shell_workflow(
     workflow["id"].as_str().unwrap().to_string()
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_running_workflow_run_can_be_canceled() {
     let harness = TestApp::boot("workflow-cancel", Options::default());
     let app = harness.app.clone();
@@ -597,7 +622,7 @@ async fn a_running_workflow_run_can_be_canceled() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_finished_workflow_run_can_be_listed_and_relaunched() {
     let harness = TestApp::boot("workflow-relaunch", Options::default());
     let app = harness.app.clone();
@@ -691,7 +716,7 @@ async fn a_finished_workflow_run_can_be_listed_and_relaunched() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_stale_workflow_save_is_rejected_and_keeps_the_first_writer() {
     let harness = TestApp::boot("workflow-conflict", Options::default());
     let app = harness.app.clone();

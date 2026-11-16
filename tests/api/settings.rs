@@ -11,7 +11,7 @@ use crate::common::{call_bearer_team as call_bearer, call_cookie as call};
 
 use crate::common::*;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn responses_carry_standard_headers() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -66,7 +66,7 @@ async fn responses_carry_standard_headers() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn owner_can_edit_an_execution_environment() {
     let harness = TestApp::boot("env", Options::default());
     let app = harness.app.clone();
@@ -179,7 +179,7 @@ async fn owner_can_edit_an_execution_environment() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn an_environment_tool_limits_the_templates_that_can_use_it() {
     let harness = TestApp::boot("env-tool", Options::default());
     let app = harness.app.clone();
@@ -255,7 +255,7 @@ async fn an_environment_tool_limits_the_templates_that_can_use_it() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn editing_an_environment_clears_a_tool_default_it_no_longer_fits() {
     let harness = TestApp::boot("env-default-edit", Options::default());
     let app = harness.app.clone();
@@ -413,7 +413,7 @@ async fn editing_an_environment_clears_a_tool_default_it_no_longer_fits() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn an_opentofu_template_without_an_environment_uses_the_tool_default() {
     let harness = TestApp::boot("env-default", Options::default());
     let app = harness.app.clone();
@@ -496,7 +496,7 @@ async fn an_opentofu_template_without_an_environment_uses_the_tool_default() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_fresh_install_seeds_a_default_environment_per_tool() {
     let harness = TestApp::boot("seeded-ee", Options::default());
     let app = harness.app.clone();
@@ -566,7 +566,7 @@ async fn a_fresh_install_seeds_a_default_environment_per_tool() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_job_without_a_default_environment_fails_before_it_starts() {
     let dir = temp_dir("no-default-ee");
     let mut cfg = config(&dir, &Options::default());
@@ -638,7 +638,7 @@ async fn a_job_without_a_default_environment_fails_before_it_starts() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_changed_environment_tool_fails_the_job_before_the_container_starts() {
     let dir = temp_dir("env-tool-job");
     let mut cfg = config(&dir, &Options::default());
@@ -733,7 +733,7 @@ async fn a_changed_environment_tool_fails_the_job_before_the_container_starts() 
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn environment_scopes_follow_the_selected_team() {
     let harness = TestApp::boot("env-scope", Options::default());
     let app = harness.app.clone();
@@ -1215,7 +1215,7 @@ async fn environment_scopes_follow_the_selected_team() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_privileged_environment_network_is_refused_for_a_non_admin_launch() {
     let dir = temp_dir("env-network-admin");
     let mut cfg = config(&dir, &Options::default());
@@ -1323,7 +1323,7 @@ async fn a_privileged_environment_network_is_refused_for_a_non_admin_launch() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn cross_origin_api_writes_are_refused() {
     use axum::body::Body;
     use axum::http::Request;
@@ -1558,7 +1558,7 @@ async fn cross_origin_api_writes_are_refused() {
     assert_eq!(status, StatusCode::FORBIDDEN, "delete is guarded");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_trusted_proxy_uses_the_forwarded_proto() {
     use axum::body::Body;
     use axum::http::Request;
@@ -1600,7 +1600,7 @@ async fn a_trusted_proxy_uses_the_forwarded_proto() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn settings_responses_have_the_documented_shape() {
     let harness = TestApp::boot("settings-shape", Options::default());
     let app = harness.app.clone();
@@ -1713,7 +1713,7 @@ async fn settings_responses_have_the_documented_shape() {
     assert_eq!(current, expected);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn admin_settings_hide_secrets_and_apply_without_restart() {
     let harness = TestApp::boot("settings-smoke", Options::default());
     let app = harness.app.clone();
@@ -2054,7 +2054,7 @@ async fn admin_settings_hide_secrets_and_apply_without_restart() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn json_bodies_are_rejected_by_kind_and_objects_reject_arrays() {
     let harness = TestApp::boot("json-kind", Options::default());
     let app = harness.app.clone();
@@ -2330,7 +2330,7 @@ async fn json_bodies_are_rejected_by_kind_and_objects_reject_arrays() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn unknown_fields_are_rejected_on_write_endpoints() {
     let dir = temp_dir("unknown");
     let origin = temp_dir("unknown-origin");
@@ -2903,7 +2903,7 @@ fn the_packages_ship_a_systemd_unit_and_a_pinned_nfpm_config() {
     assert!(docs.contains("sudo dnf install ./koreograf_<version>_amd64.rpm"));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn version_is_available_without_signing_in() {
     let harness = TestApp::boot("version", Options::default());
     let app = harness.app.clone();
@@ -2914,7 +2914,7 @@ async fn version_is_available_without_signing_in() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn runner_preflight_is_admin_only_and_leaks_no_secrets() {
     let harness = TestApp::boot("preflight-smoke", Options::default());
     let app = harness.app.clone();
@@ -3034,9 +3034,9 @@ async fn runner_preflight_is_admin_only_and_leaks_no_secrets() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn dashboard_series_comes_from_stored_jobs_and_is_team_scoped() {
-    let harness = TestApp::boot("dashboard", Options::default());
+    let harness = TestApp::boot_sqlite("dashboard", Options::default());
     let state = harness.state.clone();
     let app = harness.app.clone();
     let dir = harness.dir.clone();
@@ -3299,7 +3299,7 @@ async fn dashboard_series_comes_from_stored_jobs_and_is_team_scoped() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn mcp_tools_call_the_http_api() {
     let harness = TestApp::boot("mcp", Options::default());
     let app = harness.app.clone();
@@ -3629,7 +3629,7 @@ async fn mcp_tools_call_the_http_api() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn mcp_http_routes_can_be_turned_off() {
     let dir = temp_dir("mcp-off");
     let mut cfg = config(&dir, &Options::default());

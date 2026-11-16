@@ -7,7 +7,7 @@ use crate::common::call_cookie as call;
 
 use crate::common::*;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn organizations_inventories_and_git_sync() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -391,7 +391,7 @@ async fn organizations_inventories_and_git_sync() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_project_can_be_edited_and_syncs_a_new_revision() {
     let dir = temp_dir("edit");
     let origin = temp_dir("edit-origin");
@@ -564,7 +564,7 @@ async fn a_project_can_be_edited_and_syncs_a_new_revision() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn projects_use_a_source_control_credential() {
     let harness = TestApp::boot("project-credential", Options::default());
     let app = harness.app.clone();
@@ -829,7 +829,7 @@ async fn projects_use_a_source_control_credential() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn project_credentials_stay_with_the_project_team() {
     let harness = TestApp::boot("project-credential-team", Options::default());
     let app = harness.app.clone();
@@ -1087,7 +1087,7 @@ async fn project_credentials_stay_with_the_project_team() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn playbooks_project_inventory_and_netbox() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

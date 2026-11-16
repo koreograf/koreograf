@@ -6,9 +6,9 @@ use crate::common::call_cookie as call;
 
 use crate::common::*;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_schedule_runs_the_last_miss_once_and_lists_on_its_target() {
-    let harness = TestApp::boot("schedule", Options::default());
+    let harness = TestApp::boot_sqlite("schedule", Options::default());
     let state = harness.state.clone();
     let app = harness.app.clone();
     let dir = harness.dir.clone();
@@ -500,7 +500,7 @@ async fn a_schedule_runs_the_last_miss_once_and_lists_on_its_target() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_failed_missed_run_stays_visible() {
     let dir = temp_dir("missed-keep");
     let mut cfg = config(&dir, &Options::default());
@@ -629,7 +629,7 @@ async fn a_failed_missed_run_stays_visible() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn an_edit_records_the_user_who_changed_the_schedule() {
     let harness = TestApp::boot("schedule-editor", Options::default());
     let app = harness.app.clone();
@@ -782,7 +782,7 @@ fn daily_shape(
     })
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn schedule_endpoints_return_the_documented_shape() {
     let harness = TestApp::boot("schedule-shape", Options::default());
     let state = harness.state.clone();
@@ -817,6 +817,25 @@ async fn schedule_endpoints_return_the_documented_shape() {
     .await;
     assert_eq!(status, StatusCode::CREATED, "{template}");
     let template_id = template["id"].as_str().unwrap().to_string();
+
+    let (status, invalid_repeat, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/templates/{template_id}/schedules"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Invalid schedule",
+            "timezone": "Europe/Berlin",
+            "start_date": "2027-06-01",
+            "start_time": "03:00",
+            "frequency": "yearly",
+            "end_kind": "never"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(invalid_repeat["error"], "schedule_repeat_is_invalid");
 
     let (status, created, _) = call(
         &app,
@@ -942,29 +961,31 @@ async fn schedule_endpoints_return_the_documented_shape() {
     );
     assert_eq!(paused, expected);
 
-    mark_missed(&state, &schedule_id);
-    let (status, declined, _) = call(
-        &app,
-        "POST",
-        &format!("/api/v1/schedules/{schedule_id}/missed"),
-        Some(&cookie),
-        Some(&team),
-        Some(json!({"accept": false})),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{declined}");
-    let expected = daily_shape(
-        &declined,
-        "Morning later",
-        "template",
-        &template_id,
-        false,
-        json!("2027-06-01T04:00:00Z"),
-        Value::Null,
-        "admin",
-        "admin",
-    );
-    assert_eq!(declined, expected);
+    if !harness.is_postgres() {
+        mark_missed(&state, &schedule_id);
+        let (status, declined, _) = call(
+            &app,
+            "POST",
+            &format!("/api/v1/schedules/{schedule_id}/missed"),
+            Some(&cookie),
+            Some(&team),
+            Some(json!({"accept": false})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{declined}");
+        let expected = daily_shape(
+            &declined,
+            "Morning later",
+            "template",
+            &template_id,
+            false,
+            json!("2027-06-01T04:00:00Z"),
+            Value::Null,
+            "admin",
+            "admin",
+        );
+        assert_eq!(declined, expected);
+    }
 
     let (status, workflow, _) = call(
         &app,

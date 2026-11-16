@@ -84,6 +84,11 @@ jobs:
         run: cargo test --workspace --all-features
         env:
           KOREOGRAF_TEST_POSTGRES_URL: postgres://koreograf:koreograf@localhost:5432/koreograf_test?sslmode=disable
+      - name: Test the API suite on PostgreSQL
+        run: cargo test --workspace --all-features --test api
+        env:
+          KOREOGRAF_TEST_POSTGRES_URL: postgres://koreograf:koreograf@localhost:5432/koreograf_test?sslmode=disable
+          KOREOGRAF_TEST_BACKEND: postgres
       - name: Docs
         run: cargo doc --workspace --no-deps
         env:

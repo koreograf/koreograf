@@ -7,7 +7,7 @@ use crate::common::call_cookie as call;
 
 use crate::common::*;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn inventory_hosts_page_search_and_filter() {
     let harness = TestApp::boot("host-page", Options::default());
     let app = harness.app.clone();
@@ -307,7 +307,7 @@ cache-01 ansible_host=10.0.0.42 role=cache\n";
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn inventory_host_and_group_details_include_effective_variables() {
     let harness = TestApp::boot("host-details", Options::default());
     let app = harness.app.clone();
@@ -497,7 +497,7 @@ web-02 ansible_host=10.0.0.2\n";
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn inventory_sources_can_be_edited_and_inventories_renamed() {
     let harness = TestApp::boot("source-edit", Options::default());
     let app = harness.app.clone();
@@ -695,9 +695,9 @@ async fn inventory_sources_can_be_edited_and_inventories_renamed() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn netbox_sources_follow_the_credential_address() {
-    let harness = TestApp::boot("netbox-credential-url", Options::default());
+    let harness = TestApp::boot_sqlite("netbox-credential-url", Options::default());
     let state = harness.state.clone();
     let app = harness.app.clone();
     let dir = harness.dir.clone();
@@ -925,9 +925,9 @@ async fn netbox_sources_follow_the_credential_address() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn netbox_credentials_without_a_url_cannot_reach_another_endpoint() {
-    let harness = TestApp::boot("netbox-no-url", Options::default());
+    let harness = TestApp::boot_sqlite("netbox-no-url", Options::default());
     let state = harness.state.clone();
     let app = harness.app.clone();
     let dir = harness.dir.clone();
@@ -1148,7 +1148,7 @@ async fn netbox_credentials_without_a_url_cannot_reach_another_endpoint() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn netbox_credentials_without_a_source_are_disabled() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1257,7 +1257,7 @@ async fn netbox_credentials_without_a_source_are_disabled() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn netbox_source_update_can_switch_the_credential() {
     let harness = TestApp::boot("netbox-switch", Options::default());
     let app = harness.app.clone();
@@ -1418,7 +1418,7 @@ async fn netbox_source_update_can_switch_the_credential() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn netbox_sources_share_a_normal_credential() {
     let harness = TestApp::boot("netbox-shared", Options::default());
     let app = harness.app.clone();
@@ -1673,7 +1673,7 @@ async fn netbox_sources_share_a_normal_credential() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn netbox_automatic_credentials_become_normal_and_get_their_url() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1835,7 +1835,7 @@ async fn netbox_automatic_credentials_become_normal_and_get_their_url() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn netbox_test_connection_reports_the_version_or_a_mapped_error() {
     let harness = TestApp::boot("netbox-test", Options::default());
     let app = harness.app.clone();
@@ -1999,7 +1999,7 @@ async fn netbox_test_connection_reports_the_version_or_a_mapped_error() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn deleting_an_inventory_keeps_its_shortcut_netbox_credential() {
     let harness = TestApp::boot("netbox-cred", Options::default());
     let app = harness.app.clone();
@@ -2125,7 +2125,7 @@ async fn deleting_an_inventory_keeps_its_shortcut_netbox_credential() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn deleting_a_used_inventory_is_refused_with_the_template_names() {
     let harness = TestApp::boot("inv-in-use", Options::default());
     let app = harness.app.clone();
@@ -2230,7 +2230,7 @@ async fn deleting_a_used_inventory_is_refused_with_the_template_names() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn deleting_an_inventory_keeps_shortcut_credentials_from_sources() {
     let harness = TestApp::boot("src-cred", Options::default());
     let app = harness.app.clone();
@@ -2360,7 +2360,7 @@ async fn deleting_an_inventory_keeps_shortcut_credentials_from_sources() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_broken_ini_inventory_is_rejected_with_the_line_number() {
     let harness = TestApp::boot("bad-ini", Options::default());
     let app = harness.app.clone();
@@ -2420,7 +2420,7 @@ async fn a_broken_ini_inventory_is_rejected_with_the_line_number() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn broken_ini_bodies_are_rejected_on_the_source_endpoints() {
     let harness = TestApp::boot("bad-ini-sources", Options::default());
     let app = harness.app.clone();
@@ -2496,9 +2496,9 @@ async fn broken_ini_bodies_are_rejected_on_the_source_endpoints() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn deleting_an_inventory_keeps_shortcut_credentials_referenced_in_workflows() {
-    let harness = TestApp::boot("cred-guard", Options::default());
+    let harness = TestApp::boot_sqlite("cred-guard", Options::default());
     let state = harness.state.clone();
     let app = harness.app.clone();
     let dir = harness.dir.clone();
@@ -2709,7 +2709,7 @@ async fn deleting_an_inventory_keeps_shortcut_credentials_referenced_in_workflow
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn inventory_sources_and_ansible_check_options() {
     let harness = TestApp::boot("mix", Options::default());
     let app = harness.app.clone();

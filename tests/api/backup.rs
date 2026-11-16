@@ -5,7 +5,7 @@ use crate::common::{call_cookie as call, call_raw_headers as call_raw};
 
 use crate::common::*;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn admin_responses_have_the_documented_shape() {
     let harness = TestApp::boot("admin-shape", Options::default());
     let app = harness.app.clone();
@@ -55,11 +55,16 @@ async fn admin_responses_have_the_documented_shape() {
         String::from_utf8_lossy(&restored)
     );
     let restored: serde_json::Value = serde_json::from_slice(&restored).expect("restore body");
+    let engine = if harness.is_postgres() {
+        "postgresql"
+    } else {
+        "sqlite"
+    };
     assert_eq!(
         restored,
         json!({
             "restored": true,
-            "engine": "sqlite",
+            "engine": engine,
             "previous": "restore-previous.zip"
         })
     );
@@ -74,7 +79,7 @@ async fn admin_responses_have_the_documented_shape() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn admin_backup_roundtrip_replaces_the_installation() {
     let harness = TestApp::boot("backup-http", Options::default());
     let app = harness.app.clone();
