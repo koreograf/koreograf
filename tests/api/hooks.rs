@@ -437,6 +437,21 @@ async fn a_hook_can_be_edited_and_keeps_its_token() {
     let id = created["id"].as_str().unwrap();
     let token = created["token"].as_str().unwrap();
 
+    let (status, wrong_token, _) = call(
+        &app,
+        "POST",
+        &format!("/hooks/{id}/wrong-token"),
+        None,
+        None,
+        Some(json!({
+            "status": "firing",
+            "alerts": [{"status": "firing", "labels": {"alertname": "DiskSpaceLow"}}]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(wrong_token["error"], "sign_in_is_required");
+
     let (status, updated, _) = call(
         &app,
         "PUT",
@@ -458,6 +473,23 @@ async fn a_hook_can_be_edited_and_keeps_its_token() {
     assert_eq!(updated["match_status"], "resolved");
     assert_eq!(updated["token"], token);
     assert_eq!(updated["extra_vars"]["limit"], "web-1");
+
+    let (status, invalid, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/hooks/{id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "After",
+            "match_alertname": "CpuHigh",
+            "match_status": "broken",
+            "template_id": template_id
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(invalid["error"], "status_is_firing_resolved_or_any");
 
     let (status, hooks, _) =
         call(&app, "GET", "/api/hooks", Some(&cookie), Some(&team), None).await;

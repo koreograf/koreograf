@@ -64,6 +64,31 @@ async fn a_workflow_node_without_an_inventory_fails_before_launching() {
     assert_eq!(status, StatusCode::CREATED, "{template}");
     let template_id = template["id"].as_str().unwrap();
 
+    let (status, cycle, _) = call(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Cyclic run",
+            "description": "",
+            "graph": {
+                "nodes": [
+                    {"id": "a", "template_id": template_id, "name": "A"},
+                    {"id": "b", "template_id": template_id, "name": "B"}
+                ],
+                "edges": [
+                    {"from": "a", "to": "b", "when": "success"},
+                    {"from": "b", "to": "a", "when": "success"}
+                ]
+            }
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(cycle["error"], "the_workflow_contains_a_cycle");
+
     let (status, workflow, _) = call(
         &app,
         "POST",

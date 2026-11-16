@@ -818,6 +818,25 @@ async fn schedule_endpoints_return_the_documented_shape() {
     assert_eq!(status, StatusCode::CREATED, "{template}");
     let template_id = template["id"].as_str().unwrap().to_string();
 
+    let (status, invalid_repeat, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/templates/{template_id}/schedules"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Invalid schedule",
+            "timezone": "Europe/Berlin",
+            "start_date": "2027-06-01",
+            "start_time": "03:00",
+            "frequency": "yearly",
+            "end_kind": "never"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(invalid_repeat["error"], "schedule_repeat_is_invalid");
+
     let (status, created, _) = call(
         &app,
         "POST",

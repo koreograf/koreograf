@@ -33,6 +33,14 @@ async fn write_team(
 #[tokio::test(flavor = "multi_thread")]
 async fn each_module_registers_its_routes() {
     let harness = TestApp::boot("http-module-routes", Options::default());
+    let (status, _, health) = request(&harness.app, "GET", "/healthz", &[], None).await;
+    assert_eq!(status, StatusCode::OK);
+    let engine = if harness.is_postgres() {
+        "postgresql"
+    } else {
+        "sqlite"
+    };
+    assert_eq!(String::from_utf8_lossy(&health), format!("ok ({engine})"));
     for prefix in API_PREFIXES {
         for (method, path) in [
             ("GET", "/maintenance"),
