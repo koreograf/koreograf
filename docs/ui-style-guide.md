@@ -210,7 +210,7 @@ Something stays a page when it needs its own address, a deep link to a record, a
 ## Responsive behavior
 
 - At 900 px the sidebar becomes an off-canvas panel with `.nav-toggle` and `.scrim`; `.main` padding drops to 16 px. The schedule layout stacks, and `.dialog-footer` becomes visible.
-- The workflow editor keeps its page width at 900 px: only the canvas pans and zooms, and the node panel becomes a collapsible bottom sheet.
+- The workflow editor keeps its page width at 900 px: only the canvas pans and zooms, and the read-only node summary becomes a collapsible bottom sheet. Editing a node or an edge opens an overlay.
 - At 600 px `.overlay` loses its padding and `.overlay-card` becomes full screen.
 - Tables scroll inside `.table-wrap`. Add a minimum width only to a table that needs it, as `.inventory-hosts-table` and `.schedule-table` do.
 - Check every UI change at 1280 px and 390 px, in German and English.

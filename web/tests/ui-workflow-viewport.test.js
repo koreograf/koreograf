@@ -232,7 +232,8 @@ test("the node panel starts collapsed on a narrow screen and opens on selection"
       pointerId: 1,
     });
     assert.equal(inspector.hidden, false, "selecting a node did not open the panel");
-    assert.ok(inspector.querySelector("#node-name"), "the opened panel has no node details");
+    assert.ok(inspector.querySelector(".node-panel"), "the opened panel has no node details");
+    assert.equal(inspector.querySelector("#node-name"), null, "the opened panel has a live edit form");
   } finally {
     window.innerWidth = previous;
   }
