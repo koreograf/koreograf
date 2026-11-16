@@ -4,14 +4,44 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const { stylesheet, rule, mediaBlock, read } = require("./css.js");
 
+const PADDING_SIDES = ["top", "right", "bottom", "left"];
+
 function paddingBox(declarations) {
-  const match = /padding:\s*([^;]+);/.exec(declarations);
-  if (!match) return null;
-  const values = match[1].trim().split(/\s+/).map((value) => Number.parseFloat(value));
-  if (values.some((value) => !Number.isFinite(value))) return null;
-  const [top, right = top, bottom = top, left = right] = values;
-  return { top, right, bottom, left };
+  const box = { top: 0, right: 0, bottom: 0, left: 0 };
+  let declared = false;
+  for (const declaration of declarations.split(";")) {
+    const colon = declaration.indexOf(":");
+    if (colon < 0) continue;
+    const property = declaration.slice(0, colon).trim().toLowerCase();
+    const value = declaration.slice(colon + 1).trim();
+    if (property === "padding") {
+      const values = value.split(/\s+/).map((part) => Number.parseFloat(part));
+      if (values.some((part) => !Number.isFinite(part))) return null;
+      const [top, right = top, bottom = top, left = right] = values;
+      Object.assign(box, { top, right, bottom, left });
+      declared = true;
+      continue;
+    }
+    if (!property.startsWith("padding-")) continue;
+    const side = property.slice("padding-".length);
+    if (!PADDING_SIDES.includes(side)) continue;
+    const number = Number.parseFloat(value);
+    if (!Number.isFinite(number)) return null;
+    box[side] = number;
+    declared = true;
+  }
+  return declared ? box : null;
 }
+
+test("the padding box follows the last declaration in a rule", () => {
+  const overridden = paddingBox("padding: 6px; padding-left: 0;");
+  assert.ok(overridden, "the rule has no padding");
+  assert.equal(overridden.left, 0);
+  assert.equal(overridden.top, 6);
+  const shorthandLast = paddingBox("padding-left: 0; padding: 6px;");
+  assert.ok(shorthandLast, "the rule has no padding");
+  assert.equal(shorthandLast.left, 6);
+});
 
 test("the shared styles keep the log, table and navigation rules", () => {
   const css = stylesheet();
