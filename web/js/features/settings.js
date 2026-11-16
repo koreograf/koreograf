@@ -105,7 +105,7 @@ async function pageSettings(notice) {
   const unsupported = proxy.unsupported_env
     ? `<p class="banner warn">${h("the_environment_uses_a_proxy_that_is_neither")}</p>`
     : "";
-  const saved = notice ? `<p class="banner good">${h(notice)}</p>` : "";
+  const saved = typeof notice === "string" && notice ? `<p class="banner good">${h(notice)}</p>` : "";
   const activeTab = settingsTab();
   const panelHidden = (id) => activeTab === id ? "" : " hidden";
   shell(t("settings"), `<form class="card form" id="settings-form">

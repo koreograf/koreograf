@@ -52,6 +52,22 @@ test("settings are one form with tab panels", async () => {
   assert.equal(document.querySelector("#settings-panel-jobs").hidden, true);
 });
 
+test("the settings route only shows a banner after a save", async () => {
+  await admin();
+  const router = await load("core/router.js");
+  location.hash = "#/settings";
+  const route = router.matchRoute("#/settings");
+  await route.handler(route.params);
+  const app = document.querySelector("#app");
+  assert.equal(app.querySelector(".banner.good"), null, "a plain visit shows a success banner");
+  document.querySelector("#settings-form").dispatchEvent({ type: "submit", preventDefault() {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  const banner = document.querySelector("#app").querySelector(".banner.good");
+  assert.ok(banner, "a saved settings page has no banner");
+  assert.match(banner.innerHTML, /settings_saved/);
+  assert.doesNotMatch(document.querySelector("#app").innerHTML, /\[object Object\]/);
+});
+
 test("settings tab labels and panel styles are present", () => {
   for (const id of ["de", "en"]) {
     const values = catalog(id);
