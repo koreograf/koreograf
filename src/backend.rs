@@ -1250,11 +1250,19 @@ impl PostgresBackend {
         tokio::task::block_in_place(|| handle.block_on(future))
     }
 
-    fn ensure_schema(&self) -> AppResult<()> {
+    fn with_client<T, F, Fut>(&self, body: F) -> AppResult<T>
+    where
+        F: FnOnce(deadpool_postgres::Client) -> Fut,
+        Fut: std::future::Future<Output = AppResult<T>>,
+    {
         self.run(async {
             let client = self.pool.get().await.map_err(pool_error)?;
-            db::ensure_postgres_schema(&client).await
+            body(client).await
         })
+    }
+
+    fn ensure_schema(&self) -> AppResult<()> {
+        self.with_client(|client| async move { db::ensure_postgres_schema(&client).await })
     }
 }
 
@@ -1404,15 +1412,11 @@ impl Backend for PostgresBackend {
     }
 
     fn export_sqlite(&self, dest: &Path) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
-            crate::portable::to_sqlite(&client, dest).await
-        })
+        self.with_client(|client| async move { crate::portable::to_sqlite(&client, dest).await })
     }
 
     fn restore_sqlite(&self, source: &Path) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client.batch_execute("BEGIN").await?;
             match crate::portable::copy_from_sqlite(&client, source, true).await {
                 Ok(()) => {
@@ -1428,8 +1432,7 @@ impl Backend for PostgresBackend {
     }
 
     fn busy(&self) -> AppResult<bool> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let jobs: i64 = client
                 .query_one(&store::sql::postgres(jobs::store::JOBS_BUSY), &[])
                 .await?
@@ -1446,16 +1449,14 @@ impl Backend for PostgresBackend {
     }
 
     fn ping(&self) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client.query_one(store::sql::PING, &[]).await?;
             Ok(())
         })
     }
 
     fn settings_rows(&self) -> AppResult<HashMap<String, String>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(crate::features::operations::store::SETTINGS_ROWS),
@@ -1470,8 +1471,7 @@ impl Backend for PostgresBackend {
     }
 
     fn set_setting(&self, key: &str, value: &str) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(crate::features::operations::store::INSERT_SETTING),
@@ -1483,8 +1483,7 @@ impl Backend for PostgresBackend {
     }
 
     fn count_teams(&self) -> AppResult<i64> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let row = client
                 .query_one(&store::sql::postgres(identity_store::COUNT_TEAMS), &[])
                 .await?;
@@ -1493,8 +1492,7 @@ impl Backend for PostgresBackend {
     }
 
     fn seed_state(&self, key: &str) -> AppResult<Option<String>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let row = client
                 .query_opt(
                     &store::sql::postgres(crate::features::operations::store::SEED_STATE),
@@ -1506,8 +1504,7 @@ impl Backend for PostgresBackend {
     }
 
     fn set_seed_state(&self, key: &str, value: &str) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(crate::features::operations::store::SET_SEED_STATE),
@@ -1519,8 +1516,7 @@ impl Backend for PostgresBackend {
     }
 
     fn user_by_username(&self, username: &str) -> AppResult<Option<User>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let sql = store::sql::Dialect::Postgres.render(&identity_store::user_by_username_sql(
                 store::sql::Dialect::Postgres,
             ));
@@ -1530,8 +1526,7 @@ impl Backend for PostgresBackend {
     }
 
     fn user_by_session(&self, token: &str) -> AppResult<Option<User>> {
-        let row = self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        let row = self.with_client(|client| async move {
             client
                 .query_opt(
                     &store::sql::postgres(identity_store::USER_BY_SESSION),
@@ -1552,8 +1547,7 @@ impl Backend for PostgresBackend {
     }
 
     fn user_by_api_token(&self, token_hash: &str) -> AppResult<Option<User>> {
-        let row = self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        let row = self.with_client(|client| async move {
             client
                 .query_opt(
                     &store::sql::postgres(identity_store::USER_BY_API_TOKEN),
@@ -1566,8 +1560,7 @@ impl Backend for PostgresBackend {
             return Ok(None);
         };
         let token_id: String = row.try_get(9)?;
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(identity_store::TOUCH_API_TOKEN),
@@ -1580,8 +1573,7 @@ impl Backend for PostgresBackend {
     }
 
     fn create_session(&self, token: &str, user_id: &str) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(identity_store::CREATE_SESSION),
@@ -1593,8 +1585,7 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_session(&self, token: &str) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(identity_store::DELETE_SESSION),
@@ -1606,8 +1597,7 @@ impl Backend for PostgresBackend {
     }
 
     fn purge_sessions(&self) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(identity_store::PURGE_SESSIONS),
@@ -1627,8 +1617,7 @@ impl Backend for PostgresBackend {
         auth_source: &str,
         is_admin: bool,
     ) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(identity_store::INSERT_USER),
@@ -1648,8 +1637,7 @@ impl Backend for PostgresBackend {
     }
 
     fn user_by_id(&self, id: &str) -> AppResult<Option<User>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let row = client
                 .query_opt(&store::sql::postgres(identity_store::USER_BY_ID), &[&id])
                 .await?;
@@ -1658,8 +1646,7 @@ impl Backend for PostgresBackend {
     }
 
     fn list_users(&self) -> AppResult<Vec<(User, i64)>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let sql = store::sql::Dialect::Postgres.render(&identity_store::list_users_sql(
                 store::sql::Dialect::Postgres,
             ));
@@ -1677,8 +1664,7 @@ impl Backend for PostgresBackend {
         email: Option<&str>,
         password_hash: Option<&str>,
     ) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             if let Some(password_hash) = password_hash {
                 client
                     .execute(
@@ -1699,8 +1685,7 @@ impl Backend for PostgresBackend {
     }
 
     fn set_user_email(&self, id: &str, email: Option<&str>) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(identity_store::SET_USER_EMAIL),
@@ -1719,8 +1704,7 @@ impl Backend for PostgresBackend {
         disabled: bool,
         password_hash: Option<&str>,
     ) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             if let Some(password_hash) = password_hash {
                 client
                     .execute(
@@ -1747,8 +1731,7 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_user_sessions(&self, user_id: &str) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(identity_store::DELETE_USER_SESSIONS),
@@ -1760,8 +1743,7 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_user(&self, id: &str) -> AppResult<bool> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             Ok(client
                 .execute(&store::sql::postgres(identity_store::DELETE_USER), &[&id])
                 .await?
@@ -1770,8 +1752,7 @@ impl Backend for PostgresBackend {
     }
 
     fn other_active_admins(&self, user_id: &str) -> AppResult<i64> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let row = client
                 .query_one(
                     &store::sql::postgres(identity_store::OTHER_ACTIVE_ADMINS),
@@ -1791,8 +1772,7 @@ impl Backend for PostgresBackend {
         token_hash: &str,
         created_at: &str,
     ) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(identity_store::CREATE_API_TOKEN),
@@ -1804,8 +1784,7 @@ impl Backend for PostgresBackend {
     }
 
     fn list_api_tokens(&self, user_id: &str) -> AppResult<Vec<ApiToken>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(identity_store::LIST_API_TOKENS),
@@ -1817,8 +1796,7 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_api_token(&self, id: &str, user_id: &str) -> AppResult<bool> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             Ok(client
                 .execute(
                     &store::sql::postgres(identity_store::DELETE_API_TOKEN),
@@ -1831,8 +1809,7 @@ impl Backend for PostgresBackend {
 
     fn list_teams_for_user(&self, user_id: &str, admin: bool) -> AppResult<Vec<(Team, String)>> {
         let sql = store::sql::postgres(&identity_store::teams_for_user_sql(admin));
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client.query(&sql, &[&user_id]).await?;
             rows.iter()
                 .map(|row| Ok((identity_store::row_team(row)?, row.try_get::<_, String>(7)?)))
@@ -1841,8 +1818,7 @@ impl Backend for PostgresBackend {
     }
 
     fn list_user_memberships(&self, user_id: &str) -> AppResult<Vec<UserMembership>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(identity_store::MEMBERSHIPS_FOR_USER),
@@ -1856,8 +1832,7 @@ impl Backend for PostgresBackend {
     }
 
     fn replace_settings(&self, rows: &[(String, String)]) -> AppResult<()> {
-        self.run(async {
-            let mut client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|mut client| async move {
             let transaction = client.transaction().await?;
             transaction
                 .execute(
@@ -1879,8 +1854,7 @@ impl Backend for PostgresBackend {
     }
 
     fn environment(&self, id: &str) -> AppResult<Option<Environment>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let row = client
                 .query_opt(
                     &store::sql::postgres(store::environments::ENVIRONMENT_BY_ID),
@@ -1894,8 +1868,7 @@ impl Backend for PostgresBackend {
     }
 
     fn team_by_id(&self, id: &str) -> AppResult<Option<Team>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let row = client
                 .query_opt(&store::sql::postgres(identity_store::TEAM_BY_ID), &[&id])
                 .await?;
@@ -1904,8 +1877,7 @@ impl Backend for PostgresBackend {
     }
 
     fn role_of(&self, team_id: &str, user_id: &str) -> AppResult<Option<String>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let row = client
                 .query_opt(
                     &store::sql::postgres(identity_store::ROLE_OF),
@@ -1924,8 +1896,7 @@ impl Backend for PostgresBackend {
         description: &str,
         ldap_group: Option<&str>,
     ) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(identity_store::INSERT_TEAM),
@@ -1950,8 +1921,7 @@ impl Backend for PostgresBackend {
         description: &str,
         ldap_group: Option<&str>,
     ) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let changed = client
                 .execute(
                     &store::sql::postgres(identity_store::UPDATE_TEAM),
@@ -1966,8 +1936,7 @@ impl Backend for PostgresBackend {
     }
 
     fn set_team_organization(&self, team_id: &str, organization_id: &str) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let changed = client
                 .execute(
                     &store::sql::postgres(identity_store::SET_TEAM_ORGANIZATION),
@@ -1982,8 +1951,7 @@ impl Backend for PostgresBackend {
     }
 
     fn insert_organization(&self, id: &str, name: &str, description: &str) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(identity_store::INSERT_ORGANIZATION),
@@ -1995,8 +1963,7 @@ impl Backend for PostgresBackend {
     }
 
     fn update_organization(&self, id: &str, name: &str, description: &str) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let changed = client
                 .execute(
                     &store::sql::postgres(identity_store::UPDATE_ORGANIZATION),
@@ -2011,8 +1978,7 @@ impl Backend for PostgresBackend {
     }
 
     fn organization(&self, id: &str) -> AppResult<Option<Organization>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let row = client
                 .query_opt(
                     &store::sql::postgres(identity_store::ORGANIZATION_BY_ID),
@@ -2026,8 +1992,7 @@ impl Backend for PostgresBackend {
     }
 
     fn organization_by_name(&self, name: &str) -> AppResult<Option<Organization>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let row = client
                 .query_opt(
                     &store::sql::postgres(identity_store::ORGANIZATION_BY_NAME),
@@ -2046,8 +2011,7 @@ impl Backend for PostgresBackend {
         } else {
             identity_store::ORGANIZATIONS_FOR_USER
         });
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = if admin {
                 client.query(&sql, &[]).await?
             } else {
@@ -2058,8 +2022,7 @@ impl Backend for PostgresBackend {
     }
 
     fn teams_in_organization(&self, organization_id: &str) -> AppResult<Vec<Team>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(identity_store::TEAMS_IN_ORGANIZATION),
@@ -2071,8 +2034,7 @@ impl Backend for PostgresBackend {
     }
 
     fn teams_with_ldap(&self) -> AppResult<Vec<Team>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(&store::sql::postgres(identity_store::TEAMS_WITH_LDAP), &[])
                 .await?;
@@ -2087,8 +2049,7 @@ impl Backend for PostgresBackend {
         role: &str,
         source: &str,
     ) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(identity_store::UPSERT_MEMBERSHIP),
@@ -2100,8 +2061,7 @@ impl Backend for PostgresBackend {
     }
 
     fn grant_manual_membership(&self, team_id: &str, user_id: &str, role: &str) -> AppResult<()> {
-        let source = self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        let source = self.with_client(|client| async move {
             let row = client
                 .query_opt(
                     &store::sql::postgres(identity_store::MEMBERSHIP_SOURCE),
@@ -2119,8 +2079,7 @@ impl Backend for PostgresBackend {
     }
 
     fn list_members(&self, team_id: &str) -> AppResult<Vec<Member>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(identity_store::LIST_MEMBERS),
@@ -2132,8 +2091,7 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_membership(&self, team_id: &str, user_id: &str) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(identity_store::DELETE_MEMBERSHIP),
@@ -2145,8 +2103,7 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_ldap_membership(&self, team_id: &str, user_id: &str) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(identity_store::DELETE_LDAP_MEMBERSHIP),
@@ -2158,8 +2115,7 @@ impl Backend for PostgresBackend {
     }
 
     fn list_projects(&self, team_id: &str) -> AppResult<Vec<Project>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(projects::store::LIST_PROJECTS),
@@ -2179,8 +2135,7 @@ impl Backend for PostgresBackend {
     }
 
     fn project(&self, id: &str) -> AppResult<Option<Project>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let row = client
                 .query_opt(
                     &store::sql::postgres(projects::store::PROJECT_BY_ID),
@@ -2198,8 +2153,7 @@ impl Backend for PostgresBackend {
     }
 
     fn project_visible(&self, id: &str, team_id: &str) -> AppResult<bool> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let row = client
                 .query_opt(
                     &store::sql::postgres(projects::store::PROJECT_VISIBLE),
@@ -2211,8 +2165,7 @@ impl Backend for PostgresBackend {
     }
 
     fn insert_project(&self, project: &Project) -> AppResult<()> {
-        self.run(async {
-            let mut client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|mut client| async move {
             let transaction = client.transaction().await?;
             transaction
                 .execute(
@@ -2243,8 +2196,7 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_project(&self, id: &str, team_id: &str) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let changed = client
                 .execute(
                     &store::sql::postgres(projects::store::DELETE_PROJECT),
@@ -2266,8 +2218,7 @@ impl Backend for PostgresBackend {
         source: &str,
         revision: &str,
     ) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let changed = client
                 .execute(
                     &store::sql::postgres(projects::store::SET_PROJECT_DETAILS),
@@ -2282,8 +2233,7 @@ impl Backend for PostgresBackend {
     }
 
     fn set_project_organization(&self, id: &str, organization_id: &str) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let changed = client
                 .execute(
                     &store::sql::postgres(projects::store::SET_PROJECT_ORGANIZATION),
@@ -2298,8 +2248,7 @@ impl Backend for PostgresBackend {
     }
 
     fn replace_project_teams(&self, project_id: &str, team_ids: &[String]) -> AppResult<()> {
-        self.run(async {
-            let mut client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|mut client| async move {
             let transaction = client.transaction().await?;
             projects::store::postgres_write_project_teams(&transaction, project_id, team_ids)
                 .await?;
@@ -2309,8 +2258,7 @@ impl Backend for PostgresBackend {
     }
 
     fn set_project_credential(&self, id: &str, credential_id: Option<&str>) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let changed = client
                 .execute(
                     &store::sql::postgres(projects::store::SET_PROJECT_CREDENTIAL),
@@ -2325,8 +2273,7 @@ impl Backend for PostgresBackend {
     }
 
     fn set_project_admin_saved(&self, id: &str, admin_saved: bool) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let changed = client
                 .execute(
                     &store::sql::postgres(projects::store::SET_PROJECT_ADMIN_SAVED),
@@ -2341,8 +2288,7 @@ impl Backend for PostgresBackend {
     }
 
     fn set_project_sync_success(&self, id: &str, at: &str, commit: &str) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let changed = client
                 .execute(
                     &store::sql::postgres(projects::store::SET_PROJECT_SYNC_SUCCESS),
@@ -2357,8 +2303,7 @@ impl Backend for PostgresBackend {
     }
 
     fn set_project_sync_failed(&self, id: &str) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let changed = client
                 .execute(
                     &store::sql::postgres(projects::store::SET_PROJECT_SYNC_FAILED),
@@ -2373,8 +2318,7 @@ impl Backend for PostgresBackend {
     }
 
     fn list_inventories(&self, team_id: &str) -> AppResult<Vec<Inventory>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(inventories::store::LIST_INVENTORIES),
@@ -2386,8 +2330,7 @@ impl Backend for PostgresBackend {
     }
 
     fn inventory(&self, id: &str) -> AppResult<Option<Inventory>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let row = client
                 .query_opt(
                     &store::sql::postgres(inventories::store::INVENTORY_BY_ID),
@@ -2406,8 +2349,7 @@ impl Backend for PostgresBackend {
         sources: &[InventorySource],
         refresh: bool,
     ) -> AppResult<()> {
-        self.run(async {
-            let mut client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|mut client| async move {
             let transaction = client.transaction().await?;
             transaction
                 .execute(
@@ -2437,8 +2379,7 @@ impl Backend for PostgresBackend {
     }
 
     fn update_inventory(&self, id: &str, team_id: &str, name: &str, body: &str) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let changed = client
                 .execute(
                     &store::sql::postgres(inventories::store::UPDATE_INVENTORY),
@@ -2453,8 +2394,7 @@ impl Backend for PostgresBackend {
     }
 
     fn set_inventory_admin_saved(&self, id: &str, admin_saved: bool) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(inventories::store::SET_INVENTORY_ADMIN_SAVED),
@@ -2466,8 +2406,7 @@ impl Backend for PostgresBackend {
     }
 
     fn set_inventory_body(&self, id: &str, team_id: &str, body: &str) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let changed = client
                 .execute(
                     &store::sql::postgres(inventories::store::SET_INVENTORY_BODY),
@@ -2482,8 +2421,7 @@ impl Backend for PostgresBackend {
     }
 
     fn list_inventory_sources(&self, inventory_id: &str) -> AppResult<Vec<InventorySource>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(inventories::store::LIST_SOURCES),
@@ -2497,8 +2435,7 @@ impl Backend for PostgresBackend {
     }
 
     fn inventory_source(&self, id: &str) -> AppResult<Option<InventorySource>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let row = client
                 .query_opt(
                     &store::sql::postgres(inventories::store::SOURCE_BY_ID),
@@ -2517,8 +2454,7 @@ impl Backend for PostgresBackend {
         source: &InventorySource,
         admin_saved: bool,
     ) -> AppResult<()> {
-        self.run(async {
-            let mut client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|mut client| async move {
             let transaction = client.transaction().await?;
             inventories::store::postgres_insert_source(&transaction, source).await?;
             inventories::store::postgres_refresh_summary(&transaction, inventory_id).await?;
@@ -2534,8 +2470,7 @@ impl Backend for PostgresBackend {
     }
 
     fn set_inventory_source_body(&self, id: &str, body: &str) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(inventories::store::SET_SOURCE_BODY),
@@ -2551,8 +2486,7 @@ impl Backend for PostgresBackend {
         source: &InventorySource,
         admin_saved: bool,
     ) -> AppResult<()> {
-        self.run(async {
-            let mut client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|mut client| async move {
             let transaction = client.transaction().await?;
             let changed = transaction
                 .execute(
@@ -2588,8 +2522,7 @@ impl Backend for PostgresBackend {
         inventory_id: &str,
         admin_saved: bool,
     ) -> AppResult<()> {
-        self.run(async {
-            let mut client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|mut client| async move {
             let transaction = client.transaction().await?;
             let changed = transaction
                 .execute(
@@ -2613,8 +2546,7 @@ impl Backend for PostgresBackend {
     }
 
     fn refresh_inventory_summary(&self, inventory_id: &str) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             inventories::store::postgres_refresh_summary(&client, inventory_id).await
         })
     }
@@ -2625,8 +2557,7 @@ impl Backend for PostgresBackend {
         bodies: &[(String, String)],
         admin_saved: bool,
     ) -> AppResult<()> {
-        self.run(async {
-            let mut client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|mut client| async move {
             let transaction = client.transaction().await?;
             for (source_id, body) in bodies {
                 transaction
@@ -2649,8 +2580,7 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_inventory(&self, id: &str, team_id: &str) -> AppResult<()> {
-        self.run(async {
-            let mut client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|mut client| async move {
             let transaction = client.transaction().await?;
             let rows = transaction
                 .query(
@@ -2695,8 +2625,7 @@ impl Backend for PostgresBackend {
         inventory_id: &str,
         team_id: &str,
     ) -> AppResult<Vec<String>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(inventories::store::TEMPLATES_USING_INVENTORY),
@@ -2712,8 +2641,7 @@ impl Backend for PostgresBackend {
         inventory_id: &str,
         team_id: &str,
     ) -> AppResult<Vec<String>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(inventories::store::WORKFLOW_GRAPHS),
@@ -2733,8 +2661,7 @@ impl Backend for PostgresBackend {
     }
 
     fn list_credentials(&self, team_id: &str) -> AppResult<Vec<Credential>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(credentials::store::LIST_CREDENTIALS),
@@ -2748,8 +2675,7 @@ impl Backend for PostgresBackend {
     }
 
     fn credential(&self, id: &str) -> AppResult<Option<Credential>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let row = client
                 .query_opt(
                     &store::sql::postgres(credentials::store::CREDENTIAL_BY_ID),
@@ -2763,8 +2689,7 @@ impl Backend for PostgresBackend {
     }
 
     fn insert_credential(&self, item: &Credential) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(credentials::store::INSERT_CREDENTIAL),
@@ -2785,8 +2710,7 @@ impl Backend for PostgresBackend {
     }
 
     fn update_credential(&self, item: &Credential) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let changed = client
                 .execute(
                     &store::sql::postgres(credentials::store::UPDATE_CREDENTIAL),
@@ -2807,8 +2731,7 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_credential(&self, id: &str, team_id: &str) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let changed = client
                 .execute(
                     &store::sql::postgres(credentials::store::DELETE_CREDENTIAL),
@@ -2827,8 +2750,7 @@ impl Backend for PostgresBackend {
         credential_id: &str,
         team_id: &str,
     ) -> AppResult<Vec<CredentialUsage>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(credentials::store::CREDENTIAL_USAGES),
@@ -2843,8 +2765,7 @@ impl Backend for PostgresBackend {
 
     fn list_environments(&self, team_id: &str) -> AppResult<Vec<Environment>> {
         let team = self.team_by_id(team_id)?.ok_or(ApiError::NotFound)?;
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(store::environments::LIST_ENVIRONMENTS),
@@ -2858,8 +2779,7 @@ impl Backend for PostgresBackend {
     }
 
     fn insert_environment(&self, item: &Environment) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(store::environments::INSERT_ENVIRONMENT),
@@ -2883,8 +2803,7 @@ impl Backend for PostgresBackend {
 
     fn update_environment(&self, item: &Environment) -> AppResult<()> {
         let global = item.team_id.is_none() && item.organization_id.is_none();
-        self.run(async {
-            let mut client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|mut client| async move {
             let transaction = client.transaction().await?;
             let changed = transaction
                 .execute(
@@ -2923,8 +2842,7 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_environment(&self, id: &str) -> AppResult<()> {
-        self.run(async {
-            let mut client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|mut client| async move {
             let transaction = client.transaction().await?;
             let changed = transaction
                 .execute(
@@ -2949,8 +2867,7 @@ impl Backend for PostgresBackend {
     }
 
     fn list_templates(&self, team_id: &str) -> AppResult<Vec<Template>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(projects::store::LIST_TEMPLATES),
@@ -2962,8 +2879,7 @@ impl Backend for PostgresBackend {
     }
 
     fn template(&self, id: &str) -> AppResult<Option<Template>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let row = client
                 .query_opt(
                     &store::sql::postgres(projects::store::TEMPLATE_BY_ID),
@@ -2975,8 +2891,7 @@ impl Backend for PostgresBackend {
     }
 
     fn insert_template(&self, item: &Template, credential_ids: &[String]) -> AppResult<()> {
-        self.run(async {
-            let mut client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|mut client| async move {
             let transaction = client.transaction().await?;
             transaction
                 .execute(
@@ -3014,8 +2929,7 @@ impl Backend for PostgresBackend {
     }
 
     fn update_template(&self, item: &Template, credential_ids: &[String]) -> AppResult<()> {
-        self.run(async {
-            let mut client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|mut client| async move {
             let transaction = client.transaction().await?;
             let changed = transaction
                 .execute(
@@ -3055,8 +2969,7 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_template(&self, id: &str, team_id: &str) -> AppResult<()> {
-        self.run(async {
-            let mut client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|mut client| async move {
             let transaction = client.transaction().await?;
             let changed = transaction
                 .execute(
@@ -3079,8 +2992,7 @@ impl Backend for PostgresBackend {
     }
 
     fn template_credential_ids(&self, template_id: &str) -> AppResult<Vec<String>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(projects::store::TEMPLATE_CREDENTIAL_IDS),
@@ -3092,8 +3004,7 @@ impl Backend for PostgresBackend {
     }
 
     fn list_template_credential_links(&self, team_id: &str) -> AppResult<Vec<(String, String)>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(projects::store::LIST_TEMPLATE_CREDENTIAL_LINKS),
@@ -3105,8 +3016,7 @@ impl Backend for PostgresBackend {
     }
 
     fn list_hooks(&self, team_id: &str) -> AppResult<Vec<Hook>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(&store::sql::postgres(store::hooks::LIST_HOOKS), &[&team_id])
                 .await?;
@@ -3115,8 +3025,7 @@ impl Backend for PostgresBackend {
     }
 
     fn hook(&self, id: &str) -> AppResult<Option<Hook>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let row = client
                 .query_opt(&store::sql::postgres(store::hooks::HOOK_BY_ID), &[&id])
                 .await?;
@@ -3125,8 +3034,7 @@ impl Backend for PostgresBackend {
     }
 
     fn insert_hook(&self, item: &Hook) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(store::hooks::INSERT_HOOK),
@@ -3150,8 +3058,7 @@ impl Backend for PostgresBackend {
     }
 
     fn update_hook(&self, item: &Hook) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let changed = client
                 .execute(
                     &store::sql::postgres(store::hooks::UPDATE_HOOK),
@@ -3175,8 +3082,7 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_hook(&self, id: &str, team_id: &str) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let changed = client
                 .execute(
                     &store::sql::postgres(store::hooks::DELETE_HOOK),
@@ -3191,8 +3097,7 @@ impl Backend for PostgresBackend {
     }
 
     fn list_deliveries(&self, team_id: &str, limit: i64) -> AppResult<Vec<Delivery>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(store::deliveries::LIST_DELIVERIES),
@@ -3204,8 +3109,7 @@ impl Backend for PostgresBackend {
     }
 
     fn insert_delivery(&self, item: &NewDelivery<'_>) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(store::deliveries::INSERT_DELIVERY),
@@ -3226,8 +3130,7 @@ impl Backend for PostgresBackend {
     }
 
     fn job(&self, id: &str) -> AppResult<Option<Job>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let row = client
                 .query_opt(&store::sql::postgres(&jobs::store::job_by_id_sql()), &[&id])
                 .await?;
@@ -3238,8 +3141,7 @@ impl Backend for PostgresBackend {
     fn list_jobs(&self, team_id: &str, query: &JobQuery) -> AppResult<(Vec<Job>, i64)> {
         let limit = query.limit.clamp(1, 100);
         let offset = query.offset.max(0);
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(&jobs::store::list_jobs_sql(
@@ -3286,8 +3188,7 @@ impl Backend for PostgresBackend {
     }
 
     fn insert_job(&self, item: &Job) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(jobs::store::INSERT_JOB),
@@ -3316,8 +3217,7 @@ impl Backend for PostgresBackend {
     }
 
     fn mark_running(&self, id: &str) -> AppResult<bool> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let changed = client
                 .execute(
                     &store::sql::postgres(jobs::store::MARK_RUNNING),
@@ -3329,8 +3229,7 @@ impl Backend for PostgresBackend {
     }
 
     fn set_failed_hosts(&self, id: &str, failed_hosts: &str) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(jobs::store::SET_FAILED_HOSTS),
@@ -3342,8 +3241,7 @@ impl Backend for PostgresBackend {
     }
 
     fn set_job_parameters(&self, id: &str, parameters: &str) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(jobs::store::SET_JOB_PARAMETERS),
@@ -3355,8 +3253,7 @@ impl Backend for PostgresBackend {
     }
 
     fn finish_job(&self, id: &str, status: &str) -> AppResult<bool> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let changed = client
                 .execute(
                     &store::sql::postgres(jobs::store::FINISH_JOB),
@@ -3368,8 +3265,7 @@ impl Backend for PostgresBackend {
     }
 
     fn insert_event(&self, job_id: &str, stream: &str, line: &str) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(jobs::store::INSERT_EVENT),
@@ -3381,8 +3277,7 @@ impl Backend for PostgresBackend {
     }
 
     fn events_after(&self, job_id: &str, after: i64, limit: i64) -> AppResult<Vec<JobEvent>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(jobs::store::EVENTS_AFTER),
@@ -3394,8 +3289,7 @@ impl Backend for PostgresBackend {
     }
 
     fn events_count_between(&self, job_id: &str, after: i64, before: i64) -> AppResult<i64> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let row = client
                 .query_one(
                     &store::sql::postgres(jobs::store::EVENTS_COUNT_BETWEEN),
@@ -3407,8 +3301,7 @@ impl Backend for PostgresBackend {
     }
 
     fn events_bytes(&self, job_id: &str) -> AppResult<i64> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let row = client
                 .query_one(
                     &store::sql::postgres(jobs::store::events_bytes_sql(
@@ -3422,8 +3315,7 @@ impl Backend for PostgresBackend {
     }
 
     fn events_last(&self, job_id: &str, limit: i64) -> AppResult<Vec<JobEvent>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(jobs::store::EVENTS_LAST),
@@ -3440,8 +3332,7 @@ impl Backend for PostgresBackend {
     }
 
     fn workflow_job(&self, id: &str) -> AppResult<Option<WorkflowJob>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let row = client
                 .query_opt(
                     &store::sql::postgres(&workflows::store::workflow_job_by_id_sql()),
@@ -3461,8 +3352,7 @@ impl Backend for PostgresBackend {
         limit: i64,
     ) -> AppResult<Vec<WorkflowJob>> {
         let limit = limit.clamp(1, 1000);
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(&workflows::store::list_workflow_jobs_sql()),
@@ -3476,8 +3366,7 @@ impl Backend for PostgresBackend {
     }
 
     fn insert_workflow_job(&self, item: &WorkflowJob) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(workflows::store::INSERT_WORKFLOW_JOB),
@@ -3500,8 +3389,7 @@ impl Backend for PostgresBackend {
     }
 
     fn set_workflow_status(&self, id: &str, status: &str, finish: bool) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             if finish {
                 client
                     .execute(
@@ -3522,8 +3410,7 @@ impl Backend for PostgresBackend {
     }
 
     fn insert_workflow_node(&self, workflow_job_id: &str, node_id: &str) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(workflows::store::INSERT_WORKFLOW_NODE),
@@ -3541,8 +3428,7 @@ impl Backend for PostgresBackend {
         phase: &str,
         job_id: Option<&str>,
     ) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(workflows::store::SET_WORKFLOW_NODE),
@@ -3554,8 +3440,7 @@ impl Backend for PostgresBackend {
     }
 
     fn workflow_nodes(&self, workflow_job_id: &str) -> AppResult<Vec<WorkflowNodeRow>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(workflows::store::WORKFLOW_NODES),
@@ -3570,8 +3455,7 @@ impl Backend for PostgresBackend {
 
     fn recent_jobs(&self, team_id: &str, limit: i64) -> AppResult<Vec<Job>> {
         let limit = limit.clamp(1, 100);
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(&jobs::store::recent_jobs_sql()),
@@ -3583,8 +3467,7 @@ impl Backend for PostgresBackend {
     }
 
     fn job_activity(&self, team_id: &str, from: &str, to: &str) -> AppResult<Vec<JobActivity>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(jobs::store::JOB_ACTIVITY),
@@ -3596,8 +3479,7 @@ impl Backend for PostgresBackend {
     }
 
     fn import_report(&self) -> AppResult<Option<serde_json::Value>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let row = client
                 .query_opt(
                     &store::sql::postgres(crate::features::operations::store::SETTING),
@@ -3612,8 +3494,7 @@ impl Backend for PostgresBackend {
     }
 
     fn first_workflow(&self, team_id: &str) -> AppResult<Option<Workflow>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let row = client
                 .query_opt(
                     &store::sql::postgres(&workflows::store::first_workflow_sql()),
@@ -3625,8 +3506,7 @@ impl Backend for PostgresBackend {
     }
 
     fn first_hook(&self, team_id: &str) -> AppResult<Option<Hook>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let row = client
                 .query_opt(&store::sql::postgres(store::hooks::FIRST_HOOK), &[&team_id])
                 .await?;
@@ -3635,8 +3515,7 @@ impl Backend for PostgresBackend {
     }
 
     fn list_workflows(&self, team_id: &str) -> AppResult<Vec<Workflow>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(&workflows::store::list_workflows_sql()),
@@ -3648,8 +3527,7 @@ impl Backend for PostgresBackend {
     }
 
     fn workflow(&self, id: &str) -> AppResult<Option<Workflow>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let row = client
                 .query_opt(
                     &store::sql::postgres(&workflows::store::workflow_by_id_sql()),
@@ -3661,8 +3539,7 @@ impl Backend for PostgresBackend {
     }
 
     fn insert_workflow(&self, item: &Workflow) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(workflows::store::INSERT_WORKFLOW),
@@ -3683,8 +3560,7 @@ impl Backend for PostgresBackend {
     }
 
     fn update_workflow(&self, item: &Workflow, expected_version: Option<i64>) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let changed = client
                 .execute(
                     &store::sql::postgres(workflows::store::UPDATE_WORKFLOW),
@@ -3722,8 +3598,7 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_workflow(&self, id: &str, team_id: &str) -> AppResult<()> {
-        self.run(async {
-            let mut client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|mut client| async move {
             let transaction = client.transaction().await?;
             let changed = transaction
                 .execute(
@@ -3746,8 +3621,7 @@ impl Backend for PostgresBackend {
     }
 
     fn workflow_team(&self, id: &str) -> AppResult<Option<String>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let row = client
                 .query_opt(
                     &store::sql::postgres(workflows::store::WORKFLOW_TEAM),
@@ -3759,8 +3633,7 @@ impl Backend for PostgresBackend {
     }
 
     fn list_team_schedules(&self, team_id: &str) -> AppResult<Vec<(Schedule, String)>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(&schedules::store::list_team_schedules_sql()),
@@ -3774,8 +3647,7 @@ impl Backend for PostgresBackend {
     }
 
     fn schedule(&self, id: &str) -> AppResult<Option<Schedule>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let row = client
                 .query_opt(
                     &store::sql::postgres(&schedules::store::schedule_by_id_sql()),
@@ -3787,8 +3659,7 @@ impl Backend for PostgresBackend {
     }
 
     fn list_schedules(&self, kind: &str, target_id: &str) -> AppResult<Vec<Schedule>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(&schedules::store::list_schedules_sql()),
@@ -3801,8 +3672,7 @@ impl Backend for PostgresBackend {
 
     fn insert_schedule(&self, item: &Schedule) -> AppResult<()> {
         let end_count = item.end_count.map(|count| count as i32);
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(schedules::store::INSERT_SCHEDULE),
@@ -3838,8 +3708,7 @@ impl Backend for PostgresBackend {
 
     fn update_schedule(&self, item: &Schedule) -> AppResult<()> {
         let end_count = item.end_count.map(|count| count as i32);
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let changed = client
                 .execute(
                     &store::sql::postgres(schedules::store::UPDATE_SCHEDULE),
@@ -3873,8 +3742,7 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_schedule(&self, id: &str, team_id: &str) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let changed = client
                 .execute(
                     &store::sql::postgres(schedules::store::DELETE_SCHEDULE),
@@ -3896,8 +3764,7 @@ impl Backend for PostgresBackend {
         next_run_at: Option<&str>,
         occurrence_count: i64,
     ) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let changed = client
                 .execute(
                     &store::sql::postgres(schedules::store::SET_SCHEDULE_ENABLED),
@@ -3919,8 +3786,7 @@ impl Backend for PostgresBackend {
     }
 
     fn claim_missed(&self, id: &str, team_id: &str) -> AppResult<Option<String>> {
-        self.run(async {
-            let mut client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|mut client| async move {
             let transaction = client.transaction().await?;
             let row = transaction
                 .query_opt(
@@ -3946,8 +3812,7 @@ impl Backend for PostgresBackend {
     }
 
     fn restore_missed(&self, id: &str, team_id: &str, missed_at: &str) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(schedules::store::RESTORE_MISSED),
@@ -3959,8 +3824,7 @@ impl Backend for PostgresBackend {
     }
 
     fn due_schedules(&self, now: &str) -> AppResult<Vec<Schedule>> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             let rows = client
                 .query(
                     &store::sql::postgres(&schedules::store::due_schedules_sql()),
@@ -3977,8 +3841,7 @@ impl Backend for PostgresBackend {
         next_run_at: Option<&str>,
         occurrence_count: i64,
     ) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(schedules::store::ADVANCE_SCHEDULE),
@@ -3990,8 +3853,7 @@ impl Backend for PostgresBackend {
     }
 
     fn note_miss(&self, id: &str, missed_at: Option<&str>) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(schedules::store::NOTE_MISS),
@@ -4003,8 +3865,7 @@ impl Backend for PostgresBackend {
     }
 
     fn set_launch_block(&self, id: &str, reason: Option<&str>) -> AppResult<()> {
-        self.run(async {
-            let client = self.pool.get().await.map_err(pool_error)?;
+        self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(schedules::store::SET_LAUNCH_BLOCK),
