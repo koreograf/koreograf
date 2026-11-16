@@ -70,12 +70,10 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   let connecting = null;
   let connectDrag = null;
   let drag = null;
-  let flushNode = () => true;
   let dirty = false;
   let baseline = null;
   let historyStack = [snapshotGraph()];
   let historyIndex = 0;
-  let nameHistoryOpen = false;
   let toastTimer = null;
   const leaveGuard = () => dirty;
   const back = readonly && workflow.workflow_id
@@ -131,7 +129,6 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
             </div>` : ""}
           </div>
         </div>
-        <div class="inspector-resizer" id="inspector-resizer" role="separator" aria-orientation="vertical" aria-label="${h("resize_node_panel")}" tabindex="0"></div>
         <div class="inspector-panel" id="inspector-panel">
           <div class="inspector-bar">
             <button class="btn compact ghost inspector-toggle" type="button" id="inspector-toggle" aria-expanded="true" aria-controls="inspector" aria-label="${h("collapse_node_panel")}" title="${h("collapse_node_panel")}">−</button>
@@ -401,7 +398,6 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     connectDrag = null;
     clearConnectPreview();
     serverIssues = [];
-    flushNode = () => true;
     recomputeValidation();
     renderNodes();
     renderInspector();
@@ -410,7 +406,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   }
 
   function undo() {
-    if (!editable || !flushNode()) return;
+    if (!editable) return;
     if (historyIndex <= 0) return;
     historyIndex -= 1;
     hideToast();
@@ -418,7 +414,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   }
 
   function redo() {
-    if (!editable || !flushNode()) return;
+    if (!editable) return;
     if (historyIndex >= historyStack.length - 1) return;
     historyIndex += 1;
     hideToast();
@@ -426,7 +422,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   }
 
   function autoLayoutGraph() {
-    if (!editable || !flushNode()) return;
+    if (!editable) return;
     if (!graph.nodes.length) return;
     const before = snapshotGraph();
     const positions = new Map(layoutGraph(graph).map((position) => [String(position.id), position]));
@@ -557,28 +553,6 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     return `<span class="wf-join-badge ${all ? "all" : "any"}" title="${esc(label)}" aria-label="${esc(label)}">${h(all ? "join_badge_all" : "join_badge_any")}</span>`;
   }
 
-  function paintJoin(node) {
-    const badge = nodes.querySelector(`[data-id="${CSS.escape(node.id)}"] .wf-join-badge`);
-    if (!badge) return;
-    const count = predecessorCount(node);
-    const all = node.convergence === "all";
-    const label = t(all ? "all_of_n_predecessors" : "any_of_n_predecessors", { count });
-    badge.className = `wf-join-badge ${all ? "all" : "any"}`;
-    badge.textContent = t(all ? "join_badge_all" : "join_badge_any");
-    badge.setAttribute("title", label);
-    badge.setAttribute("aria-label", label);
-  }
-
-  function paintNodeChips(node) {
-    const element = nodes.querySelector(`[data-id="${CSS.escape(node.id)}"]`);
-    if (!element) return;
-    const template = templates.find((item) => item.id === node.template_id);
-    const chips = element.querySelector(".wf-node-chips");
-    if (!chips) return;
-    const markup = nodeChips(node, template);
-    if (chips.innerHTML !== markup) chips.innerHTML = markup;
-  }
-
   function nodeParamFields(node, template) {
     if (!template) return "";
     const over = node.overrides || {};
@@ -631,18 +605,6 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       <p class="small muted">${h("applies_only_to_this_node_the_template_stays")}</p>
       ${nodeParamFields(node, template)}
     </details>`;
-  }
-
-  function convergenceField(node) {
-    const count = predecessorCount(node);
-    if (count < 2) return `<p class="small muted">${h("convergence_needs_two_predecessors")}</p>`;
-    return `<label class="field"><span>${h("convergence")}</span>
-      <select class="fit" id="node-join">
-        <option value="any"${node.convergence !== "all" ? " selected" : ""}>${h("any_predecessor")}</option>
-        <option value="all"${node.convergence === "all" ? " selected" : ""}>${h("all_predecessors")}</option>
-      </select>
-      <span class="small muted">${h("convergence_help")}</span>
-    </label>`;
   }
 
   function edgeOffsets() {
@@ -742,7 +704,6 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   }
 
   function selectEdge(index, focus) {
-    if (!flushNode()) return;
     selectedEdge = index;
     selected = null;
     connecting = null;
@@ -752,20 +713,6 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     revealInspector();
     renderInspector();
     if (focus) focusEdge(index);
-  }
-
-  function selectNodeById(id) {
-    if (!flushNode()) return;
-    selected = id;
-    selectedEdge = null;
-    connecting = null;
-    connectDrag = null;
-    clearConnectPreview();
-    renderNodes();
-    revealInspector();
-    renderInspector();
-    const element = nodes.querySelector(`[data-id="${CSS.escape(id)}"]`);
-    if (element) element.focus();
   }
 
   function removeEdgeAt(index) {
@@ -915,7 +862,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       return;
     }
     const template = templates[0];
-    openAddNodeEditor({
+    openNodeEditor({
       id: `n${Math.random().toString(16).slice(2, 10)}`,
       template_id: template.id,
       name: template.name,
@@ -951,9 +898,8 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   }
 
   function removeNode(node) {
-    if (!editable || !flushNode()) return;
+    if (!editable) return;
     if (!graph.nodes.some((item) => item.id === node.id)) return;
-    flushNode = () => true;
     graph.nodes = graph.nodes.filter((item) => item.id !== node.id);
     graph.edges = graph.edges.filter((edge) => edge.from !== node.id && edge.to !== node.id);
     recordHistory();
@@ -982,8 +928,24 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       ${nodeParams(node, template)}`;
   }
 
-  function openAddNodeEditor(node, point, link) {
-    if (!editable || !flushNode()) return;
+  function applyNodeEdit(node, draft) {
+    const before = snapshotGraph();
+    node.name = draft.name;
+    node.template_id = draft.template_id;
+    node.convergence = draft.convergence;
+    if (draft.overrides === undefined) delete node.overrides;
+    else node.overrides = draft.overrides;
+    if (!sameJson(before, snapshotGraph())) {
+      recordHistory();
+      markDirty();
+    }
+    renderNodes();
+    renderInspector();
+  }
+
+  function openNodeEditor(node, point, link) {
+    if (!editable) return;
+    const adding = Boolean(point);
     const draftFor = (templateId, name, convergence) => {
       const draft = { ...node, name, convergence, template_id: templateId };
       if (!node.overrides) return draft;
@@ -997,9 +959,9 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       return draft;
     };
     const dialog = openDialog({
-      id: "add-node-dialog",
-      title: t("add_node"),
-      submit: t("create"),
+      id: adding ? "add-node-dialog" : "node-edit-dialog",
+      title: t(adding ? "add_node" : "edit_node"),
+      submit: t(adding ? "create" : "save"),
       body: nodeEditorFields(node),
       onSubmit: ({ form, close }) => {
         const name = form.querySelector("#node-name").value.trim();
@@ -1008,8 +970,9 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         if (!templates.some((item) => item.id === templateId)) throw new Error("create_a_template_or_a_workflow_first");
         const convergence = form.querySelector("#node-join").value === "all" ? "all" : "any";
         const draft = draftFor(templateId, name, convergence);
-        if (!readOverrides(draft, form)) return;
-        addNode(draft, point, link);
+        readOverrides(draft, form);
+        if (adding) addNode(draft, point, link);
+        else applyNodeEdit(node, draft);
         close();
       },
     });
@@ -1042,7 +1005,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   }
 
   function startConnect(node) {
-    if (!editable || !flushNode()) return;
+    if (!editable) return;
     connecting = { from: node.id };
     connectDrag = null;
     selected = node.id;
@@ -1119,15 +1082,17 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     openAddNode(point, { from: node.id, when: "success" });
   }
 
-  function focusNodePanel(id) {
-    if (selected !== id) return;
-    const field = document.querySelector("#node-name");
-    if (field) field.focus();
-  }
-
   function editNode(node) {
-    selectNodeById(node.id);
-    focusNodePanel(node.id);
+    if (!editable) return;
+    selected = node.id;
+    selectedEdge = null;
+    connecting = null;
+    connectDrag = null;
+    clearConnectPreview();
+    renderNodes();
+    revealInspector();
+    renderInspector();
+    openNodeEditor(node);
   }
 
   const nodeMenuActions = {
@@ -1269,7 +1234,6 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         if (connecting) {
           if (node.id === connecting.from) {
             event.preventDefault();
-            if (!flushNode()) return;
             connectDrag = { id: node.id, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, moved: false };
             element.setPointerCapture(event.pointerId);
             drawConnectPreview(node, localPoint(event));
@@ -1280,7 +1244,6 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
           finishConnect(node.id);
           return;
         }
-        if (!flushNode()) return;
         selected = node.id;
         selectedEdge = null;
         const point = localPoint(event);
@@ -1338,10 +1301,16 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         drag = null;
       });
       element.addEventListener("contextmenu", (event) => {
-        if (!editable || !flushNode()) return;
+        if (!editable) return;
         event.preventDefault();
         event.stopPropagation();
         openNodeMenu(node, event.clientX, event.clientY, element, nodeMenuActions);
+      });
+      element.addEventListener("dblclick", (event) => {
+        if (!editable || event.target.closest(".node-menu-button, .wf-port")) return;
+        event.preventDefault();
+        event.stopPropagation();
+        editNode(node);
       });
       if (menuButton) {
         menuButton.addEventListener("pointerdown", (event) => event.stopPropagation());
@@ -1355,7 +1324,6 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         button.addEventListener("pointerdown", (event) => event.stopPropagation());
         button.addEventListener("click", (event) => {
           event.stopPropagation();
-          if (!flushNode()) return;
           const when = button.dataset.addPort;
           const offset = PORT_OFFSETS[when] || PORT_OFFSETS.success;
           openAddNode({ x: node.x + 260, y: node.y + offset }, { from: node.id, when });
@@ -1382,7 +1350,6 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
             if (node.id !== connecting.from) finishConnect(node.id);
             return;
           }
-          if (!flushNode()) return;
           if (event.key === "Enter") {
             editNode(node);
             return;
@@ -1423,94 +1390,6 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
 
   function edgeWhenText(when) {
     return t(edgeWhenLabel(when));
-  }
-
-  function targetOptions(fromId, current, placeholder) {
-    const options = placeholder ? [`<option value="">${h("choose_target")}</option>`] : [];
-    graph.nodes.forEach((item) => {
-      if (item.id === fromId) return;
-      options.push(`<option value="${esc(item.id)}"${item.id === current ? " selected" : ""}>${esc(item.name)}</option>`);
-    });
-    return options.join("");
-  }
-
-  function outgoingRows(node) {
-    return graph.edges
-      .map((edge, index) => ({ edge, index }))
-      .filter(({ edge }) => edge.from === node.id)
-      .map(({ edge, index }) => {
-        const when = ["success", "failure", "always"].includes(edge.when) ? edge.when : "always";
-        const target = graph.nodes.find((item) => item.id === edge.to);
-        const targetName = target ? target.name : edge.to;
-        return `<div class="edge-row" data-edge-index="${index}" data-edge-when="${when}">
-          <span class="pill ${when}">${h(edgeWhenLabel(when))}</span>
-          <select class="fit edge-target" data-edge-index="${index}" aria-label="${h("target")}: ${esc(targetName)}">${targetOptions(node.id, edge.to, false)}</select>
-          <button class="btn compact ghost" type="button" data-remove-edge="${index}" aria-label="${h("delete_edge")}: ${esc(targetName)}">${h("remove")}</button>
-        </div>`;
-      })
-      .join("");
-  }
-
-  function changeOutgoing(node, index, toId) {
-    const edge = graph.edges[index];
-    if (!edge || edge.from !== node.id) return false;
-    if (!toId || toId === node.id || !graph.nodes.some((item) => item.id === toId)) return false;
-    if (graph.edges.some((item, position) => position !== index && item.from === edge.from && item.to === toId && item.when === edge.when)) {
-      setHint("the_same_edge_is_present_twice");
-      return false;
-    }
-    if (wouldCreateCycle(graph, edge.from, toId, index)) {
-      setHint("connection_would_create_a_cycle");
-      return false;
-    }
-    edge.to = toId;
-    recordHistory();
-    markDirty();
-    setHint("edge_changed");
-    drawEdges();
-    renderNodes();
-    return true;
-  }
-
-  function addOutgoing(node) {
-    const host = document.querySelector("#inspector");
-    const when = host.querySelector("#link-when").value;
-    const toId = host.querySelector("#link-target").value;
-    if (!toId || toId === node.id || !graph.nodes.some((item) => item.id === toId)) {
-      setHint("choose_target");
-      return;
-    }
-    if (edgeExists(node.id, toId, when)) {
-      setHint("the_same_edge_is_present_twice");
-      return;
-    }
-    if (wouldCreateCycle(graph, node.id, toId)) {
-      setHint("connection_would_create_a_cycle");
-      return;
-    }
-    graph.edges.push({ from: node.id, to: toId, when });
-    connecting = null;
-    connectDrag = null;
-    clearConnectPreview();
-    recordHistory();
-    markDirty();
-    setHint("edge_added", { when: edgeWhenText(when), from: node.name, to: graph.nodes.find((item) => item.id === toId).name });
-    drawEdges();
-    renderNodes();
-    renderInspector();
-  }
-
-  function removeOutgoing(node, index) {
-    const edge = graph.edges[index];
-    if (!edge || edge.from !== node.id) return;
-    graph.edges.splice(index, 1);
-    recordHistory();
-    markDirty();
-    setHint("edge_removed");
-    drawEdges();
-    renderNodes();
-    renderInspector();
-    showToast("edge_deleted");
   }
 
   function freeNodePosition() {
@@ -1557,24 +1436,14 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     return element.value == null ? "" : String(element.value);
   }
 
-  function note(message) {
-    const hint = document.querySelector("#wf-hint");
-    if (hint) hint.textContent = message;
-  }
-
-  function readOverrides(node, root = document) {
+  function readOverrides(node, root) {
     const template = templates.find((item) => item.id === node.template_id);
     const extraField = root.querySelector("#node-extra");
-    if (!template || !extraField) return true;
-    const fromDialog = root !== document;
+    if (!template || !extraField) return;
     const fail = (key, vars) => {
-      if (fromDialog) {
-        const error = new Error(key);
-        if (vars) error.vars = vars;
-        throw error;
-      }
-      note(t(key, vars));
-      return false;
+      const error = new Error(key);
+      if (vars) error.vars = vars;
+      throw error;
     };
     const over = {};
     const templateSpec = template.spec || {};
@@ -1595,8 +1464,8 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         if (templateHasForks) spec.forks = null;
       } else {
         const forks = Number(forksRaw);
-        if (!Number.isInteger(forks)) return fail("forks_is_a_whole_number");
-        if (forks < 1 || forks > 50) return fail("forks_is_a_number_from_1_to_50");
+        if (!Number.isInteger(forks)) fail("forks_is_a_whole_number");
+        if (forks < 1 || forks > 50) fail("forks_is_a_number_from_1_to_50");
         if (forks !== templateForks) spec.forks = forks;
       }
       const diff = Boolean(root.querySelector("#node-diff") && root.querySelector("#node-diff").checked);
@@ -1615,25 +1484,10 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     }
     const credentialId = fieldValue(root, "#node-credential");
     if (credentialId !== (template.credential_id || "")) over.credential_id = credentialId;
-    let extra;
-    try {
-      extra = jsonObject(extraField.value, "extra_variables");
-    } catch (error) {
-      if (fromDialog) throw error;
-      note(t(error.message, error.vars));
-      return false;
-    }
+    const extra = jsonObject(extraField.value, "extra_variables");
     if (!sameJson(extra, template.extra_vars || {})) over.extra_vars = extra;
     if (Object.keys(over).length) node.overrides = over;
     else delete node.overrides;
-    paintNodeChips(node);
-    if (!fromDialog) {
-      const hint = document.querySelector("#wf-hint");
-      if (hint && (hint.textContent === t("forks_is_a_whole_number") || hint.textContent === t("forks_is_a_number_from_1_to_50") || hint.textContent === t("extra_variables_are_not_valid_json") || hint.textContent === t("extra_variables_must_be_a_json_object"))) {
-        hint.textContent = "";
-      }
-    }
-    return true;
   }
 
   function detailRow(label, value) {
@@ -1693,22 +1547,63 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     };
     const outgoing = graph.edges.filter((edge) => edge.from === node.id).map((edge) => edgeRow(edge.when, nodeNameById(edge.to)));
     const incoming = graph.edges.filter((edge) => edge.to === node.id).map((edge) => edgeRow(edge.when, nodeNameById(edge.from)));
-    const group = (label, rows) => `<p class="small muted">${h(label)}</p>${rows.length ? `<div class="edge-list">${rows.join("")}</div>` : `<p class="small muted">${h("none")}</p>`}`;
-    return `${group("outgoing", outgoing)}${group("incoming", incoming)}`;
+    const group = (label, rows, direction) => `<p class="small muted">${h(label)}</p>${rows.length ? `<div class="edge-list" data-direction="${direction}">${rows.join("")}</div>` : `<p class="small muted">${h("none")}</p>`}`;
+    return `${group("outgoing", outgoing, "outgoing")}${group("incoming", incoming, "incoming")}`;
   }
 
-  function renderViewerInspector(host) {
-    const badge = `<span class="pill read-only">${h("read_only")}</span>`;
-    const hint = `<p class="small muted">${esc(readOnlyHint())}</p>`;
+  function openEdgeEditor(index) {
+    const edge = graph.edges[index];
+    if (!editable || !edge) return;
+    const dialog = openDialog({
+      id: "edge-edit-dialog",
+      title: t("edit_edge"),
+      body: `<p class="edge-ends"><span class="mono">${esc(nodeNameById(edge.from))}</span><span aria-hidden="true">→</span><span class="mono">${esc(nodeNameById(edge.to))}</span></p>
+        <label class="field"><span>${h("when")}</span>
+          <select class="fit" id="edge-when">
+            ${["success", "failure", "always"].map((when) => `<option value="${when}"${edge.when === when ? " selected" : ""}>${h(edgeWhenLabel(when))}</option>`).join("")}
+          </select>
+        </label>`,
+      danger: `<button class="btn danger" type="button" data-edge-delete>${h("delete_edge")}</button>`,
+      onSubmit: ({ form, close }) => {
+        const when = form.querySelector("#edge-when").value;
+        if (when !== edge.when && graph.edges.some((item, position) => position !== index && item.from === edge.from && item.to === edge.to && item.when === when)) {
+          throw new Error("the_same_edge_is_present_twice");
+        }
+        if (when !== edge.when) {
+          edge.when = when;
+          recordHistory();
+          markDirty();
+          setHint("edge_changed");
+          drawEdges();
+          renderInspector();
+        }
+        close();
+      },
+    });
+    dialog.overlay.querySelector("[data-edge-delete]").addEventListener("click", () => {
+      dialog.clean();
+      dialog.close();
+      if (removeEdgeAt(index)) canvas.focus();
+    });
+  }
+
+  function renderDetailsInspector(host) {
+    const badge = editable ? "" : `<span class="pill read-only">${h("read_only")}</span>`;
+    const viewerHint = `<p class="small muted">${esc(readOnlyHint())}</p>`;
     if (selectedEdge !== null && graph.edges[selectedEdge]) {
       const edge = graph.edges[selectedEdge];
       const when = ["success", "failure", "always"].includes(edge.when) ? edge.when : "always";
+      const hint = editable ? `<p class="small muted">${h("edge_details_hint")}</p>` : viewerHint;
+      const edit = editable ? `<button class="btn" id="edge-edit" type="button">${h("edit_edge")}</button>` : "";
       host.innerHTML = `<div class="inspector-block">
         <div class="spread"><h2>${h("edge")}</h2>${badge}</div>
         <p class="edge-ends"><span class="mono">${esc(nodeNameById(edge.from))}</span><span aria-hidden="true">→</span><span class="mono">${esc(nodeNameById(edge.to))}</span></p>
         ${detailList([detailRow(t("when"), `<span class="pill ${when}">${h(edgeWhenLabel(when))}</span>`)])}
+        ${edit}
         ${hint}
       </div>`;
+      const editButton = host.querySelector("#edge-edit");
+      if (editButton) editButton.addEventListener("click", () => openEdgeEditor(selectedEdge));
       return;
     }
     const node = graph.nodes.find((item) => item.id === selected);
@@ -1716,12 +1611,13 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       host.innerHTML = `<div class="inspector-block">
         <div class="spread"><h2>${h("view")}</h2>${badge}</div>
         <p class="small muted">${h("select_a_node_or_an_edge_to_see_its_details")}</p>
-        ${hint}
+        ${editable ? "" : viewerHint}
       </div>`;
       return;
     }
     const template = templates.find((item) => item.id === node.template_id);
     const tool = template ? toolKey(template.tool) : "";
+    const hint = editable ? `<p class="small muted">${h("node_details_hint")}</p>` : viewerHint;
     host.innerHTML = `<div class="node-panel">
       <div class="node-panel-head">
         <div class="spread"><h2>${esc(node.name)}</h2>${badge}</div>
@@ -1751,180 +1647,12 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   }
 
   function renderInspector() {
-    if (!flushNode()) return;
-    flushNode = () => true;
-    nameHistoryOpen = false;
     const host = document.querySelector("#inspector");
     if (readonly) {
       host.innerHTML = `<h2>${h("run_2")}</h2><p class="small"><span id="run-state" class="pill ${esc(workflow.status || "pending")}">${esc(statusLabel(workflow.status || "pending"))}</span></p>${runSummary()}${runLegend()}`;
       return;
     }
-    if (!editable) {
-      renderViewerInspector(host);
-      return;
-    }
-    const node = graph.nodes.find((item) => item.id === selected);
-    if (selectedEdge !== null && graph.edges[selectedEdge]) {
-      const edge = graph.edges[selectedEdge];
-      const from = graph.nodes.find((item) => item.id === edge.from);
-      const to = graph.nodes.find((item) => item.id === edge.to);
-      const fromName = from ? from.name : edge.from;
-      const toName = to ? to.name : edge.to;
-      host.innerHTML = `<div class="inspector-block">
-          <h2>${h("edge")}</h2>
-          <p class="edge-ends">
-            <button class="btn compact ghost" type="button" data-edge-node="from" aria-label="${h("select_node", { name: fromName })}">${esc(fromName)}</button>
-            <span aria-hidden="true">→</span>
-            <button class="btn compact ghost" type="button" data-edge-node="to" aria-label="${h("select_node", { name: toName })}">${esc(toName)}</button>
-          </p>
-          <label class="field"><span>${h("when")}</span>
-            <select class="fit" id="edge-when">
-              ${["success", "failure", "always"].map((when) => `<option value="${when}"${edge.when === when ? " selected" : ""}>${h(edgeWhenLabel(when))}</option>`).join("")}
-            </select>
-          </label>
-          <button class="btn danger" id="edge-delete" type="button">${h("delete_edge")}</button>
-        </div>`;
-      host.querySelectorAll("[data-edge-node]").forEach((button) => {
-        button.addEventListener("click", () => selectNodeById(button.dataset.edgeNode === "from" ? edge.from : edge.to));
-      });
-      host.querySelector("#edge-when").addEventListener("change", (event) => {
-        const next = event.target.value;
-        if (next !== edge.when && graph.edges.some((item, index) => index !== selectedEdge && item.from === edge.from && item.to === edge.to && item.when === next)) {
-          setHint("the_same_edge_is_present_twice");
-          event.target.value = edge.when;
-          return;
-        }
-        edge.when = next;
-        recordHistory();
-        drawEdges();
-        markDirty();
-        setHint("edge_changed");
-      });
-      host.querySelector("#edge-delete").addEventListener("click", () => {
-        if (removeEdgeAt(selectedEdge)) canvas.focus();
-      });
-      return;
-    }
-    if (!node) {
-      host.innerHTML = `<p class="small muted">${h("right_click_empty_canvas_to_add_a_node")}</p>
-        <p class="small muted">${h("an_empty_graph_can_be_saved_but_not")}</p>
-        <p class="small muted">${h("select_a_node_to_connect_it")}</p>`;
-      return;
-    }
-    host.innerHTML = `<div class="node-panel">
-        <div class="node-panel-head">
-          <label class="field required"><span>${h("name")}</span><input id="node-name" value="${esc(node.name)}" required></label>
-          <label class="field"><span>${h("template")}</span><select class="fit" id="node-template">${selectOptions(templates, node.template_id, false, (row) => row.name)}</select></label>
-          <button class="btn danger compact" id="node-delete" type="button">${h("delete_node")}</button>
-        </div>
-        <details class="node-section" open>
-          <summary>${h("general")}</summary>
-          <div class="node-section-body">${convergenceField(node)}</div>
-        </details>
-        <details class="node-section" open>
-          <summary>${h("parameters")}</summary>
-          <div class="node-section-body">
-            <p class="small muted">${h("applies_only_to_this_node_the_template_stays")}</p>
-            ${nodeParamFields(node, templates.find((item) => item.id === node.template_id))}
-          </div>
-        </details>
-        <details class="node-section" open>
-          <summary>${h("connections")}</summary>
-          <div class="node-section-body">
-            <button class="btn pill primary" id="node-connect" type="button">${h("connect")}</button>
-            <p class="small muted">${h("connect_help")}</p>
-            <div class="edge-list" id="outgoing-edges">${outgoingRows(node)}</div>
-            <div class="edge-add">
-              <label class="field"><span>${h("when")}</span>
-                <select class="fit" id="link-when">
-                  ${["success", "failure", "always"].map((when) => `<option value="${when}">${h(edgeWhenLabel(when))}</option>`).join("")}
-                </select>
-              </label>
-              <label class="field"><span>${h("target")}</span><select class="fit" id="link-target">${targetOptions(node.id, "", true)}</select></label>
-              <button class="btn" id="link-add" type="button">${h("add_edge")}</button>
-            </div>
-          </div>
-        </details>
-      </div>`;
-    host.querySelector("#node-connect").addEventListener("click", () => startConnect(node));
-    host.querySelector("#node-name").addEventListener("input", (event) => {
-      node.name = event.target.value;
-      const label = nodes.querySelector(`[data-id="${CSS.escape(node.id)}"] strong`);
-      if (label) label.textContent = node.name;
-      if (nameHistoryOpen) {
-        historyStack = historyStack.slice(0, historyIndex + 1);
-        historyStack[historyIndex] = snapshotGraph();
-        if (historyIndex > 0 && sameJson(historyStack[historyIndex], historyStack[historyIndex - 1])) {
-          historyStack.pop();
-          historyIndex -= 1;
-        }
-        updateHistoryButtons();
-      } else {
-        recordHistory();
-        nameHistoryOpen = true;
-      }
-      markDirty();
-    });
-    host.querySelector("#node-name").addEventListener("change", () => {
-      nameHistoryOpen = false;
-    });
-    host.querySelector("#node-name").addEventListener("blur", () => {
-      nameHistoryOpen = false;
-    });
-    host.querySelector("#node-template").addEventListener("change", (event) => {
-      const next = event.target.value;
-      if (!readOverrides(node)) {
-        Array.from(event.target.options).forEach((option) => {
-          if (option.value === node.template_id) option.setAttribute("selected", "");
-          else option.removeAttribute("selected");
-        });
-        return;
-      }
-      if (node.overrides) delete node.overrides.spec;
-      if (node.overrides && node.overrides.inventory_id === undefined && node.overrides.credential_id === undefined && node.overrides.extra_vars === undefined) {
-        delete node.overrides;
-      }
-      node.template_id = next;
-      recordHistory();
-      flushNode = () => true;
-      markDirty();
-      renderNodes();
-      renderInspector();
-    });
-    const join = host.querySelector("#node-join");
-    if (join) {
-      join.addEventListener("change", (event) => {
-        node.convergence = event.target.value;
-        paintJoin(node);
-        recordHistory();
-        markDirty();
-      });
-    }
-    flushNode = () => {
-      const before = snapshotGraph();
-      if (!readOverrides(node)) return false;
-      if (!sameJson(before, snapshotGraph())) recordHistory();
-      return true;
-    };
-    ["#node-inventory", "#node-credential", "#node-job-type", "#node-verbosity", "#node-diff", "#node-action", "#node-forks", "#node-tags", "#node-skip-tags", "#node-limit", "#node-extra"].forEach((id) => {
-      const element = host.querySelector(id);
-      if (!element) return;
-      element.addEventListener("input", markDirty);
-      element.addEventListener("change", () => { if (flushNode()) markDirty(); });
-    });
-    host.querySelector("#link-add").addEventListener("click", () => addOutgoing(node));
-    host.querySelectorAll(".edge-target").forEach((select) => {
-      select.addEventListener("change", (event) => {
-        const index = Number(event.target.dataset.edgeIndex);
-        const edge = graph.edges[index];
-        if (!edge) return;
-        if (!changeOutgoing(node, index, event.target.value)) event.target.value = edge.to;
-      });
-    });
-    host.querySelectorAll("[data-remove-edge]").forEach((button) => {
-      button.addEventListener("click", () => removeOutgoing(node, Number(button.dataset.removeEdge)));
-    });
-    host.querySelector("#node-delete").addEventListener("click", () => removeNode(node));
+    renderDetailsInspector(host);
   }
 
   svg.addEventListener("click", (event) => {
@@ -1955,7 +1683,6 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       cancelConnect();
       return;
     }
-    if (!flushNode()) return;
     if (editable) {
       selected = null;
       selectedEdge = null;
@@ -2011,7 +1738,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   }
 
   function canvasContextMenu(event) {
-    if (!editable || !flushNode()) return;
+    if (!editable) return;
     if (event.target.closest(".wf-node, .canvas-controls, .minimap")) return;
     event.preventDefault();
     openCanvasMenu(localPoint(event), event.clientX, event.clientY, openAddNode);
@@ -2053,35 +1780,6 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   const redoButton = document.querySelector("#wf-redo");
   if (redoButton) redoButton.addEventListener("click", redo);
 
-  const resizer = document.querySelector("#inspector-resizer");
-  if (resizer && editorBody && inspector) {
-    let resizePointer = null;
-    const setPanelWidth = (width) => {
-      const limit = Math.max(260, Math.min(560, editorBody.getBoundingClientRect().width - 320));
-      editorBody.style.setProperty("--inspector-width", `${Math.round(Math.min(Math.max(width, 260), limit))}px`);
-    };
-    resizer.addEventListener("pointerdown", (event) => {
-      resizePointer = event.pointerId;
-      resizer.setPointerCapture(event.pointerId);
-      event.preventDefault();
-    });
-    resizer.addEventListener("pointermove", (event) => {
-      if (resizePointer !== event.pointerId) return;
-      setPanelWidth(editorBody.getBoundingClientRect().right - event.clientX);
-    });
-    const endResize = (event) => {
-      if (resizePointer !== event.pointerId) return;
-      resizePointer = null;
-    };
-    resizer.addEventListener("pointerup", endResize);
-    resizer.addEventListener("pointercancel", endResize);
-    resizer.addEventListener("keydown", (event) => {
-      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-      event.preventDefault();
-      const step = event.key === "ArrowLeft" ? 20 : -20;
-      setPanelWidth(inspector.getBoundingClientRect().width + step);
-    });
-  }
   if (inspectorToggle) {
     inspectorToggle.addEventListener("click", () => setInspectorCollapsed(!inspectorCollapsed, false));
   }
@@ -2119,7 +1817,6 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     }
     if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
     event.preventDefault();
-    if (!flushNode()) return;
     const point = freeNodePosition();
     const screen = viewport.graphToScreen(point);
     const rect = canvas.getBoundingClientRect();
@@ -2227,7 +1924,6 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     connectDrag = null;
     clearConnectPreview();
     serverIssues = [];
-    flushNode = () => true;
     historyStack = [snapshotGraph()];
     historyIndex = 0;
     baseline = currentState();
@@ -2328,7 +2024,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   }
 
   async function saveWorkflow() {
-    if (!editable || !flushNode()) return false;
+    if (!editable) return false;
     return saveGraph();
   }
 
@@ -2370,7 +2066,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   const launch = document.querySelector("#wf-launch");
   if (launch) {
     launch.addEventListener("click", async () => {
-      if (launch.disabled || !flushNode()) return;
+      if (launch.disabled) return;
       let mode = "current";
       if (dirty) {
         mode = await chooseLaunchMode();

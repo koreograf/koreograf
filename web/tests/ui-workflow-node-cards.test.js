@@ -92,9 +92,10 @@ test("editing an override updates the card chips", async () => {
 
   select("n1");
   assert.equal(card("n1").querySelector('[data-chip="limit"]'), null, "an unset limit shows a chip");
-  const limit = document.querySelector("#node-limit");
-  limit.value = "web";
-  limit.dispatchEvent({ type: "change", target: limit });
+  card("n1").dispatchEvent({ type: "dblclick" });
+  const dialog = document.querySelector("#node-edit-dialog");
+  dialog.querySelector("#node-limit").value = "web";
+  dialog.querySelector(".dialog-form").dispatchEvent({ type: "submit", preventDefault() {} });
   assert.equal(card("n1").querySelector('[data-chip="limit"]').innerHTML, "Limit: web");
   assert.equal(card("n1").querySelector('[data-chip="tags"]'), null, "an unset tags override shows a chip");
 });

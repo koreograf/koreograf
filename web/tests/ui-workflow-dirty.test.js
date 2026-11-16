@@ -64,10 +64,14 @@ test("moving or renaming a node marks the editor dirty and registers the leave g
   assert.ok(!document.querySelector("#wf-launch").classList.contains("primary"), "Launch stays primary while dirty");
 
   selectNode();
-  const name = document.querySelector("#node-name");
-  name.value = "Renamed";
-  name.dispatchEvent({ type: "input", target: name });
-  assert.equal(document.querySelector('[data-id="n1"] strong').textContent, "Renamed");
+  assert.equal(document.querySelector("#node-name"), null, "the panel still has a live node name field");
+  document.querySelector('[data-id="n1"]').dispatchEvent({ type: "dblclick" });
+  const dialog = document.querySelector("#node-edit-dialog");
+  dialog.querySelector("#node-name").value = "Renamed";
+  dialog.querySelector(".dialog-form").dispatchEvent({ type: "submit", preventDefault() {} });
+  await settle();
+  const strong = document.querySelector('[data-id="n1"] strong');
+  assert.equal(strong.textContent || strong.innerHTML, "Renamed");
   assert.equal(statusText(), "unsaved_changes", "renaming a node does not mark the editor dirty");
 });
 
@@ -154,18 +158,24 @@ test("Ctrl+S and Cmd+S save a dirty editor and do nothing while clean", async ()
   assert.equal(statusText(), "all_changes_saved");
 });
 
-test("typing an override marks the editor dirty before the field loses focus", async () => {
+test("saving an override in the overlay marks the editor dirty", async () => {
   const { calls } = await mount();
   selectNode();
-  const extra = document.querySelector("#node-extra");
+  document.querySelector('[data-id="n1"]').dispatchEvent({ type: "dblclick" });
+  const dialog = document.querySelector("#node-edit-dialog");
+  const extra = dialog.querySelector("#node-extra");
   extra.value = '{"typed": true}';
   extra.dispatchEvent({ type: "input", target: extra });
-  assert.equal(statusText(), "unsaved_changes", "typing an override does not mark the editor dirty");
+  assert.equal(statusText(), "all_changes_saved", "typing in the overlay marked the editor dirty before Save");
+
+  dialog.querySelector(".dialog-form").dispatchEvent({ type: "submit", preventDefault() {} });
+  await settle();
+  assert.equal(statusText(), "unsaved_changes", "saving an override does not mark the editor dirty");
 
   document.querySelector("#canvas").dispatchEvent({ type: "keydown", key: "s", ctrlKey: true, preventDefault() {} });
   await settle();
   const puts = calls.filter((call) => call.method === "PUT");
-  assert.equal(puts.length, 1, "Ctrl+S did not save the focused override");
+  assert.equal(puts.length, 1, "Ctrl+S did not save the override");
   const saved = JSON.parse(puts[0].body).graph.nodes.find((node) => node.id === "n1");
   assert.deepEqual(saved.overrides.extra_vars, { typed: true });
 });

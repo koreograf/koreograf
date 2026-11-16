@@ -93,10 +93,12 @@ test("selecting a node shows the template and overrides as read-only details", a
   assert.match(html, /All predecessors/, "the convergence is missing");
   assert.match(html, /Outgoing/);
   assert.match(html, /Incoming/);
-  for (const selector of ["#node-name", "#node-template", "#node-delete", "#node-connect", "#link-add", "#link-when", "#link-target"]) {
+  for (const selector of ["#node-name", "#node-template", "#node-delete", "#node-connect", "#link-add", "#link-when", "#link-target", "#edge-edit"]) {
     assert.equal(inspector.querySelector(selector), null, `the read-only panel has ${selector}`);
   }
   assert.equal(inspector.querySelectorAll("input, select, button").length, 0, "the read-only panel has an edit control");
+  assert.equal(document.querySelector("#node-edit-dialog"), null, "a viewer sees an edit overlay");
+  assert.equal(document.querySelector("#edge-edit-dialog"), null, "a viewer sees an edge edit overlay");
 });
 
 test("selecting an edge shows its type and endpoints as read-only details", async () => {

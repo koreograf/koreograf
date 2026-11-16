@@ -56,6 +56,18 @@ async function pressUntilFocused(page, key, predicate, attempts = 40) {
   throw new Error(`focus did not reach the expected control after ${attempts} ${key} presses`);
 }
 
+async function clickEdge(page, locator, offset = 5) {
+  const point = await locator.evaluate((element) => {
+    const middle = element.getPointAtLength(element.getTotalLength() / 2);
+    const matrix = element.getScreenCTM();
+    return {
+      x: middle.x * matrix.a + middle.y * matrix.c + matrix.e,
+      y: middle.x * matrix.b + middle.y * matrix.d + matrix.f,
+    };
+  });
+  await page.mouse.click(point.x + offset, point.y + offset);
+}
+
 test("an administrator navigates every route, launches the demo shell job and switches language", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("button", { name: catalog.de.signIn })).toBeVisible();
@@ -162,39 +174,32 @@ test("an administrator navigates every route, launches the demo shell job and sw
   await expect(addDialog).toHaveCount(0);
   const added = page.locator(".wf-node", { hasText: "Extra check" });
   await expect(added).toBeVisible();
-  await expect(page.locator("#node-name")).toHaveValue("Extra check");
-  await expect(page.locator("#node-template option:checked")).toHaveText("Healthcheck");
-  await expect(page.locator("#node-extra")).toHaveValue(/"alert": "added"/);
-  await expect(page.locator("#inspector #add-node")).toHaveCount(0);
+  await added.click();
+  const inspector = page.locator("#inspector");
+  await expect(inspector).toContainText("Extra check");
+  await expect(inspector).toContainText("Healthcheck");
+  await expect(inspector).toContainText("added");
+  await expect(inspector.locator("#node-name")).toHaveCount(0);
+  await expect(inspector.locator("#add-node")).toHaveCount(0);
 
-  await page.locator('.wf-node[data-id="check"]').click();
-  await expect(page.locator("#outgoing-edges .edge-row")).toHaveCount(2);
-  await page.locator("#link-when").selectOption("success");
-  await page.locator("#link-target").selectOption({ label: "Extra check" });
-  await page.locator("#link-add").click();
-  await expect(page.locator("#outgoing-edges .edge-row")).toHaveCount(3);
+  await page.getByRole("button", { name: "Actions for Healthcheck", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Connect", exact: true }).click();
+  await added.click();
+  const edgeType = page.getByRole("dialog");
+  await expect(edgeType.getByRole("heading", { name: "Connect Healthcheck to Extra check" })).toBeVisible();
+  await edgeType.getByRole("button", { name: "On success", exact: true }).click();
   await expect(page.locator("#edges path.success")).toHaveCount(2);
-
-  const successRows = page.locator('#outgoing-edges .edge-row[data-edge-when="success"]');
-  await expect(successRows).toHaveCount(2);
-  await successRows.nth(0).locator(".edge-target").selectOption("escalate");
-  await expect(page.locator("#wf-hint")).toHaveText("Edge changed.");
-  await expect(page.locator("#outgoing-edges .edge-row")).toHaveCount(3);
-  await expect(page.locator("#edges path.success")).toHaveCount(2);
-  await expect(page.locator('#outgoing-edges .edge-row[data-edge-when="success"] .edge-target option:checked')).toHaveText(["Eskalation", "Extra check"]);
-
-  await successRows.nth(1).locator("[data-remove-edge]").click();
-  await expect(page.locator("#wf-hint")).toHaveText("Edge removed.");
-  await expect(page.locator("#outgoing-edges .edge-row")).toHaveCount(2);
-  await expect(page.locator("#edges path.success")).toHaveCount(1);
-  await expect(page.locator("#edges path.failure")).toHaveCount(1);
-  await expect(page.locator('#outgoing-edges .edge-row[data-edge-when="success"] .edge-target option:checked')).toHaveText("Eskalation");
 
   await added.click();
-  await page.locator("#node-name").fill("Extra check edited");
+  await page.getByRole("button", { name: "Actions for Extra check", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Edit", exact: true }).click();
+  const editNode = page.getByRole("dialog");
+  await expect(editNode.getByRole("heading", { name: "Edit node" })).toBeVisible();
+  await editNode.locator("#node-name").fill("Extra check edited");
+  await editNode.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(editNode).toHaveCount(0);
+  await expect(page.locator(".wf-node", { hasText: "Extra check edited" })).toBeVisible();
   await expect(page.locator("#wf-status")).toHaveText("Unsaved changes");
-  await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "Edit node" })).toHaveCount(0);
 
   await nav.getByRole("link", { name: "Jobs", exact: true }).click();
   const discard = page.getByRole("dialog");
@@ -216,7 +221,13 @@ test("an administrator navigates every route, launches the demo shell job and sw
   const saved = page.locator(".wf-node", { hasText: "Extra check edited" });
   await expect(saved).toBeVisible();
   await saved.click();
-  await page.locator("#node-name").fill("Unsaved check");
+  await page.getByRole("button", { name: "Actions for Extra check edited", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Edit", exact: true }).click();
+  const unsavedEdit = page.getByRole("dialog");
+  await expect(unsavedEdit.getByRole("heading", { name: "Edit node" })).toBeVisible();
+  await unsavedEdit.locator("#node-name").fill("Unsaved check");
+  await unsavedEdit.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(unsavedEdit).toHaveCount(0);
   await expect(page.locator("#wf-status")).toHaveText("Unsaved changes");
 
   await page.getByRole("button", { name: "Launch", exact: true }).click();
@@ -292,13 +303,26 @@ test("the workflow editor connects, retypes and removes an edge with the keyboar
     return Boolean(active && active.closest("#edges") && label && label.includes("Keyboard Beta") && label.includes("Keyboard Alpha"));
   });
   await page.keyboard.press("Enter");
-  await pressUntilFocused(page, "Tab", () => document.activeElement && document.activeElement.id === "edge-when");
-  await page.keyboard.press("ArrowDown");
+  await pressUntilFocused(page, "Tab", () => document.activeElement && document.activeElement.id === "edge-edit");
+  await page.keyboard.press("Enter");
+  const edgeDialog = page.getByRole("dialog");
+  await expect(edgeDialog.getByRole("heading", { name: "Edit edge" })).toBeVisible();
+  await edgeDialog.locator("#edge-when").selectOption("failure");
+  await edgeDialog.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.locator("#wf-hint")).toHaveText("Edge changed.");
 
-  await page.keyboard.press("Tab");
-  await expect(page.locator("#edge-delete")).toBeFocused();
+  await focusCanvas(page);
+  await pressUntilFocused(page, "Tab", () => {
+    const active = document.activeElement;
+    const label = active && active.getAttribute("aria-label");
+    return Boolean(active && active.closest("#edges") && label && label.includes("Keyboard Beta") && label.includes("Keyboard Alpha"));
+  });
   await page.keyboard.press("Enter");
+  await pressUntilFocused(page, "Tab", () => document.activeElement && document.activeElement.id === "edge-edit");
+  await page.keyboard.press("Enter");
+  const removeDialog = page.getByRole("dialog");
+  await expect(removeDialog.getByRole("heading", { name: "Edit edge" })).toBeVisible();
+  await removeDialog.getByRole("button", { name: "Delete edge", exact: true }).click();
   await expect(page.locator("#wf-hint")).toHaveText("Edge removed.");
   await expect(page.locator("#edges path")).toHaveCount(edgeCount);
 });
@@ -308,25 +332,25 @@ test("the workflow edge hit area selects a failure edge and names its nodes", as
   await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
   await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
   await page.locator('.wf-node[data-id="check"]').click();
-  await expect(page.locator('#outgoing-edges .edge-row[data-edge-when="success"] .pill')).toHaveText("On success");
-  await expect(page.locator('#outgoing-edges .edge-row[data-edge-when="failure"] .pill')).toHaveText("On failure");
+  const inspector = page.locator("#inspector");
+  const outgoing = inspector.locator('[data-direction="outgoing"] .edge-row');
+  await expect(outgoing.first()).toBeVisible();
+  await expect(outgoing.locator(".pill.failure")).toHaveText("On failure");
+  expect(await outgoing.locator(".pill.success").count()).toBeGreaterThanOrEqual(1);
   const failure = page.locator("#edges path.failure");
   await expect(failure).toHaveCount(1);
-  const point = await failure.evaluate((element) => {
-    const middle = element.getPointAtLength(element.getTotalLength() / 2);
-    const matrix = element.getScreenCTM();
-    return {
-      x: middle.x * matrix.a + middle.y * matrix.c + matrix.e,
-      y: middle.x * matrix.b + middle.y * matrix.d + matrix.f,
-    };
-  });
-  await page.mouse.click(point.x + 5, point.y + 5);
-  await expect(page.locator("#edge-when")).toHaveValue("failure");
-  await expect(page.locator("#edge-when option:checked")).toHaveText("On failure");
-  const inspector = page.locator("#inspector");
+  await clickEdge(page, failure);
+  await expect(page.locator("#edge-when")).toHaveCount(0);
+  await expect(inspector).toContainText("On failure");
   await expect(inspector).toContainText("Healthcheck");
   await expect(inspector).toContainText("Eskalation");
   await expect(inspector).not.toContainText("Error");
+  await page.locator("#edge-edit").click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "Edit edge" })).toBeVisible();
+  await expect(dialog.locator("#edge-when")).toHaveValue("failure");
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
 });
 
 test("the workflow canvas fits, zooms and pans", async ({ page }) => {
@@ -369,7 +393,7 @@ test("the workflow canvas fits, zooms and pans", async ({ page }) => {
   await expect.poll(async () => Number(await page.locator("#board").getAttribute("data-view-x"))).toBeGreaterThan(viewBefore);
 });
 
-test("the node panel edits in place and fits at 1024 px", async ({ page }) => {
+test("a left click shows a read-only summary and right-click Edit opens the overlay", async ({ page }) => {
   await page.setViewportSize({ width: 1024, height: 900 });
   await signInInEnglish(page);
   await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
@@ -377,17 +401,22 @@ test("the node panel edits in place and fits at 1024 px", async ({ page }) => {
 
   const node = page.locator('.wf-node[data-id="check"]');
   await node.click();
-  await expect(page.locator("#inspector #node-name")).toBeVisible();
+  const inspector = page.locator("#inspector");
+  await expect(inspector).toContainText("Healthcheck");
+  await expect(inspector.locator("#node-name")).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Edit node" })).toHaveCount(0);
   await expect(page.getByRole("dialog")).toHaveCount(0);
 
-  await page.locator("#inspector #node-name").fill("Panel edited");
-  await expect(node.locator("strong")).toHaveText("Panel edited");
-  await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(page.locator("#wf-status")).toHaveText("Unsaved changes");
-
-  const overflow = await page.locator("#inspector").evaluate((element) => element.scrollWidth - element.clientWidth);
+  await node.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Edit", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "Edit node" })).toBeVisible();
+  await expect(dialog.locator("#node-name")).toHaveValue("Healthcheck");
+  const overflow = await dialog.evaluate((element) => element.scrollWidth - element.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator("#wf-status")).toHaveText("All changes saved");
 });
 
 test("the workflow editor reflows at 375 px and opens the inspector on selection", async ({ page }) => {
@@ -409,7 +438,8 @@ test("the workflow editor reflows at 375 px and opens the inspector on selection
   await node.scrollIntoViewIfNeeded();
   await node.click();
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
-  await expect(page.locator("#inspector #node-name")).toBeVisible();
+  await expect(page.locator("#inspector .node-panel")).toBeVisible();
+  await expect(page.locator("#inspector #node-name")).toHaveCount(0);
   const after = await pageWidth();
   expect(after.content).toBeLessThanOrEqual(after.viewport);
   const inspector = await page.locator("#inspector").boundingBox();
@@ -584,6 +614,8 @@ test("a viewer inspects a workflow node without edit controls", async ({ page })
   await expect(page.locator("#node-name")).toHaveCount(0);
   await expect(page.locator("#node-delete")).toHaveCount(0);
   await expect(page.locator("#node-connect")).toHaveCount(0);
+  await expect(page.locator("#node-edit-dialog")).toHaveCount(0);
+  await expect(page.locator("#edge-edit-dialog")).toHaveCount(0);
   await expect(page.locator("[data-node-menu]")).toHaveCount(0);
   await expect(page.locator("[data-add-port]")).toHaveCount(0);
 

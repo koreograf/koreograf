@@ -47,11 +47,32 @@ function openCanvasDialog() {
   return dialog;
 }
 
+function selectNode(id) {
+  document.querySelector(`[data-id="${id}"]`).dispatchEvent({ type: "pointerdown", clientX: 20, clientY: 20, pointerId: 1 });
+}
+
+function openEditDialog(id) {
+  document.querySelector(`[data-id="${id}"] [data-node-menu]`).dispatchEvent({ type: "click" });
+  document.querySelector("[data-edit-node]").dispatchEvent({ type: "click" });
+  const dialog = document.querySelector("#node-edit-dialog");
+  assert.ok(dialog, "Edit node does not use the shared overlay");
+  return dialog;
+}
+
+function submit(dialog) {
+  dialog.querySelector(".dialog-form").dispatchEvent({ type: "submit", preventDefault() {} });
+}
+
+function nodeName(id) {
+  const strong = document.querySelector(`[data-id="${id}"] strong`);
+  return strong.textContent || strong.innerHTML;
+}
+
 test("the inspector adds nodes only through the canvas menu", async () => {
   await mount();
   const inspector = document.querySelector("#inspector");
   assert.ok(!inspector.querySelector("#add-node"), "the inspector still has an Add node button");
-  assert.match(inspector.innerHTML, /right_click_empty_canvas_to_add_a_node/);
+  assert.match(inspector.innerHTML, /select_a_node_or_an_edge_to_see_its_details/);
 
   const add = openCanvasDialog();
   for (const id of ["node-name", "node-template", "node-join", "node-inventory", "node-credential", "node-extra"]) {
@@ -64,50 +85,84 @@ test("the inspector adds nodes only through the canvas menu", async () => {
 
   const node = document.querySelector('[data-id="n1"]');
   node.dispatchEvent({ type: "pointerdown", clientX: 20, clientY: 20, pointerId: 1 });
-  assert.ok(inspector.querySelector("#node-connect"), "the inspector has no Connect action");
-  assert.equal(inspector.querySelector("#node-join"), null, "a node with fewer than two predecessors shows convergence");
-  assert.match(inspector.innerHTML, /node-inventory/);
-  assert.match(inspector.innerHTML, /node-panel-head/);
+  assert.equal(inspector.querySelector("#node-name"), null, "a left click opened an edit form in the panel");
+  assert.equal(inspector.querySelector("#node-connect"), null, "the panel still has a Connect action");
+  assert.match(inspector.innerHTML, /node-panel/);
+  assert.match(inspector.innerHTML, /Hosts/);
   assert.match(inspector.innerHTML, /node-section/);
 
   node.dispatchEvent({ type: "keydown", key: "Enter" });
-  assert.equal(document.querySelector("#node-edit-dialog"), null, "Enter opened the Edit node dialog");
-  assert.equal(document.activeElement.id, "node-name", "Enter did not focus the panel's first field");
+  assert.ok(document.querySelector("#node-edit-dialog"), "Enter did not open the Edit node dialog");
+  assert.equal(document.querySelector("#inspector #node-name"), null, "the inspector has an edit form next to the overlay");
+  document.querySelector("#node-edit-dialog").dispatchEvent({ type: "keydown", key: "Escape", preventDefault() {} });
+  await tick();
+  assert.equal(document.querySelector("#node-edit-dialog"), null, "Escape left the Edit node dialog open");
 
   document.querySelector("#edges").dispatchEvent({ type: "click", target: document.querySelector("#edges path") });
-  assert.ok(inspector.querySelector("#edge-when"), "an existing edge cannot change its type");
-  assert.ok(inspector.querySelector("#edge-delete"), "an existing edge cannot be deleted");
+  assert.equal(inspector.querySelector("#edge-when"), null, "an edge still has a live type control in the panel");
+  assert.ok(inspector.querySelector("#edge-edit"), "an existing edge has no Edit edge action");
+  assert.equal(inspector.querySelector("#edge-delete"), null, "an edge still has a live delete control in the panel");
 });
 
-test("the node menu edit action opens the side panel instead of a dialog", async () => {
+test("the node menu edit action opens the edit overlay", async () => {
   await mount();
-  document.querySelector('[data-id="n2"] [data-node-menu]').dispatchEvent({ type: "click" });
-  document.querySelector("[data-edit-node]").dispatchEvent({ type: "click" });
-  assert.equal(document.querySelector("#node-edit-dialog"), null, "Edit node opened a dialog");
-  assert.equal(document.activeElement.id, "node-name", "Edit did not focus the panel's first field");
+  const dialog = openEditDialog("n2");
+  assert.match(dialog.innerHTML, /edit_node/);
+  for (const id of ["node-name", "node-template", "node-join", "node-inventory", "node-credential", "node-extra"]) {
+    assert.ok(dialog.querySelector(`#${id}`), `Edit node has no ${id} field`);
+  }
+  assert.ok(dialog.querySelector('[data-dialog-cancel]'), "Edit node has no Cancel action");
+  assert.ok(dialog.querySelector('button[type="submit"]'), "Edit node has no Save action");
+  assert.equal(document.querySelector("#inspector #node-name"), null, "the inspector has a second edit form");
   assert.equal(document.querySelector('[data-id="n2"]').classList.contains("selected"), true, "Edit did not select the node");
+  dialog.dispatchEvent({ type: "keydown", key: "Escape", preventDefault() {} });
+  await tick();
 });
 
-test("changing a field in the panel updates the graph", async () => {
+test("Enter and double-click open the edit overlay", async () => {
   await mount();
-  document.querySelector('[data-id="n1"]').dispatchEvent({ type: "pointerdown", clientX: 20, clientY: 20, pointerId: 1 });
-  const name = document.querySelector("#node-name");
+  document.querySelector('[data-id="n1"]').dispatchEvent({ type: "keydown", key: "Enter" });
+  assert.ok(document.querySelector("#node-edit-dialog"), "Enter did not open the edit overlay");
+  document.querySelector("#node-edit-dialog").dispatchEvent({ type: "keydown", key: "Escape", preventDefault() {} });
+  await tick();
+
+  document.querySelector('[data-id="n2"]').dispatchEvent({ type: "dblclick" });
+  assert.ok(document.querySelector("#node-edit-dialog"), "double-click did not open the edit overlay");
+  document.querySelector("#node-edit-dialog").dispatchEvent({ type: "keydown", key: "Escape", preventDefault() {} });
+  await tick();
+});
+
+test("the edit overlay saves one undo step and Cancel changes nothing", async () => {
+  await mount();
+  const dialog = openEditDialog("n1");
+  const name = dialog.querySelector("#node-name");
   name.value = "Renamed";
-  name.dispatchEvent({ type: "input", target: name });
-  assert.equal(document.querySelector('[data-id="n1"] strong').textContent, "Renamed", "the canvas did not take the new name");
+  submit(dialog);
+  await tick();
+  assert.equal(document.querySelector("#node-edit-dialog"), null, "Save left the edit overlay open");
+  assert.equal(nodeName("n1"), "Renamed", "the canvas did not take the new name");
   assert.equal(document.querySelector("#wf-status").textContent, "unsaved_changes");
+  assert.equal(document.querySelector("#wf-undo").disabled, false, "Save did not enable Undo");
 
-  const template = document.querySelector("#node-template");
-  template.value = "t2";
-  template.dispatchEvent({ type: "change", target: template });
-  assert.match(document.querySelector("#inspector").innerHTML, /value="t2" selected/, "the panel did not take the new template");
+  document.querySelector("#wf-undo").dispatchEvent({ type: "click" });
+  assert.equal(nodeName("n1"), "One", "Undo did not revert the whole edit");
+  assert.equal(document.querySelector("#wf-undo").disabled, true, "the edit created more than one history entry");
+  document.querySelector("#wf-redo").dispatchEvent({ type: "click" });
+  assert.equal(nodeName("n1"), "Renamed", "Redo did not restore the edit");
+
+  const cancelled = openEditDialog("n1");
+  cancelled.querySelector("#node-name").value = "Cancelled";
+  cancelled.querySelector("[data-dialog-cancel]").dispatchEvent({ type: "click" });
+  await tick();
+  assert.equal(document.querySelector("#node-edit-dialog"), null, "Cancel left the edit overlay open");
+  assert.equal(nodeName("n1"), "Renamed", "Cancel changed the node");
 });
 
-test("the convergence control needs two predecessors and explains skipped branches", async () => {
+test("the convergence control lives in the overlay", async () => {
   await mount();
-  document.querySelector('[data-id="n2"]').dispatchEvent({ type: "pointerdown", clientX: 320, clientY: 20, pointerId: 1 });
-  assert.equal(document.querySelector("#node-join"), null, "one predecessor shows convergence");
-  assert.equal(document.querySelector('[data-id="n2"] .wf-join-badge'), null, "one predecessor shows a join badge");
+  selectNode("n2");
+  assert.equal(document.querySelector("#node-join"), null, "the read-only panel shows a convergence control");
+  assert.match(document.querySelector("#inspector").innerHTML, /convergence_needs_two_predecessors/);
 
   await mount({
     graph: {
@@ -122,16 +177,21 @@ test("the convergence control needs two predecessors and explains skipped branch
       ],
     },
   });
-  document.querySelector('[data-id="n2"]').dispatchEvent({ type: "pointerdown", clientX: 320, clientY: 20, pointerId: 1 });
-  const join = document.querySelector("#node-join");
-  assert.ok(join, "two predecessors hide convergence");
-  assert.match(document.querySelector("#inspector").innerHTML, /convergence_help/, "the convergence help text is missing");
+  selectNode("n2");
+  const inspector = document.querySelector("#inspector");
+  assert.match(inspector.innerHTML, /any_predecessor/, "the read-only panel hides the convergence");
+  assert.equal(inspector.querySelector("#node-join"), null, "the read-only panel has a convergence control");
   const badge = document.querySelector('[data-id="n2"] .wf-join-badge');
   assert.ok(badge, "two predecessors show no join badge");
   assert.equal(badge.innerHTML, "join_badge_any");
+
+  const dialog = openEditDialog("n2");
+  const join = dialog.querySelector("#node-join");
+  assert.ok(join, "the edit overlay has no convergence control");
   join.value = "all";
-  join.dispatchEvent({ type: "change", target: join });
-  assert.equal(document.querySelector('[data-id="n2"] .wf-join-badge').textContent, "join_badge_all");
+  submit(dialog);
+  await tick();
+  assert.equal(document.querySelector('[data-id="n2"] .wf-join-badge').innerHTML, "join_badge_all");
 });
 
 test("Add node creates one node with the chosen fields at the clicked point", async () => {
@@ -151,7 +211,7 @@ test("Add node creates one node with the chosen fields at the clicked point", as
   assert.match(markup, /<strong>Created<\/strong>/);
   assert.match(markup, /left:80px;top:80px/);
   const inspector = document.querySelector("#inspector");
-  assert.match(inspector.innerHTML, /value="t1" selected/, "the first template is not pre-filled");
+  assert.match(inspector.innerHTML, /Deploy/, "the first template is not shown");
   assert.match(inspector.innerHTML, /&quot;answer&quot;: 42/, "the chosen override is not kept");
 });
 
@@ -257,10 +317,12 @@ test("viewers get no add path", async () => {
 test("workflow node menu copy is in both catalogs", () => {
   for (const id of ["de", "en"]) {
     const values = catalog(id);
-    for (const key of ["add_node", "connections", "convergence_help", "convergence_needs_two_predecessors", "join_badge_all", "join_badge_any", "resize_node_panel", "right_click_empty_canvas_to_add_a_node", "add_first_step", "add_step_after", "empty_canvas_hint"]) {
+    for (const key of ["add_node", "connections", "convergence_needs_two_predecessors", "edit_edge", "edit_node", "edge_details_hint", "join_badge_all", "join_badge_any", "node_details_hint", "select_a_node_or_an_edge_to_see_its_details", "add_first_step", "add_step_after", "empty_canvas_hint"]) {
       assert.ok(typeof values[key] === "string" && values[key].trim(), `${key} is missing from ${id}.json`);
     }
-    assert.ok(!Object.prototype.hasOwnProperty.call(values, "name_optional"), `name_optional is still in ${id}.json`);
+    for (const key of ["add_edge", "connect_help", "delete_node", "resize_node_panel", "right_click_empty_canvas_to_add_a_node", "select_a_node_to_connect_it", "select_node"]) {
+      assert.ok(!Object.prototype.hasOwnProperty.call(values, key), `${key} is still in ${id}.json`);
+    }
   }
 });
 
@@ -268,5 +330,7 @@ test("workflow docs describe the node menus", () => {
   const docs = readFileSync(join(__dirname, "..", "..", "docs", "workflows-webhooks.md"), "utf8");
   assert.ok(docs.includes("Right-click empty canvas to add a node"));
   assert.ok(docs.includes("edit, delete, or connect"));
+  assert.ok(docs.includes("edit overlay"));
   assert.ok(!docs.includes("Add node stays in the side panel"));
+  assert.ok(!docs.includes("Enter on a focused node moves into that panel"));
 });
