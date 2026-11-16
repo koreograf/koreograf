@@ -117,12 +117,13 @@ export function flushChips(form) {
   return ok;
 }
 
-export function chipBox(name, label, value) {
+export function chipBox(name, label, value, id = "") {
+  const fieldId = id ? ` id="${esc(id)}"` : "";
   return `<label class="field chips-field"><span>${h(label)}</span>
     <div class="chips" data-chips="${esc(name)}">
       <input class="chip-entry" type="text" autocomplete="off" aria-label="${h(label)}">
     </div>
-    <input type="hidden" name="${esc(name)}" value="${esc(parseTagList(value).join(","))}">
+    <input type="hidden" name="${esc(name)}" value="${esc(parseTagList(value).join(","))}"${fieldId}>
     <span class="chip-error" aria-live="polite"></span>
   </label>`;
 }

@@ -2,6 +2,7 @@ import * as appState from "../../core/state.js";
 import { api } from "../../core/api.js";
 import { confirmDialog, openDialog } from "../../core/dialog.js";
 import { can, go, handle, shell } from "../../core/app.js";
+import { bindChips, chipBox, flushChips } from "../../core/chips.js";
 import { credentialKindLabel } from "../../core/credentials.js";
 import { esc, h, selectOptions, table } from "../../core/dom.js";
 import { spanText, statusLabel, verbosityLabel, when } from "../../core/format.js";
@@ -579,8 +580,11 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         </label>
         <label class="field"><span>${h("forks")}</span><input class="tiny" id="node-forks" inputmode="numeric" value="${esc(spec.forks ?? "")}"></label>
         <label class="field check"><span>${h("diff")}</span><input id="node-diff" type="checkbox"${spec.diff ? " checked" : ""}></label>
-        <label class="field"><span>${h("tags")}</span><input id="node-tags" value="${esc(spec.tags || "")}"></label>
-        <label class="field"><span>${h("skip_tags")}</span><input id="node-skip-tags" value="${esc(spec.skip_tags || "")}"></label>
+        <div class="field-row">
+          ${chipBox("tags", "tags", spec.tags, "node-tags")}
+          ${chipBox("skip_tags", "skip_tags", spec.skip_tags, "node-skip-tags")}
+        </div>
+        <p class="small muted">${h("a_comma_or_a_space_turns_the_typed")}</p>
         <label class="field"><span>${h("limit")}</span><input id="node-limit" value="${esc(spec.limit || "")}"></label>`;
     } else if (template.tool === "opentofu") {
       const action = spec.action === "apply" ? "apply" : "plan";
@@ -964,6 +968,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       submit: t(adding ? "create" : "save"),
       body: nodeEditorFields(node),
       onSubmit: ({ form, close }) => {
+        if (!flushChips(form)) return;
         const name = form.querySelector("#node-name").value.trim();
         if (!name) throw new Error("name_is_missing_or_too_long");
         const templateId = form.querySelector("#node-template").value;
@@ -976,12 +981,18 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         close();
       },
     });
+    let currentTemplateId = node.template_id;
     const bindTemplate = () => {
+      bindChips(dialog.form);
       const select = dialog.form.querySelector("#node-template");
       if (!select) return;
       select.addEventListener("change", (event) => {
         const next = templates.find((item) => item.id === event.target.value);
         if (!next) return;
+        if (!flushChips(dialog.form)) {
+          event.target.value = currentTemplateId;
+          return;
+        }
         const name = dialog.form.querySelector("#node-name").value;
         const convergence = dialog.form.querySelector("#node-join").value;
         const values = {};
@@ -998,6 +1009,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
           else if (control.tagName === "SELECT" && [...control.options].some((option) => option.value === value)) control.value = value;
           else if (control.tagName !== "SELECT") control.value = value;
         });
+        currentTemplateId = next.id;
         bindTemplate();
       });
     };

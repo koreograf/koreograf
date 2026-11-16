@@ -99,3 +99,100 @@ test("editing an override updates the card chips", async () => {
   assert.equal(card("n1").querySelector('[data-chip="limit"]').innerHTML, "Limit: web");
   assert.equal(card("n1").querySelector('[data-chip="tags"]'), null, "an unset tags override shows a chip");
 });
+
+test("typing a comma turns a node tag into a pill and Save keeps it", async () => {
+  await mount({
+    nodes: [{ id: "n1", template_id: "t1", name: "One", x: 20, y: 20, convergence: "any" }],
+    edges: [],
+  });
+
+  select("n1");
+  card("n1").dispatchEvent({ type: "dblclick" });
+  const dialog = document.querySelector("#node-edit-dialog");
+  const box = dialog.querySelector('[data-chips="tags"]');
+  const entry = box.querySelector(".chip-entry");
+  const hidden = dialog.querySelector("#node-tags");
+
+  entry.value = "web,";
+  entry.dispatchEvent({ type: "input" });
+  assert.equal(box.querySelectorAll(".chip").length, 1, "typing a comma did not create a chip");
+  assert.equal(box.querySelector(".chip-text").innerHTML, "web");
+  assert.equal(hidden.value, "web", "the hidden field does not hold the chip value");
+
+  dialog.querySelector(".dialog-form").dispatchEvent({ type: "submit", preventDefault() {} });
+  assert.equal(dialog.isConnected, false, "Save left the overlay open");
+  assert.equal(card("n1").querySelector('[data-chip="tags"]').innerHTML, "Tags: web");
+  assert.equal(document.querySelector("#wf-status").textContent, catalog("de").unsaved_changes);
+
+  document.querySelector("#wf-undo").dispatchEvent({ type: "click" });
+  assert.equal(card("n1").querySelector('[data-chip="tags"]'), null, "Undo kept the tag override");
+  document.querySelector("#wf-redo").dispatchEvent({ type: "click" });
+  assert.equal(card("n1").querySelector('[data-chip="tags"]').innerHTML, "Tags: web");
+});
+
+test("Save flushes a pending node tag draft", async () => {
+  await mount({
+    nodes: [{ id: "n1", template_id: "t1", name: "One", x: 20, y: 20, convergence: "any" }],
+    edges: [],
+  });
+
+  select("n1");
+  card("n1").dispatchEvent({ type: "dblclick" });
+  const dialog = document.querySelector("#node-edit-dialog");
+  const box = dialog.querySelector('[data-chips="tags"]');
+  const entry = box.querySelector(".chip-entry");
+  entry.value = "web";
+  entry.dispatchEvent({ type: "input" });
+  assert.equal(box.querySelectorAll(".chip").length, 0, "an unfinished draft became a chip early");
+
+  dialog.querySelector(".dialog-form").dispatchEvent({ type: "submit", preventDefault() {} });
+  assert.equal(card("n1").querySelector('[data-chip="tags"]').innerHTML, "Tags: web");
+});
+
+test("existing node tags open as pills", async () => {
+  await mount({
+    nodes: [{
+      id: "n1",
+      template_id: "t1",
+      name: "One",
+      x: 20,
+      y: 20,
+      convergence: "any",
+      overrides: { spec: { tags: "api,db", skip_tags: "slow" } },
+    }],
+    edges: [],
+  });
+
+  select("n1");
+  card("n1").dispatchEvent({ type: "dblclick" });
+  const dialog = document.querySelector("#node-edit-dialog");
+  const tags = dialog.querySelector('[data-chips="tags"]');
+  const skip = dialog.querySelector('[data-chips="skip_tags"]');
+  assert.deepEqual([...tags.querySelectorAll(".chip-text")].map((node) => node.innerHTML), ["api", "db"]);
+  assert.deepEqual([...skip.querySelectorAll(".chip-text")].map((node) => node.innerHTML), ["slow"]);
+  assert.equal(dialog.querySelector("#node-tags").value, "api,db");
+  assert.equal(dialog.querySelector("#node-skip-tags").value, "slow");
+  dialog.querySelector("[data-dialog-cancel]").dispatchEvent({ type: "click" });
+});
+
+test("an invalid node tag shows the template message", async () => {
+  await mount({
+    nodes: [{ id: "n1", template_id: "t1", name: "One", x: 20, y: 20, convergence: "any" }],
+    edges: [],
+  });
+
+  select("n1");
+  card("n1").dispatchEvent({ type: "dblclick" });
+  const dialog = document.querySelector("#node-edit-dialog");
+  const tags = dialog.querySelector('[data-chips="tags"]');
+  const entry = tags.querySelector(".chip-entry");
+  entry.value = "-bad,";
+  entry.dispatchEvent({ type: "input" });
+  assert.equal(tags.querySelectorAll(".chip").length, 0, "an invalid tag became a chip");
+  assert.equal(
+    tags.parentElement.querySelector(".chip-error").textContent,
+    catalog("de").the_tag_part_is_invalid_letters_digits_and.replace("{part}", "-bad"),
+    "the node editor does not show the template tag error",
+  );
+  dialog.querySelector("[data-dialog-cancel]").dispatchEvent({ type: "click" });
+});

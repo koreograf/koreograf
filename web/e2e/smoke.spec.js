@@ -255,6 +255,8 @@ test("a node card shows its template and limit override", async ({ page }) => {
   await dialog.locator("#node-name").fill("Limited deploy");
   await dialog.locator("#node-template").selectOption({ label: "Self-Heal" });
   await dialog.locator("#node-limit").fill("web");
+  await dialog.locator('[data-chips="tags"] .chip-entry').fill("web,");
+  await expect(dialog.locator('[data-chips="tags"] .chip-text')).toHaveText("web");
   await dialog.getByRole("button", { name: "Create", exact: true }).click();
   await expect(dialog).toHaveCount(0);
 
@@ -263,6 +265,7 @@ test("a node card shows its template and limit override", async ({ page }) => {
   await expect(card.locator(".wf-node-template")).toHaveText("Self-Heal");
   await expect(card.locator(".wf-node-tool")).toHaveAttribute("aria-label", "Ansible");
   await expect(card.locator('[data-chip="limit"]')).toHaveText("Limit: web");
+  await expect(card.locator('[data-chip="tags"]')).toHaveText("Tags: web");
 });
 
 test("the workflow editor connects, retypes and removes an edge with the keyboard", async ({ page }) => {
