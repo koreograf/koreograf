@@ -8,7 +8,7 @@ use crate::common::call_cookie as call;
 
 use crate::common::*;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_hook_delivery_is_rejected_when_local_runs_are_admin_only() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -382,7 +382,7 @@ async fn a_hook_delivery_is_rejected_when_local_runs_are_admin_only() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_hook_can_be_edited_and_keeps_its_token() {
     let harness = TestApp::boot("hook-edit", Options::default());
     let app = harness.app.clone();

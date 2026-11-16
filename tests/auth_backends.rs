@@ -5,7 +5,7 @@ mod common;
 use axum::http::StatusCode;
 use serde_json::json;
 
-use common::{drop_database, postgres_guard, postgres_test_url, Options, TestApp};
+use common::{Options, TestApp};
 
 async fn auth_flow(app: &TestApp) {
     let (cookie, team) = app.sign_in().await;
@@ -198,13 +198,8 @@ async fn shared_auth_flow_runs_on_sqlite() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn shared_auth_flow_runs_on_postgres() {
-    let _guard = postgres_guard().await;
     let Some(app) = TestApp::boot_postgres("shared-auth-postgres", Options::default()).await else {
         return;
     };
     auth_flow(&app).await;
-    let base = postgres_test_url().expect("postgres test url");
-    let name = app.database_name.clone().expect("database name");
-    drop(app);
-    drop_database(&base, &name).await;
 }

@@ -112,7 +112,7 @@ fn with_extras(mut value: Value, extras: Value) -> Value {
     value
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn project_contents_and_import_return_the_documented_shape() {
     let root = temp_dir("sources-project");
     write(&root.join("site.yml"), "- hosts: all\n");
@@ -196,7 +196,7 @@ async fn project_contents_and_import_return_the_documented_shape() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn source_endpoints_return_the_documented_shape() {
     let root = temp_dir("sources-project");
     write(&root.join("inventory/hosts.ini"), PROJECT_INI);
@@ -451,7 +451,7 @@ async fn source_endpoints_return_the_documented_shape() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn netbox_endpoints_return_the_documented_shape() {
     let harness = TestApp::boot("sources-netbox", Options::default());
     let app = harness.app.clone();

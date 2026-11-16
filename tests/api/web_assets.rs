@@ -41,7 +41,7 @@ fn temp_web_app(label: &str) -> (axum::Router, PathBuf) {
     (koreograf::router(state), base)
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn web_assets_send_types_etags_and_security_headers() {
     let harness = TestApp::boot("assets", Options::default());
     for (path, content_type) in [
@@ -95,7 +95,7 @@ async fn web_assets_send_types_etags_and_security_headers() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn feature_js_is_compressed_with_gzip_and_brotli() {
     let harness = TestApp::boot("assets-compressed", Options::default());
     let (status, headers, body) = request(
@@ -137,7 +137,7 @@ async fn feature_js_is_compressed_with_gzip_and_brotli() {
     assert_security_headers(&headers, "/js/features/jobs.js brotli");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn nested_files_and_every_allowed_extension_are_served() {
     let (app, base) = temp_web_app("assets-types");
     let web = base.join("web");
@@ -185,7 +185,7 @@ async fn nested_files_and_every_allowed_extension_are_served() {
     let _ = std::fs::remove_dir_all(base);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn traversal_and_symlinks_outside_the_web_directory_are_rejected() {
     let (app, base) = temp_web_app("assets-escape");
     let web = base.join("web");

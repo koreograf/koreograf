@@ -11,7 +11,7 @@ use crate::common::call_cookie as call;
 
 use crate::common::*;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn the_job_log_marks_a_fatal_line_and_keeps_galaxy_as_a_warning() {
     let harness = TestApp::boot("log-style", Options::default());
     let app = harness.app.clone();
@@ -22,7 +22,7 @@ async fn the_job_log_marks_a_fatal_line_and_keeps_galaxy_as_a_warning() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn login_shell_job_and_webhook() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -220,7 +220,7 @@ async fn login_shell_job_and_webhook() {
 /// building the response. `std::sync::Mutex` waits forever in that case, and
 /// every later request stops. A timeout on another thread is the failure signal.
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn failed_job_shows_parameters_and_can_be_relaunched() {
     let harness = TestApp::boot("relaunch", Options::default());
     let app = harness.app.clone();
@@ -364,7 +364,7 @@ async fn failed_job_shows_parameters_and_can_be_relaunched() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn prompt_on_launch_overrides_the_job_and_keeps_the_template() {
     let dir = temp_dir("prompt");
     let mut cfg = config(&dir, &Options::default());
@@ -637,7 +637,7 @@ async fn prompt_on_launch_overrides_the_job_and_keeps_the_template() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn launch_with_options_overrides_a_template_without_prompt_on_launch() {
     let harness = TestApp::boot("launch-options", Options::default());
     let app = harness.app.clone();
@@ -756,7 +756,7 @@ async fn launch_with_options_overrides_a_template_without_prompt_on_launch() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn options_launch_passes_the_local_runner_gate() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -818,7 +818,7 @@ async fn options_launch_passes_the_local_runner_gate() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn options_launch_relaunch_passes_the_local_runner_gate() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -880,7 +880,7 @@ async fn options_launch_relaunch_passes_the_local_runner_gate() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn ansible_launch_requires_an_inventory() {
     let harness = TestApp::boot("inventory-required", Options::default());
     let app = harness.app.clone();
@@ -1007,7 +1007,7 @@ async fn ansible_launch_requires_an_inventory() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn oversized_job_output_keeps_the_recap_in_the_download() {
     let dir = temp_dir("output");
     let mut cfg = config(&dir, &Options::default());
@@ -1104,7 +1104,7 @@ async fn oversized_job_output_keeps_the_recap_in_the_download() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn an_operator_cannot_start_a_local_job_or_an_arbitrary_path() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1278,9 +1278,9 @@ async fn an_operator_cannot_start_a_local_job_or_an_arbitrary_path() {
     let _ = std::fs::remove_dir_all(&outside);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn job_list_pages_searches_filters_and_reloads_the_hash() {
-    let harness = TestApp::boot("job-list", Options::default());
+    let harness = TestApp::boot_sqlite("job-list", Options::default());
     let state = harness.state.clone();
     let app = harness.app.clone();
     let dir = harness.dir.clone();
@@ -1400,7 +1400,7 @@ async fn job_list_pages_searches_filters_and_reloads_the_hash() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_relative_data_dir_can_run_a_local_shell_job() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1467,7 +1467,7 @@ async fn a_relative_data_dir_can_run_a_local_shell_job() {
     let _ = std::fs::remove_dir_all(&data_dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn cancel_stops_the_local_process_group() {
     let harness = TestApp::boot("cancel", Options::default());
     let app = harness.app.clone();
@@ -1577,7 +1577,7 @@ async fn cancel_stops_the_local_process_group() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn jobs_that_end_before_execution_are_still_counted() {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1741,7 +1741,7 @@ async fn jobs_that_end_before_execution_are_still_counted() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn cancel_kills_a_child_that_ignores_term() {
     let harness = TestApp::boot("cancel-trap", Options::default());
     let app = harness.app.clone();
@@ -1841,7 +1841,7 @@ async fn cancel_kills_a_child_that_ignores_term() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn cancel_kills_a_detached_child_that_ignores_term() {
     let harness = TestApp::boot("cancel-detached", Options::default());
     let app = harness.app.clone();

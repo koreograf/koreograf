@@ -5,7 +5,7 @@ use crate::common::call_cookie as call;
 
 use crate::common::*;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_team_description_stops_at_one_thousand_characters() {
     let harness = TestApp::boot("desc", Options::default());
     let app = harness.app.clone();

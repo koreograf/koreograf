@@ -52,7 +52,7 @@ const DYNAMIC_PREFIX_KEYS: [(&str, &[&str]); 4] = [
     ),
 ];
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_request_without_json_returns_a_catalog_error() {
     let harness = TestApp::boot("json", Options::default());
     let app = harness.app.clone();
@@ -283,7 +283,7 @@ fn source_control_token_hints_are_in_the_forms_and_catalogs() {
     assert!(docs.contains("oauth2"));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn the_catalog_routes_serve_the_merged_catalogs() {
     let harness = TestApp::boot("catalog-http", Options::default());
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));

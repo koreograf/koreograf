@@ -5,7 +5,7 @@ use crate::common::call_cookie as call;
 
 use crate::common::*;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn teams_and_organizations_return_the_documented_shape() {
     let harness = TestApp::boot("catalog-teams", Options::default());
     let app = harness.app.clone();
@@ -286,7 +286,7 @@ async fn teams_and_organizations_return_the_documented_shape() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn catalog_data_endpoints_return_the_documented_shape() {
     let harness = TestApp::boot("catalog-data", Options::default());
     let app = harness.app.clone();
@@ -436,7 +436,7 @@ async fn catalog_data_endpoints_return_the_documented_shape() {
         "/api/v1/inventories",
         Some(&cookie),
         Some(team_id.as_str().expect("team id")),
-        Some(json!({"name": "Web", "body": body})),
+        Some(json!({"name": "web", "body": body})),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{created_inventory}");
@@ -474,7 +474,7 @@ async fn catalog_data_endpoints_return_the_documented_shape() {
         "host_count": 2,
         "hosts": detail_hosts,
         "id": inventory_id.clone(),
-        "name": "Web",
+        "name": "web",
         "source": {},
         "source_count": 1,
         "source_kind": "ini",
@@ -512,7 +512,7 @@ async fn catalog_data_endpoints_return_the_documented_shape() {
             "group_count": 2,
             "host_count": 2,
             "id": inventory_id.clone(),
-            "name": "Web",
+            "name": "web",
             "source": {},
             "source_count": 1,
             "source_kind": "ini",
@@ -548,26 +548,6 @@ async fn catalog_data_endpoints_return_the_documented_shape() {
         inventories,
         json!([
             {
-                "created_at": detail["created_at"].clone(),
-                "credential_id": null,
-                "group_count": 2,
-                "host_count": 2,
-                "id": inventory_id.clone(),
-                "name": "Web",
-                "source": {},
-                "source_count": 1,
-                "source_kind": "ini",
-                "sources": [{
-                    "credential_id": null,
-                    "host_count": 2,
-                    "id": inventory_source_id.clone(),
-                    "kind": "ini",
-                    "name": "manual",
-                    "source": {}
-                }],
-                "team_id": team_id.clone()
-            },
-            {
                 "created_at": local["created_at"].clone(),
                 "credential_id": null,
                 "group_count": 0,
@@ -581,6 +561,26 @@ async fn catalog_data_endpoints_return_the_documented_shape() {
                     "credential_id": null,
                     "host_count": 1,
                     "id": local["sources"][0]["id"].clone(),
+                    "kind": "ini",
+                    "name": "manual",
+                    "source": {}
+                }],
+                "team_id": team_id.clone()
+            },
+            {
+                "created_at": detail["created_at"].clone(),
+                "credential_id": null,
+                "group_count": 2,
+                "host_count": 2,
+                "id": inventory_id.clone(),
+                "name": "web",
+                "source": {},
+                "source_count": 1,
+                "source_kind": "ini",
+                "sources": [{
+                    "credential_id": null,
+                    "host_count": 2,
+                    "id": inventory_source_id.clone(),
                     "kind": "ini",
                     "name": "manual",
                     "source": {}
@@ -1024,7 +1024,7 @@ async fn catalog_data_endpoints_return_the_documented_shape() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn system_catalog_endpoints_return_the_documented_shape() {
     let harness = TestApp::boot("catalog-system", Options::default());
     let app = harness.app.clone();

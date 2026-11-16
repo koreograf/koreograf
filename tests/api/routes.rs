@@ -30,7 +30,7 @@ async fn write_team(
     status
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn each_module_registers_its_routes() {
     let harness = TestApp::boot("http-module-routes", Options::default());
     for prefix in API_PREFIXES {
@@ -52,7 +52,7 @@ async fn each_module_registers_its_routes() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn both_api_prefixes_share_login_reads_writes_bearer_tokens_and_404() {
     let harness = TestApp::boot("http-prefixes", Options::default());
     let app = harness.app.clone();
