@@ -8,9 +8,9 @@ description = "Prototype for team-scoped automation with a dependency cache and 
 publish = false
 
 [dependencies]
-aes-gcm = "0.11"
 anyhow = "1"
 async-stream = "0.3"
+aws-lc-rs = { version = "1.18.2", default-features = false, features = ["aws-lc-sys"] }
 axum = "0.8"
 base64 = "0.23"
 chrono = "0.4"
@@ -20,7 +20,6 @@ hex = "0.4"
 http-body-util = "0.1"
 ldap3 = { version = "0.12.0", default-features = false, features = ["tls-rustls-aws-lc-rs"] }
 nix = { version = "0.31", default-features = false, features = ["dir", "signal", "user", "fs", "process"] }
-pbkdf2 = "0.13"
 percent-encoding = "2"
 rand = "0.10"
 reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }

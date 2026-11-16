@@ -1,13 +1,13 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::num::NonZeroU32;
 use std::path::Path;
 
-use aes_gcm::aead::Aead;
-use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
+use aws_lc_rs::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
+use aws_lc_rs::digest::{digest, SHA256};
+use aws_lc_rs::pbkdf2::{derive, PBKDF2_HMAC_SHA256};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
-use pbkdf2::pbkdf2_hmac;
-use sha2::{Digest, Sha256};
 
 use crate::error::{ApiError, AppResult};
 
@@ -23,16 +23,21 @@ pub struct Cipher {
 
 impl Cipher {
     pub fn encrypt(&self, plain: &str) -> AppResult<String> {
-        let cipher = Aes256Gcm::new_from_slice(&self.key)
-            .map_err(|_| ApiError::Internal("key is invalid".into()))?;
+        let key = LessSafeKey::new(
+            UnboundKey::new(&AES_256_GCM, &self.key)
+                .map_err(|_| ApiError::Internal("key is invalid".into()))?,
+        );
         let mut nonce_bytes = [0u8; 12];
         rand::fill(&mut nonce_bytes);
-        let nonce = Nonce::from(nonce_bytes);
-        let ct = cipher
-            .encrypt(&nonce, plain.as_bytes())
-            .map_err(|_| ApiError::Internal("encryption failed".into()))?;
         let mut packed = nonce_bytes.to_vec();
-        packed.extend(ct);
+        let mut in_out = plain.as_bytes().to_vec();
+        key.seal_in_place_append_tag(
+            Nonce::assume_unique_for_key(nonce_bytes),
+            Aad::empty(),
+            &mut in_out,
+        )
+        .map_err(|_| ApiError::Internal("encryption failed".into()))?;
+        packed.extend_from_slice(&in_out);
         Ok(B64.encode(packed))
     }
 
@@ -44,14 +49,18 @@ impl Cipher {
             return Err(ApiError::Internal("secret is too short".into()));
         }
         let (nonce_bytes, ct) = bytes.split_at(12);
-        let cipher = Aes256Gcm::new_from_slice(&self.key)
-            .map_err(|_| ApiError::Internal("key is invalid".into()))?;
-        let nonce = Nonce::try_from(nonce_bytes)
+        let key = LessSafeKey::new(
+            UnboundKey::new(&AES_256_GCM, &self.key)
+                .map_err(|_| ApiError::Internal("key is invalid".into()))?,
+        );
+        let nonce = Nonce::try_assume_unique_for_key(nonce_bytes)
             .map_err(|_| ApiError::Internal("secret cannot be read".into()))?;
-        let plain = cipher
-            .decrypt(&nonce, ct)
+        let mut in_out = ct.to_vec();
+        let plain = key
+            .open_in_place(nonce, Aad::empty(), &mut in_out)
             .map_err(|_| ApiError::Internal("secret cannot be read".into()))?;
-        String::from_utf8(plain).map_err(|_| ApiError::Internal("secret is not text".into()))
+        String::from_utf8(plain.to_vec())
+            .map_err(|_| ApiError::Internal("secret is not text".into()))
     }
 }
 
@@ -140,7 +149,14 @@ pub fn hash_password(password: &str) -> String {
     let mut salt = [0u8; 16];
     rand::fill(&mut salt);
     let mut out = [0u8; 32];
-    pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, PBKDF2_ITERS, &mut out);
+    let iterations = NonZeroU32::new(PBKDF2_ITERS).unwrap_or(NonZeroU32::MIN);
+    derive(
+        PBKDF2_HMAC_SHA256,
+        iterations,
+        &salt,
+        password.as_bytes(),
+        &mut out,
+    );
     format!(
         "pbkdf2${PBKDF2_ITERS}${}${}",
         hex::encode(salt),
@@ -153,7 +169,11 @@ pub fn verify_password(stored: &str, password: &str) -> bool {
     if parts.next() != Some("pbkdf2") {
         return false;
     }
-    let Some(iters) = parts.next().and_then(|v| v.parse::<u32>().ok()) else {
+    let Some(iters) = parts
+        .next()
+        .and_then(|v| v.parse::<u32>().ok())
+        .and_then(NonZeroU32::new)
+    else {
         return false;
     };
     let Some(salt) = parts.next().and_then(|v| hex::decode(v).ok()) else {
@@ -162,11 +182,17 @@ pub fn verify_password(stored: &str, password: &str) -> bool {
     let Some(expected) = parts.next().and_then(|v| hex::decode(v).ok()) else {
         return false;
     };
-    if iters == 0 || iters > 2_000_000 || expected.is_empty() {
+    if iters.get() > 2_000_000 || expected.is_empty() {
         return false;
     }
     let mut out = vec![0u8; expected.len()];
-    pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, iters, &mut out);
+    derive(
+        PBKDF2_HMAC_SHA256,
+        iters,
+        &salt,
+        password.as_bytes(),
+        &mut out,
+    );
     use subtle::ConstantTimeEq;
     bool::from(out.ct_eq(&expected))
 }
@@ -186,7 +212,7 @@ pub fn token_prefix(token: &str) -> String {
 }
 
 pub fn hash_api_token(token: &str) -> String {
-    hex::encode(Sha256::digest(token.as_bytes()))
+    hex::encode(digest(&SHA256, token.as_bytes()))
 }
 
 pub fn random_password() -> String {
@@ -211,6 +237,21 @@ mod tests {
 
     const VALID_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
+    const FIXTURE_KEY: [u8; 32] = [
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+        0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+        0x1e, 0x1f,
+    ];
+    const FIXTURE_PLAINTEXT: &str = "koreograf-fixture-secret";
+    const FIXTURE_CIPHERTEXT: &str =
+        "9ACgay/mgGj8Tt1MTCWJC4kgtXZYrAsaCVp7iasOCVM164uGXDvhdqwgODUNgEQ93mnYeQ==";
+    const FIXTURE_PASSWORD: &str = "koreograf-fixture-password";
+    const FIXTURE_PASSWORD_HASH: &str = "pbkdf2$120000$fb993fd3e9827ddba933bab117533724$0d8f2ae7617b9699c0a92895332bbf53078e2e5f69c342e9ae328a0eb26cf34d";
+    const FIXTURE_TOKEN: &str =
+        "koro_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const FIXTURE_TOKEN_HASH: &str =
+        "c0537b3f6bca9f89ad5f47f9136d334276ca99ed541d2d3d18f72ce95040d7f3";
+
     fn scratch(tag: &str) -> PathBuf {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -227,6 +268,26 @@ mod tests {
         assert!(verify_password(&stored, "correct horse"));
         assert!(!verify_password(&stored, "nope"));
         assert!(!verify_password("garbage", "correct horse"));
+    }
+
+    #[test]
+    fn ciphertext_from_the_previous_implementation_decrypts() {
+        let cipher = Cipher { key: FIXTURE_KEY };
+        assert_eq!(
+            cipher.decrypt(FIXTURE_CIPHERTEXT).unwrap(),
+            FIXTURE_PLAINTEXT
+        );
+    }
+
+    #[test]
+    fn password_hash_from_the_previous_implementation_verifies() {
+        assert!(verify_password(FIXTURE_PASSWORD_HASH, FIXTURE_PASSWORD));
+        assert!(!verify_password(FIXTURE_PASSWORD_HASH, "wrong password"));
+    }
+
+    #[test]
+    fn api_token_hash_from_the_previous_implementation_matches() {
+        assert_eq!(hash_api_token(FIXTURE_TOKEN), FIXTURE_TOKEN_HASH);
     }
 
     #[test]
