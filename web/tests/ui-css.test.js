@@ -2,7 +2,7 @@
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { stylesheet, withoutComments, mediaBlock } = require("./css.js");
+const { stylesheet, withoutComments, mediaBlock, read } = require("./css.js");
 
 function ruleSelectors(css) {
   const selectors = [];
@@ -56,4 +56,15 @@ test("the narrow workflow editor keeps the board inside the page", () => {
   const wide = mediaBlock(css, "@media (min-width: 1024px)");
   assert.match(wide, /\.canvas-column \.canvas\s*\{[^}]*min-height:\s*max\(560px,\s*70vh\)/);
   assert.match(css, /\.editor-body\.inspector-collapsed/);
+});
+
+test("short selects keep the fit width and the schedule uses it", () => {
+  const rule = /select\.fit\s*\{([^}]*)\}/.exec(withoutComments(stylesheet()));
+  assert.ok(rule, "select.fit is missing");
+  assert.match(rule[1], /field-sizing:\s*content/);
+  assert.match(rule[1], /justify-self:\s*start/);
+  const schedule = read("web/js/features/schedules.js");
+  for (const name of ["timezone", "frequency", "end_kind"]) {
+    assert.match(schedule, new RegExp(`<select class="fit" name="${name}">`), `${name} lost the fit class`);
+  }
 });

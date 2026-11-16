@@ -493,7 +493,7 @@ export function openScheduleForm(kind, target, existing, redraw, options) {
           <div class="form-section">
             <h2>${h("general")}</h2>
             <label class="field required"><span>${h("name")}</span><input name="name" required value="${esc(item.name)}"></label>
-            <label class="field"><span>${h("time_zone")}</span><select name="timezone">${zones}</select></label>
+            <label class="field"><span>${h("time_zone")}</span><select class="fit" name="timezone">${zones}</select></label>
           </div>
           <div class="form-section">
             <h2>${h("start")}</h2>
@@ -505,7 +505,7 @@ export function openScheduleForm(kind, target, existing, redraw, options) {
           <div class="form-section">
             <h2>${h("repeat")}</h2>
             <label class="field"><span>${h("repeat")}</span>
-              <select name="frequency">
+              <select class="fit" name="frequency">
                 ${["once", "hourly", "daily", "weekly", "monthly"].map((value) => `<option value="${value}"${item.frequency === value ? " selected" : ""}>${h(value)}</option>`).join("")}
               </select>
             </label>
@@ -518,7 +518,7 @@ export function openScheduleForm(kind, target, existing, redraw, options) {
             <h2>${h("end")}</h2>
             <div class="field-row" id="schedule-end">
               <label class="field"><span>${h("ends")}</span>
-                <select name="end_kind">
+                <select class="fit" name="end_kind">
                   <option value="never"${item.end_kind === "never" ? " selected" : ""}>${h("never")}</option>
                   <option value="after"${item.end_kind === "after" ? " selected" : ""}>${h("after_n_occurrences")}</option>
                   <option value="on_date"${item.end_kind === "on_date" ? " selected" : ""}>${h("on_a_date")}</option>
