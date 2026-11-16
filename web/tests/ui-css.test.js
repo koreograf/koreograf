@@ -62,6 +62,7 @@ test("short selects keep the fit width and the schedule uses it", () => {
   const rule = /select\.fit\s*\{([^}]*)\}/.exec(withoutComments(stylesheet()));
   assert.ok(rule, "select.fit is missing");
   assert.match(rule[1], /field-sizing:\s*content/);
+  assert.match(rule[1], /max-width:\s*100%/);
   assert.match(rule[1], /justify-self:\s*start/);
   const schedule = read("web/js/features/schedules.js");
   for (const name of ["timezone", "frequency", "end_kind"]) {

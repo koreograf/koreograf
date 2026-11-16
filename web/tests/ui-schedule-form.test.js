@@ -53,6 +53,30 @@ test("the short schedule selects use the shared fit control", async () => {
   }
 });
 
+test("a long schedule time zone keeps the fit select inside the column", async () => {
+  await operator();
+  const { openScheduleForm } = await load("features/schedules.js");
+  const timezone = "America/Argentina/ComodRivadavia";
+  openScheduleForm("template", "t1", {
+    id: "s1",
+    name: "Long zone",
+    timezone,
+    start_date: "2026-01-01",
+    start_time: "08:00",
+    frequency: "daily",
+    weekdays: ["MO"],
+    end_kind: "never",
+    end_count: 5,
+    end_date: "2026-01-01",
+  }, async () => {});
+  const select = document.querySelector('#schedule-form [name="timezone"]');
+  assert.ok(select.classList.contains("fit"), "the long zone select does not use the fit width");
+  assert.equal(select.value, timezone, "the long zone is not selected");
+  const option = select.querySelector(`option[value="${timezone}"]`);
+  assert.ok(option, "the long zone is not offered");
+  assert.equal(option.innerHTML, timezone, "the long zone label is truncated");
+});
+
 test("the schedule strings are in both catalogs", () => {
   for (const id of ["de", "en"]) {
     const values = catalog(id);
