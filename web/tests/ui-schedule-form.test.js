@@ -41,6 +41,18 @@ test("the schedule form can target a template or a workflow", async () => {
   assert.match(overlay.innerHTML, /Healthcheck/);
 });
 
+test("the short schedule selects use the shared fit control", async () => {
+  await operator();
+  const { openScheduleForm } = await load("features/schedules.js");
+  openScheduleForm("", "", null, async () => {});
+  const overlay = document.querySelector("#schedule-form");
+  for (const name of ["timezone", "frequency", "end_kind"]) {
+    const select = overlay.querySelector(`[name="${name}"]`);
+    assert.ok(select, `the schedule form has no ${name} select`);
+    assert.ok(select.classList.contains("fit"), `the ${name} select does not use the fit width`);
+  }
+});
+
 test("the schedule strings are in both catalogs", () => {
   for (const id of ["de", "en"]) {
     const values = catalog(id);

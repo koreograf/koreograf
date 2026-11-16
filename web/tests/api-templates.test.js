@@ -52,10 +52,35 @@ test("the template environments follow the selected tool", async () => {
 });
 
 test("the template credential kinds follow the tool", async () => {
-  const { TOOL_CREDENTIAL_KINDS } = await load("features/templates.js");
+  const { TOOL_CREDENTIAL_KINDS } = await load("core/template-fields.js");
   assert.deepEqual(TOOL_CREDENTIAL_KINDS.ansible, ["ssh", "vault"]);
   assert.deepEqual(TOOL_CREDENTIAL_KINDS.opentofu, ["aws", "azure", "gce", "vmware", "openstack", "kubernetes", "env"]);
   assert.deepEqual(TOOL_CREDENTIAL_KINDS.shell, ["ssh", "env"]);
+});
+
+test("the shared ansible fields keep the template control layout", async () => {
+  const { ansibleFields, extraVarsField } = await load("core/template-fields.js");
+  const html = ansibleFields({ job_type: "check", tags: "web", skip_tags: "slow", limit: "web", verbosity: 2, forks: 5, diff: true });
+  assert.match(html, /class="field-row"/);
+  assert.match(html, /<select class="fit" name="job_type">/);
+  assert.match(html, /<select class="fit" name="verbosity">/);
+  assert.match(html, /<input class="tiny" name="forks"/);
+  assert.match(html, /<input name="diff" type="checkbox" checked>/);
+  assert.match(html, /data-chips="tags"/);
+  assert.match(html, /name="tags" value="web"/);
+  assert.match(html, /<input class="fit" name="limit" value="web"/);
+  assert.match(extraVarsField({ a: 1 }), /name="extra_vars"/);
+  assert.match(extraVarsField({ a: 1 }, "node-extra"), /id="node-extra"/);
+});
+
+test("the shared credential picker filters a single node select by tool", async () => {
+  const { credentialFields } = await load("core/template-fields.js");
+  const html = credentialFields(launchCredentials, [], "ansible", { singleId: "node-credential" });
+  assert.match(html, /<select class="fit" id="node-credential">/);
+  assert.match(html, /value="ssh-1"/);
+  assert.match(html, /value="vault-1"/);
+  assert.doesNotMatch(html, /value="aws-1"/);
+  assert.doesNotMatch(html, /value="netbox-1"/);
 });
 
 const launchCredentials = [
@@ -141,7 +166,7 @@ test("the template validation errors map to their fields", async () => {
 });
 
 test("the vault picker adds by search and removes a pill", async () => {
-  const { bindVaultPicker } = await load("features/templates.js");
+  const { bindVaultPicker } = await load("core/template-fields.js");
   const form = document.createElement("form");
   form.innerHTML = '<div id="vault-pills"></div><input id="vault-search"><div id="vault-options"></div>';
   document.body.appendChild(form);

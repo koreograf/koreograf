@@ -2,12 +2,13 @@ import * as appState from "../../core/state.js";
 import { api } from "../../core/api.js";
 import { confirmDialog, openDialog } from "../../core/dialog.js";
 import { can, go, handle, shell } from "../../core/app.js";
-import { bindChips, chipBox, flushChips } from "../../core/chips.js";
+import { bindChips, flushChips } from "../../core/chips.js";
 import { credentialKindLabel } from "../../core/credentials.js";
 import { esc, h, selectOptions, table } from "../../core/dom.js";
 import { spanText, statusLabel, verbosityLabel, when } from "../../core/format.js";
 import { jsonObject } from "../../core/forms.js";
 import { t } from "../../core/i18n.js";
+import { ansibleFields, credentialFields, extraVarsField, inventoryField, tofuFields } from "../../core/template-fields.js";
 import { confirmTofuApply } from "../../core/tofu.js";
 import { mountSchedules } from "../schedules.js";
 import { chooseEdgeType, edgeWhenLabel, openCanvasMenu, openNodeMenu } from "./menus.js";
@@ -561,45 +562,25 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     const inventoryId = over.inventory_id !== undefined ? over.inventory_id : (template.inventory_id || "");
     const credentialId = over.credential_id !== undefined ? over.credential_id : (template.credential_id || "");
     const extra = over.extra_vars || template.extra_vars || {};
-    const verbosity = Number(spec.verbosity) || 0;
-    const jobType = spec.job_type === "check" ? "check" : "run";
     let toolFields = "";
     if (template.tool === "ansible") {
-      toolFields = `
-        <label class="field"><span>${h("inventory")}</span><select class="fit" id="node-inventory">${selectOptions(lists.inventories, inventoryId, true, (row) => row.name)}</select></label>
-        <label class="field"><span>${h("type")}</span>
-          <select class="fit" id="node-job-type">
-            <option value="run"${jobType === "check" ? "" : " selected"}>${h("run_2")}</option>
-            <option value="check"${jobType === "check" ? " selected" : ""}>${h("check_dry_run")}</option>
-          </select>
-        </label>
-        <label class="field"><span>${h("verbosity")}</span>
-          <select class="fit" id="node-verbosity">
-            ${[0, 1, 2, 3, 4].map((level) => `<option value="${level}"${verbosity === level ? " selected" : ""}>${h(verbosityLabel(level))}</option>`).join("")}
-          </select>
-        </label>
-        <label class="field"><span>${h("forks")}</span><input class="tiny" id="node-forks" inputmode="numeric" value="${esc(spec.forks ?? "")}"></label>
-        <label class="field check"><span>${h("diff")}</span><input id="node-diff" type="checkbox"${spec.diff ? " checked" : ""}></label>
-        <div class="field-row">
-          ${chipBox("tags", "tags", spec.tags, "node-tags")}
-          ${chipBox("skip_tags", "skip_tags", spec.skip_tags, "node-skip-tags")}
-        </div>
-        <p class="small muted">${h("a_comma_or_a_space_turns_the_typed")}</p>
-        <label class="field"><span>${h("limit")}</span><input id="node-limit" value="${esc(spec.limit || "")}"></label>`;
+      toolFields = `${inventoryField(lists.inventories, inventoryId, { id: "node-inventory" })}${ansibleFields(spec, {
+        ids: {
+          job_type: "node-job-type",
+          verbosity: "node-verbosity",
+          forks: "node-forks",
+          diff: "node-diff",
+          tags: "node-tags",
+          skip_tags: "node-skip-tags",
+          limit: "node-limit",
+        },
+      })}`;
     } else if (template.tool === "opentofu") {
-      const action = spec.action === "apply" ? "apply" : "plan";
-      toolFields = `
-        <label class="field"><span>${h("action")}</span>
-          <select class="fit" id="node-action">
-            <option value="plan"${action === "apply" ? "" : " selected"}>plan</option>
-            <option value="apply"${action === "apply" ? " selected" : ""}>apply</option>
-          </select>
-        </label>
-        <p class="small muted">${h("opentofu_plan_reads_state_apply_keeps_it")}</p>`;
+      toolFields = tofuFields(spec, { ids: { action: "node-action" } });
     }
     return `${toolFields}
-      <label class="field"><span>${h("nav.access")}</span><select class="fit" id="node-credential">${selectOptions(lists.credentials, credentialId, true, (row) => `${row.name} (${credentialKindLabel(row.kind)})`)}</select></label>
-      <label class="field"><span>${h("extra_variables_json")}</span><textarea id="node-extra">${esc(JSON.stringify(extra, null, 2))}</textarea></label>`;
+      ${credentialFields(lists.credentials, [credentialId], template.tool, { singleId: "node-credential" })}
+      ${extraVarsField(extra, "node-extra")}`;
   }
 
   function nodeParams(node, template) {

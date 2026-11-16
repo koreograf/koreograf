@@ -15,7 +15,7 @@ const templates = [
   { id: "t3", name: "Tofu", tool: "opentofu", spec: { action: "plan" } },
 ];
 
-async function mount(graph) {
+async function mount(graph, credentials = []) {
   const state = await load("core/state.js");
   const i18n = await load("core/i18n.js");
   i18n.setCatalog("de", catalog("de"));
@@ -24,7 +24,7 @@ async function mount(graph) {
   globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => "[]" });
   const editor = await load("features/workflows/editor.js");
   const workflow = { id: "w1", name: "Deploy", description: "", graph };
-  editor.mountEditor(workflow, templates, false, {}, { inventories: [{ id: "i1", name: "Hosts" }, { id: "i2", name: "Production" }], credentials: [] }, {});
+  editor.mountEditor(workflow, templates, false, {}, { inventories: [{ id: "i1", name: "Hosts" }, { id: "i2", name: "Production" }], credentials }, {});
 }
 
 function card(id) {
@@ -194,5 +194,28 @@ test("an invalid node tag shows the template message", async () => {
     catalog("de").the_tag_part_is_invalid_letters_digits_and.replace("{part}", "-bad"),
     "the node editor does not show the template tag error",
   );
+  dialog.querySelector("[data-dialog-cancel]").dispatchEvent({ type: "click" });
+});
+
+test("the node overlay filters credentials and shares the extra vars field", async () => {
+  await mount({
+    nodes: [{ id: "n1", template_id: "t1", name: "One", x: 20, y: 20, convergence: "any" }],
+    edges: [],
+  }, [
+    { id: "ssh-1", kind: "ssh", name: "Machine" },
+    { id: "vault-1", kind: "vault", name: "Secrets" },
+    { id: "aws-1", kind: "aws", name: "Cloud" },
+  ]);
+
+  select("n1");
+  card("n1").dispatchEvent({ type: "dblclick" });
+  const dialog = document.querySelector("#node-edit-dialog");
+  const credential = dialog.querySelector("#node-credential");
+  assert.ok(credential.classList.contains("fit"), "the node credential select lost the fit width");
+  assert.match(credential.innerHTML, /Machine/, "the node overlay hides the ssh credential");
+  assert.match(credential.innerHTML, /Secrets/, "the node overlay hides the vault credential");
+  assert.doesNotMatch(credential.innerHTML, /Cloud/, "the node overlay offers an unfit credential");
+  assert.equal(dialog.querySelector("#node-extra").getAttribute("name"), "extra_vars", "the node extra vars field is not the shared control");
+  assert.ok(dialog.querySelector("#node-job-type").classList.contains("fit"), "the node job type lost the fit width");
   dialog.querySelector("[data-dialog-cancel]").dispatchEvent({ type: "click" });
 });

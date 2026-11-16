@@ -4,11 +4,24 @@ import { addLink, emptyState, esc, h, selectOptions, table } from "../core/dom.j
 import { t } from "../core/i18n.js";
 import { registerRedirect, registerRoute } from "../core/router.js";
 import { can, go, handle, markSaved, needTeam, route, shell } from "../core/app.js";
-import { bindChips, chipBox, flushChips } from "../core/chips.js";
-import { CREDENTIAL_KINDS, credentialKindLabel } from "../core/credentials.js";
+import { bindChips, flushChips } from "../core/chips.js";
+import { credentialKindLabel } from "../core/credentials.js";
 import { clearEditHash, editQuery, openEditDialog, rememberEditHash } from "../core/edit.js";
 import { environmentToolLabel, scopeLabel, verbosityLabel } from "../core/format.js";
 import { jsonObject, showFieldError } from "../core/forms.js";
+import {
+  ansibleFields,
+  bindLegacyCredentials,
+  bindVaultPicker,
+  credentialFields,
+  extraVarsField,
+  inventoryField,
+  readCredentialIds,
+  selectedCredentialIds,
+  tofuFields,
+  TOOL_CREDENTIAL_KINDS,
+  toolCredentialKinds,
+} from "../core/template-fields.js";
 import { confirmTofuApply } from "../core/tofu.js";
 import { bindScheduleActions, openScheduleForm, scheduleTable } from "./schedules.js";
 
@@ -83,37 +96,15 @@ function tofuApply(item) {
 export async function openLaunchPrompt(item, launchWithOptions = false, preset = {}) {
   const previous = document.querySelector("#launch-prompt");
   if (previous) previous.remove();
-  const spec = item.spec || {};
+  const spec = { ...(item.spec || {}), ...(preset.limit === undefined ? {} : { limit: preset.limit }) };
   const ansible = item.tool === "ansible";
   const [inventories, credentials] = await Promise.all([
     ansible ? api("GET", "/api/v1/inventories") : Promise.resolve([]),
     api("GET", "/api/v1/credentials"),
   ]);
-  const verbosity = Number(spec.verbosity) || 0;
   const inventoryId = preset.inventoryId || item.inventory_id;
-  const limit = preset.limit === undefined ? (spec.limit || "") : preset.limit;
-  const inventory = ansible
-    ? `<label class="field"><span>${h("inventory")}</span><select name="inventory_id">${selectOptions(inventories, inventoryId, true, (row) => row.name)}</select></label>`
-    : "";
-  const ansibleFields = ansible ? `
-    <div class="field-row">
-      <label class="field"><span>${h("type")}</span>
-        <select class="fit" name="job_type">
-          <option value="run"${spec.job_type === "check" ? "" : " selected"}>${h("run_2")}</option>
-          <option value="check"${spec.job_type === "check" ? " selected" : ""}>${h("check_dry_run")}</option>
-        </select>
-      </label>
-      <label class="field"><span>${h("verbosity")}</span>
-        <select class="fit" name="verbosity">
-          ${[0, 1, 2, 3, 4].map((level) => `<option value="${level}"${verbosity === level ? " selected" : ""}>${h(verbosityLabel(level))}</option>`).join("")}
-        </select>
-      </label>
-    </div>
-    <div class="field-row">
-      ${chipBox("tags", "tags", spec.tags)}
-      ${chipBox("skip_tags", "skip_tags", spec.skip_tags)}
-    </div>
-    <label class="field"><span>${h("limit")}</span><input class="fit" name="limit" value="${esc(limit)}"></label>` : "";
+  const inventory = ansible ? inventoryField(inventories, inventoryId) : "";
+  const ansibleOptions = ansible ? ansibleFields(spec, { extras: false }) : "";
   let submitting = false;
   const dialog = openDialog({
     id: "launch-prompt",
@@ -122,9 +113,9 @@ export async function openLaunchPrompt(item, launchWithOptions = false, preset =
     body: `
       <p class="small muted">${h(launchWithOptions ? "launch_with_options_help" : "the_launch_dialog_starts_from_the_template")}</p>
       ${inventory}
-      ${templateCredentialFields(credentials, selectedCredentialIds(item), item.tool)}
-      ${ansibleFields}
-      <label class="field"><span>${h("extra_variables_json")}</span><textarea name="extra_vars">${esc(JSON.stringify(item.extra_vars || {}, null, 2))}</textarea></label>`,
+      ${credentialFields(credentials, selectedCredentialIds(item), item.tool)}
+      ${ansibleOptions}
+      ${extraVarsField(item.extra_vars)}`,
     submit: t("launch"),
     onSubmit: async ({ form, close }) => {
       if (submitting || !flushChips(form)) return;
@@ -160,20 +151,9 @@ export async function openLaunchPrompt(item, launchWithOptions = false, preset =
         submitButton.setAttribute("aria-busy", "true");
       }
       try {
-        const offered = new Set(TOOL_CREDENTIAL_KINDS[item.tool] || []);
-        const credentialIds = new Set();
-        form.querySelectorAll("[data-credential-field]").forEach((field) => {
-          if (field.hidden) return;
-          const select = field.querySelector("select[data-credential-kind]");
-          if (select && select.value) credentialIds.add(select.value);
-        });
-        if (offered.has("vault")) {
-          form.querySelectorAll("#vault-pills [data-vault-id]").forEach((node) => credentialIds.add(node.dataset.vaultId));
-        }
-        form.querySelectorAll("[data-legacy-credential-id]").forEach((node) => credentialIds.add(node.dataset.legacyCredentialId));
         const body = {
           extra_vars: jsonObject(form.extra_vars.value, "extra_variables"),
-          credential_ids: [...credentialIds],
+          credential_ids: readCredentialIds(form, item.tool),
         };
         if (launchWithOptions) body.launch_with_options = true;
         if (ansible) {
@@ -383,11 +363,11 @@ async function openTemplateDialog(existing, initialTab = "") {
         <label class="field check"><span>${h("update_the_project_on_launch")}</span><input name="update_on_launch" type="checkbox"${item.update_on_launch === false ? "" : " checked"}></label>
         <p class="small muted">${h("off_uses_the_checkout_from_the_last_sync")}</p>
       </div>
-      <label class="field" id="inventory-field"${item.tool === "ansible" ? "" : " hidden"}><span>${h("inventory")}</span><select name="inventory_id">${selectOptions(inventories, item.inventory_id, true, (row) => row.name)}</select></label>
+      ${inventoryField(inventories, item.inventory_id, { labelId: "inventory-field", hidden: item.tool !== "ansible" })}
       <label class="field"><span>${h("execution_environment")}</span><select name="environment_id">${environmentOptions(item.tool, item.no_environment ? NO_ENVIRONMENT : item.environment_id)}</select></label>
     </div>
     <p class="banner warn" id="environment-runtime-warning" hidden></p>
-    ${templateCredentialFields(credentials, selectedCredentialIds(item), item.tool, readOnly)}
+    ${credentialFields(credentials, selectedCredentialIds(item), item.tool, { readOnly })}
     <label class="field" id="playbook-field" hidden><span>${h("playbook_from_the_project")}</span><select name="playbook"><option value="">${h("other_path")}</option></select></label>
     <p class="small muted" id="entrypoint-note"></p>
     <label class="field" id="entrypoint-field"><span id="entrypoint-label">${h("entry_path")}</span><input name="entrypoint" value="${esc(item.entrypoint)}" placeholder="${h("for_example_site_yml")}"><span class="field-error" id="entrypoint-error" aria-live="polite"></span></label>
@@ -395,48 +375,18 @@ async function openTemplateDialog(existing, initialTab = "") {
   const options = `
     <div class="form-section" id="ansible-options"${item.tool === "ansible" ? "" : " hidden"}>
       <h2>Ansible</h2>
-      <div class="field-row">
-        <label class="field"><span>${h("type")}</span>
-          <select class="fit" name="job_type">
-            <option value="run"${spec.job_type === "check" ? "" : " selected"}>${h("run_2")}</option>
-            <option value="check"${spec.job_type === "check" ? " selected" : ""}>${h("check_dry_run")}</option>
-          </select>
-        </label>
-        <label class="field"><span>${h("verbosity")}</span>
-          <select class="fit" name="verbosity">
-            ${[0, 1, 2, 3, 4].map((level) => `<option value="${level}"${verbosity === level ? " selected" : ""}>${h(verbosityLabel(level))}</option>`).join("")}
-          </select>
-        </label>
-        <label class="field"><span>${h("forks")}</span><input class="tiny" name="forks" inputmode="numeric" value="${esc(spec.forks || "")}" placeholder="5"></label>
-        <label class="field check"><span>${h("diff")}</span><input name="diff" type="checkbox"${spec.diff ? " checked" : ""}></label>
-      </div>
-      <div class="field-row">
-        ${chipBox("tags", "tags", spec.tags)}
-        ${chipBox("skip_tags", "skip_tags", spec.skip_tags)}
-      </div>
-      <p class="small muted">${h("a_comma_or_a_space_turns_the_typed")}</p>
-      <div class="field-row">
-        <label class="field"><span>${h("limit")}</span><input class="fit" name="limit" value="${esc(spec.limit || "")}" placeholder="web:&db"></label>
-      </div>
+      ${ansibleFields(spec)}
       <p class="small muted">${h("check_starts_ansible_playbook_with_check_tags_skipped")}</p>
     </div>
     <div class="form-section" id="tofu-options"${item.tool === "opentofu" ? "" : " hidden"}>
       <h2>OpenTofu</h2>
-      <div class="field-row">
-        <label class="field"><span>${h("action")}</span>
-          <select class="fit" name="action">
-            <option value="plan"${spec.action === "apply" ? "" : " selected"}>plan</option>
-            <option value="apply"${spec.action === "apply" ? " selected" : ""}>apply</option>
-          </select>
-        </label>
-      </div>
-      <p class="small muted">${h("opentofu_plan_reads_state_apply_keeps_it")}</p>
+      ${tofuFields(spec)}
     </div>
     <div class="form-section" id="shell-options"${item.tool === "shell" ? "" : " hidden"}>
       <h2>Shell</h2>
       <label class="field"><span>${h("script_when_no_entry_path_is_set")}</span><textarea name="script">${esc(spec.script || "")}</textarea></label>
     </div>`;
-  const variables = `<label class="field"><span>${h("extra_variables_json")}</span><textarea name="extra_vars">${esc(JSON.stringify(item.extra_vars || {}, null, 2))}</textarea></label>`;
+  const variables = extraVarsField(item.extra_vars);
   const templateSchedules = `
     <p class="small muted">${h("template_schedules_hint")}</p>
     <p class="small muted" id="template-schedules-status" role="status">${h("loading")}</p>
@@ -470,18 +420,7 @@ async function openTemplateDialog(existing, initialTab = "") {
       clearEntrypointError();
       try {
         const selectedProject = projects.find((item) => item.id === form.project_id.value);
-        const offeredKinds = new Set(TOOL_CREDENTIAL_KINDS[form.tool.value] || []);
-        const legacyBox = form.querySelector("#template-legacy-credentials");
-        const credentialIds = [
-          ...[...form.querySelectorAll("[data-credential-field]")]
-            .filter((field) => !field.hidden)
-            .map((field) => field.querySelector("select[data-credential-kind]").value)
-            .filter(Boolean),
-          ...(offeredKinds.has("vault") && vaultPicker ? vaultPicker.ids() : []),
-          ...(legacyBox && !legacyBox.hidden
-            ? [...legacyBox.querySelectorAll("[data-legacy-credential-id]")].map((node) => node.dataset.legacyCredentialId)
-            : []),
-        ];
+        const credentialIds = readCredentialIds(form, form.tool.value);
         const body = {
           name: form.name.value,
           description: form.description.value,
@@ -527,7 +466,7 @@ async function openTemplateDialog(existing, initialTab = "") {
       fieldset.hidden = true;
       return;
     }
-    const offered = new Set(TOOL_CREDENTIAL_KINDS[form.tool.value] || []);
+    const offered = toolCredentialKinds(form.tool.value);
     const ids = new Set(legacyCredentialIds);
     form.querySelectorAll("[data-credential-field]").forEach((field) => {
       if (offered.has(field.dataset.credentialField)) return;
@@ -555,7 +494,7 @@ async function openTemplateDialog(existing, initialTab = "") {
     });
   };
   const showCredentialKinds = () => {
-    const offered = new Set(TOOL_CREDENTIAL_KINDS[form.tool.value] || []);
+    const offered = toolCredentialKinds(form.tool.value);
     form.querySelectorAll("[data-credential-field]").forEach((field) => {
       field.hidden = !offered.has(field.dataset.credentialField);
     });
@@ -760,193 +699,6 @@ async function deleteTemplate(item, dialog) {
   } catch (error) {
     handle(error);
   }
-}
-
-export const TOOL_CREDENTIAL_KINDS = {
-  ansible: ["ssh", "vault"],
-  opentofu: ["aws", "azure", "gce", "vmware", "openstack", "kubernetes", "env"],
-  shell: ["ssh", "env"],
-};
-
-function selectedCredentialIds(item) {
-  if (Array.isArray(item.credential_ids)) return item.credential_ids;
-  return item.credential_id ? [item.credential_id] : [];
-}
-
-function unfitCredentials(credentials, selectedIds, tool) {
-  const offered = new Set(TOOL_CREDENTIAL_KINDS[tool] || []);
-  const selected = new Set(selectedIds || []);
-  return credentials.filter((row) => selected.has(row.id) && !offered.has(row.kind));
-}
-
-function bindLegacyCredentials(form, credentials, selectedIds, tool) {
-  const field = form.querySelector("#template-legacy-credentials");
-  const box = form.querySelector("#legacy-pills");
-  if (!field || !box) return;
-  const rows = unfitCredentials(credentials, selectedIds, tool);
-  box.innerHTML = rows.map((row) => `<span class="chip" data-legacy-credential-id="${esc(row.id)}" data-legacy-kind="${esc(row.kind)}"><span class="chip-text">${esc(`${credentialKindLabel(row.kind)} · ${row.name}`)}</span><button class="chip-remove" type="button" aria-label="${h("remove_credential_name", { name: row.name })}">×</button></span>`).join("");
-  field.hidden = rows.length === 0;
-  box.querySelectorAll(".chip-remove").forEach((button) => {
-    button.addEventListener("click", () => {
-      const chip = button.closest(".chip");
-      if (chip) chip.remove();
-      field.hidden = box.querySelectorAll("[data-legacy-credential-id]").length === 0;
-    });
-  });
-}
-
-function templateCredentialFields(credentials, selectedIds, tool = "", readOnly = false) {
-  const selected = new Set(selectedIds || []);
-  const present = new Set(credentials.map((row) => row.kind));
-  const offered = tool ? new Set(TOOL_CREDENTIAL_KINDS[tool] || []) : null;
-  const toolKinds = new Set(Object.values(TOOL_CREDENTIAL_KINDS).flat());
-  const selects = CREDENTIAL_KINDS
-    .map((row) => row[0])
-    .filter((kind) => kind !== "vault" && present.has(kind))
-    .filter((kind) => !offered || toolKinds.has(kind))
-    .map((kind) => {
-      const rows = credentials.filter((row) => row.kind === kind);
-      const current = rows.find((row) => selected.has(row.id));
-      const hidden = offered && !offered.has(kind) ? " hidden" : "";
-      return `<div data-credential-field="${esc(kind)}"${hidden}><label class="field"><span>${esc(credentialKindLabel(kind))}</span><select class="fit" data-credential-kind="${esc(kind)}">${selectOptions(rows, current ? current.id : "", true, (row) => row.name)}</select></label></div>`;
-    })
-    .join("");
-  const grid = selects ? `<div class="field-grid">${selects}</div>` : "";
-  const empty = credentials.length ? "" : `<p class="small muted">${h("no_credentials_in_this_team")}</p>`;
-  const vaults = credentials.filter((row) => row.kind === "vault");
-  const vaultHidden = offered && !offered.has("vault") ? " hidden" : "";
-  const vaultPicker = vaults.length && !readOnly
-    ? `<div class="vault-picker">
-      <input class="search" id="vault-search" type="search" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="vault-options" placeholder="${h("search_vaults")}" aria-label="${h("search_vaults")}">
-      <div class="vault-options" id="vault-options" role="listbox" hidden></div>
-    </div>`
-    : "";
-  const vaultEmpty = vaults.length ? "" : `<p class="small muted">${h("no_vault_credentials_in_this_team")}</p>`;
-  const vault = `<div class="field" id="template-vault-field"${vaultHidden}>
-    <span>${esc(credentialKindLabel("vault"))}</span>
-    <div class="vault-row">
-      <div class="chips" id="vault-pills"></div>
-      ${vaultPicker}
-    </div>
-    ${vaultEmpty}
-  </div>`;
-  const legacy = tool
-    ? `<div class="field" id="template-legacy-credentials" hidden><span>${h("other_credentials")}</span><div class="chips" id="legacy-pills"></div></div>`
-    : "";
-  return `${empty}<p class="small muted">${h("one_credential_of_each_kind_choose_vault_credentials")}</p>${grid}${vault}${legacy}`;
-}
-
-function vaultSuggestions(credentials, chosen, query) {
-  const needle = String(query || "").trim().toLowerCase();
-  return credentials
-    .filter((row) => row.kind === "vault" && !chosen.includes(row.id))
-    .filter((row) => !needle || row.name.toLowerCase().includes(needle))
-    .slice()
-    .sort((left, right) => left.name.localeCompare(right.name, "de"));
-}
-
-function renderVaultPills(box, credentials, ids, readOnly = false) {
-  const byId = new Map(credentials.map((row) => [row.id, row]));
-  box.innerHTML = ids.map((id) => {
-    const row = byId.get(id);
-    if (!row) return "";
-    const remove = readOnly
-      ? ""
-      : `<button class="chip-remove" type="button" aria-label="${h("remove_vault_credential_name", { name: row.name })}">×</button>`;
-    return `<span class="chip" data-vault-id="${esc(id)}"><span class="chip-text">${esc(row.name)}</span>${remove}</span>`;
-  }).join("");
-}
-
-export function bindVaultPicker(form, credentials, selectedIds, readOnly = false) {
-  const box = form.querySelector("#vault-pills");
-  const search = form.querySelector("#vault-search");
-  const options = form.querySelector("#vault-options");
-  const vaultIds = new Set(credentials.filter((row) => row.kind === "vault").map((row) => row.id));
-  let chosen = (selectedIds || []).filter((id) => vaultIds.has(id));
-  let open = false;
-  let active = 0;
-  const drawPills = () => {
-    if (box) renderVaultPills(box, credentials, chosen, readOnly);
-  };
-  const drawOptions = () => {
-    if (!search || !options) return;
-    const rows = open ? vaultSuggestions(credentials, chosen, search.value) : [];
-    if (active >= rows.length) active = Math.max(rows.length - 1, 0);
-    options.innerHTML = rows.map((row, index) =>
-      `<button class="vault-option${index === active ? " selected" : ""}" type="button" role="option" aria-selected="${index === active}" data-vault-pick="${esc(row.id)}">${esc(row.name)}</button>`
-    ).join("");
-    options.hidden = rows.length === 0;
-    search.setAttribute("aria-expanded", rows.length ? "true" : "false");
-  };
-  const pick = (id) => {
-    if (!vaultIds.has(id) || chosen.includes(id)) return;
-    chosen = [...chosen, id];
-    if (search) search.value = "";
-    open = false;
-    active = 0;
-    drawPills();
-    drawOptions();
-  };
-  const remove = (id) => {
-    chosen = chosen.filter((item) => item !== id);
-    drawPills();
-    drawOptions();
-  };
-  drawPills();
-  drawOptions();
-  if (!box || !search || !options || readOnly) {
-    return { ids: () => [...chosen], remove, suggest: (query) => vaultSuggestions(credentials, chosen, query) };
-  }
-  box.addEventListener("click", (event) => {
-    const button = event.target && event.target.closest ? event.target.closest(".chip-remove") : null;
-    if (!button) return;
-    const chip = button.closest(".chip");
-    if (!chip) return;
-    remove(chip.dataset.vaultId);
-    search.focus();
-  });
-  options.addEventListener("mousedown", (event) => event.preventDefault());
-  options.addEventListener("click", (event) => {
-    const button = event.target && event.target.closest ? event.target.closest("[data-vault-pick]") : null;
-    if (!button) return;
-    pick(button.dataset.vaultPick);
-    search.focus();
-  });
-  search.addEventListener("focus", () => {
-    open = true;
-    active = 0;
-    drawOptions();
-  });
-  search.addEventListener("blur", () => {
-    open = false;
-    drawOptions();
-  });
-  search.addEventListener("input", () => {
-    open = true;
-    active = 0;
-    drawOptions();
-  });
-  search.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      const rows = vaultSuggestions(credentials, chosen, search.value);
-      if (rows[active]) pick(rows[active].id);
-      return;
-    }
-    if (event.key === "Escape") {
-      open = false;
-      drawOptions();
-      return;
-    }
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      const rows = vaultSuggestions(credentials, chosen, search.value);
-      if (!rows.length) return;
-      event.preventDefault();
-      active = (active + (event.key === "ArrowDown" ? 1 : -1) + rows.length) % rows.length;
-      drawOptions();
-    }
-  });
-  return { ids: () => [...chosen], remove, suggest: (query) => vaultSuggestions(credentials, chosen, query) };
 }
 
 registerRedirect("#/templates/new", "#/templates?new=1");
