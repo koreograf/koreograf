@@ -83,7 +83,7 @@ Every control sits in a `<label class="field">`. The label text is the first `sp
 </label>
 ```
 
-Use `.field-row` for a few related controls that fit on one line and `.field-grid` for a responsive two-column group. Use `.form-section` for a titled group inside a long form.
+Use `.field-row` for a few related controls that fit on one line and `.field-grid` for a responsive two-column group. Use `.form-section` for a titled group inside a long form. Use `.filter-bar` for a page filter bar that mixes a search field, labelled selects, and a button: it lines the controls up on their bottom edge and drops the search field's bottom margin.
 
 ```html
 <div class="field-grid">

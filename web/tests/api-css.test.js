@@ -2,7 +2,7 @@
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { stylesheet, rule, mediaBlock } = require("./css.js");
+const { stylesheet, rule, mediaBlock, read } = require("./css.js");
 
 test("the shared styles keep the log, table and navigation rules", () => {
   const css = stylesheet();
@@ -27,6 +27,22 @@ test("the shared styles keep the log, table and navigation rules", () => {
   }
   assert.ok(css.includes("[hidden]"));
   assert.ok(css.includes("display: none !important"));
+});
+
+test("the jobs filter bar aligns its controls on one baseline", () => {
+  const css = stylesheet();
+  const bar = rule(css, ".filter-bar");
+  assert.ok(bar, "the filter bar rule is missing");
+  assert.match(bar[1], /align-items:\s*end;/);
+  assert.match(bar[1], /flex-wrap:\s*wrap;/);
+  const search = rule(css, ".filter-bar > .search");
+  assert.ok(search, "the filter bar search rule is missing");
+  assert.match(search[1], /margin:\s*0;/);
+  assert.doesNotMatch(search[1], /margin-bottom/);
+  assert.match(rule(css, ".row")[1], /align-items:\s*center;/);
+  const jobs = read("web/js/features/jobs.js");
+  assert.ok(jobs.includes('<div class="filter-bar">'));
+  assert.match(jobs, /class="filter-bar">[\s\S]*?id="job-search"[\s\S]*?id="job-only-failed"/);
 });
 
 test("the schedule overlay uses the shared wide form layout", () => {
