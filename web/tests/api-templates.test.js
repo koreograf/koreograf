@@ -58,6 +58,68 @@ test("the template credential kinds follow the tool", async () => {
   assert.deepEqual(TOOL_CREDENTIAL_KINDS.shell, ["ssh", "env"]);
 });
 
+const launchCredentials = [
+  { id: "ssh-1", kind: "ssh", name: "Machine" },
+  { id: "vault-1", kind: "vault", name: "Secrets" },
+  { id: "aws-1", kind: "aws", name: "Cloud" },
+  { id: "netbox-1", kind: "netbox", name: "NetBox" },
+];
+
+async function openLaunch(tool, item) {
+  const state = await load("core/state.js");
+  state.setMe({ is_admin: true, display_name: "Admin", teams: [{ id: "t1", name: "Team", role: "owner" }] });
+  state.setTeamId("t1");
+  const main = document.createElement("main");
+  main.className = "main";
+  document.body.appendChild(main);
+  const posts = [];
+  globalThis.fetch = async (path, init) => {
+    if (init && init.method === "POST") {
+      posts.push(JSON.parse(init.body));
+      return { ok: true, status: 200, text: async () => JSON.stringify({ id: "job-1" }) };
+    }
+    const body = path.startsWith("/api/v1/credentials") ? launchCredentials : [];
+    return { ok: true, status: 200, text: async () => JSON.stringify(body) };
+  };
+  const { openLaunchPrompt } = await load("features/templates.js");
+  await openLaunchPrompt({ id: `tpl-${tool}`, name: tool, tool, extra_vars: {}, spec: {}, ...item }, true);
+  const dialog = document.querySelector("#launch-prompt");
+  return { form: dialog.querySelector(".dialog-form"), posts };
+}
+
+test("the launch dialog offers only the credential kinds the tool uses", async () => {
+  const cases = [
+    ["ansible", ["ssh"], ["aws"], true],
+    ["opentofu", ["aws"], ["ssh"], false],
+    ["shell", ["ssh"], ["aws"], false],
+  ];
+  for (const [tool, visible, hidden, vault] of cases) {
+    const { form } = await openLaunch(tool, { credential_ids: ["netbox-1"] });
+    for (const kind of visible) {
+      const field = form.querySelector(`[data-credential-field="${kind}"]`);
+      assert.ok(field && !field.hidden, `${tool} does not offer ${kind}`);
+    }
+    for (const kind of hidden) {
+      const field = form.querySelector(`[data-credential-field="${kind}"]`);
+      assert.ok(field && field.hidden, `${tool} offers ${kind}`);
+    }
+    assert.equal(form.querySelector('[data-credential-kind="netbox"]'), null, `${tool} offers netbox`);
+    assert.equal(form.querySelector("#template-vault-field").hidden, !vault, `${tool} vault field`);
+    const legacy = form.querySelector("#template-legacy-credentials");
+    assert.equal(legacy.hidden, false, `${tool} hides the stored netbox credential`);
+    assert.match(legacy.innerHTML, /NetBox/, `${tool} does not show the stored netbox credential`);
+  }
+});
+
+test("the launch dialog keeps the stored credentials in the payload", async () => {
+  const { form, posts } = await openLaunch("ansible", { credential_ids: ["ssh-1", "vault-1", "netbox-1"] });
+  form.extra_vars.value = "{}";
+  form.dispatchEvent({ type: "submit", preventDefault() {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(posts.length, 1, "the launch did not post");
+  assert.deepEqual([...posts[0].credential_ids].sort(), ["netbox-1", "ssh-1", "vault-1"]);
+});
+
 test("the template validation errors map to their fields", async () => {
   const { ERROR_FIELD } = await load("core/forms.js");
   const expected = {
