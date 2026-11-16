@@ -122,7 +122,7 @@ export async function openLaunchPrompt(item, launchWithOptions = false, preset =
     body: `
       <p class="small muted">${h(launchWithOptions ? "launch_with_options_help" : "the_launch_dialog_starts_from_the_template")}</p>
       ${inventory}
-      ${templateCredentialFields(credentials, selectedCredentialIds(item))}
+      ${templateCredentialFields(credentials, selectedCredentialIds(item), item.tool)}
       ${ansibleFields}
       <label class="field"><span>${h("extra_variables_json")}</span><textarea name="extra_vars">${esc(JSON.stringify(item.extra_vars || {}, null, 2))}</textarea></label>`,
     submit: t("launch"),
@@ -160,12 +160,20 @@ export async function openLaunchPrompt(item, launchWithOptions = false, preset =
         submitButton.setAttribute("aria-busy", "true");
       }
       try {
+        const offered = new Set(TOOL_CREDENTIAL_KINDS[item.tool] || []);
+        const credentialIds = new Set();
+        form.querySelectorAll("[data-credential-field]").forEach((field) => {
+          if (field.hidden) return;
+          const select = field.querySelector("select[data-credential-kind]");
+          if (select && select.value) credentialIds.add(select.value);
+        });
+        if (offered.has("vault")) {
+          form.querySelectorAll("#vault-pills [data-vault-id]").forEach((node) => credentialIds.add(node.dataset.vaultId));
+        }
+        form.querySelectorAll("[data-legacy-credential-id]").forEach((node) => credentialIds.add(node.dataset.legacyCredentialId));
         const body = {
           extra_vars: jsonObject(form.extra_vars.value, "extra_variables"),
-          credential_ids: [
-            ...[...form.querySelectorAll("[data-credential-kind]")].map((select) => select.value).filter(Boolean),
-            ...[...form.querySelectorAll("#vault-pills [data-vault-id]")].map((node) => node.dataset.vaultId),
-          ],
+          credential_ids: [...credentialIds],
         };
         if (launchWithOptions) body.launch_with_options = true;
         if (ansible) {
@@ -195,6 +203,7 @@ export async function openLaunchPrompt(item, launchWithOptions = false, preset =
   const form = dialog.form;
   bindChips(form);
   bindVaultPicker(form, credentials, selectedCredentialIds(item));
+  bindLegacyCredentials(form, credentials, selectedCredentialIds(item), item.tool);
 }
 
 async function pageTemplates() {
@@ -762,6 +771,28 @@ export const TOOL_CREDENTIAL_KINDS = {
 function selectedCredentialIds(item) {
   if (Array.isArray(item.credential_ids)) return item.credential_ids;
   return item.credential_id ? [item.credential_id] : [];
+}
+
+function unfitCredentials(credentials, selectedIds, tool) {
+  const offered = new Set(TOOL_CREDENTIAL_KINDS[tool] || []);
+  const selected = new Set(selectedIds || []);
+  return credentials.filter((row) => selected.has(row.id) && !offered.has(row.kind));
+}
+
+function bindLegacyCredentials(form, credentials, selectedIds, tool) {
+  const field = form.querySelector("#template-legacy-credentials");
+  const box = form.querySelector("#legacy-pills");
+  if (!field || !box) return;
+  const rows = unfitCredentials(credentials, selectedIds, tool);
+  box.innerHTML = rows.map((row) => `<span class="chip" data-legacy-credential-id="${esc(row.id)}" data-legacy-kind="${esc(row.kind)}"><span class="chip-text">${esc(`${credentialKindLabel(row.kind)} · ${row.name}`)}</span><button class="chip-remove" type="button" aria-label="${h("remove_credential_name", { name: row.name })}">×</button></span>`).join("");
+  field.hidden = rows.length === 0;
+  box.querySelectorAll(".chip-remove").forEach((button) => {
+    button.addEventListener("click", () => {
+      const chip = button.closest(".chip");
+      if (chip) chip.remove();
+      field.hidden = box.querySelectorAll("[data-legacy-credential-id]").length === 0;
+    });
+  });
 }
 
 function templateCredentialFields(credentials, selectedIds, tool = "", readOnly = false) {
