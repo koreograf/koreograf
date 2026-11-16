@@ -4,6 +4,15 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const { stylesheet, rule, mediaBlock, read } = require("./css.js");
 
+function paddingBox(declarations) {
+  const match = /padding:\s*([^;]+);/.exec(declarations);
+  if (!match) return null;
+  const values = match[1].trim().split(/\s+/).map((value) => Number.parseFloat(value));
+  if (values.some((value) => !Number.isFinite(value))) return null;
+  const [top, right = top, bottom = top, left = right] = values;
+  return { top, right, bottom, left };
+}
+
 test("the shared styles keep the log, table and navigation rules", () => {
   const css = stylesheet();
   for (const needle of [
@@ -48,7 +57,14 @@ test("the jobs filter bar aligns its controls on one baseline", () => {
 test("the schedule overlay uses the shared wide form layout", () => {
   const css = stylesheet();
   assert.ok(css.includes(".schedule-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(15rem, 19rem);"));
-  assert.ok(css.includes(".schedule-fields { overflow-y: auto;"));
+  const fields = rule(css, ".schedule-fields");
+  assert.ok(fields, "the schedule fields rule is missing");
+  assert.match(fields[1], /overflow-y:\s*auto;/);
+  const padding = paddingBox(fields[1]);
+  assert.ok(padding, "the schedule fields rule has no padding");
+  for (const side of ["top", "right", "bottom", "left"]) {
+    assert.ok(padding[side] >= 4, `the schedule fields leave no room for the focus ring on the ${side}`);
+  }
   assert.ok(css.includes(".schedule-preview { overflow-y: auto;"));
   const narrow = mediaBlock(css, "@media (max-width: 900px)");
   assert.ok(narrow.includes(".schedule-layout { grid-template-columns: 1fr; height: auto; }"));
@@ -56,6 +72,27 @@ test("the schedule overlay uses the shared wide form layout", () => {
   assert.ok(narrow.includes(".schedule-pin { display: block;"));
   assert.ok(css.includes('.overlay-card.dialog input:not([type="checkbox"]):not([type="radio"])'));
   assert.ok(!css.includes("#schedule-form input"));
+});
+
+test("scroll containers around controls leave room for the focus ring", () => {
+  const css = stylesheet();
+  for (const selector of [".dialog-body", ".schedule-preview", ".assistant-thread", ".vault-options"]) {
+    const found = rule(css, selector);
+    assert.ok(found, `the ${selector} rule is missing`);
+    const padding = paddingBox(found[1]);
+    assert.ok(padding, `the ${selector} rule has no padding`);
+    for (const side of ["top", "right", "bottom", "left"]) {
+      assert.ok(padding[side] >= 4, `the ${selector} leaves no room for the focus ring on the ${side}`);
+    }
+  }
+  const narrow = mediaBlock(css, "@media (max-width: 900px)");
+  const inspector = /\.inspector-panel \.inspector\s*\{([^}]*)\}/.exec(narrow);
+  assert.ok(inspector, "the narrow inspector rule is missing");
+  const padding = paddingBox(inspector[1]);
+  assert.ok(padding, "the narrow inspector rule has no padding");
+  for (const side of ["top", "right", "bottom", "left"]) {
+    assert.ok(padding[side] >= 4, `the narrow inspector leaves no room for the focus ring on the ${side}`);
+  }
 });
 
 test("the edit overlay keeps its tabs and panels", () => {
