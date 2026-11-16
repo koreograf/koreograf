@@ -62,7 +62,7 @@ async function pageJobs() {
   ].join("");
   shell(t("jobs"), `
     <section class="card">
-      <div class="row">
+      <div class="filter-bar">
         <input class="search" id="job-search" type="search" value="${esc(view.q)}" placeholder="${h("search_jobs")}" aria-label="${h("search_jobs")}" autocomplete="off">
         <label class="field"><span>${h("status")}</span><select id="job-status" aria-label="${h("status")}">${choices(["pending", "running", "successful", "failed", "canceled"], view.status, statusLabel)}</select></label>
         <label class="field"><span>${h("tool")}</span><select id="job-tool" aria-label="${h("tool")}">${choices(["ansible", "opentofu", "shell"], view.tool, (value) => t(value))}</select></label>
