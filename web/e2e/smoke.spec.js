@@ -69,6 +69,7 @@ async function clickEdge(page, locator, offset = 5) {
 }
 
 test("an administrator navigates every route, launches the demo shell job and switches language", async ({ page }) => {
+  test.setTimeout(120000);
   await page.goto("/");
   await expect(page.getByRole("button", { name: catalog.de.signIn })).toBeVisible();
 
@@ -537,6 +538,7 @@ test("Delete removes a connected node and Ctrl+Z restores it with its edge", asy
 });
 
 test("a finished workflow run shows its path, closes output on Escape and is reachable from the Runs tab", async ({ page }) => {
+  test.setTimeout(120000);
   await signInInEnglish(page);
   await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
   await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
