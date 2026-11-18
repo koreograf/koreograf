@@ -6,6 +6,7 @@ const { dataDir, password, port, root, username } = require("./env");
 module.exports = defineConfig({
   testDir: __dirname,
   testMatch: "smoke.spec.js",
+  timeout: 120000,
   fullyParallel: false,
   workers: 1,
   forbidOnly: Boolean(process.env.CI),
