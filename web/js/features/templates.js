@@ -207,14 +207,17 @@ async function pageTemplates() {
   let query = "";
   const draw = () => {
     const shown = filterTemplates(items, tool, query);
-    const rows = shown.map((item) => `
+    const rows = shown.map((item) => {
+      const entry = item.entrypoint || "—";
+      return `
       <tr>
         <td><a href="#/templates?edit=${esc(item.id)}">${esc(item.name)}</a><div class="small muted">${esc(item.description)}</div></td>
         <td class="tool narrow-hide">${esc(item.tool)}</td>
-        <td class="mono narrow-hide">${esc(item.entrypoint || "—")}</td>
+        <td class="mono entry narrow-hide"><span class="entry-path" title="${esc(entry)}">${esc(entry)}</span></td>
         <td class="small narrow-hide">${esc(templateOptionLine(item))}</td>
         <td>${can("operator") ? `<div class="row"><button class="btn primary" type="button" data-launch="${esc(item.id)}">${h("launch")}</button>${item.tool === "ansible" && !item.prompt_on_launch ? `<button class="btn" type="button" data-launch-options="${esc(item.id)}">${h("launch_with_options")}</button>` : ""}</div>` : ""}</td>
-      </tr>`);
+      </tr>`;
+    });
     const host = document.querySelector("#template-table");
     if (!shown.length) {
       host.innerHTML = items.length
