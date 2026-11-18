@@ -46,6 +46,10 @@ pub(crate) const JOB_ACTIVITY: &str = "SELECT status, started_at, finished_at FR
 pub(crate) const JOBS_BUSY: &str =
     "SELECT COUNT(*) FROM jobs WHERE status IN ('pending', 'running')";
 
+pub(crate) const JOBS_BY_STATUS: &str = "SELECT COUNT(*) FROM jobs WHERE status = ?1";
+
+pub(crate) const PENDING: &str = "pending";
+
 fn job_filter(dialect: Dialect) -> &'static str {
     match dialect {
         Dialect::Sqlite => {

@@ -5903,7 +5903,7 @@ exit 0
             failed_host_names(&job.failed_hosts)
         };
         assert_eq!(hosts, vec!["web-9".to_string()]);
-        let metrics = state.metrics.render(&[]);
+        let metrics = state.metrics.render(&[], 0);
         assert!(metrics.contains("role=\"hidden.role\""), "{metrics}");
         assert!(metrics.contains("role=\"kept.role\""), "{metrics}");
         let _ = std::fs::remove_dir_all(&state.cfg.data_dir);

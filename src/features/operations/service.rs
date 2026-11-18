@@ -1429,6 +1429,14 @@ pub(crate) fn own_imported(data_dir: &Path, container_image: bool) {
     let _ = (data_dir, container_image);
 }
 
+pub(crate) fn pending_jobs(c: &Connection) -> AppResult<i64> {
+    Ok(c.query_row(
+        crate::features::jobs::store::JOBS_BY_STATUS,
+        [crate::features::jobs::store::PENDING],
+        |row| row.get(0),
+    )?)
+}
+
 pub(crate) fn busy(c: &Connection) -> AppResult<bool> {
     let jobs: i64 = c.query_row(
         "SELECT COUNT(*) FROM jobs WHERE status IN ('pending', 'running')",
@@ -2495,10 +2503,34 @@ struct OpenJob {
 struct Book {
     started: BTreeMap<(String, String), u64>,
     finished: BTreeMap<(String, String, String), u64>,
+    durations: BTreeMap<(String, String, String), DurationHistogram>,
     roles: BTreeMap<(String, String, &'static str), u64>,
     open: HashMap<String, OpenJob>,
     closed: HashSet<String>,
     closed_order: VecDeque<String>,
+}
+
+const DURATION_BUCKETS: [f64; 12] = [
+    1.0, 5.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1800.0, 3600.0, 7200.0, 21600.0,
+];
+
+#[derive(Default)]
+struct DurationHistogram {
+    buckets: [u64; DURATION_BUCKETS.len()],
+    count: u64,
+    sum: f64,
+}
+
+impl DurationHistogram {
+    fn observe(&mut self, seconds: f64) {
+        self.count += 1;
+        self.sum += seconds;
+        for (index, bound) in DURATION_BUCKETS.iter().enumerate() {
+            if seconds <= *bound {
+                self.buckets[index] += 1;
+            }
+        }
+    }
 }
 
 pub(crate) struct Metrics {
@@ -2560,6 +2592,7 @@ impl Metrics {
             inner: Mutex::new(Book {
                 started: BTreeMap::new(),
                 finished: BTreeMap::new(),
+                durations: BTreeMap::new(),
                 roles: BTreeMap::new(),
                 open: HashMap::new(),
                 closed: HashSet::new(),
@@ -2640,7 +2673,7 @@ impl Metrics {
         );
     }
 
-    pub(crate) fn render(&self, caches: &[CacheGauge]) -> String {
+    pub(crate) fn render(&self, caches: &[CacheGauge], pending: u64) -> String {
         let Ok(book) = self.inner.lock() else {
             return String::new();
         };
@@ -2673,6 +2706,70 @@ impl Metrics {
                 *value,
             );
         }
+        family(
+            &mut out,
+            "koreograf_job_duration_seconds",
+            "histogram",
+            "Runtime of jobs that began execution, in seconds.",
+        );
+        for ((tool, playbook, status), histogram) in &book.durations {
+            for (index, bound) in DURATION_BUCKETS.iter().enumerate() {
+                let le = bound.to_string();
+                sample(
+                    &mut out,
+                    "koreograf_job_duration_seconds_bucket",
+                    &[
+                        ("tool", tool),
+                        ("playbook", playbook),
+                        ("status", status),
+                        ("le", &le),
+                    ],
+                    histogram.buckets[index],
+                );
+            }
+            sample(
+                &mut out,
+                "koreograf_job_duration_seconds_bucket",
+                &[
+                    ("tool", tool),
+                    ("playbook", playbook),
+                    ("status", status),
+                    ("le", "+Inf"),
+                ],
+                histogram.count,
+            );
+            sample_float(
+                &mut out,
+                "koreograf_job_duration_seconds_sum",
+                &[("tool", tool), ("playbook", playbook), ("status", status)],
+                histogram.sum,
+            );
+            sample(
+                &mut out,
+                "koreograf_job_duration_seconds_count",
+                &[("tool", tool), ("playbook", playbook), ("status", status)],
+                histogram.count,
+            );
+        }
+        family(
+            &mut out,
+            "koreograf_jobs_pending",
+            "gauge",
+            "Jobs waiting for a runner.",
+        );
+        sample(&mut out, "koreograf_jobs_pending", &[], pending);
+        family(
+            &mut out,
+            "koreograf_jobs_running",
+            "gauge",
+            "Jobs currently executing.",
+        );
+        sample(
+            &mut out,
+            "koreograf_jobs_running",
+            &[],
+            as_u64(book.open.len()),
+        );
         family(
             &mut out,
             "koreograf_role_results_total",
@@ -2812,22 +2909,25 @@ impl Metrics {
             return None;
         }
         let status = terminal_status(status).to_string();
-        let closed = if let Some(mut open) = book.open.remove(job_id) {
+        let (closed, ran) = if let Some(mut open) = book.open.remove(job_id) {
             if only_unstarted {
                 book.open.insert(job_id.to_string(), open);
                 return None;
             }
             let summary = open.observer.finish();
             let duration_ms = u64::try_from(open.started.elapsed().as_millis()).unwrap_or(u64::MAX);
-            ClosedJob {
-                tool: open.tool,
-                playbook: open.playbook,
-                team_id: open.team_id,
-                template: open.template,
-                status,
-                duration_ms,
-                summary,
-            }
+            (
+                ClosedJob {
+                    tool: open.tool,
+                    playbook: open.playbook,
+                    team_id: open.team_id,
+                    template: open.template,
+                    status,
+                    duration_ms,
+                    summary,
+                },
+                true,
+            )
         } else {
             let (tool, playbook, team_id, template) = match fallback {
                 Some(meta) => (
@@ -2843,15 +2943,18 @@ impl Metrics {
                     "-".to_string(),
                 ),
             };
-            ClosedJob {
-                tool,
-                playbook,
-                team_id,
-                template,
-                status,
-                duration_ms: 0,
-                summary: None,
-            }
+            (
+                ClosedJob {
+                    tool,
+                    playbook,
+                    team_id,
+                    template,
+                    status,
+                    duration_ms: 0,
+                    summary: None,
+                },
+                false,
+            )
         };
         *book
             .finished
@@ -2861,6 +2964,16 @@ impl Metrics {
                 closed.status.clone(),
             ))
             .or_default() += 1;
+        if ran {
+            book.durations
+                .entry((
+                    closed.tool.clone(),
+                    closed.playbook.clone(),
+                    closed.status.clone(),
+                ))
+                .or_default()
+                .observe(closed.duration_ms as f64 / 1000.0);
+        }
         remember_closed(&mut book, job_id);
         Some(closed)
     }
@@ -2952,7 +3065,13 @@ pub(crate) fn scrape(state: &Shared) -> String {
     let ids = cache_team_ids(&state.cfg.data_dir);
     let names = team_names(state, &ids);
     let gauges = gauges_from_dir(&state.cfg.data_dir, &names);
-    state.metrics.render(&gauges)
+    let pending = state
+        .store()
+        .pending_jobs()
+        .ok()
+        .and_then(|count| u64::try_from(count).ok())
+        .unwrap_or(0);
+    state.metrics.render(&gauges, pending)
 }
 
 pub(crate) fn gauges_from_dir(data_dir: &Path, names: &HashMap<String, String>) -> Vec<CacheGauge> {
@@ -3202,21 +3321,29 @@ fn family(out: &mut String, name: &str, kind: &str, help: &str) {
 }
 
 fn sample(out: &mut String, name: &str, labels: &[(&str, &str)], value: u64) {
+    sample_value(out, name, labels, &value.to_string());
+}
+
+fn sample_float(out: &mut String, name: &str, labels: &[(&str, &str)], value: f64) {
+    sample_value(out, name, labels, &format!("{value:.3}"));
+}
+
+fn sample_value(out: &mut String, name: &str, labels: &[(&str, &str)], value: &str) {
     out.push_str(name);
     if !labels.is_empty() {
         out.push('{');
-        for (index, (key, value)) in labels.iter().enumerate() {
+        for (index, (key, text)) in labels.iter().enumerate() {
             if index > 0 {
                 out.push(',');
             }
             out.push_str(key);
             out.push_str("=\"");
-            out.push_str(&prom_escape(value));
+            out.push_str(&prom_escape(text));
             out.push('"');
         }
         out.push('}');
     }
     out.push(' ');
-    out.push_str(&value.to_string());
+    out.push_str(value);
     out.push('\n');
 }
