@@ -242,6 +242,46 @@ test("an administrator navigates every route, launches the demo shell job and sw
   expect(new URL(page.url()).hash).toMatch(/^#\/workflows\/[^?]+$/);
 });
 
+test("a long template entry stays on one line at 1440 px and hides at 375 px", async ({ page }) => {
+  await signInInEnglish(page);
+  const teamId = await page.evaluate(async () => {
+    const response = await fetch("/api/v1/me");
+    const profile = await response.json();
+    return profile.teams[0].id;
+  });
+  const entrypoint = "playbooks/production/webservers/health_check.yml";
+  const created = await page.request.post("/api/v1/templates", {
+    headers: { "X-Team-Id": teamId },
+    data: { name: "Long entry", tool: "ansible", entrypoint },
+  });
+  expect(created.status()).toBe(201);
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.getByRole("navigation").getByRole("link", { name: "Templates", exact: true }).click();
+  const row = page.getByRole("row", { name: /Long entry/ });
+  const entry = row.locator("td.entry .entry-path");
+  await expect(entry).toHaveText(entrypoint);
+  await expect(entry).toHaveAttribute("title", entrypoint);
+  const box = await entry.boundingBox();
+  expect(box.height).toBeLessThan(24);
+  const clipped = await entry.evaluate((element) => element.scrollWidth > element.clientWidth);
+  expect(clipped).toBe(true);
+  const tool = await row.locator("td.tool").evaluate((element) => getComputedStyle(element).whiteSpace);
+  expect(tool).toBe("nowrap");
+  const run = row.locator("td.small");
+  await expect(run).toHaveText("Run");
+  expect(await run.evaluate((element) => getComputedStyle(element).wordBreak)).toBe("normal");
+  const pageWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+  expect(pageWidth).toBeLessThanOrEqual(1440);
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect(entry).toBeHidden();
+  const width = await page.evaluate(() => document.documentElement.scrollWidth);
+  expect(width).toBeLessThanOrEqual(375);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect(entry).toBeVisible();
+});
+
 test("a node card shows its template and limit override", async ({ page }) => {
   await signInInEnglish(page);
   await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();

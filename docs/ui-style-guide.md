@@ -131,6 +131,8 @@ Every table goes through the `table` helper or reproduces its markup: `.table-wr
 
 A list page puts its search in `.search`, optional filters in `.filter-row`, and the table in a card. Table headers are uppercase and muted; numbers use `.num`, narrow columns use `.tight`, and the last action column uses `.actions`. Paging keeps the current page in the address, as the job list does. The account page's API token list follows the same table shape, with a create form above it and a revoke button in the action column.
 
+A file path in a cell uses `td.entry` with a `span.entry-path` inside. The span stays on one line, ends in an ellipsis when the column is narrow, and carries the full path in `title`; the templates list shows the pattern.
+
 ### Status pills
 
 `pill(status)` renders a `.pill` span with the translated label. The status is also the class: `.pending`, `.running`, `.successful`, `.failed`, `.canceled`, `.skipped`, and `.warn`. The label carries the meaning; the color is a second signal.

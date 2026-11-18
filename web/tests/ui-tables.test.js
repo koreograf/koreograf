@@ -26,6 +26,20 @@ test("table text does not break mid word", () => {
   assert.ok(css.includes(".table .pill, .table time { white-space: nowrap; }"));
 });
 
+test("long template entries truncate instead of wrapping mid word", () => {
+  const css = stylesheet();
+  const entry = rule(css, ".table td.entry .entry-path");
+  assert.ok(entry, "the entry cell rule is missing");
+  assert.match(entry[1], /display:\s*block/);
+  assert.match(entry[1], /max-width:\s*22rem/);
+  assert.match(entry[1], /overflow:\s*hidden/);
+  assert.match(entry[1], /text-overflow:\s*ellipsis/);
+  assert.match(entry[1], /white-space:\s*nowrap/);
+  const mono = rule(css, "code, .mono");
+  assert.ok(mono, "the mono rule is missing");
+  assert.match(mono[1], /word-break:\s*break-all/);
+});
+
 test("the shared table wraps cells with a data label", async () => {
   require("./test-dom.js").install();
   const { join } = require("node:path");
@@ -52,7 +66,7 @@ test("list tables hide low priority cells on narrow windows", async () => {
     items: [{ id: "j1", name: "Job", tool: "ansible", status: "successful", trigger: "manual", created_at: "2026-01-01T00:00:00Z" }],
     total: 1,
   };
-  const templates = [{ id: "t1", name: "Template", tool: "ansible", entrypoint: "site.yml", spec: {} }];
+  const templates = [{ id: "t1", name: "Template", tool: "ansible", entrypoint: "health_check.yml", spec: {} }];
   globalThis.fetch = async (path) => {
     let body = [];
     if (path.startsWith("/api/v1/jobs")) body = jobs;
@@ -70,5 +84,7 @@ test("list tables hide low priority cells on narrow windows", async () => {
   assert.ok((table.innerHTML.match(/narrow-hide/g) || []).length >= 3);
   location.hash = "#/templates";
   await router.matchRoute("#/templates").handler();
-  assert.match(document.querySelector("#template-table").innerHTML, /class="mono narrow-hide"/);
+  const templatesTable = document.querySelector("#template-table").innerHTML;
+  assert.match(templatesTable, /class="mono entry narrow-hide"/);
+  assert.match(templatesTable, /<span class="entry-path" title="health_check.yml">health_check.yml<\/span>/);
 });

@@ -257,6 +257,7 @@ h2 { font-size: 18px; margin: 0 0 10px; }
 .table .pill, .table time { white-space: nowrap; }
 .table a { display: inline-flex; align-items: center; min-height: 24px; min-width: 24px; text-decoration: none; }
 .table a:hover { text-decoration: underline; }
+.table td.entry .entry-path { display: block; max-width: 22rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .pill {
   display: inline-block;
