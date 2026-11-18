@@ -35,6 +35,7 @@ class Element {
     this.clientWidth = 800;
     this.offsetWidth = 200;
     this.offsetHeight = 100;
+    this.offsetTop = 0;
     this.offsetParent = {};
     this.tabIndex = 0;
   }
