@@ -2465,6 +2465,7 @@ const LABEL_TOOL: usize = 32;
 /// The two closes of one job land before this many other jobs finish.
 /// Older ids are dropped so the set does not grow for the process lifetime.
 pub(super) const CLOSED_LIMIT: usize = 1024;
+pub(super) const HOST_LIMIT: usize = 1000;
 
 /// Tool, entry path, team, and template stored on the job.
 pub(crate) fn job_labels(job: &db::Job) -> JobLabels {
@@ -2500,11 +2501,18 @@ struct OpenJob {
     observer: PlayObserver,
 }
 
+struct HostLast {
+    at: i64,
+    success: bool,
+}
+
 struct Book {
     started: BTreeMap<(String, String), u64>,
     finished: BTreeMap<(String, String, String), u64>,
     durations: BTreeMap<(String, String, String), DurationHistogram>,
     roles: BTreeMap<(String, String, &'static str), u64>,
+    host_last: BTreeMap<(String, String), HostLast>,
+    host_order: VecDeque<(String, String)>,
     open: HashMap<String, OpenJob>,
     closed: HashSet<String>,
     closed_order: VecDeque<String>,
@@ -2547,8 +2555,47 @@ struct RoleSummary {
 }
 
 enum Step {
-    Host { role: String, result: &'static str },
+    Host {
+        role: Option<String>,
+        result: &'static str,
+    },
     Done(RoleSummary),
+}
+
+#[derive(Default)]
+struct HostTally {
+    ok: u64,
+    changed: u64,
+    failed: u64,
+    unreachable: u64,
+    skipped: u64,
+}
+
+impl HostTally {
+    fn add(&mut self, result: &str) {
+        match result {
+            "ok" => self.ok += 1,
+            "changed" => self.changed += 1,
+            "failed" => self.failed += 1,
+            "unreachable" => self.unreachable += 1,
+            "skipped" => self.skipped += 1,
+            _ => {}
+        }
+    }
+
+    fn result(&self) -> &'static str {
+        if self.unreachable > 0 {
+            "unreachable"
+        } else if self.failed > 0 {
+            "failed"
+        } else if self.changed > 0 {
+            "changed"
+        } else if self.ok > 0 {
+            "ok"
+        } else {
+            "skipped"
+        }
+    }
 }
 
 enum LogEv {
@@ -2571,6 +2618,7 @@ struct ClosedJob {
     status: String,
     duration_ms: u64,
     summary: Option<RoleSummary>,
+    hosts: Vec<db::HostRun>,
 }
 
 #[derive(Default)]
@@ -2581,6 +2629,7 @@ struct PlayObserver {
     failed: u64,
     unreachable: u64,
     skipped: u64,
+    hosts: BTreeMap<(String, String), HostTally>,
     saw_play: bool,
     saw_host: bool,
     saw_work: bool,
@@ -2594,6 +2643,8 @@ impl Metrics {
                 finished: BTreeMap::new(),
                 durations: BTreeMap::new(),
                 roles: BTreeMap::new(),
+                host_last: BTreeMap::new(),
+                host_order: VecDeque::new(),
                 open: HashMap::new(),
                 closed: HashSet::new(),
                 closed_order: VecDeque::new(),
@@ -2635,12 +2686,17 @@ impl Metrics {
             .unwrap_or(false)
     }
 
-    pub(crate) fn close(&self, job_id: &str, status: &str, fallback: Option<&JobMeta<'_>>) {
+    pub(crate) fn close(
+        &self,
+        job_id: &str,
+        status: &str,
+        fallback: Option<&JobMeta<'_>>,
+    ) -> Vec<db::HostRun> {
         let Some(closed) = self.record_close(job_id, status, false, fallback) else {
-            return;
+            return Vec::new();
         };
-        if let Some(summary) = closed.summary {
-            log_role_finished(job_id, &closed.playbook, &summary);
+        if let Some(summary) = &closed.summary {
+            log_role_finished(job_id, &closed.playbook, summary);
         }
         tracing::info!(
             target: "koreograf::job",
@@ -2653,6 +2709,7 @@ impl Metrics {
             duration_ms = closed.duration_ms,
             "job finished"
         );
+        closed.hosts
     }
 
     /// Counts a terminal job that never reached `begin`. A later `close` is a no-op.
@@ -2786,6 +2843,34 @@ impl Metrics {
         }
         family(
             &mut out,
+            "koreograf_host_last_run_timestamp_seconds",
+            "gauge",
+            "Last Ansible run per host and playbook, in Unix seconds.",
+        );
+        for ((host, playbook), last) in &book.host_last {
+            sample(
+                &mut out,
+                "koreograf_host_last_run_timestamp_seconds",
+                &[("host", host), ("playbook", playbook)],
+                u64::try_from(last.at).unwrap_or(0),
+            );
+        }
+        family(
+            &mut out,
+            "koreograf_host_last_run_success",
+            "gauge",
+            "1 when the last Ansible run per host and playbook had no failed or unreachable result.",
+        );
+        for ((host, playbook), last) in &book.host_last {
+            sample(
+                &mut out,
+                "koreograf_host_last_run_success",
+                &[("host", host), ("playbook", playbook)],
+                u64::from(last.success),
+            );
+        }
+        family(
+            &mut out,
             "koreograf_cache_collections",
             "gauge",
             "Ansible collections stored in the team cache.",
@@ -2877,16 +2962,18 @@ impl Metrics {
         let mut events = Vec::new();
         for step in steps {
             match step {
-                Step::Host { role, result } => {
-                    *book
-                        .roles
-                        .entry((playbook.clone(), role.clone(), result))
-                        .or_default() += 1;
-                    events.push(LogEv::Host {
-                        playbook: playbook.clone(),
-                        role,
-                        result,
-                    });
+                Step::Host { role, result, .. } => {
+                    if let Some(role) = role {
+                        *book
+                            .roles
+                            .entry((playbook.clone(), role.clone(), result))
+                            .or_default() += 1;
+                        events.push(LogEv::Host {
+                            playbook: playbook.clone(),
+                            role,
+                            result,
+                        });
+                    }
                 }
                 Step::Done(summary) => events.push(LogEv::Done {
                     playbook: playbook.clone(),
@@ -2915,6 +3002,7 @@ impl Metrics {
                 return None;
             }
             let summary = open.observer.finish();
+            let hosts = open.observer.host_runs(&open.playbook);
             let duration_ms = u64::try_from(open.started.elapsed().as_millis()).unwrap_or(u64::MAX);
             (
                 ClosedJob {
@@ -2925,6 +3013,7 @@ impl Metrics {
                     status,
                     duration_ms,
                     summary,
+                    hosts,
                 },
                 true,
             )
@@ -2952,6 +3041,7 @@ impl Metrics {
                     status,
                     duration_ms: 0,
                     summary: None,
+                    hosts: Vec::new(),
                 },
                 false,
             )
@@ -2973,10 +3063,34 @@ impl Metrics {
                 ))
                 .or_default()
                 .observe(closed.duration_ms as f64 / 1000.0);
+            let at = chrono::Utc::now().timestamp();
+            let mut latest: BTreeMap<(String, String), bool> = BTreeMap::new();
+            for run in &closed.hosts {
+                let key = (run.host.clone(), run.playbook.clone());
+                latest
+                    .entry(key)
+                    .and_modify(|success| *success &= run.success())
+                    .or_insert_with(|| run.success());
+            }
+            for (key, success) in latest {
+                remember_host(&mut book, key, HostLast { at, success });
+            }
         }
         remember_closed(&mut book, job_id);
         Some(closed)
     }
+}
+
+fn remember_host(book: &mut Book, key: (String, String), last: HostLast) {
+    if !book.host_last.contains_key(&key) {
+        book.host_order.push_back(key.clone());
+        if book.host_order.len() > HOST_LIMIT {
+            if let Some(old) = book.host_order.pop_front() {
+                book.host_last.remove(&old);
+            }
+        }
+    }
+    book.host_last.insert(key, last);
 }
 
 fn remember_closed(book: &mut Book, job_id: &str) {
@@ -3163,25 +3277,47 @@ impl PlayObserver {
             }
             return steps;
         }
-        let Some(result) = host_result(line) else {
+        let Some((result, host)) = host_result(line) else {
             return Vec::new();
         };
-        let Some(role) = self.role.clone() else {
-            return Vec::new();
-        };
-        match result {
-            "ok" => self.ok += 1,
-            "changed" => self.changed += 1,
-            "failed" => self.failed += 1,
-            "unreachable" => self.unreachable += 1,
-            "skipped" => self.skipped += 1,
-            _ => {}
+        let role = self.role.clone();
+        let label = role.clone().unwrap_or_else(|| "-".to_string());
+        self.hosts
+            .entry((host.to_string(), label))
+            .or_default()
+            .add(result);
+        if role.is_some() {
+            match result {
+                "ok" => self.ok += 1,
+                "changed" => self.changed += 1,
+                "failed" => self.failed += 1,
+                "unreachable" => self.unreachable += 1,
+                "skipped" => self.skipped += 1,
+                _ => {}
+            }
         }
         vec![Step::Host { role, result }]
     }
 
     fn finish(&mut self) -> Option<RoleSummary> {
         self.end_role()
+    }
+
+    fn host_runs(&self, playbook: &str) -> Vec<db::HostRun> {
+        self.hosts
+            .iter()
+            .map(|((host, role), tally)| db::HostRun {
+                host: host.clone(),
+                playbook: playbook.to_string(),
+                role: role.clone(),
+                result: tally.result().to_string(),
+                ok: tally.ok,
+                changed: tally.changed,
+                failed: tally.failed,
+                unreachable: tally.unreachable,
+                skipped: tally.skipped,
+            })
+            .collect()
     }
 
     fn matched_nothing(&self) -> bool {
@@ -3240,19 +3376,23 @@ fn role_of_task(task: &str) -> Option<String> {
     }
 }
 
-fn host_result(line: &str) -> Option<&'static str> {
+fn host_result(line: &str) -> Option<(&'static str, &str)> {
     let (kind, rest) = line.split_once(':')?;
-    if !rest.trim_start().starts_with('[') {
+    let inner = rest.trim_start().strip_prefix('[')?;
+    let end = inner.find(']')?;
+    let host = inner[..end].split(" -> ").next()?.trim();
+    if host.is_empty() {
         return None;
     }
-    match kind.trim() {
-        "ok" => Some("ok"),
-        "changed" => Some("changed"),
-        "fatal" | "failed" => Some("failed"),
-        "unreachable" => Some("unreachable"),
-        "skipping" => Some("skipped"),
-        _ => None,
-    }
+    let result = match kind.trim() {
+        "ok" => "ok",
+        "changed" => "changed",
+        "fatal" | "failed" => "failed",
+        "unreachable" => "unreachable",
+        "skipping" => "skipped",
+        _ => return None,
+    };
+    Some((result, host))
 }
 
 fn strip_ansi(line: &str) -> Cow<'_, str> {

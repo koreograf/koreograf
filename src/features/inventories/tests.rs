@@ -62,6 +62,193 @@ web-1 ansible_connection=local
     );
 }
 
+fn history_config(dir: &Path) -> crate::Config {
+    crate::Config {
+        bind: "127.0.0.1:0".into(),
+        data_dir: dir.to_path_buf(),
+        web_dir: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web"),
+        examples_dir: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples"),
+        admin_user: "admin".into(),
+        admin_password: Some("test-admin-pass".into()),
+        runner: crate::config::RunnerMode::Local,
+        container_image: false,
+        job_timeout_secs: 60,
+        job_output_lines: 8_000,
+        local_jobs: crate::config::LocalJobs::All,
+        project_roots: Vec::new(),
+        hsts: false,
+        cookie_secure: crate::config::CookieSecure::Auto,
+        trusted_proxy: false,
+        mcp: true,
+        public_url: Vec::new(),
+        data_host: None,
+        ldap: None,
+    }
+}
+
+#[tokio::test]
+async fn host_history_is_team_scoped() {
+    use axum::extract::{Path as AxumPath, Query, State};
+    use axum::http::HeaderValue;
+
+    use crate::db::HostRun;
+    use crate::error::ApiError;
+    use crate::features::identity::AuthUser;
+
+    use crate::features::inventories::routes::{get_inventory_host_history, HostQuery};
+
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-host-history-{nanos}"));
+    let state = crate::boot(history_config(&dir)).expect("boot");
+    let (team_id, organization_id) = {
+        let db = state.db().unwrap();
+        db.query_row(
+            "SELECT id, COALESCE(organization_id, '') FROM teams LIMIT 1",
+            [],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .unwrap()
+    };
+    let inventory_id = "history-inventory".to_string();
+    let job_id = "history-job".to_string();
+    {
+        let db = state.db().unwrap();
+        db.execute(
+            "INSERT INTO inventories (id, team_id, name, body, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                inventory_id,
+                team_id,
+                "History inventory",
+                "[web]\nweb-1\n",
+                "2026-01-01T00:00:00Z"
+            ],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO jobs (
+                id, team_id, template_id, workflow_job_id, workflow_node_id, name, tool,
+                status, extra_vars, launched_by, trigger, started_at, finished_at, created_at,
+                parameters, failed_hosts
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            rusqlite::params![
+                job_id,
+                team_id,
+                Option::<String>::None,
+                Option::<String>::None,
+                Option::<String>::None,
+                "History job",
+                "ansible",
+                "successful",
+                "{}",
+                "admin",
+                "manual",
+                Option::<String>::None,
+                Option::<String>::None,
+                "2026-01-01T00:00:00Z",
+                "{}",
+                "[]"
+            ],
+        )
+        .unwrap();
+    }
+    let runs = vec![HostRun {
+        host: "web-1".into(),
+        playbook: "site.yml".into(),
+        role: "web".into(),
+        result: "ok".into(),
+        ok: 2,
+        changed: 1,
+        failed: 0,
+        unreachable: 0,
+        skipped: 0,
+    }];
+    state
+        .store()
+        .insert_host_results(
+            &job_id,
+            &team_id,
+            Some(&inventory_id),
+            &runs,
+            "2026-01-01T00:00:00Z",
+        )
+        .unwrap();
+    state
+        .store()
+        .insert_user(
+            "history-viewer",
+            "history-viewer",
+            "History viewer",
+            None,
+            "local",
+            false,
+        )
+        .unwrap();
+    state
+        .store()
+        .insert_team(
+            "history-other-team",
+            &organization_id,
+            "History other team",
+            "",
+            None,
+        )
+        .unwrap();
+    state
+        .store()
+        .upsert_membership("history-other-team", "history-viewer", "viewer", "manual")
+        .unwrap();
+    let admin: AuthUser = state
+        .store()
+        .user_by_username("admin")
+        .unwrap()
+        .unwrap()
+        .into();
+    let viewer: AuthUser = state
+        .store()
+        .user_by_username("history-viewer")
+        .unwrap()
+        .unwrap()
+        .into();
+
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert("x-team-id", HeaderValue::from_str(&team_id).unwrap());
+    let history = get_inventory_host_history(
+        State(state.clone()),
+        headers,
+        admin,
+        AxumPath((inventory_id.clone(), "web-1".to_string())),
+        Query(HostQuery::default()),
+    )
+    .await
+    .expect("own team history");
+    assert_eq!(history.0.total, 1);
+    assert_eq!(history.0.entries.len(), 1);
+    assert_eq!(history.0.entries[0].job_id, job_id);
+    assert_eq!(history.0.entries[0].role, "web");
+    assert_eq!(history.0.entries[0].result, "ok");
+    assert_eq!(history.0.entries[0].changed, 1);
+
+    let mut foreign = axum::http::HeaderMap::new();
+    foreign.insert(
+        "x-team-id",
+        HeaderValue::from_str("history-other-team").unwrap(),
+    );
+    let denied = get_inventory_host_history(
+        State(state.clone()),
+        foreign,
+        viewer,
+        AxumPath((inventory_id, "web-1".to_string())),
+        Query(HostQuery::default()),
+    )
+    .await;
+    assert!(matches!(denied, Err(ApiError::NotFound)), "{denied:?}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn reads_yaml_inventory_and_skips_plugin_files() {
     let body = "\

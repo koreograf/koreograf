@@ -38,6 +38,22 @@ pub(crate) const EVENTS_COUNT_BETWEEN: &str =
 pub(crate) const EVENTS_LAST: &str = "SELECT id, ts, stream, line FROM job_events
      WHERE job_id = ?1 ORDER BY id DESC LIMIT ?2";
 
+pub(crate) const INSERT_HOST_RESULT: &str = "INSERT INTO host_results (
+        job_id, team_id, inventory_id, host, playbook, role, result,
+        ok, changed, failed, unreachable, skipped, ts
+     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)";
+
+pub(crate) const HOST_HISTORY: &str = "SELECT h.id, h.job_id, j.name, j.status,
+        h.host, h.playbook, h.role, h.result,
+        h.ok, h.changed, h.failed, h.unreachable, h.skipped, h.ts
+     FROM host_results h JOIN jobs j ON j.id = h.job_id
+     WHERE h.team_id = ?1 AND h.inventory_id = ?2 AND h.host = ?3
+     ORDER BY h.ts DESC, h.id DESC LIMIT ?4 OFFSET ?5";
+
+pub(crate) const HOST_HISTORY_COUNT: &str = "SELECT COUNT(*) FROM host_results h
+     JOIN jobs j ON j.id = h.job_id
+     WHERE h.team_id = ?1 AND h.inventory_id = ?2 AND h.host = ?3";
+
 pub(crate) const JOB_ACTIVITY: &str = "SELECT status, started_at, finished_at FROM jobs
      WHERE team_id = ?1
        AND ((finished_at IS NOT NULL AND finished_at >= ?2 AND finished_at <= ?3)
@@ -280,6 +296,88 @@ pub(crate) fn events_last(c: &Connection, job_id: &str, limit: i64) -> AppResult
     let mut events = sql::sqlite_all(c, EVENTS_LAST, params![job_id, limit], sqlite_row_job_event)?;
     events.reverse();
     Ok(events)
+}
+
+pub(crate) fn insert_host_results(
+    c: &Connection,
+    job_id: &str,
+    team_id: &str,
+    inventory_id: Option<&str>,
+    runs: &[db::HostRun],
+    at: &str,
+) -> AppResult<()> {
+    for run in runs {
+        c.execute(
+            INSERT_HOST_RESULT,
+            params![
+                job_id,
+                team_id,
+                inventory_id,
+                run.host,
+                run.playbook,
+                run.role,
+                run.result,
+                count(run.ok),
+                count(run.changed),
+                count(run.failed),
+                count(run.unreachable),
+                count(run.skipped),
+                at
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+fn count(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
+pub(crate) fn host_history(
+    c: &Connection,
+    team_id: &str,
+    inventory_id: &str,
+    host: &str,
+    limit: i64,
+    offset: i64,
+) -> AppResult<(Vec<db::HostHistoryEntry>, i64)> {
+    let entries = sql::sqlite_all(
+        c,
+        HOST_HISTORY,
+        params![team_id, inventory_id, host, limit, offset],
+        sqlite_row_host_history,
+    )?;
+    let total = sql::sqlite_opt(
+        c,
+        HOST_HISTORY_COUNT,
+        params![team_id, inventory_id, host],
+        |row| SqlRow::get(row, 0),
+    )?
+    .unwrap_or(0);
+    Ok((entries, total))
+}
+
+pub(crate) fn row_host_history<R: SqlRow>(row: &R) -> AppResult<db::HostHistoryEntry> {
+    Ok(db::HostHistoryEntry {
+        id: row.get(0)?,
+        job_id: row.get(1)?,
+        job_name: row.get(2)?,
+        job_status: row.get(3)?,
+        host: row.get(4)?,
+        playbook: row.get(5)?,
+        role: row.get(6)?,
+        result: row.get(7)?,
+        ok: row.get(8)?,
+        changed: row.get(9)?,
+        failed: row.get(10)?,
+        unreachable: row.get(11)?,
+        skipped: row.get(12)?,
+        time: row.get(13)?,
+    })
+}
+
+fn sqlite_row_host_history(row: &rusqlite::Row<'_>) -> AppResult<db::HostHistoryEntry> {
+    row_host_history(row)
 }
 
 pub(crate) fn row_job<R: SqlRow>(row: &R) -> AppResult<Job> {
