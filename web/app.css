@@ -459,6 +459,10 @@ a.btn { display: inline-block; text-decoration: none; }
 select.fit { width: max-content; min-width: 8rem; max-width: 100%; field-sizing: content; justify-self: start; }
 .field-row input.fit { width: 16rem; max-width: 100%; }
 .field-row input.tiny { width: 6.5rem; }
+.wf-meta-row .field { flex: 0 1 auto; justify-items: stretch; }
+.wf-meta-row .wf-name-field { flex: 0 1 16rem; min-width: 11rem; }
+.wf-meta-row .wf-description-field { flex: 1 1 18rem; min-width: 0; }
+.wf-meta-row input.fit { width: 100%; text-overflow: ellipsis; }
 .chips-field { width: min(22rem, 100%); }
 .chips-field input[type="hidden"] { display: none; }
 .chips {
