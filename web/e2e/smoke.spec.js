@@ -282,6 +282,42 @@ test("a long template entry stays on one line at 1440 px and hides at 375 px", a
   await expect(entry).toBeVisible();
 });
 
+test("a long workflow description stays complete in the editor header at 1440 px", async ({ page }) => {
+  await signInInEnglish(page);
+  const teamId = await page.evaluate(async () => {
+    const response = await fetch("/api/v1/me");
+    const profile = await response.json();
+    return profile.teams[0].id;
+  });
+  const description = "Health check, deploy the web stack and verify the database replica before the traffic switch";
+  const created = await page.request.post("/api/v1/workflows", {
+    headers: { "X-Team-Id": teamId },
+    data: { name: "Long description", description, graph: { nodes: [], edges: [] } },
+  });
+  expect(created.status()).toBe(201);
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
+  await page.getByRole("link", { name: "Long description", exact: true }).click();
+  const field = page.locator("#wf-description");
+  await expect(field).toHaveValue(description);
+  await expect(field).toHaveAttribute("title", description);
+  const shape = await field.evaluate((element) => ({
+    width: element.getBoundingClientRect().width,
+    clipped: element.scrollWidth > element.clientWidth + 1,
+    overflow: getComputedStyle(element).textOverflow,
+  }));
+  expect(shape.width).toBeGreaterThan(256);
+  if (shape.clipped) expect(shape.overflow).toBe("ellipsis");
+  const name = page.locator("#wf-name");
+  await expect(name).toBeVisible();
+  expect((await name.boundingBox()).width).toBeGreaterThan(100);
+  await name.fill("Renamed workflow");
+  await expect(page.locator("#wf-status")).toHaveText("Unsaved changes");
+  const pageWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+  expect(pageWidth).toBeLessThanOrEqual(1440);
+});
+
 test("a node card shows its template and limit override", async ({ page }) => {
   await signInInEnglish(page);
   await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();

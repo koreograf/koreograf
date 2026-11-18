@@ -6,7 +6,7 @@ const { join } = require("node:path");
 const { pathToFileURL } = require("node:url");
 const test = require("node:test");
 const { catalog } = require("./catalog.js");
-const { stylesheet } = require("./css.js");
+const { rule, stylesheet } = require("./css.js");
 
 const load = (path) => import(pathToFileURL(join(__dirname, "..", "js", path)).href);
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -434,6 +434,37 @@ test("the editor and run views name the workflow in the tab title", async () => 
   const label = document.querySelector('[data-id="n1"]').getAttribute("aria-label");
   assert.match(label, /Shell/);
   assert.match(label, /successful/);
+});
+
+test("a long description stays complete and the field can ellipsize", async () => {
+  const { editor } = await setup();
+  const description = "Health check, deploy the web stack and verify the database replica before the traffic switch";
+  const workflow = {
+    id: "w1",
+    name: "Deploy",
+    description,
+    graph: { nodes: [node("n1", "One", 20, 20)], edges: [] },
+  };
+  editor.mountEditor(workflow, [{ id: "t1", name: "Shell", tool: "shell", spec: {} }], false, {}, { inventories: [], credentials: [] }, {});
+
+  const field = document.querySelector("#wf-description");
+  assert.ok(field.closest(".wf-description-field"), "the description does not grow next to the name");
+  assert.equal(field.value, description, "the field truncates the stored description");
+  assert.equal(field.getAttribute("maxlength"), "1000", "the 1000 character limit changed");
+  assert.equal(field.getAttribute("title"), description, "the full description is not in the title");
+  field.value = `${description}!`;
+  field.dispatchEvent({ type: "input", target: field });
+  assert.equal(field.getAttribute("title"), `${description}!`, "the title does not follow the edited description");
+
+  const css = stylesheet();
+  const grow = rule(css, ".wf-meta-row .wf-description-field");
+  assert.ok(grow, "the description field rule is missing");
+  assert.match(grow[1], /flex:\s*1 1 18rem/);
+  assert.match(grow[1], /min-width:\s*0/);
+  const input = rule(css, ".wf-meta-row input.fit");
+  assert.ok(input, "the description input rule is missing");
+  assert.match(input[1], /width:\s*100%/);
+  assert.match(input[1], /text-overflow:\s*ellipsis/);
 });
 
 test("the workflow connect styles are present", () => {

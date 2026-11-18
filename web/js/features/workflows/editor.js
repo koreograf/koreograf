@@ -108,9 +108,9 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
         <div class="canvas-column">
           ${readonly ? `<div class="run-status-bar" id="run-status-bar" role="status"><span class="small muted">${h("status")}</span><span class="pill ${esc(workflow.status || "pending")}" id="run-state-top">${esc(statusLabel(workflow.status || "pending"))}</span></div>` : ""}
           ${readonly ? "" : `
-            <div class="field-row" style="margin-bottom:10px">
-              <label class="field"><span>${h("name")}</span><input class="fit" id="wf-name" value="${esc(workflow.name)}" ${can("operator") ? "" : "disabled"}></label>
-              <label class="field"><span>${h("description")}</span><input class="fit" id="wf-description" maxlength="1000" value="${esc(workflow.description)}" ${can("operator") ? "" : "disabled"}></label>
+            <div class="field-row wf-meta-row" style="margin-bottom:10px">
+              <label class="field wf-name-field"><span>${h("name")}</span><input class="fit" id="wf-name" value="${esc(workflow.name)}" ${can("operator") ? "" : "disabled"}></label>
+              <label class="field wf-description-field"><span>${h("description")}</span><input class="fit" id="wf-description" maxlength="1000" value="${esc(workflow.description)}" title="${esc(workflow.description)}" ${can("operator") ? "" : "disabled"}></label>
             </div>`}
           <p class="small muted" id="wf-hint" role="status" aria-live="polite">${readonly ? h("colors_show_the_run_a_click_shows_the") : editable ? h("drag_nodes_and_use_the_canvas_menus") : esc(readOnlyHint())}</p>
           <p class="small muted" id="wf-keyboard-help">${h(readonly ? "run_keyboard_help" : editable ? "workflow_keyboard_help" : "viewer_keyboard_help")}</p>
@@ -1897,7 +1897,12 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     });
   }
   const descriptionField = document.querySelector("#wf-description");
-  if (descriptionField) descriptionField.addEventListener("input", markDirty);
+  if (descriptionField) {
+    descriptionField.addEventListener("input", () => {
+      descriptionField.setAttribute("title", descriptionField.value);
+      markDirty();
+    });
+  }
 
   function applyWorkflow(current) {
     const nextGraph = current.graph || { nodes: [], edges: [] };
@@ -1910,7 +1915,10 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     const nameField = document.querySelector("#wf-name");
     if (nameField) nameField.value = current.name;
     const descriptionField = document.querySelector("#wf-description");
-    if (descriptionField) descriptionField.value = current.description;
+    if (descriptionField) {
+      descriptionField.value = current.description;
+      descriptionField.setAttribute("title", current.description);
+    }
     selected = null;
     selectedEdge = null;
     connecting = null;
