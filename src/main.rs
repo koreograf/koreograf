@@ -83,3 +83,5 @@ async fn main() -> anyhow::Result<()> {
     );
     koreograf::serve(cfg).await
 }
+
+// ci skip check
