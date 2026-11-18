@@ -3120,11 +3120,14 @@ fn layout_decision(
 ) -> Result<DaemonLayout, RunnerError> {
     match (configured, detected) {
         (Some(configured), Some(detected)) if !same_dir(configured, detected) => {
-            Err(RunnerError::runtime(format!(
-                "KOREOGRAF_DATA_HOST ({}) is not the data directory the container daemon mounted ({}). The job was not started.",
-                configured.display(),
-                detected.display()
-            )))
+            tracing::warn!(
+                configured = %configured.display(),
+                detected = %detected.display(),
+                "KOREOGRAF_DATA_HOST is not the data directory the container daemon mounted"
+            );
+            Err(RunnerError::runtime(
+                "KOREOGRAF_DATA_HOST is not the data directory the container daemon mounted. The job was not started. See the server log for both paths.",
+            ))
         }
         (_, Some(detected)) => Ok(DaemonLayout {
             host_data: Some(detected.to_path_buf()),
@@ -3135,7 +3138,7 @@ fn layout_decision(
             probe: true,
         }),
         (None, None) if in_container => Err(RunnerError::runtime(
-            "The container daemon cannot see the data directory. Set KOREOGRAF_DATA_HOST to the host path of that directory. The job was not started.",
+            "The container daemon cannot see the data directory. Set KOREOGRAF_DATA_HOST to the host path of that directory. The job was not started. See the server log for details.",
         )),
         (None, None) => Ok(DaemonLayout {
             host_data: None,
@@ -3150,9 +3153,10 @@ fn same_dir(left: &Path, right: &Path) -> bool {
 
 fn check_mount_token(path: &str) -> Result<(), RunnerError> {
     if path.contains(',') {
-        return Err(RunnerError::runtime(format!(
-            "The mount path {path} cannot be passed to the container daemon. The job was not started."
-        )));
+        tracing::warn!(path = %path, "A mount path contains a comma");
+        return Err(RunnerError::runtime(
+            "A mount path contains a comma and cannot be passed to the container daemon. The job was not started. See the server log for the path.",
+        ));
     }
     Ok(())
 }
@@ -3162,8 +3166,9 @@ fn require_visible_sources(mounts: &[(String, String, bool)]) -> Result<(), Runn
         check_mount_token(host)?;
         check_mount_token(guest)?;
         if !Path::new(host).exists() {
+            tracing::warn!(source = %host, target = %guest, "The container daemon cannot see a mount source");
             return Err(RunnerError::runtime(format!(
-                "The container daemon cannot see {host}. The job was not started."
+                "The container daemon cannot see the source for {guest}. The job was not started. See the server log for the host path."
             )));
         }
     }
@@ -3182,13 +3187,20 @@ fn translate_mounts(
         check_mount_token(host)?;
         check_mount_token(guest)?;
         let source = fs::canonicalize(host).map_err(|_| {
+            tracing::warn!(source = %host, target = %guest, "The container daemon cannot see a mount source");
             RunnerError::runtime(format!(
-                "The container daemon cannot see {host}. The job was not started."
+                "The container daemon cannot see the source for {guest}. The job was not started. See the server log for the host path."
             ))
         })?;
         let relative = source.strip_prefix(&data).map_err(|_| {
+            tracing::warn!(
+                source = %host,
+                target = %guest,
+                data = %data.display(),
+                "A mount source is outside the data directory"
+            );
             RunnerError::runtime(format!(
-                "The container daemon cannot see {host}. The job was not started."
+                "The container daemon cannot see the source for {guest}. The job was not started. See the server log for the host path."
             ))
         })?;
         let daemon = lexical_normal(&host_data.join(relative));
@@ -3345,13 +3357,10 @@ fn last_stderr_line(stderr: &str) -> String {
 
 fn mount_check_error(stderr: &str) -> String {
     let detail = last_stderr_line(stderr);
-    if detail.is_empty() {
-        "The container daemon cannot see the job directory. The job was not started.".into()
-    } else {
-        format!(
-            "The container daemon cannot see the job directory ({detail}). The job was not started."
-        )
+    if !detail.is_empty() {
+        tracing::warn!(detail = %detail, "The container daemon could not see the job directory");
     }
+    "The container daemon cannot see the job directory. The job was not started. See the server log for the daemon message.".into()
 }
 
 /// The daemon reports a missing entrypoint only after it has accepted the
@@ -3497,14 +3506,16 @@ async fn run_container(
     let layout =
         resolve_daemon_layout(bin, &state.cfg.data_dir, state.cfg.data_host.as_deref()).await?;
     if let Some(host_data) = &layout.host_data {
+        tracing::info!(
+            job_id = %job_id,
+            host_data = %host_data.display(),
+            "The container daemon can see the data directory"
+        );
         log(
             state,
             job_id,
             "system",
-            &format!(
-                "The container daemon sees the data directory at {}.",
-                host_data.display()
-            ),
+            "The container daemon can see the data directory.",
         );
         mounts = translate_mounts(&mounts, &state.cfg.data_dir, host_data)?;
     }
@@ -4625,9 +4636,13 @@ mod tests {
             .expect_err("mismatch");
         assert!(mismatch.to_string().contains("KOREOGRAF_DATA_HOST"));
         assert!(mismatch.to_string().contains("was not started"));
+        assert!(mismatch.to_string().contains("server log"));
+        assert!(!mismatch.to_string().contains("/var/lib/docker"));
+        assert!(!mismatch.to_string().contains("other-data"));
         let missing = layout_decision(None, None, true).expect_err("container without a path");
         assert!(missing.to_string().contains("KOREOGRAF_DATA_HOST"));
         assert!(missing.to_string().contains("was not started"));
+        assert!(missing.to_string().contains("server log"));
     }
 
     #[test]
@@ -4703,11 +4718,15 @@ mod tests {
         )];
         let err = translate_mounts(&outside, &data, host).expect_err("outside");
         assert!(err.to_string().contains("was not started"));
+        assert!(!err
+            .to_string()
+            .contains(&std::env::temp_dir().display().to_string()));
         let missing = Path::new("/no/such/koreograf-mount");
         let absent = vec![(missing.display().to_string(), "/runner/work".into(), false)];
         let err = require_visible_sources(&absent).expect_err("missing");
         assert!(err.to_string().contains("was not started"));
-        assert!(err.to_string().contains("/no/such/koreograf-mount"));
+        assert!(err.to_string().contains("server log"));
+        assert!(!err.to_string().contains("/no/such/koreograf-mount"));
         let comma = vec![(work.display().to_string(), "/runner/work,ro".into(), false)];
         assert!(translate_mounts(&comma, &data, host).is_err());
         assert_eq!(probe_script(&mounts), "test -f /mnt0/wrapper.sh");
@@ -4725,12 +4744,11 @@ mod tests {
         );
         assert_eq!(
             mount_check_error(""),
-            "The container daemon cannot see the job directory. The job was not started."
+            "The container daemon cannot see the job directory. The job was not started. See the server log for the daemon message."
         );
-        assert!(
-            mount_check_error("bind source path does not exist: /tmp/x\n")
-                .contains("bind source path does not exist")
-        );
+        let detail = mount_check_error("bind source path does not exist: /tmp/x\n");
+        assert!(detail.contains("server log"));
+        assert!(!detail.contains("/tmp/x"));
         let missing_shell = "exec: \"sh\": executable file not found in $PATH";
         assert!(shell_is_missing(missing_shell));
         assert!(shell_is_missing(
@@ -5928,6 +5946,79 @@ exit 0
     }
 
     #[tokio::test]
+    async fn a_daemon_layout_keeps_the_host_path_out_of_the_job_log() {
+        let host_data = PathBuf::from("/var/lib/docker/volumes/test_kg-ee-data/_data");
+        let state = output_state_with_host(8_000, Some(host_data.clone()));
+        insert_output_job(&state, "job-host-path");
+        let work = state.cfg.data_dir.join("jobs").join("job-host-path");
+        let stage = work.join("stage");
+        let cache = state.cfg.data_dir.join("cache");
+        for dir in [
+            &stage,
+            &work,
+            &cache.join("collections"),
+            &cache.join("roles"),
+            &cache.join("tofu"),
+        ] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let bin = state.cfg.data_dir.join("fake-docker");
+        write_executable(
+            &bin,
+            r#"#!/bin/sh
+if [ "$1" = "run" ]; then
+  for arg in "$@"; do
+    if [ "$arg" = "cat" ]; then
+      printf '%s\n' 'root:x:0:0:root:/root:/bin/sh'
+      exit 0
+    fi
+  done
+fi
+exit 0
+"#,
+        );
+        let environment = Environment {
+            id: "env".into(),
+            team_id: None,
+            organization_id: None,
+            name: "Test".into(),
+            tool: "ansible".into(),
+            image: "quay.io/ansible/awx-ee:latest".into(),
+            pull_policy: "never".into(),
+            network: String::new(),
+            description: String::new(),
+            created_at: String::new(),
+            scope: String::new(),
+            organization_name: String::new(),
+            team_name: String::new(),
+        };
+        let run = ContainerRun {
+            bin: bin.to_str().unwrap(),
+            environment: &environment,
+            work: &work,
+            stage: &stage,
+            cache: &cache,
+            env: &[],
+            timeout_secs: 30,
+            output_lines: 8_000,
+            tofu_state: None,
+            template_id: "tpl",
+        };
+        run_container(&state, "job-host-path", run)
+            .await
+            .expect("run");
+        let text = event_text(&state, "job-host-path");
+        assert!(
+            text.contains("The container daemon can see the data directory."),
+            "{text}"
+        );
+        assert!(!text.contains(host_data.to_str().unwrap()), "{text}");
+        assert!(!text.contains("/var/lib/docker"), "{text}");
+        assert!(!text.contains("test_kg-ee-data"), "{text}");
+        let _ = std::fs::remove_dir_all(&state.cfg.data_dir);
+    }
+
+    #[tokio::test]
     async fn cancel_still_discards_the_rest_of_the_log() {
         let state = output_state(8_000);
         insert_output_job(&state, "job-cancel");
@@ -5962,6 +6053,10 @@ exit 0
     }
 
     fn output_state(lines: u64) -> Shared {
+        output_state_with_host(lines, None)
+    }
+
+    fn output_state_with_host(lines: u64, data_host: Option<PathBuf>) -> Shared {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("clock")
@@ -5986,7 +6081,7 @@ exit 0
             trusted_proxy: false,
             mcp: true,
             public_url: Vec::new(),
-            data_host: None,
+            data_host,
             ldap: None,
         })
         .expect("boot")
