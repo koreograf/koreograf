@@ -2,7 +2,7 @@
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { rootTokens, rules, stylesheet, token } = require("./css.js");
+const { rootTokens, themeTokens, rules, stylesheet, token } = require("./css.js");
 
 const AA_NORMAL_TEXT = 4.5;
 
@@ -61,4 +61,105 @@ test("dark surfaces do not use the light muted token", () => {
     .filter(([selector, declarations]) => (selector.split(",").some((part) => part.trim().startsWith(".side")) || selector.includes("pre.vars") || selector.includes(".log")) && declarations.includes("var(--muted)"))
     .map(([selector]) => selector);
   assert.deepEqual(offenders, []);
+});
+
+function assertPairs(tokens, pairs) {
+  for (const [foreground, background] of pairs) {
+    const first = token(tokens, foreground);
+    const second = token(tokens, background);
+    assert.ok(
+      contrast(first, second) >= AA_NORMAL_TEXT,
+      `${foreground} ${first} on ${background} ${second} is below ${AA_NORMAL_TEXT}:1`,
+    );
+  }
+}
+
+test("the dark palette defines the colour tokens", () => {
+  const tokens = themeTokens(stylesheet(), "dark");
+  assert.ok(tokens.length > 0, "the dark palette is missing");
+  for (const name of ["--ink", "--paper", "--panel", "--line", "--muted", "--accent", "--side", "--log-bg"]) {
+    assert.match(token(tokens, name), /^#[0-9a-f]{6}$/, `${name} is not a dark palette colour`);
+  }
+});
+
+test("dark muted text meets WCAG AA on dark surfaces", () => {
+  const tokens = themeTokens(stylesheet(), "dark");
+  assertPairs(tokens, [
+    ["--muted", "--paper"],
+    ["--muted", "--panel"],
+    ["--muted", "--line"],
+    ["--muted", "--accent-soft"],
+    ["--muted", "--good-bg"],
+    ["--muted", "--bad-bg"],
+    ["--muted", "--info-bg"],
+    ["--muted", "--warn-bg"],
+    ["--muted", "--control"],
+    ["--muted", "--skipped-bg"],
+    ["--muted", "--canvas"],
+    ["--muted", "--hover"],
+  ]);
+});
+
+test("dark primary text meets WCAG AA on dark surfaces", () => {
+  const tokens = themeTokens(stylesheet(), "dark");
+  assertPairs(tokens, [
+    ["--ink", "--paper"],
+    ["--ink", "--panel"],
+    ["--ink", "--line"],
+    ["--ink", "--control"],
+    ["--ink", "--accent-soft"],
+    ["--ink", "--canvas"],
+    ["--ink", "--hover"],
+  ]);
+});
+
+test("dark sidebar text meets WCAG AA on dark surfaces", () => {
+  const tokens = themeTokens(stylesheet(), "dark");
+  assertPairs(tokens, [
+    ["--side-muted", "--side"],
+    ["--side-muted", "--side-control"],
+    ["--side-link", "--side"],
+    ["--side-text", "--side"],
+  ]);
+});
+
+test("dark status pills stay readable", () => {
+  const tokens = themeTokens(stylesheet(), "dark");
+  assertPairs(tokens, [
+    ["--good", "--good-bg"],
+    ["--bad", "--bad-bg"],
+    ["--warn", "--warn-bg"],
+    ["--info", "--info-bg"],
+    ["--muted", "--skipped-bg"],
+    ["--accent", "--accent-soft"],
+  ]);
+});
+
+test("dark links, primary buttons and logs meet WCAG AA", () => {
+  const tokens = themeTokens(stylesheet(), "dark");
+  assertPairs(tokens, [
+    ["--accent", "--paper"],
+    ["--accent", "--panel"],
+    ["--accent", "--line"],
+    ["--on-accent", "--accent"],
+    ["--log-text", "--log-bg"],
+    ["--log-key", "--log-bg"],
+    ["--log-value", "--log-bg"],
+  ]);
+});
+
+test("dark muted text stays quieter than primary text", () => {
+  const tokens = themeTokens(stylesheet(), "dark");
+  const paper = token(tokens, "--paper");
+  const side = token(tokens, "--side");
+  assert.ok(contrast(token(tokens, "--muted"), paper) < contrast(token(tokens, "--ink"), paper));
+  assert.ok(contrast(token(tokens, "--side-muted"), side) < contrast(token(tokens, "--side-text"), side));
+});
+
+test("dark status colours stay distinguishable", () => {
+  const tokens = themeTokens(stylesheet(), "dark");
+  const backgrounds = ["--good-bg", "--bad-bg", "--warn-bg", "--info-bg", "--skipped-bg"].map((name) => token(tokens, name));
+  assert.equal(new Set(backgrounds).size, backgrounds.length, "status pills share a background");
+  const foregrounds = ["--good", "--bad", "--warn", "--info"].map((name) => token(tokens, name));
+  assert.equal(new Set(foregrounds).size, foregrounds.length, "status pills share a text colour");
 });

@@ -17,19 +17,27 @@ function withoutComments(css) {
   return css.replace(CSS_COMMENT, "");
 }
 
-function rootTokens(css) {
-  const text = withoutComments(css);
-  const start = text.indexOf(":root");
-  if (start < 0) return [];
-  const open = text.indexOf("{", start);
-  const close = text.indexOf("}", open);
-  if (open < 0 || close < 0) return [];
-  return text
-    .slice(open + 1, close)
+function declarations(block) {
+  return block
     .split(";")
     .map((declaration) => declaration.split(":"))
     .filter((parts) => parts.length >= 2)
     .map((parts) => [parts[0].trim(), parts.slice(1).join(":").trim()]);
+}
+
+function tokensIn(css, selector) {
+  const text = withoutComments(css);
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`${escaped}\\s*\\{([^}]*)\\}`).exec(text);
+  return match ? declarations(match[1]) : [];
+}
+
+function rootTokens(css) {
+  return tokensIn(css, ":root");
+}
+
+function themeTokens(css, theme) {
+  return tokensIn(css, `:root[data-theme="${theme}"]`);
 }
 
 function token(tokens, name) {
@@ -70,4 +78,4 @@ function mediaBlock(css, query) {
   return text.slice(start);
 }
 
-module.exports = { read, stylesheet, withoutComments, rootTokens, token, rules, rule, mediaBlock };
+module.exports = { read, stylesheet, withoutComments, rootTokens, themeTokens, token, rules, rule, mediaBlock };

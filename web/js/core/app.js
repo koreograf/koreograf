@@ -5,6 +5,7 @@ import { esc, h } from "./dom.js";
 import { FLAG_SVG, LANGUAGES, configureLanguage, currentLanguage, loadCatalog, setLang, t } from "./i18n.js";
 import { matchRoute } from "./router.js";
 import { ERROR_FIELD, fieldControl, showFieldError } from "./forms.js";
+import { bindThemeSwitch, themeSwitch } from "./theme.js";
 
 window.addEventListener("beforeunload", (event) => {
   if (!appState.leaveGuard || !appState.leaveGuard()) return;
@@ -352,6 +353,7 @@ export function shell(title, body, actions) {
         <div class="side-foot">
           <a class="account-link" href="#/account">${esc(appState.me.display_name)} · ${esc(roleLabel(roleOf()))}${appState.me.auth_source === "ldap" ? " · LDAP" : ""}</a>
           ${versionSlot()}
+          ${themeSwitch()}
           ${langSwitch()}
           <button class="btn ghost" id="logout" type="button">${h("sign_out")}</button>
         </div>
@@ -375,6 +377,7 @@ export function shell(title, body, actions) {
     route();
   });
   bindLangSwitch();
+  bindThemeSwitch();
   document.querySelector(".skip-link").addEventListener("click", (event) => {
     event.preventDefault();
     document.getElementById("main").focus();
@@ -435,10 +438,12 @@ export function renderLogin(message, tone, vars, username) {
           </div>
           ${langSwitch()}
         </form>
+        <div class="login-foot">${themeSwitch()}</div>
         ${versionSlot()}
       </div>
     </div>`;
   bindLangSwitch();
+  bindThemeSwitch();
   loadVersion();
   loadMaintenance();
   const initial = username
