@@ -318,6 +318,120 @@ test("a long workflow description stays complete in the editor header at 1440 px
   expect(pageWidth).toBeLessThanOrEqual(1440);
 });
 
+test("the launch dialog keeps tags and limit visible at 1440 px", async ({ page }) => {
+  await signInInEnglish(page);
+  const teamId = await page.evaluate(async () => {
+    const response = await fetch("/api/v1/me");
+    const profile = await response.json();
+    return profile.teams[0].id;
+  });
+  const headers = { "X-Team-Id": teamId };
+  const suffix = Date.now();
+  const ssh = await page.request.post("/api/v1/credentials", {
+    headers,
+    data: { name: `Deploy SSH ${suffix}`, kind: "ssh", secret: { username: "deploy", password: "probe-pass" } },
+  });
+  expect(ssh.status()).toBe(201);
+  const vaults = [];
+  for (const vaultId of ["production", "staging", "development", "sandbox"]) {
+    const vault = await page.request.post("/api/v1/credentials", {
+      headers,
+      data: { name: `Vault ${vaultId} ${suffix}`, kind: "vault", secret: { password: "vault-pass", vault_id: vaultId } },
+    });
+    expect(vault.status()).toBe(201);
+    vaults.push((await vault.json()).id);
+  }
+  const inventory = await page.request.post("/api/v1/inventories", {
+    headers,
+    data: { name: `Production hosts ${suffix}`, body: "[web]\nweb01 ansible_host=10.0.0.1\n" },
+  });
+  expect(inventory.status()).toBe(201);
+  const created = await page.request.post("/api/v1/templates", {
+    headers,
+    data: {
+      name: `Layout probe ${suffix}`,
+      tool: "ansible",
+      entrypoint: "playbooks/demo.yml",
+      inventory_id: (await inventory.json()).id,
+      credential_ids: [(await ssh.json()).id, ...vaults],
+      spec: { job_type: "run", verbosity: 1, tags: "web", skip_tags: "slow", limit: "web:&db" },
+    },
+  });
+  expect(created.status()).toBe(201);
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.getByRole("navigation").getByRole("link", { name: "Templates", exact: true }).click();
+  const row = page.getByRole("row", { name: new RegExp(`Layout probe ${suffix}`) });
+  await row.getByRole("button", { name: "Launch with options", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "Launch", exact: true })).toBeVisible();
+  await expect(dialog).toHaveClass(/overlay-card/);
+  const body = dialog.locator(".dialog-body");
+  const tags = body.locator('[data-chips="tags"]');
+  const limit = body.locator('input[name="limit"]');
+  await expect(tags).toBeVisible();
+  await expect(limit).toBeVisible();
+
+  const layout = await dialog.evaluate((node) => {
+    const bodyNode = node.querySelector(".dialog-body");
+    const box = (element) => {
+      const rect = element.getBoundingClientRect();
+      return { top: Math.round(rect.top), bottom: Math.round(rect.bottom) };
+    };
+    const button = (label) => [...node.querySelectorAll("button")].find((item) => item.textContent.trim() === label);
+    return {
+      body: {
+        ...box(bodyNode),
+        scrollTop: bodyNode.scrollTop,
+        clientHeight: bodyNode.clientHeight,
+        scrollHeight: bodyNode.scrollHeight,
+      },
+      tags: box(node.querySelector('[data-chips="tags"]')),
+      limit: box(node.querySelector('input[name="limit"]')),
+      cancel: box(button("Cancel")),
+      launch: box(node.querySelector('button[type="submit"]')),
+      viewportHeight: window.innerHeight,
+    };
+  });
+  expect(layout.body.scrollTop).toBe(0);
+  expect(layout.tags.top).toBeGreaterThanOrEqual(layout.body.top);
+  expect(layout.tags.bottom).toBeLessThanOrEqual(layout.body.bottom);
+  expect(layout.limit.top).toBeGreaterThanOrEqual(layout.body.top);
+  expect(layout.limit.bottom).toBeLessThanOrEqual(layout.body.bottom);
+  expect(layout.launch.top).toBeGreaterThanOrEqual(layout.body.bottom);
+  expect(layout.cancel.bottom).toBeLessThanOrEqual(layout.viewportHeight);
+  expect(layout.launch.bottom).toBeLessThanOrEqual(layout.viewportHeight);
+
+  await page.setViewportSize({ width: 1024, height: 700 });
+  const scroller = await body.evaluate((node) => ({ clientHeight: node.clientHeight, scrollHeight: node.scrollHeight }));
+  expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight);
+  await tags.evaluate((element) => element.scrollIntoView({ block: "nearest" }));
+  const tagView = await body.evaluate((node) => {
+    const box = (element) => {
+      const rect = element.getBoundingClientRect();
+      return { top: Math.round(rect.top), bottom: Math.round(rect.bottom) };
+    };
+    return { ...box(node), tags: box(node.querySelector('[data-chips="tags"]')) };
+  });
+  expect(tagView.tags.top).toBeGreaterThanOrEqual(tagView.top);
+  expect(tagView.tags.bottom).toBeLessThanOrEqual(tagView.bottom);
+  await limit.evaluate((element) => element.scrollIntoView({ block: "nearest" }));
+  const limitView = await body.evaluate((node) => {
+    const box = (element) => {
+      const rect = element.getBoundingClientRect();
+      return { top: Math.round(rect.top), bottom: Math.round(rect.bottom) };
+    };
+    return {
+      ...box(node),
+      scrollTop: node.scrollTop,
+      limit: box(node.querySelector('input[name="limit"]')),
+    };
+  });
+  expect(limitView.scrollTop).toBeGreaterThan(0);
+  expect(limitView.limit.top).toBeGreaterThanOrEqual(limitView.top);
+  expect(limitView.limit.bottom).toBeLessThanOrEqual(limitView.bottom);
+});
+
 test("a node card shows its template and limit override", async ({ page }) => {
   await signInInEnglish(page);
   await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
