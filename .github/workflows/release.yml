@@ -1,4 +1,4 @@
-# Publishes the alpha image. This workflow does not deploy.
+# Publishes the beta image. This workflow does not deploy.
 # A tag push runs the jobs below. release-please creates its tag with the
 # default GITHUB_TOKEN, and that push does not start a new workflow, so
 # release-please.yml calls this file in the same run.

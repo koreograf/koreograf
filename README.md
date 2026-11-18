@@ -2,14 +2,16 @@
 
 [![ci](https://github.com/koreograf/koreograf/actions/workflows/ci.yml/badge.svg)](https://github.com/koreograf/koreograf/actions/workflows/ci.yml)
 
-Koreograf is a prototype for team-scoped automation. One Rust binary serves the API, the browser UI, and the job runner. Ansible, OpenTofu, and shell run as jobs. Workflows are directed graphs. Webhooks from Alertmanager or Grafana start those graphs.
+Koreograf runs team-scoped automation. One Rust binary serves the API, the browser UI, and the job runner. Ansible, OpenTofu, and shell run as jobs. Workflows are directed graphs. Webhooks from Alertmanager or Grafana start those graphs.
 
 ## Status
 
-Alpha [0.1.0-alpha.12](CHANGELOG.md). <!-- x-release-please-version -->
+Release [0.1.0-alpha.12](CHANGELOG.md). <!-- x-release-please-version -->
 `Cargo.toml` uses the same pre-release version.
 
-This is an early prototype, not a replacement for AWX and not a rebuild of Semaphore. There are no surveys, no Receptor, and no high-availability setup. A schedule can start a job or a workflow at a local clock time. SQLite is the default database. PostgreSQL is the second backend and serves the same API, browser UI, and features; backups work on both engines, and `koreograf db migrate` or **Settings → Database** moves a SQLite installation to PostgreSQL. See [docs/postgresql.md](docs/postgresql.md).
+The beta starts at `0.1.0-beta.1`. From that tag, `/api/v1` is stable, `/api` stays a deprecated alias until `1.0.0`, database and backup upgrades are forward-only, and the documented environment variables and Helm values keep their meaning. [Beta contract](docs/beta.md) states that and what stays out of scope: a trusted network, no high-availability setup, and one replica.
+
+Koreograf is not a replacement for AWX and not a rebuild of Semaphore. There are no surveys and no Receptor. A schedule can start a job or a workflow at a local clock time. SQLite is the default database. PostgreSQL is the second backend and serves the same API, browser UI, and features; backups work on both engines, and `koreograf db migrate` or **Settings → Database** moves a SQLite installation to PostgreSQL. See [docs/postgresql.md](docs/postgresql.md).
 
 ## Quick start
 
@@ -129,6 +131,7 @@ Play recap lines and `fatal:` lines are read from the whole stream, including li
 
 ## Documentation
 
+- [Beta contract](docs/beta.md) — what the beta keeps stable and what stays out of scope.
 - [Installation](docs/installation.md) — run on a machine, Docker Compose, and Helm.
 - [Configuration](docs/configuration.md) — environment variables, runner mode, and languages.
 - [Database and backup](docs/backup-restore.md) — the SQLite file, the key, and the backup zip.
@@ -142,7 +145,7 @@ Play recap lines and `fatal:` lines are read from the whole stream, including li
 
 ## Security
 
-The prototype is meant for a trusted network. Local jobs and arbitrary project paths are limited to administrators unless the environment opts in. See [Security](docs/security.md). Report vulnerabilities as described in [SECURITY.md](SECURITY.md).
+Koreograf is meant for a trusted network. Local jobs and arbitrary project paths are limited to administrators unless the environment opts in. See [Security](docs/security.md) and the [beta contract](docs/beta.md). Report vulnerabilities as described in [SECURITY.md](SECURITY.md).
 
 ## License
 
