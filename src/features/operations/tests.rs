@@ -1282,7 +1282,7 @@ ok: [web-1]
         );
         metrics.close("job-1", "failed", None);
         metrics.close("job-1", "failed", None);
-        let text = metrics.render(&[]);
+        let text = metrics.render(&[], 0);
         assert!(
             text.contains("koreograf_jobs_started_total{tool=\"ansible\",playbook=\"site.yml\"} 1")
         );
@@ -1389,7 +1389,7 @@ ok: [web-1]
             "fatal: [web-1]: FAILED! => {\"password\":\"s3cret\"}",
         );
         metrics.close("job-1", "successful", None);
-        let text = metrics.render(&[]);
+        let text = metrics.render(&[], 0);
         assert!(text.contains(
         "koreograf_jobs_finished_total{tool=\"shell\",playbook=\"health.sh\",status=\"successful\"} 1"
     ));
@@ -1402,7 +1402,7 @@ ok: [web-1]
         let metrics = Metrics::new();
         metrics.begin(&meta("ansible", "a\"b\\c\n.yml"));
         metrics.close("job-1", "running", None);
-        let text = metrics.render(&[]);
+        let text = metrics.render(&[], 0);
         assert!(text.contains("playbook=\"a\\\"b\\\\c .yml\""), "{text}");
         assert!(text.contains("status=\"failed\""), "{text}");
     }
@@ -1431,7 +1431,7 @@ ok: [web-1]
         };
         metrics.finish_unstarted(&pending, "canceled");
         metrics.close("job-3", "canceled", Some(&pending));
-        let text = metrics.render(&[]);
+        let text = metrics.render(&[], 0);
         assert!(!text.contains("koreograf_jobs_started_total{"), "{text}");
         assert!(
         text.contains(
@@ -1464,7 +1464,7 @@ ok: [web-1]
         metrics.observe("job-1", "ok: [web-1]");
         metrics.finish_unstarted(&running, "canceled");
         metrics.close("job-1", "canceled", None);
-        let text = metrics.render(&[]);
+        let text = metrics.render(&[], 0);
         assert!(
             text.contains("koreograf_jobs_started_total{tool=\"ansible\",playbook=\"site.yml\"} 1"),
             "{text}"
@@ -1508,7 +1508,7 @@ ok: [web-1]
         metrics.begin(&newest);
         metrics.close(&ids[0], "failed", Some(&oldest));
         metrics.close(&ids[CLOSED_LIMIT], "failed", Some(&newest));
-        let text = metrics.render(&[]);
+        let text = metrics.render(&[], 0);
         let finished = CLOSED_LIMIT + 2;
         assert!(
         text.contains(&format!(
@@ -1520,6 +1520,88 @@ ok: [web-1]
             text.contains("koreograf_jobs_started_total{tool=\"shell\",playbook=\"cap.sh\"} 1"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn a_finished_job_lands_in_the_duration_histogram() {
+        let metrics = Metrics::new();
+        metrics.begin(&meta("ansible", "site.yml"));
+        metrics.observe(
+            "job-1",
+            "fatal: [web-1]: FAILED! => {\"password\":\"s3cret\"}",
+        );
+        metrics.close("job-1", "successful", None);
+        let text = metrics.render(&[], 0);
+        assert!(
+            text.contains("# TYPE koreograf_job_duration_seconds histogram"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "koreograf_job_duration_seconds_bucket{tool=\"ansible\",playbook=\"site.yml\",status=\"successful\",le=\"+Inf\"} 1"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "koreograf_job_duration_seconds_count{tool=\"ansible\",playbook=\"site.yml\",status=\"successful\"} 1"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "koreograf_job_duration_seconds_sum{tool=\"ansible\",playbook=\"site.yml\",status=\"successful\"} 0."
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("s3cret"), "{text}");
+    }
+
+    #[test]
+    fn a_job_that_never_started_stays_out_of_the_histogram() {
+        let metrics = Metrics::new();
+        metrics.finish_unstarted(&meta("shell", "health.sh"), "canceled");
+        let text = metrics.render(&[], 0);
+        assert!(
+            !text.contains("koreograf_job_duration_seconds_count{"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "koreograf_jobs_finished_total{tool=\"shell\",playbook=\"health.sh\",status=\"canceled\"} 1"
+            ),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn open_jobs_are_running_and_the_store_reports_pending() {
+        let metrics = Metrics::new();
+        metrics.begin(&meta("ansible", "site.yml"));
+        let text = metrics.render(&[], 2);
+        assert!(text.contains("koreograf_jobs_running 1"), "{text}");
+        assert!(text.contains("koreograf_jobs_pending 2"), "{text}");
+        metrics.close("job-1", "successful", None);
+        let text = metrics.render(&[], 0);
+        assert!(text.contains("koreograf_jobs_running 0"), "{text}");
+        assert!(text.contains("koreograf_jobs_pending 0"), "{text}");
+    }
+
+    #[test]
+    fn counters_start_at_zero_after_a_restart() {
+        let text = Metrics::new().render(&[], 0);
+        assert!(
+            text.contains("# TYPE koreograf_jobs_started_total counter"),
+            "{text}"
+        );
+        assert!(!text.contains("koreograf_jobs_started_total{"), "{text}");
+        assert!(!text.contains("koreograf_jobs_finished_total{"), "{text}");
+        assert!(
+            !text.contains("koreograf_job_duration_seconds_count{"),
+            "{text}"
+        );
+        assert!(text.contains("koreograf_jobs_running 0"), "{text}");
+        assert!(text.contains("koreograf_jobs_pending 0"), "{text}");
     }
 
     #[test]
@@ -1540,7 +1622,7 @@ ok: [web-1]
         assert_eq!(gauges[0].collections, 1);
         assert_eq!(gauges[0].roles, 1);
         assert!(gauges[0].collections_bytes > 0);
-        let text = Metrics::new().render(&gauges);
+        let text = Metrics::new().render(&gauges, 0);
         assert!(text.contains(
             "koreograf_cache_collections{team_id=\"t1\",team=\"A \\\"Plattform\\\"\"} 1"
         ));

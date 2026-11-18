@@ -47,6 +47,20 @@ async fn metrics_require_the_configured_token_or_an_admin_session() {
         body.contains("# TYPE koreograf_jobs_started_total counter"),
         "{body}"
     );
+    assert!(
+        body.contains("# TYPE koreograf_job_duration_seconds histogram"),
+        "{body}"
+    );
+    assert!(
+        body.contains("# TYPE koreograf_jobs_pending gauge"),
+        "{body}"
+    );
+    assert!(
+        body.contains("# TYPE koreograf_jobs_running gauge"),
+        "{body}"
+    );
+    assert!(body.contains("\nkoreograf_jobs_pending 0\n"), "{body}");
+    assert!(body.contains("\nkoreograf_jobs_running 0\n"), "{body}");
 
     let cookie = app.login("admin", ADMIN_PASSWORD).await;
 

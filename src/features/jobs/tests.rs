@@ -353,7 +353,7 @@ async fn cancel_before_execution_counts_the_job_once() {
     )
     .expect("launch");
     cancel(&state, &job_id).expect("cancel");
-    let text = state.metrics.render(&[]);
+    let text = state.metrics.render(&[], 0);
     assert!(
         text.contains(
             "koreograf_jobs_finished_total{tool=\"shell\",playbook=\"health.sh\",status=\"canceled\"} 1"
@@ -364,7 +364,7 @@ async fn cancel_before_execution_counts_the_job_once() {
     for _ in 0..4 {
         tokio::task::yield_now().await;
     }
-    let text = state.metrics.render(&[]);
+    let text = state.metrics.render(&[], 0);
     assert!(
         text.contains(
             "koreograf_jobs_finished_total{tool=\"shell\",playbook=\"health.sh\",status=\"canceled\"} 1"

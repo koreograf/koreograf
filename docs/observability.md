@@ -28,9 +28,16 @@ Counters live in memory and start at zero after a restart. Prometheus treats tha
 | --- | --- | --- |
 | `koreograf_jobs_started_total` | counter | `tool`, `playbook` |
 | `koreograf_jobs_finished_total` | counter | `tool`, `playbook`, `status` (`successful`, `failed`, `canceled`) |
+| `koreograf_job_duration_seconds` | histogram | `tool`, `playbook`, `status`; bucket `le` |
+| `koreograf_jobs_pending` | gauge | none |
+| `koreograf_jobs_running` | gauge | none |
 | `koreograf_role_results_total` | counter | `playbook`, `role`, `result` (`ok`, `changed`, `failed`, `unreachable`, `skipped`) |
 | `koreograf_cache_collections` | gauge | `team_id`, `team` |
 | `koreograf_cache_roles` | gauge | `team_id`, `team` |
 | `koreograf_cache_bytes` | gauge | `team_id`, `team`, `kind` (`collections`, `roles`, `tofu`) |
 
 `koreograf_jobs_started_total` increases when execution begins, after preparation. `koreograf_jobs_finished_total` increases once for every job that reaches `successful`, `failed`, or `canceled`. That includes a job canceled while it is still pending and a job that fails during preparation, so finished can be larger than started. The `playbook` label is the template entry path. An empty path is `-`.
+
+`koreograf_job_duration_seconds` measures the time from the start of execution to the terminal status, in seconds. Its buckets are `1`, `5`, `15`, `30`, `60`, `120`, `300`, `600`, `1800`, `3600`, `7200`, `21600`, and `+Inf`. A job that is canceled while pending or fails during preparation has no duration, so it only appears in `koreograf_jobs_finished_total`.
+
+`koreograf_jobs_pending` is read from the database on each scrape and counts jobs with status `pending`, across every team and including jobs launched by a workflow. `koreograf_jobs_running` counts the jobs this process has begun and not yet finished; both gauges are unlabelled and read zero after a restart until work arrives.
