@@ -30,6 +30,7 @@ const PORTABLE_TABLES: &[&str] = &[
     "workflow_jobs",
     "jobs",
     "job_events",
+    "host_results",
     "workflow_nodes",
     "hooks",
     "hook_deliveries",
@@ -88,6 +89,16 @@ fn seed_sqlite_source(dir: &Path) -> std::sync::Arc<koreograf::AppState> {
             )
             .expect("job event");
         }
+        conn.execute(
+            "INSERT INTO host_results (
+                job_id, team_id, inventory_id, host, playbook, role, result, ts
+             ) VALUES (
+                'job-copy', 'team-copy', 'inventory-copy', 'web-1', 'site.yml', 'web', 'ok',
+                '2026-01-01T00:00:00Z'
+             )",
+            [],
+        )
+        .expect("host result");
     }
     state
 }
@@ -160,6 +171,24 @@ async fn db_migrate_copies_every_table_and_resets_sequences() {
         .expect("max id")
         .get(0);
     assert_eq!(next, 3);
+    client
+        .execute(
+            "INSERT INTO host_results (
+                job_id, team_id, inventory_id, host, playbook, role, result, ts
+             ) VALUES (
+                'job-copy', 'team-copy', 'inventory-copy', 'web-2', 'site.yml', 'web', 'ok',
+                '2026-01-01T00:00:00Z'
+             )",
+            &[],
+        )
+        .await
+        .expect("insert host result after copy");
+    let next: i64 = client
+        .query_one("SELECT MAX(id) FROM host_results", &[])
+        .await
+        .expect("max host result id")
+        .get(0);
+    assert_eq!(next, 2);
 
     let again = migrate_command(&dir, &target);
     assert!(!again.status.success());

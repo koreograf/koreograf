@@ -4203,13 +4203,19 @@ fn close_observation(state: &Shared, job_id: &str) {
                 .get("inventory_id")
                 .and_then(|value| value.as_str())
                 .filter(|value| !value.is_empty());
-            let _ = state.store().insert_host_results(
+            if let Err(err) = state.store().insert_host_results(
                 job_id,
                 &job.team_id,
                 inventory_id,
                 &hosts,
                 &crate::db::now(),
-            );
+            ) {
+                tracing::warn!(
+                    job_id,
+                    error = %err,
+                    "Host history could not be stored."
+                );
+            }
         }
     }
 }

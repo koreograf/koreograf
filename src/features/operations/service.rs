@@ -3082,12 +3082,13 @@ impl Metrics {
 }
 
 fn remember_host(book: &mut Book, key: (String, String), last: HostLast) {
-    if !book.host_last.contains_key(&key) {
-        book.host_order.push_back(key.clone());
-        if book.host_order.len() > HOST_LIMIT {
-            if let Some(old) = book.host_order.pop_front() {
-                book.host_last.remove(&old);
-            }
+    if book.host_last.contains_key(&key) {
+        book.host_order.retain(|item| item != &key);
+    }
+    book.host_order.push_back(key.clone());
+    while book.host_order.len() > HOST_LIMIT {
+        if let Some(old) = book.host_order.pop_front() {
+            book.host_last.remove(&old);
         }
     }
     book.host_last.insert(key, last);
