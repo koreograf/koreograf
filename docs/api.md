@@ -2,7 +2,7 @@
 
 ## Versioning
 
-`/api/v1` is the stable HTTP API path during the beta. Every route below uses that prefix. The unversioned `/api` prefix answers the same requests as an alias; it is deprecated and planned for removal in `1.0.0`. Webhook ingest `/hooks/{id}/{token}`, `/mcp`, `/metrics`, and `/healthz` stay outside the API prefix and are unchanged.
+`/api/v1` is the stable HTTP API path during the beta; the [beta contract](beta.md) states that promise. Every route below uses that prefix. The unversioned `/api` prefix answers the same requests as an alias; it is deprecated and planned for removal in `1.0.0`. Webhook ingest `/hooks/{id}/{token}`, `/mcp`, `/metrics`, and `/healthz` stay outside the API prefix and are unchanged.
 
 `GET /api/v1/version` does not need a session. It returns the version compiled from `Cargo.toml`. The browser UI reads this route for the build line on the sign-in page and in the sidebar. Session cookie `koreograf_session`, HttpOnly, SameSite=Lax, seven days, or `Authorization: Bearer <token>` with a personal API token. When both are present, the bearer token wins. `Secure` is added when `KOREOGRAF_COOKIE_SECURE` is `true`, and when it is `auto` and a trusted proxy sends `X-Forwarded-Proto: https`. The default is `auto` with that proxy off, so a plain HTTP sign-in still receives the cookie. Team routes need `X-Team-Id`. Job events use the team membership stored on the job, because `EventSource` cannot set custom headers. The stream is `GET /api/v1/jobs/{id}/events?after=`.
 
@@ -313,7 +313,7 @@ Shell: `entrypoint` or `spec.script`. The script is written as `inline.sh`.
 
 `GET /api/v1/admin/backup?tofu_state=true` adds `cache/<team>/tofu-state/` to the zip. Without the query parameter the state stays out. `POST /api/v1/admin/backup` still needs `X-Restore-Confirm: ERSETZEN`, answers `restored` (true), `engine`, and `previous` (the file name of the copy it replaced), and clears the session cookie. `GET /api/v1/overview` includes `import` with `source`, `path_map`, `missing_paths`, and the copied state count for an administrator after an import, and `null` otherwise.
 
-`GET /api/v1/inventories` returns one summary per inventory with `id`, `team_id`, `name`, `created_at`, `source_kind`, `source`, `credential_id`, `source_count`, `host_count`, `group_count`, and `sources` metadata. A summary has no `hosts` array and no source `body`. This is a breaking change for alpha clients that read `hosts` from the list.
+`GET /api/v1/inventories` returns one summary per inventory with `id`, `team_id`, `name`, `created_at`, `source_kind`, `source`, `credential_id`, `source_count`, `host_count`, `group_count`, and `sources` metadata. A summary has no `hosts` array and no source `body`. This is a breaking change for clients from the alpha line that read `hosts` from the list.
 
 `GET /api/v1/inventories/{id}` returns the same summary. It has no `hosts` array and no source `body`. `GET /api/v1/inventories/{id}/hosts` returns a page of parsed hosts with `id`, `total`, `page`, `page_size`, `groups`, and `hosts`. Each host has `name`, `groups`, and `vars`; `vars` is an object of names to values. `page` starts at 1. `page_size` defaults to 50 and is capped at 200; `limit` is an alias and `offset` starts at zero. `search` matches the host name, group names, variable names, and variable values. `group` keeps hosts in that exact group. `sort` is `name` (default), `address` (the `ansible_host` value), or `groups`; a leading `-` reverses the order.
 

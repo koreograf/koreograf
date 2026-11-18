@@ -1,4 +1,4 @@
-# Checks for the alpha. This workflow does not publish an image and does not deploy.
+# Checks for the beta line. This workflow does not publish an image and does not deploy.
 name: ci
 
 on:

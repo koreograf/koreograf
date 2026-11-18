@@ -307,7 +307,7 @@ By default the pod runs as uid and gid 10001, with `fsGroup` 10001, `runAsNonRoo
 
 Set `existingSecret` to a Secret managed outside this chart. The chart then skips its own Secret. The Deployment reads `existingSecretKeys.adminPassword` and `existingSecretKeys.secretKey`. When `ldap.url` is set it also reads `existingSecretKeys.ldapBindPassword`. When `metrics.token` is set it reads `existingSecretKeys.metricsToken`. Those keys have to exist in the Secret. The defaults are `admin-password`, `secret-key`, `ldap-bind-password`, and `metrics-token`.
 
-`replicaCount` is 1. A second pod on the same SQLite file loses writes. The Docker socket is off by default (`runner.dockerSocket.enabled`).
+`replicaCount` is 1 and stays 1 under the [beta contract](beta.md). A second pod on the same SQLite file loses writes. The other values in `values.yaml` keep their meaning under that contract too; a renamed or removed value is listed as breaking. The Docker socket is off by default (`runner.dockerSocket.enabled`).
 
 Probes run `koreograf healthcheck`, which calls `/healthz`. Prometheus can scrape `GET /metrics` on the same port. Set `metrics.token` to require `Authorization: Bearer <token>`; the chart stores the value in its Secret. Compose forwards `KOREOGRAF_METRICS_TOKEN` from `.env` the same way. Without a token the endpoint stays open, so an internal-only bind behind a reverse proxy is the alternative on a wider network. For example:
 

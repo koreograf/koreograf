@@ -1,6 +1,6 @@
 # Contributing
 
-Koreograf is an early prototype. Issues and pull requests are welcome. Read `SECURITY.md` before sending anything that might be a vulnerability.
+Koreograf is in beta; [docs/beta.md](docs/beta.md) states what that keeps stable. Issues and pull requests are welcome. Read `SECURITY.md` before sending anything that might be a vulnerability.
 
 Visible copy lives in `web/i18n/<feature>/de.json` and `web/i18n/<feature>/en.json`; the server merges them into `/i18n/de.json` and `/i18n/en.json`. The API returns a message key. Logs stay English.
 
@@ -39,11 +39,13 @@ Do not edit versions by hand. release-please reads Conventional Commits on `main
 
 Merge the release pull request after a series of fixes and features, not only when someone asks. The quick start points at the published image, so a release that lags far behind `main` leaves documented behaviour out of that image.
 
-The manifest starts at `0.1.0-alpha.1`. `versioning` is `prerelease` and `prerelease` is true, so the line stays `0.1.0-alpha.N`. The next release-worthy commit, including a `fix:`, becomes `0.1.0-alpha.2`, not `0.1.1`. On this alpha line the patch is 0, so `feat:` and `feat!:` also only increment N.
+The manifest starts at `0.1.0-alpha.1`. `versioning` is `prerelease` and `prerelease` is true, so the line stays on its pre-release counter. A release-worthy commit, including a `fix:`, increments only that counter: `0.1.0-alpha.2`, not `0.1.1`, and on the beta line `0.1.0-beta.2`, not `0.1.1`. On a pre-release line the patch is 0, so `feat:` and `feat!:` also only increment the counter.
 
-`bump-patch-for-minor-pre-major` is false, so after the alpha line a `feat:` bumps the minor (`0.1.0` to `0.2.0`). `bump-minor-pre-major` is true, so before 1.0.0 a `feat!:` bumps the minor, not the major. From 1.0.0 onward a `feat!:` bumps the major.
+`bump-patch-for-minor-pre-major` is false, so after the pre-release line a `feat:` bumps the minor (`0.1.0` to `0.2.0`). `bump-minor-pre-major` is true, so before 1.0.0 a `feat!:` bumps the minor, not the major. From 1.0.0 onward a `feat!:` bumps the major.
 
-To leave the alpha line, edit `release-please-config.json` for one release: set `release-as` to `0.1.0`, set `prerelease` to false, and set `versioning` to `default`. Merge the release pull request release-please opens for `0.1.0`. Then delete `release-as`, or the following release would be forced to `0.1.0` again.
+To switch the line from alpha to beta, edit `release-please-config.json` for one release: keep `prerelease` true and `versioning` at `prerelease`, set `prerelease-type` to `beta`, and set `release-as` to `0.1.0-beta.1`. Merge the release pull request release-please opens for `0.1.0-beta.1`, then remove `release-as`, or the following release would be forced to `0.1.0-beta.1` again. `prerelease-type` stays `beta`, so the line continues as `0.1.0-beta.N`. The contract in `docs/beta.md` starts with that tag.
+
+To leave the beta line for a stable `0.1.0`, edit `release-please-config.json` for one release: set `release-as` to `0.1.0`, set `prerelease` to false, and set `versioning` to `default`. Merge the release pull request release-please opens for `0.1.0`. Then delete `release-as`, or the following release would be forced to `0.1.0` again, and delete `prerelease-type` with it.
 
 The Rust release type updates `Cargo.toml` and `Cargo.lock`. `extra-files` updates `Cargo.toml` again through the toml updater, `Cargo.lock` through the generic updater (the `x-release-please-version` comment on the package version), and both `version` and `appVersion` in `deploy/helm/koreograf/Chart.yaml` through the yaml updater. `cargo update` rewrites the lockfile and drops that comment; the Rust release type still finds the package by name. Put the comment back when you want the generic updater to see the line. New changelog sections are inserted above the existing `0.1.0-alpha.1` entry. The generic updater also rewrites lines marked `x-release-please-version` in `deploy/helm/koreograf/values.yaml` (`image.tag`), `docker-compose.yml` (the `image` line), `README.md`, and `docs/installation.md`. Renovate does not change that image tag. The tag is `v` plus the version, for example `v0.1.0-alpha.2`.
 

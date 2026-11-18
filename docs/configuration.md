@@ -10,6 +10,8 @@ Create-lists use the same pill button, for example `+ Projekt` (English: `+ Proj
 
 See `.env.example`. Comments in that file are English. Copy it to `.env` before `docker compose up` when you want to override a forwarded variable.
 
+From `0.1.0-beta.1` onward every name below keeps its meaning and its default; the [beta contract](beta.md) lists a name that has to change as a breaking change before the release that drops it.
+
 | Variable | Default |
 | --- | --- |
 | `KOREOGRAF_BIND` | `0.0.0.0:8080` |

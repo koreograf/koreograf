@@ -1,6 +1,6 @@
 # Security
 
-Koreograf is a prototype for a trusted network. Do not put it on the public internet without TLS and an access control layer in front of it.
+Koreograf is in beta and is meant for a trusted network. Do not put it on the public internet without TLS and an access control layer in front of it. [docs/beta.md](docs/beta.md) states the contract and what stays out of scope.
 
 The Docker socket is root on the host. Leave `runner.dockerSocket.enabled` off unless you accept that.
 
