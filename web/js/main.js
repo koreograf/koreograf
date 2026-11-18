@@ -4,3 +4,5 @@ import "./features/index.js";
 
 initLanguage();
 boot();
+
+// test
