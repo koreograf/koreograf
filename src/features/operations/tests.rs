@@ -1228,7 +1228,7 @@ mod dbmigrate_tests {
 mod metrics_tests {
     use std::collections::HashMap;
 
-    use crate::features::operations::service::{gauges_from_dir, CLOSED_LIMIT};
+    use crate::features::operations::service::{gauges_from_dir, CLOSED_LIMIT, HOST_LIMIT};
     use crate::features::operations::*;
 
     const FIXTURE: &str = r#"
@@ -1310,6 +1310,91 @@ ok: [web-1]
         assert!(!text.contains("Gathering Facts"));
         assert!(!text.contains("s3cret"));
         assert!(!text.contains("Role from cache"));
+    }
+
+    #[test]
+    fn host_last_run_is_per_host_and_playbook_without_role_labels() {
+        let metrics = Metrics::new();
+        metrics.begin(&meta("ansible", "site.yml"));
+        metrics.observe("job-1", "PLAY [web] ***");
+        metrics.observe("job-1", "TASK [web : install nginx] ***");
+        metrics.observe("job-1", "ok: [web-1]");
+        metrics.observe("job-1", "changed: [web-1]");
+        metrics.observe(
+            "job-1",
+            "fatal: [web-2]: FAILED! => {\"password\":\"s3cret\"}",
+        );
+        let runs = metrics.close("job-1", "failed", None);
+        assert_eq!(runs.len(), 2, "{runs:?}");
+        assert!(runs.iter().any(|run| run.host == "web-1"
+            && run.role == "web"
+            && run.result == "changed"
+            && run.ok == 1
+            && run.changed == 1));
+        assert!(runs
+            .iter()
+            .any(|run| run.host == "web-2" && run.result == "failed" && !run.success()));
+        let text = metrics.render(&[], 0);
+        for host in ["web-1", "web-2"] {
+            let prefix = format!(
+                "koreograf_host_last_run_timestamp_seconds{{host=\"{host}\",playbook=\"site.yml\"}} "
+            );
+            let line = text
+                .lines()
+                .find(|line| line.starts_with(&prefix))
+                .unwrap_or_else(|| panic!("missing timestamp for {host}: {text}"));
+            let value = line[prefix.len()..].trim();
+            assert!(
+                value
+                    .parse::<u64>()
+                    .is_ok_and(|seconds| seconds > 1_700_000_000),
+                "{line}"
+            );
+            assert!(
+                !line.contains("role="),
+                "host series carry no role label: {line}"
+            );
+        }
+        assert!(text
+            .contains("koreograf_host_last_run_success{host=\"web-1\",playbook=\"site.yml\"} 1"));
+        assert!(text
+            .contains("koreograf_host_last_run_success{host=\"web-2\",playbook=\"site.yml\"} 0"));
+        assert!(!text.contains("s3cret"));
+        assert!(text.contains(
+            "koreograf_role_results_total{playbook=\"site.yml\",role=\"web\",result=\"ok\"} 1"
+        ));
+    }
+
+    #[test]
+    fn host_last_run_series_stay_bounded() {
+        let metrics = Metrics::new();
+        for index in 0..=HOST_LIMIT {
+            let id = format!("job-{index}");
+            let playbook = format!("play-{index}.yml");
+            let job = JobMeta {
+                job_id: &id,
+                team_id: "team-1",
+                tool: "ansible",
+                playbook: &playbook,
+                template: "Cap",
+            };
+            metrics.begin(&job);
+            metrics.observe(&id, "TASK [web : install] ***");
+            metrics.observe(&id, &format!("ok: [host-{index}]"));
+            metrics.close(&id, "successful", None);
+        }
+        let text = metrics.render(&[], 0);
+        assert!(!text.contains("host=\"host-0\""), "{text}");
+        assert!(
+            text.contains(&format!("host=\"host-{HOST_LIMIT}\"")),
+            "{text}"
+        );
+        assert_eq!(
+            text.lines()
+                .filter(|line| line.starts_with("koreograf_host_last_run_success{"))
+                .count(),
+            HOST_LIMIT
+        );
     }
 
     fn watch(lines: &[&str]) -> bool {

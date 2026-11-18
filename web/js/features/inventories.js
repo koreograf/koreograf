@@ -4,6 +4,7 @@ import { confirmDialog } from "../core/dialog.js";
 import { can, go, handle, markSaved, needTeam, route, shell } from "../core/app.js";
 import { addLink, emptyState, esc, h, selectOptions, table } from "../core/dom.js";
 import { clearEditHash, editQuery, openEditDialog } from "../core/edit.js";
+import { pill, when } from "../core/format.js";
 import { t } from "../core/i18n.js";
 import { registerRedirect, registerRoute } from "../core/router.js";
 import { openCredentialCreator } from "./credentials.js";
@@ -489,6 +490,16 @@ export function inventoryHostUrl(id, state) {
   if (state.group) params.set("group", state.group);
   if (state.sort) params.set("sort", state.sort);
   return `/api/v1/inventories/${encodeURIComponent(id)}/hosts?${params}`;
+}
+
+export function hostHistoryTable(entries) {
+  if (!entries.length) return `<p class="small muted">${h("no_run_history")}</p>`;
+  const rows = entries.map((entry) => {
+    const time = `<time datetime="${esc(entry.time)}" title="${esc(when(entry.time))}">${esc(when(entry.time))}</time>`;
+    const job = `<a href="#/jobs/${encodeURIComponent(entry.job_id)}">${esc(entry.job_name)}</a>`;
+    return `<tr><td>${time}</td><td class="mono">${esc(entry.playbook)}</td><td>${esc(entry.role)}</td><td>${pill(entry.result)}</td><td>${job}</td></tr>`;
+  }).join("");
+  return `<div class="table-wrap"><table class="table"><thead><tr><th>${h("time")}</th><th>${h("playbook")}</th><th>${h("role")}</th><th>${h("run_result")}</th><th>${h("job")}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 export function inventoryHostTable(hosts, state, id) {
@@ -1024,10 +1035,15 @@ function bindInventoryLaunch(buttonId, selectId, templates, preset) {
 
 async function pageInventoryHost(id, name) {
   if (!needTeam()) return;
-  const [item, host, templates] = await Promise.all([
+  const params = new URLSearchParams((location.hash || "").split("?")[1] || "");
+  const historyPage = Math.max(1, Number(params.get("history_page")) || 1);
+  const historySize = 25;
+  const base = `#/inventories/${encodeURIComponent(id)}/hosts/${encodeURIComponent(name)}`;
+  const [item, host, templates, history] = await Promise.all([
     api("GET", `/api/v1/inventories/${encodeURIComponent(id)}`),
     api("GET", `/api/v1/inventories/${encodeURIComponent(id)}/hosts/${encodeURIComponent(name)}`),
     can("operator") ? api("GET", "/api/v1/templates") : Promise.resolve([]),
+    api("GET", `/api/v1/inventories/${encodeURIComponent(id)}/hosts/${encodeURIComponent(name)}/history?page=${historyPage}&page_size=${historySize}`),
   ]);
   const ansibleTemplates = (templates || []).filter((item) => item.tool === "ansible");
   const groupLinks = (host.groups || []).map((group) => `<a href="#/inventories/${encodeURIComponent(id)}/groups/${encodeURIComponent(group)}">${esc(group)}</a>`).join(", ");
@@ -1036,6 +1052,10 @@ async function pageInventoryHost(id, name) {
     ? `<p><a href="${esc(host.netbox_url)}" target="_blank" rel="noopener">${h("open_in_netbox")}</a></p>`
     : "";
   const launch = can("operator") ? inventoryLaunchCard("run_a_template_on_this_host", ansibleTemplates, "run_a_template_on_this_host", "host-launch", "host-template") : "";
+  const historyPages = Math.max(1, Math.ceil(Number(history.total) / historySize));
+  const historyPager = historyPages > 1
+    ? `<div class="row"><button class="btn" type="button" data-history-page="${historyPage - 1}"${historyPage <= 1 ? " disabled" : ""}>${h("previous_page")}</button><span class="small muted">${h("page_of_pages", { page: historyPage, pages: historyPages })}</span><button class="btn" type="button" data-history-page="${historyPage + 1}"${historyPage >= historyPages ? " disabled" : ""}>${h("next_page")}</button></div>`
+    : "";
   shell(host.name, `
     <p class="small muted"><a href="#/inventories/${encodeURIComponent(id)}">${h("back_to_inventory")}</a> · ${esc(item.name)}</p>
     <section class="card">
@@ -1050,8 +1070,19 @@ async function pageInventoryHost(id, name) {
       <p class="small muted">${h("secret_looking_variables_are_masked")}</p>
       ${variablesViewer(host.vars || [])}
     </section>
+    <section class="card">
+      <h2>${h("run_history")}</h2>
+      ${hostHistoryTable(history.entries || [])}
+      ${historyPager}
+    </section>
     ${launch}`);
   bindVariablesViews();
+  document.querySelectorAll("[data-history-page]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (button.disabled) return;
+      go(Number(button.dataset.historyPage) > 1 ? `${base}?history_page=${button.dataset.historyPage}` : base);
+    });
+  });
   bindInventoryLaunch("host-launch", "host-template", ansibleTemplates, { inventoryId: id, limit: host.name });
 }
 

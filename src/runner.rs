@@ -4184,8 +4184,8 @@ fn finish(state: &Shared, job_id: &str, success: bool) {
 
 fn close_observation(state: &Shared, job_id: &str) {
     let loaded = state.store().job(job_id).ok().flatten();
-    let (status, labels) = match loaded {
-        Some(job) => (job.status.clone(), Some(job_labels(&job))),
+    let (status, labels) = match &loaded {
+        Some(job) => (job.status.clone(), Some(job_labels(job))),
         None => ("failed".to_string(), None),
     };
     let meta = labels.as_ref().map(|item| JobMeta {
@@ -4195,7 +4195,23 @@ fn close_observation(state: &Shared, job_id: &str) {
         playbook: &item.playbook,
         template: &item.template,
     });
-    state.metrics.close(job_id, &status, meta.as_ref());
+    let hosts = state.metrics.close(job_id, &status, meta.as_ref());
+    if let Some(job) = &loaded {
+        if !hosts.is_empty() {
+            let params = crate::db::json_object(&job.parameters);
+            let inventory_id = params
+                .get("inventory_id")
+                .and_then(|value| value.as_str())
+                .filter(|value| !value.is_empty());
+            let _ = state.store().insert_host_results(
+                job_id,
+                &job.team_id,
+                inventory_id,
+                &hosts,
+                &crate::db::now(),
+            );
+        }
+    }
 }
 
 #[cfg(test)]

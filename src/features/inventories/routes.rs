@@ -45,6 +45,10 @@ pub(crate) fn routes() -> Router<Shared> {
         .route("/inventories", get(list_inventories).post(create_inventory))
         .route("/inventories/{id}/hosts", get(list_inventory_hosts))
         .route("/inventories/{id}/hosts/{name}", get(get_inventory_host))
+        .route(
+            "/inventories/{id}/hosts/{name}/history",
+            get(get_inventory_host_history),
+        )
         .route("/inventories/{id}/groups", get(list_inventory_groups))
         .route("/inventories/{id}/groups/{name}", get(get_inventory_group))
         .route(
@@ -1456,6 +1460,16 @@ pub(super) struct InventoryHostResponse {
     netbox_url: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub(super) struct InventoryHostHistoryResponse {
+    pub(super) id: String,
+    pub(super) host: String,
+    pub(super) total: i64,
+    pub(super) page: usize,
+    pub(super) page_size: usize,
+    pub(super) entries: Vec<db::HostHistoryEntry>,
+}
+
 #[derive(Serialize)]
 pub(super) struct InventoryGroupsResponse {
     id: String,
@@ -1521,7 +1535,7 @@ pub async fn get_inventory(
 const HOST_PAGE_SIZE: usize = 50;
 const HOST_PAGE_SIZE_MAX: usize = 200;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 pub struct HostQuery {
     #[serde(default)]
     page: Option<usize>,
@@ -1644,6 +1658,40 @@ pub async fn get_inventory_host(
         vars,
         netbox_url: netbox_url(&state, db, source, netbox_id.as_deref()),
         netbox_id,
+    }))
+}
+
+pub async fn get_inventory_host_history(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Path((id, name)): Path<(String, String)>,
+    Query(query): Query<HostQuery>,
+) -> AppResult<Json<InventoryHostHistoryResponse>> {
+    let team = team_header(&headers)?;
+    gate(&state, &user, &team, Role::Viewer)?;
+    let db = state.store();
+    let item = visible_inventory(db, &id, &team)?;
+    let sources = db.list_inventory_sources(&item.id)?;
+    let data = inventory_data(&item, &sources);
+    if !data.hosts.iter().any(|host| host.name == name) {
+        return Err(ApiError::NotFound);
+    }
+    let page_size = query.page_size.or(query.limit).unwrap_or(20).clamp(1, 100);
+    let offset = query
+        .offset
+        .unwrap_or_else(|| query.page.unwrap_or(1).saturating_sub(1) * page_size);
+    let page = offset / page_size + 1;
+    let limit = i64::try_from(page_size).unwrap_or(i64::MAX);
+    let offset = i64::try_from(offset).unwrap_or(i64::MAX);
+    let (entries, total) = db.host_history(&team, &item.id, &name, limit, offset)?;
+    Ok(Json(InventoryHostHistoryResponse {
+        id: item.id,
+        host: name,
+        total,
+        page,
+        page_size,
+        entries,
     }))
 }
 

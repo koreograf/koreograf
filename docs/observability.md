@@ -32,6 +32,8 @@ Counters live in memory and start at zero after a restart. Prometheus treats tha
 | `koreograf_jobs_pending` | gauge | none |
 | `koreograf_jobs_running` | gauge | none |
 | `koreograf_role_results_total` | counter | `playbook`, `role`, `result` (`ok`, `changed`, `failed`, `unreachable`, `skipped`) |
+| `koreograf_host_last_run_timestamp_seconds` | gauge | `host`, `playbook` |
+| `koreograf_host_last_run_success` | gauge | `host`, `playbook` |
 | `koreograf_cache_collections` | gauge | `team_id`, `team` |
 | `koreograf_cache_roles` | gauge | `team_id`, `team` |
 | `koreograf_cache_bytes` | gauge | `team_id`, `team`, `kind` (`collections`, `roles`, `tofu`) |
@@ -41,3 +43,33 @@ Counters live in memory and start at zero after a restart. Prometheus treats tha
 `koreograf_job_duration_seconds` measures the time from the start of execution to the terminal status, in seconds. Its buckets are `1`, `5`, `15`, `30`, `60`, `120`, `300`, `600`, `1800`, `3600`, `7200`, `21600`, and `+Inf`. A job that is canceled while pending or fails during preparation has no duration, so it only appears in `koreograf_jobs_finished_total`.
 
 `koreograf_jobs_pending` is read from the database on each scrape and counts jobs with status `pending`, across every team and including jobs launched by a workflow. `koreograf_jobs_running` counts the jobs this process has begun and not yet finished; both gauges are unlabelled and read zero after a restart until work arrives.
+
+`koreograf_host_last_run_timestamp_seconds` is the finish time of the latest Ansible job that reported a result for that host and playbook. `koreograf_host_last_run_success` is `1` when that job had no `failed` or `unreachable` result on the host, otherwise `0`. A host that appears in several plays of one job is one series. The host series carry no role or task label, so a host that runs many roles still produces one timestamp and one status per playbook.
+
+Both host gauges live in memory and start empty after a restart, like the role counter. The process keeps the newest 1000 host and playbook pairs and drops the oldest pair when a new one arrives, so deleting an inventory or a host removes its series once the bound evicts it. A team with more than 1000 host and playbook pairs sees the oldest pairs disappear from `/metrics`; raise the scrape interval or split playbooks rather than adding per-host role labels.
+
+The per-host history that backs the UI is stored in SQLite and PostgreSQL in `host_results`. `GET /api/v1/inventories/{id}/hosts/{name}/history?page=1&page_size=25` returns the latest runs for one host in the signed-in team, including playbook, role, result, counters, time, and job id and name. It uses the same team check as the other inventory routes, so a viewer of another team gets `404`.
+
+Example alerts:
+
+```yaml
+groups:
+  - name: koreograf-hosts
+    rules:
+      - alert: HostNotPatched
+        expr: time() - koreograf_host_last_run_timestamp_seconds{playbook="patch.yml"} > 7 * 24 * 3600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} has not run {{ $labels.playbook }} for 7 days"
+      - alert: HostLastRunFailed
+        expr: koreograf_host_last_run_success == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The last {{ $labels.playbook }} run on {{ $labels.host }} failed"
+```
+
+`HostNotPatched` only fires for a host that has run the playbook at least once, because a missing series has no value. Use `absent()` or a separate inventory export when a host must be covered before its first run. `HostLastRunFailed` stays firing until the next run on that host and playbook succeeds.

@@ -230,6 +230,22 @@ pub(crate) trait Backend: Send + Sync {
     fn events_count_between(&self, job_id: &str, after: i64, before: i64) -> AppResult<i64>;
     fn events_bytes(&self, job_id: &str) -> AppResult<i64>;
     fn events_last(&self, job_id: &str, limit: i64) -> AppResult<Vec<JobEvent>>;
+    fn insert_host_results(
+        &self,
+        job_id: &str,
+        team_id: &str,
+        inventory_id: Option<&str>,
+        runs: &[db::HostRun],
+        at: &str,
+    ) -> AppResult<()>;
+    fn host_history(
+        &self,
+        team_id: &str,
+        inventory_id: &str,
+        host: &str,
+        limit: i64,
+        offset: i64,
+    ) -> AppResult<(Vec<db::HostHistoryEntry>, i64)>;
     fn workflow_job(&self, id: &str) -> AppResult<Option<WorkflowJob>>;
     fn list_workflow_jobs(
         &self,
@@ -1042,6 +1058,30 @@ impl Backend for SqliteBackend {
         jobs::store::events_last(&conn, job_id, limit)
     }
 
+    fn insert_host_results(
+        &self,
+        job_id: &str,
+        team_id: &str,
+        inventory_id: Option<&str>,
+        runs: &[db::HostRun],
+        at: &str,
+    ) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        jobs::store::insert_host_results(&conn, job_id, team_id, inventory_id, runs, at)
+    }
+
+    fn host_history(
+        &self,
+        team_id: &str,
+        inventory_id: &str,
+        host: &str,
+        limit: i64,
+        offset: i64,
+    ) -> AppResult<(Vec<db::HostHistoryEntry>, i64)> {
+        let conn = lock(&self.conn)?;
+        jobs::store::host_history(&conn, team_id, inventory_id, host, limit, offset)
+    }
+
     fn workflow_job(&self, id: &str) -> AppResult<Option<WorkflowJob>> {
         let conn = lock(&self.conn)?;
         workflows::store::workflow_job(&conn, id)
@@ -1406,6 +1446,10 @@ fn connection_error(err: tokio_postgres::Error, target: &str) -> anyhow::Error {
         "PostgreSQL at {target} is unreachable: {:#}",
         anyhow::Error::new(err)
     )
+}
+
+fn pg_count(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
 }
 
 impl Backend for PostgresBackend {
@@ -3346,6 +3390,72 @@ impl Backend for PostgresBackend {
                 .collect::<AppResult<Vec<_>>>()?;
             events.reverse();
             Ok(events)
+        })
+    }
+
+    fn insert_host_results(
+        &self,
+        job_id: &str,
+        team_id: &str,
+        inventory_id: Option<&str>,
+        runs: &[db::HostRun],
+        at: &str,
+    ) -> AppResult<()> {
+        self.with_client(|client| async move {
+            let sql = store::sql::postgres(jobs::store::INSERT_HOST_RESULT);
+            for run in runs {
+                client
+                    .execute(
+                        &sql,
+                        &[
+                            &job_id,
+                            &team_id,
+                            &inventory_id,
+                            &run.host,
+                            &run.playbook,
+                            &run.role,
+                            &run.result,
+                            &pg_count(run.ok),
+                            &pg_count(run.changed),
+                            &pg_count(run.failed),
+                            &pg_count(run.unreachable),
+                            &pg_count(run.skipped),
+                            &at,
+                        ],
+                    )
+                    .await?;
+            }
+            Ok(())
+        })
+    }
+
+    fn host_history(
+        &self,
+        team_id: &str,
+        inventory_id: &str,
+        host: &str,
+        limit: i64,
+        offset: i64,
+    ) -> AppResult<(Vec<db::HostHistoryEntry>, i64)> {
+        self.with_client(|client| async move {
+            let rows = client
+                .query(
+                    &store::sql::postgres(jobs::store::HOST_HISTORY),
+                    &[&team_id, &inventory_id, &host, &limit, &offset],
+                )
+                .await?;
+            let entries = rows
+                .iter()
+                .map(jobs::store::row_host_history)
+                .collect::<AppResult<Vec<_>>>()?;
+            let total: i64 = client
+                .query_one(
+                    &store::sql::postgres(jobs::store::HOST_HISTORY_COUNT),
+                    &[&team_id, &inventory_id, &host],
+                )
+                .await?
+                .get(0);
+            Ok((entries, total))
         })
     }
 

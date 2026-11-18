@@ -50,6 +50,26 @@ function filterRow(key, value) {
   };
 }
 
+test("the host history table links the job and shows the role result", async () => {
+  const { hostHistoryTable } = await load();
+  const html = hostHistoryTable([
+    {
+      time: "2026-01-01T00:00:00Z",
+      job_id: "job-1",
+      job_name: "Patch web",
+      playbook: "site.yml",
+      role: "web",
+      result: "changed",
+    },
+  ]);
+  assert.match(html, /href="#\/jobs\/job-1"/);
+  assert.match(html, /Patch web/);
+  assert.match(html, /site.yml/);
+  assert.match(html, />web</);
+  assert.match(html, /class="pill changed"/);
+  assert.equal(hostHistoryTable([]), `<p class="small muted">no_run_history</p>`);
+});
+
 test("the inventory list filter matches names and source details", async () => {
   const { inventoryMatches } = await load();
   const item = {

@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::error::{ApiError, AppResult};
 
-pub(crate) const SCHEMA_VERSION: u32 = 2;
+pub(crate) const SCHEMA_VERSION: u32 = 3;
 const BASELINE_VERSION: u32 = 1;
 
 pub fn now() -> String {
@@ -38,6 +38,11 @@ pub(crate) const SQLITE_MIGRATIONS: &[Migration] = &[
         name: "0002_workflow_version",
         sql: include_str!("../migrations/sqlite/0002_workflow_version.sql"),
     },
+    Migration {
+        version: 3,
+        name: "0003_host_results",
+        sql: include_str!("../migrations/sqlite/0003_host_results.sql"),
+    },
 ];
 
 pub(crate) const POSTGRES_MIGRATIONS: &[Migration] = &[
@@ -50,6 +55,11 @@ pub(crate) const POSTGRES_MIGRATIONS: &[Migration] = &[
         version: 2,
         name: "0002_workflow_version",
         sql: include_str!("../migrations/postgres/0002_workflow_version.sql"),
+    },
+    Migration {
+        version: 3,
+        name: "0003_host_results",
+        sql: include_str!("../migrations/postgres/0003_host_results.sql"),
     },
 ];
 
@@ -791,6 +801,43 @@ pub struct JobEvent {
     pub ts: String,
     pub stream: String,
     pub line: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct HostRun {
+    pub host: String,
+    pub playbook: String,
+    pub role: String,
+    pub result: String,
+    pub ok: u64,
+    pub changed: u64,
+    pub failed: u64,
+    pub unreachable: u64,
+    pub skipped: u64,
+}
+
+impl HostRun {
+    pub fn success(&self) -> bool {
+        self.failed == 0 && self.unreachable == 0
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct HostHistoryEntry {
+    pub id: i64,
+    pub job_id: String,
+    pub job_name: String,
+    pub job_status: String,
+    pub host: String,
+    pub playbook: String,
+    pub role: String,
+    pub result: String,
+    pub ok: i64,
+    pub changed: i64,
+    pub failed: i64,
+    pub unreachable: i64,
+    pub skipped: i64,
+    pub time: String,
 }
 
 #[derive(Clone, Debug)]
