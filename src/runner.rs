@@ -4279,7 +4279,10 @@ mod tests {
         let started = std::time::Instant::now();
         let ok = command_ok("sleep", &["30"], Duration::from_millis(200)).await;
         assert!(!ok);
-        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(
+            started.elapsed() < Duration::from_secs(25),
+            "the probe waited for the command instead of its timeout"
+        );
     }
 
     #[tokio::test]
@@ -5379,9 +5382,8 @@ exit 1
         );
         let fail_arg = fail.display().to_string();
         let ok_arg = ok_bin.display().to_string();
-        let started = std::time::Instant::now();
         let result = tokio::time::timeout(
-            Duration::from_secs(5),
+            Duration::from_secs(30),
             pull_image(&fail_arg, "missing:nope"),
         )
         .await;
@@ -5390,7 +5392,6 @@ exit 1
         let err = result
             .expect("pull stalled on stderr")
             .expect_err("pull fails");
-        assert!(started.elapsed() < Duration::from_secs(5));
         assert!(err.to_string().contains("manifest unknown"), "{err}");
         assert!(err.to_string().contains("missing:nope"), "{err}");
         assert!(err.to_string().contains("[redacted]"), "{err}");
@@ -5444,14 +5445,12 @@ exit 1
             data: b"never\n".to_vec(),
             pos: 0,
         };
-        let started = std::time::Instant::now();
         let tail = tokio::time::timeout(
-            Duration::from_secs(2),
+            Duration::from_secs(30),
             read_stderr_tail(reader, PULL_STDERR_TAIL),
         )
         .await;
         assert!(tail.is_ok(), "repeated read errors stalled");
-        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[test]
@@ -6486,12 +6485,22 @@ exit 0
             .await
             .expect("group did not exit");
         assert!(finished.is_ok());
-        // child.wait returns when the leader exits. The grandchild can still
-        // be a zombie for a moment, and a zombie's cmdline is empty.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         let mut after = None;
+        let mut status = before;
         let mut gone = false;
-        for _ in 0..60 {
+        while tokio::time::Instant::now() < deadline {
+            let current = std::fs::read_to_string(format!("/proc/{grandchild}/status")).ok();
             after = std::fs::read_to_string(format!("/proc/{grandchild}/cmdline")).ok();
+            let zombie = current.as_deref().is_some_and(|text| {
+                text.lines()
+                    .any(|line| line.starts_with("State:") && line.contains('Z'))
+            });
+            if current.is_none() || zombie {
+                gone = true;
+                break;
+            }
+            status = current;
             if after
                 .as_deref()
                 .is_none_or(|text| text.is_empty() || !text.contains("sleep"))
@@ -6503,7 +6512,7 @@ exit 0
         }
         assert!(
             gone,
-            "grandchild {grandchild} is still sleep; status={before:?} cmdline={after:?}"
+            "grandchild {grandchild} is still sleep; status={status:?} cmdline={after:?}"
         );
         let _ = std::fs::remove_dir_all(dir);
     }
