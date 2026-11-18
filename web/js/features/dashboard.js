@@ -68,15 +68,16 @@ export function dashboardTabs(tab) {
 function dashboardChart(series, values, heading, legend) {
   const totals = series.map((day) => values.reduce((sum, key) => sum + (Number(day[key]) || 0), 0));
   const max = Math.max(1, ...totals);
-  const days = series.map((day) => {
+  const days = series.map((day, index) => {
     const title = `${day.date} · ${values.map((key) => `${key === "started" ? "" : `${t(key)} `}${Number(day[key]) || 0}`).join(" · ")}`;
     const bars = values.map((key) => {
       const value = Number(day[key]) || 0;
       if (!value) return "";
-      const height = Math.max(3, Math.round((value / max) * 100));
-      return `<span class="chart-seg ${esc(key)}" style="height:${height}%"></span>`;
+      return `<span class="chart-seg ${esc(key)}" style="flex-grow:${value}"></span>`;
     }).join("");
-    return `<div class="chart-day" title="${esc(title)}"><div class="chart-bars">${bars}</div><span class="chart-day-label">${esc(shortDay(day.date))}</span></div>`;
+    const height = Math.max(4, Math.round((totals[index] / max) * 100));
+    const bar = bars ? `<div class="chart-bar" style="height:${height}%">${bars}</div>` : "";
+    return `<div class="chart-day" title="${esc(title)}"><div class="chart-bars">${bar}</div><span class="chart-day-label">${esc(shortDay(day.date))}</span></div>`;
   }).join("");
   return `<section class="card"><div class="spread"><h2>${h(heading)}</h2>${legend ? `<div class="row">${legend}</div>` : ""}</div><div class="chart" role="img" aria-label="${h(heading)}">${days}</div></section>`;
 }

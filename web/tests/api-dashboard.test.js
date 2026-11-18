@@ -50,6 +50,46 @@ test("the dashboard page shows the empty state and the cache numbers", async () 
   assert.doesNotMatch(filled.slice(filled.indexOf("dependency_cache")), /class="chart"/);
 });
 
+test("a one-day series keeps the column narrow and the failed segment visible", async () => {
+  const { dashboardBody } = await load("features/dashboard.js");
+  const { stylesheet, rule } = require("./css.js");
+  const html = dashboardBody(
+    { series: [{ date: "2026-11-18", started: 16, successful: 15, failed: 1, canceled: 0 }], cache: {} },
+    "1",
+  );
+  const chart = html.slice(html.indexOf('class="chart"'));
+  assert.match(chart, /class="chart-seg successful" style="flex-grow:15"/);
+  assert.match(chart, /class="chart-seg failed" style="flex-grow:1"/);
+  assert.match(chart, /<div class="chart-bar" style="height:100%">/);
+
+  const css = stylesheet();
+  const day = rule(css, ".chart-day");
+  assert.ok(day, "the chart day rule is missing");
+  assert.match(day[1], /max-width:\s*64px;/, "a single day still fills the card");
+  assert.match(day[1], /flex:\s*1 1 0;/, "the day column does not share the row");
+  assert.match(rule(css, ".chart")[1], /justify-content:\s*center;/, "a narrow day is not centered");
+  assert.match(rule(css, ".chart-seg")[1], /min-height:\s*4px;/, "a minority segment can collapse");
+});
+
+test("the seven and fourteen day series keep every day and the empty ones", async () => {
+  const { dashboardBody } = await load("features/dashboard.js");
+  const series = (count) => Array.from({ length: count }, (_, index) => ({
+    date: `2026-11-${String(index + 1).padStart(2, "0")}`,
+    started: index === 2 ? 0 : index + 1,
+    successful: index === 2 ? 0 : index + 1,
+    failed: index % 5 === 0 ? 1 : 0,
+    canceled: 0,
+  }));
+  for (const count of [7, 14]) {
+    const html = dashboardBody({ series: series(count), cache: {} }, String(count));
+    const charts = html.slice(html.indexOf('class="chart"'), html.indexOf("dependency_cache"));
+    assert.equal((charts.match(/class="chart-day"/g) || []).length, count * 2, `the ${count} day view lost a day`);
+    assert.equal((charts.match(/<div class="chart-bars"><\/div>/g) || []).length, 2, `the ${count} day view filled an empty day`);
+    assert.match(charts, /class="chart-seg failed"/, `the ${count} day view lost the failed segment`);
+    assert.match(charts, /class="chart-bar" style="height:\d+%"/);
+  }
+});
+
 test("the preflight notice names the missing tool and runtime", async () => {
   const { preflightNotices } = await load("core/format.js");
   const cases = [
