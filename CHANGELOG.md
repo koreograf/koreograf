@@ -1,5 +1,59 @@
 # Changelog
 
+## [0.1.0-alpha.13](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.12...v0.1.0-alpha.13) (2026-11-18)
+
+
+### Features
+
+* add a dark mode to the web ui ([#549](https://github.com/koreograf/koreograf/issues/549)) ([7545566](https://github.com/koreograf/koreograf/commit/754556603d54876854ecd33b0cd5f9a5c8029508))
+* add arrows, type labels and wider hit areas to edges ([#483](https://github.com/koreograf/koreograf/issues/483)) ([d630aa9](https://github.com/koreograf/koreograf/commit/d630aa978c48e3811a8d353d475a9dd2567d384b))
+* add job duration and queue metrics ([#547](https://github.com/koreograf/koreograf/issues/547)) ([6a3e013](https://github.com/koreograf/koreograf/commit/6a3e0130981d7ea2c859466497c19a3d88509ff1))
+* add per-host run history and metrics ([#550](https://github.com/koreograf/koreograf/issues/550)) ([2ceba74](https://github.com/koreograf/koreograf/commit/2ceba747ad2671d6fccab4a62597c4452413294d))
+* add the next workflow step from an output handle ([#481](https://github.com/koreograf/koreograf/issues/481)) ([358a687](https://github.com/koreograf/koreograf/commit/358a687b6022336fcfd2cbf4119daabacf290402))
+* add workflow nodes with the full editor ([#458](https://github.com/koreograf/koreograf/issues/458)) ([6e7c9f8](https://github.com/koreograf/koreograf/commit/6e7c9f80459e27e8549707d82054d665c5e6440c))
+* connect and delete workflow edges from the keyboard ([#478](https://github.com/koreograf/koreograf/issues/478)) ([7394c08](https://github.com/koreograf/koreograf/commit/7394c08164c64a265ab6becba7ee6a0c6e1395f7))
+* edit workflow nodes in one side panel ([#487](https://github.com/koreograf/koreograf/issues/487)) ([6c18cb0](https://github.com/koreograf/koreograf/commit/6c18cb05151ce09a2df2dae32367408ab9d162d8))
+* reject conflicting workflow saves ([#496](https://github.com/koreograf/koreograf/issues/496)) ([72e90f5](https://github.com/koreograf/koreograf/commit/72e90f5a7da6a984fd665affb14f7c7af2b09045))
+* show read-only node details to workflow viewers ([#492](https://github.com/koreograf/koreograf/issues/492)) ([a9abe6e](https://github.com/koreograf/koreograf/commit/a9abe6e8f6a4db4a305ebdc9df6ae049200d336c))
+* show the run path and add cancel, relaunch and history ([#491](https://github.com/koreograf/koreograf/issues/491)) ([8effe0a](https://github.com/koreograf/koreograf/commit/8effe0aa89a0d17b873ed10cc5b897da89e42d86))
+* show tool, template and overrides on node cards ([#488](https://github.com/koreograf/koreograf/issues/488)) ([31868bc](https://github.com/koreograf/koreograf/commit/31868bcc5508f65b35af5695f7f80007f70fe85f))
+* snap workflow nodes to the grid and add auto-layout ([#495](https://github.com/koreograf/koreograf/issues/495)) ([10593bc](https://github.com/koreograf/koreograf/commit/10593bcbf6e8f9f0db32949911df4e4bbdc8ad68))
+* undo and redo changes in the workflow editor ([#489](https://github.com/koreograf/koreograf/issues/489)) ([b6c2ac0](https://github.com/koreograf/koreograf/commit/b6c2ac0becea3d2f90956a874308e4cc909e764a))
+* validate the workflow graph while editing ([#485](https://github.com/koreograf/koreograf/issues/485)) ([0b2d1ec](https://github.com/koreograf/koreograf/commit/0b2d1ec245f43e543a667efefe91582c1cc78742))
+* zoom, pan and fit the workflow canvas ([#479](https://github.com/koreograf/koreograf/issues/479)) ([8e2d6dd](https://github.com/koreograf/koreograf/commit/8e2d6ddb83ac6a3271d07296e862bc187901c623))
+
+
+### Bug Fixes
+
+* align the jobs filter controls on one baseline ([#520](https://github.com/koreograf/koreograf/issues/520)) ([2bb21dc](https://github.com/koreograf/koreograf/commit/2bb21dc4022773182fabf837bd618053f94beff7))
+* edit existing workflow nodes in an overlay again ([#504](https://github.com/koreograf/koreograf/issues/504)) ([693df46](https://github.com/koreograf/koreograf/commit/693df464cac4c5e96388e4c3580a9ae248c89833))
+* finish the narrow workflow layout follow-ups ([#494](https://github.com/koreograf/koreograf/issues/494)) ([6c6e878](https://github.com/koreograf/koreograf/commit/6c6e87823d2f7a6fd7a50d8db0be0c1b0a30a10e))
+* finish the workflow unsaved guard follow-ups ([#476](https://github.com/koreograf/koreograf/issues/476)) ([05230f6](https://github.com/koreograf/koreograf/commit/05230f69dad187ee10bccdb7fd0d2133995398ac))
+* guard unsaved workflow edits and do not save on launch ([#475](https://github.com/koreograf/koreograf/issues/475)) ([7c404e5](https://github.com/koreograf/koreograf/commit/7c404e5562b65815a6b852ee9cd230bf39c36c06))
+* harden host history storage and eviction ([#551](https://github.com/koreograf/koreograf/issues/551)) ([8a25939](https://github.com/koreograf/koreograf/commit/8a25939d1838713394fe67ce6959531c9593ba32))
+* hide unfit credentials in the launch dialog ([#516](https://github.com/koreograf/koreograf/issues/516)) ([66a2162](https://github.com/koreograf/koreograf/commit/66a216226ef6090254b8b68b2efd6657b00acc3c))
+* ignore router params in the settings banner ([#519](https://github.com/koreograf/koreograf/issues/519)) ([774b238](https://github.com/koreograf/koreograf/commit/774b2380799e8f044fc806b9fdbbe9eb692aa1aa))
+* keep browser shortcuts and touch pinch on the canvas ([#480](https://github.com/koreograf/koreograf/issues/480)) ([addc82e](https://github.com/koreograf/koreograf/commit/addc82e39d39660411034677e76b6736e5064a6b))
+* keep fan-out edges when the inspector target changes ([#477](https://github.com/koreograf/koreograf/issues/477)) ([91c08d4](https://github.com/koreograf/koreograf/commit/91c08d4e0c9e90e649a269b24854075ededd0c64))
+* keep host data paths out of job logs ([#548](https://github.com/koreograf/koreograf/issues/548)) ([e2acf4b](https://github.com/koreograf/koreograf/commit/e2acf4b817add44b60bab363a589acafaa085722))
+* keep launch dialog tags and limit visible ([#555](https://github.com/koreograf/koreograf/issues/555)) ([e0ca94f](https://github.com/koreograf/koreograf/commit/e0ca94f6372d0d89628d4380a3a6f0f51f129a5f))
+* keep text undo inside the workflow editor fields ([#490](https://github.com/koreograf/koreograf/issues/490)) ([efee85b](https://github.com/koreograf/koreograf/commit/efee85bb58259665cbb22facffba8b14a078d58c))
+* keep workflow connect mode on a source release ([#482](https://github.com/koreograf/koreograf/issues/482)) ([7dde7ad](https://github.com/koreograf/koreograf/commit/7dde7adc92a2a627ab22489e082c3d9914d9ad52))
+* make one-day dashboard bars readable ([#552](https://github.com/koreograf/koreograf/issues/552)) ([17984f8](https://github.com/koreograf/koreograf/commit/17984f8764b7469c0e55a338f68ec2a9ff407814))
+* read padding longhands in the css test ([#523](https://github.com/koreograf/koreograf/issues/523)) ([0d2d94f](https://github.com/koreograf/koreograf/commit/0d2d94ff7b82fd947c87aeebdad702cbff35c5b0))
+* scope the playwright test timeouts ([#542](https://github.com/koreograf/koreograf/issues/542)) ([30028b9](https://github.com/koreograf/koreograf/commit/30028b91c095bf5dbeb10b4e4c97536c581abb7b))
+* scope workflow validation to the editor ([#486](https://github.com/koreograf/koreograf/issues/486)) ([8be11ea](https://github.com/koreograf/koreograf/commit/8be11eacedfc04ae9f9ef1c5a7e02df87d05deca))
+* scroll only the log when jumping to the first failure ([#546](https://github.com/koreograf/koreograf/issues/546)) ([d787d47](https://github.com/koreograf/koreograf/commit/d787d47a0f18d1d23dfb63dc9f3cf5c42b27e86e))
+* size the schedule timezone and repeat selects ([#521](https://github.com/koreograf/koreograf/issues/521)) ([54c7d0d](https://github.com/koreograf/koreograf/commit/54c7d0de74522db3fc0c74ec7bd7cf5b43a7653f))
+* stabilize the run-state playwright smoke test ([#534](https://github.com/koreograf/koreograf/issues/534)) ([9a3642f](https://github.com/koreograf/koreograf/commit/9a3642f2e50aceb517f5a719a8d23d2f97a18e7e))
+* stabilize the runner timing tests ([#533](https://github.com/koreograf/koreograf/issues/533)) ([662f175](https://github.com/koreograf/koreograf/commit/662f1750f88bef2d8d72654635ff10d693ba5e5a))
+* stop the focus ring being clipped ([#522](https://github.com/koreograf/koreograf/issues/522)) ([72dc70e](https://github.com/koreograf/koreograf/commit/72dc70eae91c74ddd36eabc13d4aec45d400dd40))
+* stop the templates entry column wrapping mid-word ([#553](https://github.com/koreograf/koreograf/issues/553)) ([b116340](https://github.com/koreograf/koreograf/commit/b116340a3535bb404a8567d5486f174ecac58f94))
+* stop the workflow description being clipped ([#554](https://github.com/koreograf/koreograf/issues/554)) ([699961b](https://github.com/koreograf/koreograf/commit/699961bf45f70ea754df58428e9aa5827a381fb0))
+* stop the workflow editor overflowing on narrow screens ([#493](https://github.com/koreograf/koreograf/issues/493)) ([61f7d07](https://github.com/koreograf/koreograf/commit/61f7d0727d4627ddb35f165534df5e683c39c828))
+* translate edge pills and scope the edge hit path ([#484](https://github.com/koreograf/koreograf/issues/484)) ([b131c1c](https://github.com/koreograf/koreograf/commit/b131c1c37823520359ed7a1798a9917dcdb2e8e5))
+* use tag pills in the workflow node editor ([#517](https://github.com/koreograf/koreograf/issues/517)) ([2d3fdeb](https://github.com/koreograf/koreograf/commit/2d3fdeb98b507027f397cd1b23d8e3277598bfd9))
+
 ## [0.1.0-alpha.12](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.11...v0.1.0-alpha.12) (2026-11-14)
 
 
