@@ -11,7 +11,7 @@ This guide describes the browser UI as it exists today. `web/app.css`, `web/js/`
 
 ## Layout and tokens
 
-The signed-in UI uses the `.shell` grid: a 232 px sidebar and a flexible main column. `.main` carries the page padding and the `#main` landmark. The sidebar holds `.side`, `.nav`, `.nav-group`, and `.nav-label`. A page starts with `.top`, which holds the `h1` and page actions. The sidebar foot (`.side-foot`) sits at the bottom and holds the account link, the build line with the repository link, the language switch, and the sign-out button.
+The signed-in UI uses the `.shell` grid: a 232 px sidebar and a flexible main column. `.main` carries the page padding and the `#main` landmark. The sidebar holds `.side`, `.nav`, `.nav-group`, and `.nav-label`. A page starts with `.top`, which holds the `h1` and page actions. The sidebar foot (`.side-foot`) sits at the bottom and holds the account link, the build line with the repository link, the theme switch, the language switch, and the sign-out button.
 
 All design tokens are custom properties on `:root` in `web/app.css`.
 
@@ -26,12 +26,28 @@ All design tokens are custom properties on `:root` in `web/app.css`.
 | `--muted` | Secondary text and help text |
 | `--accent` | Links, focus rings, primary buttons, selected tabs |
 | `--accent-soft` | Chips and selected choices |
+| `--on-accent` | Text on a primary button |
 | `--good`, `--good-bg` | Success banner and successful status |
 | `--bad`, `--bad-bg` | Error banner, destructive button, failed status |
 | `--warn`, `--warn-bg` | Warning banner and pending status |
 | `--info`, `--info-bg` | Running status and the workflow inspector |
 | `--side`, `--side-text` | Sidebar background and text |
+| `--side-muted`, `--side-link`, `--side-hover`, `--side-strong` | Sidebar labels, links, hover, and strong text |
+| `--side-control`, `--side-line` | Sidebar selects and their borders |
+| `--control`, `--control-hover` | Inputs, buttons, menus, and their hover border |
+| `--hover`, `--row-hover`, `--chip-hover` | Menu, table row, and chip hover |
+| `--skipped-bg`, `--flag-bg` | Skipped status and the flag placeholder |
+| `--danger-line`, `--accent-line` | Danger and accent borders |
+| `--switch-off`, `--switch-thumb` | Switch track and knob |
+| `--canvas`, `--canvas-dot` | Workflow canvas and its grid |
+| `--overlay` | Dialog and scrim backdrop |
+| `--glow` | Sign-in page corner glow |
+| `--mark-bg`, `--mark-line` | Brand mark |
+| `--neutral-line` | Neutral workflow edges |
+| `--log-bg`, `--log-text`, `--log-key`, `--log-value` | Job log and structured data |
 | `--shadow` | Card, menu, and dialog elevation |
+
+The light palette is the default. The dark palette redefines the same tokens under `:root[data-theme="dark"]`; a page never carries its own colours. The theme switch offers `system`, `light`, and `dark`, stores the choice in `localStorage` under `koreograf.theme`, and the resolved value is the `data-theme` attribute on `<html>`. `system` follows `prefers-color-scheme` and updates when the desktop changes.
 
 ### Typography
 
@@ -205,7 +221,8 @@ Something stays a page when it needs its own address, a deep link to a record, a
 - Every input has a label, either the wrapping `.field` label or `aria-label` for a search box.
 - Dialogs use `role="dialog"`, `aria-modal="true"`, and `aria-labelledby`. Tabs support arrow keys, Home, and End. Escape closes a dialog and returns focus.
 - Color is never the only signal. A status pill has text, a required field has `*`, and an error has text plus `aria-invalid`.
-- Check contrast before you add a color pair. Use the existing token pairs instead of a new hex value.
+- Check contrast before you add a color pair. Use the existing token pairs instead of a new hex value. A pair must reach WCAG AA in both palettes.
+- The theme switch is a labelled select. `system` is the default and follows `prefers-color-scheme`; an explicit `light` or `dark` choice wins over the system and survives a reload.
 
 ## Responsive behavior
 
@@ -221,6 +238,7 @@ Something stays a page when it needs its own address, a deep link to a record, a
 - [ ] No component style is scoped to an id. Form controls use `.overlay-card.dialog` and `.field`, not a dialog id.
 - [ ] New strings are keys in the per-feature catalogs under `web/i18n/`, and the catalogs still match.
 - [ ] The page was checked at 1280 px and 390 px, in German and English.
+- [ ] The page was checked in the light and the dark theme.
 - [ ] The overlay or page follows the address, discard, error, and focus rules above.
 - [ ] The pull request carries screenshots for a visible change.
 - [ ] The guide and this checklist were read before the change.

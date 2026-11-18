@@ -682,3 +682,112 @@ test("a dragged workflow node snaps to the grid and tidy up avoids overlaps", as
     }
   }
 });
+
+function rgbLuminance(value) {
+  const channels = (String(value).match(/[\d.]+/g) || []).slice(0, 3).map(Number);
+  const linear = channels.map((channel) => {
+    const unit = channel / 255;
+    return unit <= 0.04045 ? unit / 12.92 : ((unit + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+}
+
+function rgbContrast(first, second) {
+  const a = rgbLuminance(first);
+  const b = rgbLuminance(second);
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
+
+async function computedColors(locator) {
+  return locator.first().evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { color: style.color, background: style.backgroundColor, border: style.borderColor };
+  });
+}
+
+async function themeAttribute(page) {
+  return page.evaluate(() => document.documentElement.dataset.theme);
+}
+
+test.describe("dark theme", () => {
+  test.use({ colorScheme: "dark" });
+
+  test("the sign-in page, a list page, the template overlay and a job log follow the system preference", async ({ page }) => {
+    test.setTimeout(120000);
+    await page.goto("/");
+    await expect(page.locator(".login-card")).toBeVisible();
+    expect(await themeAttribute(page)).toBe("dark");
+
+    const login = await computedColors(page.locator(".login-card"));
+    expect(rgbLuminance(login.background)).toBeLessThan(0.1);
+    expect(rgbContrast(login.color, login.background)).toBeGreaterThanOrEqual(4.5);
+    const loginField = await computedColors(page.locator('.login-card input[name="username"]'));
+    expect(rgbLuminance(loginField.background)).toBeLessThan(0.3);
+
+    await page.getByRole("button", { name: "Sprache" }).click();
+    await page.getByRole("option", { name: /English/ }).click();
+    await page.getByLabel("Username").fill(username);
+    await page.getByLabel("Password").fill(password);
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await expect(page.getByRole("navigation")).toBeVisible();
+
+    const body = await computedColors(page.locator("body"));
+    expect(rgbLuminance(body.background)).toBeLessThan(0.1);
+    const side = await computedColors(page.locator(".side"));
+    expect(rgbLuminance(side.background)).toBeLessThan(0.1);
+    const navLink = await computedColors(page.locator(".nav a").first());
+    expect(rgbContrast(navLink.color, side.background)).toBeGreaterThanOrEqual(4.5);
+
+    await page.getByRole("navigation").getByRole("link", { name: "Templates", exact: true }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Templates" })).toBeVisible();
+    const list = await computedColors(page.locator("#template-table .table tbody tr").first());
+    const card = await computedColors(page.locator("#template-table").locator("xpath=ancestor::section[contains(@class,'card')]"));
+    expect(rgbLuminance(card.background)).toBeLessThan(0.2);
+    expect(rgbContrast(list.color, card.background)).toBeGreaterThanOrEqual(4.5);
+
+    await page.getByRole("link", { name: "Healthcheck", exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByRole("heading", { name: "Edit template" })).toBeVisible();
+    const overlay = await computedColors(dialog);
+    expect(rgbLuminance(overlay.background)).toBeLessThan(0.2);
+    const field = await computedColors(dialog.getByRole("textbox", { name: /^Name/ }));
+    expect(rgbLuminance(field.background)).toBeLessThan(0.3);
+    expect(rgbContrast(field.color, field.background)).toBeGreaterThanOrEqual(4.5);
+    const tab = await computedColors(dialog.getByRole("tab", { name: "Schedules", exact: true }));
+    expect(rgbContrast(tab.color, overlay.background)).toBeGreaterThanOrEqual(4.5);
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await expect(dialog).toHaveCount(0);
+
+    await page.getByRole("row", { name: /Healthcheck/ }).getByRole("button", { name: "Launch", exact: true }).click();
+    await expect(page).toHaveURL(/#\/jobs\/[0-9a-f-]+$/);
+    await expect(page.getByText("healthcheck ok", { exact: true })).toBeVisible({ timeout: 30000 });
+    const log = await computedColors(page.locator(".log"));
+    expect(rgbLuminance(log.background)).toBeLessThan(0.1);
+    expect(rgbContrast(log.color, log.background)).toBeGreaterThanOrEqual(4.5);
+    const status = await computedColors(page.locator(".pill.successful").first());
+    expect(rgbContrast(status.color, status.background)).toBeGreaterThanOrEqual(4.5);
+    expect(status.background).not.toBe(log.background);
+  });
+
+  test("the theme control persists an explicit choice and returns to the system preference", async ({ page }) => {
+    await page.goto("/");
+    await signInInEnglish(page);
+    const select = page.locator("[data-theme-select]").first();
+    await expect(select).toHaveValue("system");
+    expect(await themeAttribute(page)).toBe("dark");
+
+    await select.selectOption("light");
+    expect(await themeAttribute(page)).toBe("light");
+    expect(await page.evaluate(() => localStorage.getItem("koreograf.theme"))).toBe("light");
+    await expect.poll(async () => rgbLuminance(await page.evaluate(() => getComputedStyle(document.body).backgroundColor))).toBeGreaterThan(0.8);
+
+    await page.reload();
+    await expect(page.getByRole("navigation")).toBeVisible();
+    expect(await themeAttribute(page)).toBe("light");
+    await expect(page.locator("[data-theme-select]").first()).toHaveValue("light");
+
+    await page.locator("[data-theme-select]").first().selectOption("system");
+    expect(await themeAttribute(page)).toBe("dark");
+    expect(await page.evaluate(() => localStorage.getItem("koreograf.theme"))).toBe("system");
+  });
+});
