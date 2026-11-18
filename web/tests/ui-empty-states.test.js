@@ -93,6 +93,90 @@ test("the job log is scrollable and its tools hide on the parameters tab", async
   assert.equal(document.querySelector("#panel-parameters").hidden, false);
 });
 
+function tallJob(failed) {
+  const events = Array.from({ length: 40 }, (_, index) => ({ id: index + 1, stream: "stdout", line: `line ${index}` }));
+  if (failed) events[12] = { id: 13, stream: "stderr", line: "fatal: [web-1]: FAILED! => changed=false" };
+  return {
+    id: "j1",
+    name: "Job",
+    tool: "shell",
+    status: failed ? "failed" : "successful",
+    trigger: "manual",
+    launched_by: "admin",
+    created_at: "2026-01-01T00:00:00Z",
+    started_at: "2026-01-01T00:00:01Z",
+    finished_at: "2026-01-01T00:00:02Z",
+    events,
+    parameters: null,
+    extra_vars: {},
+  };
+}
+
+async function jobPage(job) {
+  const { router } = await setup({ job });
+  location.hash = "#/jobs/j1";
+  await router.matchRoute("#/jobs/:id").handler({ id: "j1" });
+}
+
+test("jump to first failure scrolls only the log", async () => {
+  await jobPage(tallJob(true));
+  const log = document.querySelector("#log");
+  const first = document.querySelector("#log-first-failure");
+  const main = document.querySelector("main.main");
+  assert.ok(main, "the job page has no main element");
+  assert.equal(first.hidden, false, "the jump button is hidden with a failed line");
+  log.clientHeight = 300;
+  log.scrollHeight = 1200;
+  log.offsetTop = 0;
+  log.children.forEach((line, index) => {
+    line.offsetTop = index * 20;
+    line.offsetHeight = 20;
+  });
+  const scrolled = [];
+  const intoView = globalThis.Element.prototype.scrollIntoView;
+  globalThis.Element.prototype.scrollIntoView = function scroll() {
+    scrolled.push(this);
+  };
+  const pageScrolls = [];
+  const scrollTo = window.scrollTo;
+  window.scrollTo = (...args) => pageScrolls.push(args);
+  window.scrollY = 140;
+  main.scrollTop = 60;
+  try {
+    first.dispatchEvent({ type: "click" });
+    assert.equal(log.scrollTop, 100, "the failed line is not centered in the log");
+    assert.deepEqual(scrolled, [], "jumping scrolled an element into view");
+    assert.deepEqual(pageScrolls, [], "jumping scrolled the page");
+    assert.equal(window.scrollY, 140, "the page scroll position changed");
+    assert.equal(main.scrollTop, 60, "the main scroll position changed");
+    log.scrollTop = 0;
+    const wrap = document.querySelector("#log-wrap");
+    wrap.checked = true;
+    wrap.dispatchEvent({ type: "change" });
+    first.dispatchEvent({ type: "click" });
+    assert.equal(log.classList.contains("wrap"), true, "wrap lines did not stay on");
+    assert.equal(log.scrollTop, 100, "the wrapped failed line is not centered in the log");
+    assert.deepEqual(scrolled, [], "jumping with wrapped lines scrolled an element into view");
+    assert.deepEqual(pageScrolls, [], "jumping with wrapped lines scrolled the page");
+    const search = document.querySelector("#log-search");
+    search.value = "line 35";
+    search.dispatchEvent({ type: "input" });
+    assert.equal(log.scrollTop, 560, "the search jump is not centered in the log");
+    assert.deepEqual(scrolled, [], "the search jump scrolled an element into view");
+    assert.deepEqual(pageScrolls, [], "the search jump scrolled the page");
+    assert.equal(window.scrollY, 140, "the search jump changed the page scroll position");
+    assert.equal(main.scrollTop, 60, "the search jump changed the main scroll position");
+  } finally {
+    globalThis.Element.prototype.scrollIntoView = intoView;
+    window.scrollTo = scrollTo;
+  }
+});
+
+test("the jump button stays hidden without a failed line", async () => {
+  await jobPage(tallJob(false));
+  assert.equal(document.querySelector("#log-first-failure").hidden, true, "the jump button shows without a failed line");
+});
+
 test("the empty state copy is in both catalogs", () => {
   for (const id of ["de", "en"]) {
     const values = catalog(id);

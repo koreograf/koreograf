@@ -391,7 +391,15 @@ function updateSearchCount(state) {
   });
 }
 
-function jumpToSearchMatch(state, index) {
+function scrollLogLine(log, line) {
+  if (!log || !line) return;
+  const offset = (Number(line.offsetTop) || 0) - (Number(log.offsetTop) || 0);
+  const centered = offset - (Number(log.clientHeight) || 0) / 2 + (Number(line.offsetHeight) || 0) / 2;
+  const max = Math.max(0, (Number(log.scrollHeight) || 0) - (Number(log.clientHeight) || 0));
+  log.scrollTop = Math.min(Math.max(0, centered), max);
+}
+
+function jumpToSearchMatch(log, state, index) {
   if (!state.matches.length) {
     state.current = -1;
     updateSearchCount(state);
@@ -402,7 +410,7 @@ function jumpToSearchMatch(state, index) {
   state.matches.forEach((mark) => mark.classList.remove("current"));
   const mark = state.matches[state.current];
   mark.classList.add("current");
-  mark.scrollIntoView({ block: "center", inline: "nearest" });
+  scrollLogLine(log, mark.parentElement);
   updateSearchCount(state);
 }
 
@@ -413,7 +421,7 @@ function paintLogSearch(log, state, jump) {
     if (line.koreografRaw === undefined) return;
     state.matches.push(...paintLogLine(line, state.query));
   });
-  if (jump && state.matches.length) jumpToSearchMatch(state, 0);
+  if (jump && state.matches.length) jumpToSearchMatch(log, state, 0);
   else updateSearchCount(state);
 }
 
@@ -444,7 +452,7 @@ function bindJobLog(log, job) {
   search.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || !state.matches.length) return;
     event.preventDefault();
-    jumpToSearchMatch(state, state.current + (event.shiftKey ? -1 : 1));
+    jumpToSearchMatch(log, state, state.current + (event.shiftKey ? -1 : 1));
   });
   log.addEventListener("scroll", () => {
     const bottom = log.scrollHeight - log.scrollTop - log.clientHeight < 24;
@@ -458,7 +466,7 @@ function bindJobLog(log, job) {
   }
   if (first) {
     first.addEventListener("click", () => {
-      if (state.firstFailure) state.firstFailure.scrollIntoView({ block: "center", behavior: "smooth" });
+      if (state.firstFailure) scrollLogLine(log, state.firstFailure);
     });
   }
   if (end) {
