@@ -387,7 +387,7 @@ export function scheduleTable(items, showTarget, emptyMessage) {
 }
 
 function scheduleTableRows(item, showTarget, span) {
-  const target = showTarget ? `<td>${scheduleTarget(item)}</td>` : "";
+  const target = showTarget ? `<td data-label="${esc(t("schedule_target"))}">${scheduleTarget(item)}</td>` : "";
   const edit = can("operator") ? `
     <button class="btn compact" type="button" data-schedule-edit="${esc(item.id)}">${h("schedule_edit")}</button>
     <button class="btn compact danger" type="button" data-schedule-delete="${esc(item.id)}">${h("delete")}</button>` : "";
@@ -409,13 +409,13 @@ function scheduleTableRows(item, showTarget, span) {
       </td>
     </tr>` : "";
   return `<tr class="${item.missed_at ? "schedule-due" : ""}">
-    <td><strong>${esc(item.name)}</strong>${by}</td>
+    <td data-label="${esc(t("name"))}"><strong>${esc(item.name)}</strong>${by}</td>
     ${target}
-    <td>${esc(scheduleRepeat(item))}</td>
-    <td class="num">${esc(item.start_time || "")}<div class="small muted">${esc(item.timezone || "")}</div></td>
-    <td class="num">${scheduleNext(item)}</td>
-    <td>${esc(scheduleEnd(item))}</td>
-    <td class="tight">${scheduleSwitch(item)}</td>
+    <td data-label="${esc(t("repeat"))}">${esc(scheduleRepeat(item))}</td>
+    <td class="num" data-label="${esc(t("start_time"))}">${esc(item.start_time || "")}<div class="small muted">${esc(item.timezone || "")}</div></td>
+    <td class="num" data-label="${esc(t("next_run"))}">${scheduleNext(item)}</td>
+    <td data-label="${esc(t("ends"))}">${esc(scheduleEnd(item))}</td>
+    <td class="tight" data-label="${esc(t("schedule_active"))}">${scheduleSwitch(item)}</td>
     <td class="actions">${edit}</td>
   </tr>${owner}${alert}`;
 }

@@ -497,7 +497,7 @@ export function hostHistoryTable(entries) {
   const rows = entries.map((entry) => {
     const time = `<time datetime="${esc(entry.time)}" title="${esc(when(entry.time))}">${esc(when(entry.time))}</time>`;
     const job = `<a href="#/jobs/${encodeURIComponent(entry.job_id)}">${esc(entry.job_name)}</a>`;
-    return `<tr><td>${time}</td><td class="mono">${esc(entry.playbook)}</td><td>${esc(entry.role)}</td><td>${pill(entry.result)}</td><td>${job}</td></tr>`;
+    return `<tr><td data-label="${esc(t("time"))}">${time}</td><td class="mono" data-label="${esc(t("playbook"))}">${esc(entry.playbook)}</td><td data-label="${esc(t("role"))}">${esc(entry.role)}</td><td data-label="${esc(t("run_result"))}">${pill(entry.result)}</td><td data-label="${esc(t("job"))}">${job}</td></tr>`;
   }).join("");
   return `<div class="table-wrap"><table class="table"><thead><tr><th>${h("time")}</th><th>${h("playbook")}</th><th>${h("role")}</th><th>${h("run_result")}</th><th>${h("job")}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
@@ -514,7 +514,7 @@ export function inventoryHostTable(hosts, state, id) {
     const link = id
       ? `<a class="mono" href="#/inventories/${encodeURIComponent(id)}/hosts/${encodeURIComponent(host.name)}">${esc(host.name)}</a>`
       : `<span class="mono">${esc(host.name)}</span>`;
-    return `<tr><td>${link}</td><td class="mono">${esc((host.vars || {}).ansible_host || "")}</td><td>${esc((host.groups || []).join(", "))}</td></tr>`;
+    return `<tr><td data-label="${esc(t("name"))}">${link}</td><td class="mono" data-label="${esc(t("address"))}">${esc((host.vars || {}).ansible_host || "")}</td><td data-label="${esc(t("groups"))}">${esc((host.groups || []).join(", "))}</td></tr>`;
   });
   return `<div class="table-wrap inventory-hosts-table"><table class="table"><thead><tr>${head("name", "name")}${head("address", "address")}${head("groups", "groups")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
 }
@@ -522,7 +522,7 @@ export function inventoryHostTable(hosts, state, id) {
 export function inventoryGroupTable(groups, id) {
   const rows = groups.map((group) => {
     const link = `<a href="#/inventories/${encodeURIComponent(id)}/groups/${encodeURIComponent(group.name)}">${esc(group.name)}</a>`;
-    return `<tr><td>${link}</td><td>${esc(group.host_count)}</td><td>${esc((group.children || []).join(", "))}</td></tr>`;
+    return `<tr><td data-label="${esc(t("name"))}">${link}</td><td data-label="${esc(t("hosts"))}">${esc(group.host_count)}</td><td data-label="${esc(t("groups"))}">${esc((group.children || []).join(", "))}</td></tr>`;
   });
   return `<div class="table-wrap inventory-groups-table"><table class="table"><thead><tr><th>${h("name")}</th><th>${h("hosts")}</th><th>${h("groups")}</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
 }
