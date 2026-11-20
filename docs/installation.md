@@ -131,7 +131,7 @@ sudo chown 10001:10001 postgres-password
 docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
 ```
 
-Both services use `restart: unless-stopped`, and the base hardening stays in place. The overlay forwards `KOREOGRAF_DATABASE_URL`, `KOREOGRAF_DATABASE_PASSWORD_FILE`, `KOREOGRAF_DATABASE_POOL_SIZE`, and `KOREOGRAF_DATABASE_CA_FILE`; the password is only in `postgres-password`. `sslmode=disable` is safe only inside that private network. Requirements, the backup hint, and the move from an existing SQLite volume are in [PostgreSQL](postgresql.md#docker-compose).
+Both services use `restart: unless-stopped`, and the base hardening stays in place. The overlay forwards `KOREOGRAF_DATABASE_URL`, `KOREOGRAF_DATABASE_PASSWORD_FILE`, and `KOREOGRAF_DATABASE_POOL_SIZE`; the password is only in `postgres-password`. `sslmode=disable` is safe only inside that private network. Requirements, the backup hint, and the move from an existing SQLite volume are in [PostgreSQL](postgresql.md#docker-compose).
 
 ### Company certificate authorities
 

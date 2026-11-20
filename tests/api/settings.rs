@@ -2926,8 +2926,14 @@ fn the_compose_postgres_overlay_keeps_the_database_private() {
     assert!(base.contains("user: \"10001:10001\""));
     assert!(base.contains("127.0.0.1:${KOREOGRAF_PORT:-8080}:8080"));
     assert!(
-        !overlay.contains("read_only:") && !overlay.contains("user: \"10001:10001\""),
-        "the overlay must not repeat or weaken the base service definition"
+        !overlay.contains("read_only"),
+        "the overlay must not set read_only; the base file owns the hardening"
+    );
+    assert!(
+        overlay
+            .lines()
+            .all(|line| !line.trim_start().starts_with("user:")),
+        "the overlay must not set user; the base file owns the hardening"
     );
     let docs =
         std::fs::read_to_string(root.join("docs/postgresql.md")).expect("docs/postgresql.md");

@@ -365,6 +365,7 @@ jobs:
           PY
       - name: Render the PostgreSQL overlay
         run: |
+          touch postgres-password
           docker compose -f docker-compose.yml -f docker-compose.postgres.yml \
             config --format json > /tmp/compose-postgres.json
           python3 - << 'PY'

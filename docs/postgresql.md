@@ -53,7 +53,7 @@ Without a CA file, Koreograf uses the system roots. A local or Compose PostgreSQ
 Keep the password out of the URL. `KOREOGRAF_DATABASE_PASSWORD_FILE` names a file with the password; a trailing newline is ignored. The file wins when the URL also carries a password. The value is read once at startup and is never written to logs, `koreograf doctor` output, API responses, the audit log, or the browser UI.
 
 ```bash
-KOREOGRAF_DATABASE_PASSWORD_FILE=/run/secrets/koreograf_database_password
+KOREOGRAF_DATABASE_PASSWORD_FILE=/run/secrets/postgres_password
 ```
 
 A password that stays in the URL is supported. Quote the URL, and percent-encode characters that are special in a URL. A secret store that injects the URL is then the only place the password lives.
@@ -92,7 +92,7 @@ KOREOGRAF_DATABASE_PASSWORD_FILE=/run/secrets/postgres_password
 KOREOGRAF_DATABASE_POOL_SIZE=8
 ```
 
-`sslmode=disable` is safe only inside this private Compose network; the bundled PostgreSQL has no certificate. An external database uses `sslmode=require`, or `verify-full` with `KOREOGRAF_DATABASE_CA_FILE`. When `KOREOGRAF_DATABASE_URL` is empty, the overlay uses the line above; set it only to override the target.
+`sslmode=disable` is safe only inside this private Compose network; the bundled PostgreSQL has no certificate. The overlay is for the bundled database; an external server uses `docker-compose.yml` alone (or requires putting that server's password in `postgres-password`). When `KOREOGRAF_DATABASE_URL` is empty, the overlay uses the line above.
 
 Both services set `restart: unless-stopped`, and Koreograf uses `depends_on: condition: service_healthy` so it starts after `pg_isready` passes. Check the engine:
 
@@ -114,7 +114,7 @@ docker compose -f docker-compose.yml -f docker-compose.postgres.yml run --rm kor
 docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
 ```
 
-`docker compose stop koreograf` uses the same project name as the base stack. The one-off container reads the data volume and `KOREOGRAF_DATABASE_PASSWORD_FILE` from the overlay. The fresh target is empty. Alternatively, start the base stack and use **Settings → Database** while it still runs on SQLite, then restart with the overlay. Migration and rollback rules are below.
+`docker compose stop koreograf` uses the same project name as the base stack. The one-off container reads the data volume and `KOREOGRAF_DATABASE_PASSWORD_FILE` from the overlay. The target must be empty. If the overlay was already started, it holds the seeded schema and admin rows, so `db migrate` refuses it: reset only the `koreograf-db` volume (`docker compose -f docker-compose.yml -f docker-compose.postgres.yml rm -sf db`, then `docker volume rm <project>_koreograf-db`) and keep `koreograf-data`, or start the base stack and use **Settings → Database** while it still runs on SQLite. Migration and rollback rules are below.
 
 ### Binary
 

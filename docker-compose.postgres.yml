@@ -40,7 +40,6 @@ services:
       KOREOGRAF_DATABASE_URL: ${KOREOGRAF_DATABASE_URL:-postgresql://koreograf@db:5432/koreograf?sslmode=disable}
       KOREOGRAF_DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
       KOREOGRAF_DATABASE_POOL_SIZE: ${KOREOGRAF_DATABASE_POOL_SIZE:-8}
-      KOREOGRAF_DATABASE_CA_FILE: ${KOREOGRAF_DATABASE_CA_FILE:-}
     secrets:
       - postgres_password
 
