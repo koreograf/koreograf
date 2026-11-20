@@ -4,7 +4,7 @@ import { confirmDialog } from "../core/dialog.js";
 import { can, go, handle, markSaved, needTeam, route, shell } from "../core/app.js";
 import { addLink, emptyState, esc, h, selectOptions, table } from "../core/dom.js";
 import { clearEditHash, editQuery, openEditDialog } from "../core/edit.js";
-import { pill, when } from "../core/format.js";
+import { lastSyncCell, lastSyncText, pill, when } from "../core/format.js";
 import { t } from "../core/i18n.js";
 import { registerRedirect, registerRoute } from "../core/router.js";
 import { openCredentialCreator } from "./credentials.js";
@@ -32,6 +32,14 @@ function sourceSummary(item, credentials = []) {
   }
   if (item.kind === "project") return data.path || t("project");
   return t("text");
+}
+
+export function canSyncInventory(item) {
+  return can("operator") && (item.sources || []).some((source) => source.kind === "project" || source.kind === "netbox");
+}
+
+export function inventorySyncText(item) {
+  return `${t("last_sync")}: ${lastSyncText(item)}`;
 }
 
 export function inventoryMatches(item, credentials, needle) {
@@ -372,7 +380,7 @@ function bindSourcePicks(projects, credentials) {
 
 async function pageInventories() {
   if (!needTeam()) return;
-  const [items, credentials] = await Promise.all([
+  let [items, credentials] = await Promise.all([
     api("GET", "/api/v1/inventories"),
     api("GET", "/api/v1/credentials"),
   ]);
@@ -390,7 +398,13 @@ async function pageInventories() {
       const label = kinds.length ? [...new Set(kinds)].join(", ") : sourceKindLabel(item.source_kind);
       const count = item.source_count != null ? item.source_count : kinds.length;
       const insecure = (item.sources || []).some(certificateCheckOff) || certificateCheckOff({ kind: item.source_kind, source: item.source });
-      return `<tr><td><a href="#/inventories/${esc(item.id)}">${esc(item.name)}</a></td><td class="narrow-hide">${esc(count)}</td><td class="narrow-hide">${esc(label)}${certificateBadge(insecure)}</td><td>${esc(item.host_count)}</td><td>${can("operator") ? `<a class="btn" href="#/inventories?edit=${esc(item.id)}">${h("edit")}</a>` : ""}</td></tr>`;
+      const sync = canSyncInventory(item)
+        ? `<button class="btn" type="button" data-sync-inventory="${esc(item.id)}">${h("refresh")}</button>`
+        : "";
+      const actions = can("operator")
+        ? `<div class="row"><a class="btn" href="#/inventories?edit=${esc(item.id)}">${h("edit")}</a>${sync}</div>`
+        : sync;
+      return `<tr><td><a href="#/inventories/${esc(item.id)}">${esc(item.name)}</a></td><td class="narrow-hide">${esc(count)}</td><td class="narrow-hide">${esc(label)}${certificateBadge(insecure)}</td><td>${esc(item.host_count)}</td><td class="small">${lastSyncCell(item)}</td><td>${actions}</td></tr>`;
     });
     const host = document.querySelector("#inventory-table");
     if (!shown.length) {
@@ -399,7 +413,28 @@ async function pageInventories() {
         : emptyState("empty_inventories", can("operator") ? "#/inventories?new=1" : "", "new_inventory");
       return;
     }
-    host.innerHTML = table([t("name"), t("sources"), t("type"), t("hosts"), ""], rows);
+    host.innerHTML = table([t("name"), t("sources"), t("type"), t("hosts"), t("last_sync"), ""], rows);
+    document.querySelectorAll("[data-sync-inventory]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        if (button.disabled) return;
+        button.disabled = true;
+        button.setAttribute("aria-busy", "true");
+        button.textContent = t("refreshing");
+        try {
+          await api("POST", `/api/v1/inventories/${encodeURIComponent(button.dataset.syncInventory)}/sync`);
+          [items, credentials] = await Promise.all([
+            api("GET", "/api/v1/inventories"),
+            api("GET", "/api/v1/credentials"),
+          ]);
+          draw();
+        } catch (error) {
+          button.disabled = false;
+          button.removeAttribute("aria-busy");
+          button.textContent = t("refresh");
+          handle(error);
+        }
+      });
+    });
   };
   document.querySelector("#inventory-search").addEventListener("input", draw);
   draw();
@@ -577,6 +612,7 @@ async function pageInventory(id) {
         <h2>${h("hosts")}</h2>
         ${external && can("operator") ? `<button class="btn" id="sync-inventory" type="button">${h("refresh_all_sources")}</button>` : ""}
       </div>
+      <p class="small muted" id="inventory-last-sync">${esc(inventorySyncText(item))}</p>
       <div class="row" id="inventory-tabs">
         <button class="btn pill${view.tab === "hosts" ? " primary" : ""}" type="button" data-inventory-tab="hosts">${h("hosts")}</button>
         <button class="btn pill${view.tab === "groups" ? " primary" : ""}" type="button" data-inventory-tab="groups">${h("groups")}</button>
@@ -786,9 +822,9 @@ async function pageInventory(id) {
       sync.disabled = true;
       try {
         await api("POST", `/api/v1/inventories/${encodeURIComponent(id)}/sync`);
-        route();
+        await route();
       } catch (error) {
-        sync.disabled = false;
+        await route();
         handle(error);
       }
     });

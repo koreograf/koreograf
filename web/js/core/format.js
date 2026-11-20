@@ -19,6 +19,30 @@ export function pill(status) {
   return `<span class="pill ${esc(status)}">${esc(statusLabel(status))}</span>`;
 }
 
+export function lastSyncStatus(item) {
+  if (item && item.last_sync_status === "success") return t("success");
+  if (item && item.last_sync_status === "failed") return t("failed");
+  return t("never");
+}
+
+export function lastSyncActor(item) {
+  if (!item || (!item.last_sync_at && !item.last_sync_by)) return "";
+  const time = item.last_sync_at ? when(item.last_sync_at) : t("never");
+  return item.last_sync_by
+    ? t("sync_by_at", { user: item.last_sync_by, time })
+    : t("synced_at", { time });
+}
+
+export function lastSyncCell(item) {
+  const actor = lastSyncActor(item);
+  return `<div>${esc(lastSyncStatus(item))}</div>${actor ? `<div class="small muted">${esc(actor)}</div>` : ""}`;
+}
+
+export function lastSyncText(item) {
+  const actor = lastSyncActor(item);
+  return actor ? `${lastSyncStatus(item)} · ${actor}` : lastSyncStatus(item);
+}
+
 export function when(value) {
   if (!value) return "—";
   const date = new Date(value);
