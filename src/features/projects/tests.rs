@@ -20,6 +20,7 @@ fn project() -> Project {
         last_sync_at: String::new(),
         last_sync_commit: String::new(),
         last_sync_status: String::new(),
+        last_sync_by: String::new(),
         admin_saved: true,
     }
 }

@@ -11,10 +11,12 @@ pub(crate) const INSERT_INVENTORY: &str = "INSERT INTO inventories (
 pub(crate) const UPDATE_INVENTORY: &str =
     "UPDATE inventories SET name = ?3, body = ?4 WHERE id = ?1 AND team_id = ?2";
 pub(crate) const LIST_INVENTORIES: &str =
-    "SELECT id, team_id, name, body, created_at, source_kind, source_json, credential_id, admin_saved
+    "SELECT id, team_id, name, body, created_at, source_kind, source_json, credential_id, admin_saved,
+     last_sync_at, last_sync_status, last_sync_by
      FROM inventories WHERE team_id = ?1 ORDER BY name";
 pub(crate) const INVENTORY_BY_ID: &str =
-    "SELECT id, team_id, name, body, created_at, source_kind, source_json, credential_id, admin_saved
+    "SELECT id, team_id, name, body, created_at, source_kind, source_json, credential_id, admin_saved,
+     last_sync_at, last_sync_status, last_sync_by
      FROM inventories WHERE id = ?1";
 pub(crate) const SET_INVENTORY_ADMIN_SAVED: &str =
     "UPDATE inventories SET admin_saved = ?2 WHERE id = ?1";
@@ -22,6 +24,12 @@ pub(crate) const SET_INVENTORY_BODY: &str =
     "UPDATE inventories SET body = ?3 WHERE id = ?1 AND team_id = ?2";
 pub(crate) const UPDATE_INVENTORY_SUMMARY: &str = "UPDATE inventories
      SET body = ?2, source_kind = ?3, source_json = ?4, credential_id = ?5
+     WHERE id = ?1";
+pub(crate) const SET_INVENTORY_SYNC_SUCCESS: &str = "UPDATE inventories
+     SET last_sync_at = ?2, last_sync_status = 'success', last_sync_by = ?3
+     WHERE id = ?1";
+pub(crate) const SET_INVENTORY_SYNC_FAILED: &str = "UPDATE inventories
+     SET last_sync_status = 'failed', last_sync_by = ?2
      WHERE id = ?1";
 
 pub(crate) const INSERT_SOURCE: &str = "INSERT INTO inventory_sources (
@@ -183,6 +191,27 @@ pub(crate) fn delete_inventory_source(
     Ok(())
 }
 
+pub(crate) fn set_inventory_sync_success(
+    c: &Connection,
+    id: &str,
+    at: &str,
+    by: &str,
+) -> AppResult<()> {
+    let changed = c.execute(SET_INVENTORY_SYNC_SUCCESS, params![id, at, by])?;
+    if changed == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(())
+}
+
+pub(crate) fn set_inventory_sync_failed(c: &Connection, id: &str, by: &str) -> AppResult<()> {
+    let changed = c.execute(SET_INVENTORY_SYNC_FAILED, params![id, by])?;
+    if changed == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(())
+}
+
 pub(crate) fn refresh_inventory_summary(c: &Connection, inventory_id: &str) -> AppResult<()> {
     let sources = list_inventory_sources(c, inventory_id)?;
     let (kind, source_json, credential_id, body) = summary(&sources);
@@ -310,6 +339,9 @@ pub(crate) fn row_inventory<R: SqlRow>(row: &R) -> AppResult<Inventory> {
         source_json: row.get(6)?,
         credential_id: row.get(7)?,
         admin_saved: row.get(8)?,
+        last_sync_at: row.get(9)?,
+        last_sync_status: row.get(10)?,
+        last_sync_by: row.get(11)?,
     })
 }
 

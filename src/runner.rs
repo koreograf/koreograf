@@ -4342,6 +4342,7 @@ mod tests {
             last_sync_at: String::new(),
             last_sync_commit: String::new(),
             last_sync_status: String::new(),
+            last_sync_by: String::new(),
             admin_saved: true,
         };
         let proxy = ProxySettings::inherit();
@@ -6532,6 +6533,7 @@ exit 0
             last_sync_at: String::new(),
             last_sync_commit: String::new(),
             last_sync_status: String::new(),
+            last_sync_by: String::new(),
             admin_saved: true,
         };
         let proxy = ProxySettings::inherit();

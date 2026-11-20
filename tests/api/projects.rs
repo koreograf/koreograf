@@ -1391,3 +1391,180 @@ async fn playbooks_project_inventory_and_netbox() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sync_from_the_list_records_the_operator_and_the_result() {
+    let dir = temp_dir("sync-actor");
+    let origin = temp_dir("sync-actor-origin");
+    let mut cfg = config(&dir, &Options::default());
+    cfg.project_roots.push(origin.clone());
+    let state = koreograf::boot(cfg).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("admin session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    git(&origin, &["init", "-b", "main"]);
+    git(&origin, &["config", "user.email", "test@example.com"]);
+    git(&origin, &["config", "user.name", "Koreograf Test"]);
+    std::fs::write(origin.join("site.yml"), "- hosts: all\n").unwrap();
+    git(&origin, &["add", "site.yml"]);
+    git(&origin, &["commit", "-m", "main"]);
+    let url = format!("file://{}", origin.display());
+
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        "/api/v1/users",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "username": "sync-operator",
+            "display_name": "Sync operator",
+            "password": "operator-pass"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/teams/{team}/members"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"username": "sync-operator", "role": "operator"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, operator_me, operator_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "sync-operator", "password": "operator-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{operator_me}");
+    let operator_cookie = operator_cookie.expect("operator session cookie");
+
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/v1/projects",
+        Some(&operator_cookie),
+        Some(&team),
+        Some(json!({"name": "List sync", "source_type": "git", "source": url, "revision": "main"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let project_id = created["id"].as_str().unwrap().to_string();
+    assert_eq!(created["last_sync_by"], "");
+
+    let (status, synced, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/projects/{project_id}/sync"),
+        Some(&operator_cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{synced}");
+
+    let (status, listed, _) = call(
+        &app,
+        "GET",
+        "/api/v1/projects",
+        Some(&operator_cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let project = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == project_id)
+        .unwrap();
+    assert_eq!(project["last_sync_status"], "success");
+    assert_eq!(project["last_sync_by"], "sync-operator");
+    assert!(!project["last_sync_at"].as_str().unwrap().is_empty());
+    let successful_at = project["last_sync_at"].clone();
+
+    std::fs::create_dir_all(origin.join("broken")).unwrap();
+    let (status, failed, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/v1/projects/{project_id}"),
+        Some(&operator_cookie),
+        Some(&team),
+        Some(json!({"source": format!("file://{}/broken", origin.display())})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{failed}");
+    assert_eq!(failed["sync"]["ok"], false);
+    assert_eq!(failed["last_sync_status"], "failed");
+    assert_eq!(failed["last_sync_by"], "sync-operator");
+    assert_eq!(failed["last_sync_at"], successful_at);
+
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        "/api/v1/users",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "username": "sync-viewer",
+            "display_name": "Sync viewer",
+            "password": "viewer-pass"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/teams/{team}/members"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"username": "sync-viewer", "role": "viewer"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, viewer_me, viewer_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "sync-viewer", "password": "viewer-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{viewer_me}");
+    let viewer_cookie = viewer_cookie.expect("viewer session cookie");
+    let (status, denied, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/projects/{project_id}/sync"),
+        Some(&viewer_cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&origin);
+}

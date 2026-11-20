@@ -281,6 +281,9 @@ pub async fn import_inventory(
         source_kind: "project".into(),
         source_json: project_source_json(&project.id, path),
         credential_id: None,
+        last_sync_at: String::new(),
+        last_sync_status: String::new(),
+        last_sync_by: String::new(),
         admin_saved: user.is_admin,
     };
     let source_row = db::InventorySource {
@@ -337,6 +340,9 @@ pub async fn create_netbox(
         source_kind: "netbox".into(),
         source_json: source_json_with_collisions(&source, &fetched.collisions).to_string(),
         credential_id: Some(access.credential_id.clone()),
+        last_sync_at: String::new(),
+        last_sync_status: String::new(),
+        last_sync_by: String::new(),
         admin_saved: user.is_admin,
     };
     let source_row = db::InventorySource {
@@ -441,20 +447,27 @@ pub async fn sync_inventory(
     };
     let mut fresh = Vec::new();
     for source in &sources {
-        match source.kind.as_str() {
-            "project" => fresh.push((
-                source.id.clone(),
-                NetboxResult {
-                    body: refresh_project(&state, &team, &source.source_json)?,
+        let fetched = match source.kind.as_str() {
+            "project" => {
+                refresh_project(&state, &team, &source.source_json).map(|body| NetboxResult {
+                    body,
                     collisions: Vec::new(),
                     dropped_vars: Vec::new(),
-                },
-            )),
-            "netbox" => fresh.push((
-                source.id.clone(),
-                refresh_netbox(&state, &source.credential_id, &team, &source.source_json).await?,
-            )),
-            _ => {}
+                })
+            }
+            "netbox" => {
+                refresh_netbox(&state, &source.credential_id, &team, &source.source_json).await
+            }
+            _ => continue,
+        };
+        match fetched {
+            Ok(fetched) => fresh.push((source.id.clone(), fetched)),
+            Err(err) => {
+                state
+                    .store()
+                    .set_inventory_sync_failed(&id, &user.username)?;
+                return Err(err);
+            }
         }
     }
     if fresh.is_empty() {
@@ -473,7 +486,7 @@ pub async fn sync_inventory(
         .map(|(source_id, fetched)| (source_id.clone(), fetched.body.clone()))
         .collect();
     let db = state.store();
-    db.sync_inventory_sources(&id, &bodies, user.is_admin)?;
+    db.sync_inventory_sources(&id, &bodies, user.is_admin, &db::now(), &user.username)?;
     let item = db.inventory(&id)?.ok_or(ApiError::NotFound)?;
     let mut response = inventory_detail(db, &item)?;
     response.collisions = Some(collisions);
@@ -786,6 +799,9 @@ pub(crate) async fn create_with_sources(
         source_kind: "ini".into(),
         source_json: "{}".into(),
         credential_id: None,
+        last_sync_at: String::new(),
+        last_sync_status: String::new(),
+        last_sync_by: String::new(),
         admin_saved,
     };
     let sources: Vec<db::InventorySource> = resolved
@@ -952,21 +968,30 @@ pub async fn sync_source(
         owned_source(db, &inventory_id, &source_id, &team)?
     };
     let fetched = match source.kind.as_str() {
-        "project" => NetboxResult {
-            body: refresh_project(&state, &team, &source.source_json)?,
+        "project" => refresh_project(&state, &team, &source.source_json).map(|body| NetboxResult {
+            body,
             collisions: Vec::new(),
             dropped_vars: Vec::new(),
-        },
-        "netbox" => {
-            refresh_netbox(&state, &source.credential_id, &team, &source.source_json).await?
-        }
+        }),
+        "netbox" => refresh_netbox(&state, &source.credential_id, &team, &source.source_json).await,
         _ => return Err(ApiError::bad("this_inventory_has_no_external_source")),
+    };
+    let fetched = match fetched {
+        Ok(fetched) => fetched,
+        Err(err) => {
+            state
+                .store()
+                .set_inventory_sync_failed(&inventory_id, &user.username)?;
+            return Err(err);
+        }
     };
     let db = state.store();
     db.sync_inventory_sources(
         &inventory_id,
         &[(source_id.clone(), fetched.body)],
         user.is_admin,
+        &db::now(),
+        &user.username,
     )?;
     let item = db.inventory(&inventory_id)?.ok_or(ApiError::NotFound)?;
     let mut response = inventory_detail(db, &item)?;
@@ -1394,6 +1419,9 @@ pub(super) struct InventorySummaryResponse {
     sources: Vec<InventorySourceResponse>,
     host_count: usize,
     group_count: usize,
+    last_sync_at: String,
+    last_sync_status: String,
+    last_sync_by: String,
 }
 
 #[derive(Serialize)]
@@ -1410,6 +1438,9 @@ pub(crate) struct InventoryDetailResponse {
     sources: Vec<InventorySourceResponse>,
     host_count: usize,
     group_count: usize,
+    last_sync_at: String,
+    last_sync_status: String,
+    last_sync_by: String,
     hosts: Vec<InventoryHost>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) sync: Option<InventorySyncResponse>,
@@ -1957,6 +1988,9 @@ pub async fn create_inventory(
         source_kind: "ini".into(),
         source_json: "{}".into(),
         credential_id: None,
+        last_sync_at: String::new(),
+        last_sync_status: String::new(),
+        last_sync_by: String::new(),
         admin_saved: user.is_admin,
     };
     let source = if body.body.trim().is_empty() {
@@ -1998,6 +2032,9 @@ fn inventory_summary(c: &dyn Backend, item: &Inventory) -> AppResult<InventorySu
             .collect(),
         host_count: data.hosts.len(),
         group_count: group_count(&data),
+        last_sync_at: item.last_sync_at.clone(),
+        last_sync_status: item.last_sync_status.clone(),
+        last_sync_by: item.last_sync_by.clone(),
     })
 }
 
@@ -2023,6 +2060,9 @@ pub(crate) fn inventory_detail(
             .collect(),
         host_count: data.hosts.len(),
         group_count: group_count(&data),
+        last_sync_at: item.last_sync_at.clone(),
+        last_sync_status: item.last_sync_status.clone(),
+        last_sync_by: item.last_sync_by.clone(),
         hosts: data.hosts,
         sync: None,
         collisions: None,

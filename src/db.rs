@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::error::{ApiError, AppResult};
 
-pub(crate) const SCHEMA_VERSION: u32 = 3;
+pub(crate) const SCHEMA_VERSION: u32 = 4;
 const BASELINE_VERSION: u32 = 1;
 
 pub fn now() -> String {
@@ -25,6 +25,9 @@ pub(crate) struct Migration {
     pub(crate) version: u32,
     pub(crate) name: &'static str,
     pub(crate) sql: &'static str,
+    /// A legacy database already has these columns when this migration runs.
+    /// Skip the SQL but still record the version.
+    pub(crate) legacy_columns: &'static [(&'static str, &'static str)],
 }
 
 pub(crate) const SQLITE_MIGRATIONS: &[Migration] = &[
@@ -32,16 +35,30 @@ pub(crate) const SQLITE_MIGRATIONS: &[Migration] = &[
         version: 1,
         name: "0001_baseline",
         sql: include_str!("../migrations/sqlite/0001_baseline.sql"),
+        legacy_columns: &[],
     },
     Migration {
         version: 2,
         name: "0002_workflow_version",
         sql: include_str!("../migrations/sqlite/0002_workflow_version.sql"),
+        legacy_columns: &[],
     },
     Migration {
         version: 3,
         name: "0003_host_results",
         sql: include_str!("../migrations/sqlite/0003_host_results.sql"),
+        legacy_columns: &[],
+    },
+    Migration {
+        version: 4,
+        name: "0004_sync_actor",
+        sql: include_str!("../migrations/sqlite/0004_sync_actor.sql"),
+        legacy_columns: &[
+            ("projects", "last_sync_by"),
+            ("inventories", "last_sync_at"),
+            ("inventories", "last_sync_status"),
+            ("inventories", "last_sync_by"),
+        ],
     },
 ];
 
@@ -50,16 +67,25 @@ pub(crate) const POSTGRES_MIGRATIONS: &[Migration] = &[
         version: 1,
         name: "0001_baseline",
         sql: include_str!("../migrations/postgres/0001_baseline.sql"),
+        legacy_columns: &[],
     },
     Migration {
         version: 2,
         name: "0002_workflow_version",
         sql: include_str!("../migrations/postgres/0002_workflow_version.sql"),
+        legacy_columns: &[],
     },
     Migration {
         version: 3,
         name: "0003_host_results",
         sql: include_str!("../migrations/postgres/0003_host_results.sql"),
+        legacy_columns: &[],
+    },
+    Migration {
+        version: 4,
+        name: "0004_sync_actor",
+        sql: include_str!("../migrations/postgres/0004_sync_actor.sql"),
+        legacy_columns: &[],
     },
 ];
 
@@ -256,10 +282,23 @@ fn legacy_migrate(c: &Connection) -> AppResult<()> {
     if !column_exists(c, "projects", "credential_id")? {
         c.execute("ALTER TABLE projects ADD COLUMN credential_id TEXT", [])?;
     }
-    for column in ["last_sync_at", "last_sync_commit", "last_sync_status"] {
+    for column in [
+        "last_sync_at",
+        "last_sync_commit",
+        "last_sync_status",
+        "last_sync_by",
+    ] {
         if !column_exists(c, "projects", column)? {
             c.execute(
                 &format!("ALTER TABLE projects ADD COLUMN {column} TEXT NOT NULL DEFAULT ''"),
+                [],
+            )?;
+        }
+    }
+    for column in ["last_sync_at", "last_sync_status", "last_sync_by"] {
+        if !column_exists(c, "inventories", column)? {
+            c.execute(
+                &format!("ALTER TABLE inventories ADD COLUMN {column} TEXT NOT NULL DEFAULT ''"),
                 [],
             )?;
         }
@@ -441,7 +480,16 @@ fn apply_sqlite_migrations(c: &Connection, migrations: &[Migration]) -> AppResul
             continue;
         }
         let transaction = c.unchecked_transaction()?;
-        transaction.execute_batch(migration.sql)?;
+        let mut resolved_by_legacy = !migration.legacy_columns.is_empty();
+        for (table, column) in migration.legacy_columns {
+            if !column_exists(&transaction, table, column)? {
+                resolved_by_legacy = false;
+                break;
+            }
+        }
+        if !resolved_by_legacy {
+            transaction.execute_batch(migration.sql)?;
+        }
         transaction.pragma_update(None, "user_version", migration.version)?;
         transaction.execute(
             "INSERT INTO schema_meta (key, value) VALUES (?1, ?2)
@@ -651,6 +699,7 @@ pub struct Project {
     pub last_sync_at: String,
     pub last_sync_commit: String,
     pub last_sync_status: String,
+    pub last_sync_by: String,
     /// True when an administrator last saved this project.
     #[serde(skip)]
     pub admin_saved: bool,
@@ -673,6 +722,9 @@ pub struct Inventory {
     pub source_kind: String,
     pub source_json: String,
     pub credential_id: Option<String>,
+    pub last_sync_at: String,
+    pub last_sync_status: String,
+    pub last_sync_by: String,
     /// True when an administrator last saved this inventory.
     #[serde(skip)]
     pub admin_saved: bool,
@@ -1636,6 +1688,7 @@ mod tests {
             version: SCHEMA_VERSION + 1,
             name: "9999_broken",
             sql: "CREATE TABLE broken (id TEXT",
+            legacy_columns: &[],
         }];
         assert!(apply_sqlite_migrations(&conn, &migrations).is_err());
         assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);

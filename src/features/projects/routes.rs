@@ -153,7 +153,8 @@ pub async fn update_project(
         jobs::discard_project_checkout(&state, &updated);
     }
     if sync_changed {
-        let sync = SyncResponse::from_result(jobs::sync_project(&state, &updated).await);
+        let sync =
+            SyncResponse::from_result(jobs::sync_project(&state, &updated, &user.username).await);
         let db = state.store();
         response = ProjectResponse::new(&db.project(&id)?.ok_or(ApiError::NotFound)?, &team);
         response.sync = Some(sync);
@@ -208,6 +209,7 @@ pub async fn create_project(
         last_sync_at: String::new(),
         last_sync_commit: String::new(),
         last_sync_status: String::new(),
+        last_sync_by: String::new(),
         admin_saved: user.is_admin,
     };
     db.insert_project(&project)?;
@@ -246,7 +248,7 @@ pub async fn sync_project(
         }
         project
     };
-    let path = jobs::sync_project(&state, &project).await?;
+    let path = jobs::sync_project(&state, &project, &user.username).await?;
     Ok(Json(SyncProjectResponse { path }))
 }
 #[derive(Deserialize)]

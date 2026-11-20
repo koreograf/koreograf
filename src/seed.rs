@@ -457,6 +457,7 @@ fn seed_demo<S: SeedStore + ?Sized>(store: &S, cfg: &Config) -> AppResult<()> {
         last_sync_at: String::new(),
         last_sync_commit: String::new(),
         last_sync_status: String::new(),
+        last_sync_by: String::new(),
         admin_saved: true,
     })?;
 
@@ -482,6 +483,9 @@ fn seed_demo<S: SeedStore + ?Sized>(store: &S, cfg: &Config) -> AppResult<()> {
             source_kind: "ini".into(),
             source_json: "{}".into(),
             credential_id: None,
+            last_sync_at: String::new(),
+            last_sync_status: String::new(),
+            last_sync_by: String::new(),
             admin_saved: true,
         },
         std::slice::from_ref(&inventory_source),
