@@ -39,7 +39,7 @@ The port mapping is `127.0.0.1:8080:8080`, so the UI is only on loopback. Change
 
 The service sets `restart: unless-stopped`, so the container starts again after a Docker daemon restart or a host reboot. A container stopped with `docker compose stop` stays stopped.
 
-To run on PostgreSQL instead of SQLite, use the overlay. It starts a pinned PostgreSQL on a private network with no published host port and reads the password from `postgres-password`; create that file first as described in [PostgreSQL](docs/postgresql.md#docker-compose). The overlay is for fresh installs; to keep an existing SQLite volume, migrate before the first overlay start.
+To run on PostgreSQL instead of SQLite, use the overlay. It starts PostgreSQL 17 on a private network with no published host port and reads the password from `postgres-password`; create that file first as described in [PostgreSQL](docs/postgresql.md#docker-compose). The overlay is for fresh installs; to keep an existing SQLite volume, migrate before the first overlay start.
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d

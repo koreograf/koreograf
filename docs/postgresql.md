@@ -68,7 +68,7 @@ Raise the pool size when many requests wait on the database. Keep the total acro
 
 ### Docker Compose
 
-The repository ships `docker-compose.postgres.yml` as an overlay on `docker-compose.yml`. It adds a pinned `postgres:17`, a named `koreograf-db` volume, and a `pg_isready` healthcheck, and points Koreograf at that database. PostgreSQL publishes no host port, so it is reachable only on the Compose network. SQLite stays the default when you start only `docker-compose.yml`; do not turn the normal quick start into a PostgreSQL stack.
+The repository ships `docker-compose.postgres.yml` as an overlay on `docker-compose.yml`. It adds PostgreSQL 17 (`postgres:17`), a named `koreograf-db` volume, and a `pg_isready` healthcheck, and points Koreograf at that database. PostgreSQL publishes no host port, so it is reachable only on the Compose network. SQLite stays the default when you start only `docker-compose.yml`; do not turn the normal quick start into a PostgreSQL stack.
 
 Create the password file once and start the stack:
 

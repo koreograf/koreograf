@@ -122,7 +122,7 @@ docker compose exec koreograf rm /var/lib/koreograf/initial-admin-password
 
 ### PostgreSQL
 
-SQLite stays the default. The `docker-compose.postgres.yml` overlay adds a pinned `postgres:17` on the private Compose network, with no published host port, and waits for its `pg_isready` healthcheck before Koreograf starts:
+SQLite stays the default. The `docker-compose.postgres.yml` overlay adds PostgreSQL 17 (`postgres:17`) on the private Compose network, with no published host port, and waits for its `pg_isready` healthcheck before Koreograf starts:
 
 ```bash
 openssl rand -hex 24 > postgres-password

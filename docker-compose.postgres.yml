@@ -37,6 +37,8 @@ services:
     environment:
       # sslmode=disable is safe only on this private Compose network.
       # The bundled database has no TLS certificate.
+      # Use this overlay only with the bundled db. An external server uses
+      # docker-compose.yml alone, or needs its password in postgres-password.
       KOREOGRAF_DATABASE_URL: ${KOREOGRAF_DATABASE_URL:-postgresql://koreograf@db:5432/koreograf?sslmode=disable}
       KOREOGRAF_DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
       KOREOGRAF_DATABASE_POOL_SIZE: ${KOREOGRAF_DATABASE_POOL_SIZE:-8}

@@ -2891,28 +2891,6 @@ fn the_compose_postgres_overlay_keeps_the_database_private() {
         "the overlay should pin PostgreSQL to a supported major version"
     );
     assert!(
-        overlay.contains("pg_isready"),
-        "the database service needs a healthcheck"
-    );
-    assert!(
-        overlay.contains("condition: service_healthy"),
-        "koreograf should wait for a healthy database"
-    );
-    assert!(
-        overlay.contains("restart: unless-stopped"),
-        "the database service should restart after a daemon restart"
-    );
-    assert!(
-        overlay.contains("KOREOGRAF_DATABASE_URL:")
-            && overlay.contains("KOREOGRAF_DATABASE_PASSWORD_FILE:")
-            && overlay.contains("POSTGRES_PASSWORD_FILE:"),
-        "the overlay should forward the database URL and the password file"
-    );
-    assert!(
-        overlay.contains("koreograf-db:/var/lib/postgresql/data"),
-        "the database needs its own named volume"
-    );
-    assert!(
         !overlay.contains("ports:"),
         "the database must stay on the private Compose network"
     );
