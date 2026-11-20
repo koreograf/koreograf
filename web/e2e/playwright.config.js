@@ -5,7 +5,7 @@ const { dataDir, password, port, root, username } = require("./env");
 
 module.exports = defineConfig({
   testDir: __dirname,
-  testMatch: "smoke.spec.js",
+  testMatch: /(smoke|mobile)\.spec\.js/,
   timeout: 30000,
   fullyParallel: false,
   workers: 1,
@@ -17,7 +17,11 @@ module.exports = defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    { name: "chromium", testMatch: "smoke.spec.js", use: { ...devices["Desktop Chrome"] } },
+    { name: "iPhone 13", testMatch: "mobile.spec.js", use: { ...devices["iPhone 13"], browserName: "chromium" } },
+    { name: "Pixel 7", testMatch: "mobile.spec.js", use: { ...devices["Pixel 7"] } },
+  ],
   webServer: {
     command: `sh -c 'rm -rf "${dataDir}" && exec ./target/debug/koreograf'`,
     cwd: root,

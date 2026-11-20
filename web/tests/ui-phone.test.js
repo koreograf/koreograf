@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const { readFileSync } = require("node:fs");
 const { join } = require("node:path");
 const { pathToFileURL } = require("node:url");
 const test = require("node:test");
@@ -20,6 +21,11 @@ test("the shell wraps headers and uses the dynamic viewport", () => {
   assert.match(rule(css, ".login-wrap")[1], /min-height:\s*100dvh/, "the login page does not use the dynamic viewport");
   assert.match(rule(css, ".side")[1], /safe-area-inset-bottom/, "the drawer ignores the bottom safe area");
   assert.match(rule(css, ".main")[1], /safe-area-inset-bottom/, "the main column ignores the bottom safe area");
+});
+
+test("the viewport meta keeps device width", () => {
+  const html = readFileSync(join(__dirname, "..", "index.html"), "utf8");
+  assert.match(html, /<meta name="viewport" content="width=device-width, initial-scale=1">/);
 });
 
 test("the drawer toggle and nav links are touch sized", () => {
