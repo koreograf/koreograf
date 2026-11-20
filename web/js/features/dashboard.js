@@ -77,7 +77,7 @@ function dashboardChart(series, values, heading, legend) {
     }).join("");
     const height = Math.max(4, Math.round((totals[index] / max) * 100));
     const bar = bars ? `<div class="chart-bar" style="height:${height}%">${bars}</div>` : "";
-    return `<div class="chart-day" title="${esc(title)}"><div class="chart-bars">${bar}</div><span class="chart-day-label">${esc(shortDay(day.date))}</span></div>`;
+    return `<div class="chart-day" title="${esc(title)}" aria-label="${esc(title)}"><span class="chart-day-total">${totals[index]}</span><div class="chart-bars">${bar}</div><span class="chart-day-label">${esc(shortDay(day.date))}</span></div>`;
   }).join("");
   return `<section class="card"><div class="spread"><h2>${h(heading)}</h2>${legend ? `<div class="row">${legend}</div>` : ""}</div><div class="chart" role="img" aria-label="${h(heading)}">${days}</div></section>`;
 }

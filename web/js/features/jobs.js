@@ -425,6 +425,10 @@ function paintLogSearch(log, state, jump) {
   else updateSearchCount(state);
 }
 
+function phoneWidth() {
+  return typeof window.matchMedia === "function" && window.matchMedia("(max-width: 600px)").matches;
+}
+
 function bindJobLog(log, job) {
   const state = logState(log);
   state.tool = job.tool || "";
@@ -460,8 +464,8 @@ function bindJobLog(log, job) {
     if (end) end.hidden = bottom;
   });
   if (wrap) {
-    wrap.checked = false;
-    log.classList.remove("wrap");
+    wrap.checked = phoneWidth();
+    log.classList.toggle("wrap", wrap.checked);
     wrap.addEventListener("change", () => log.classList.toggle("wrap", wrap.checked));
   }
   if (first) {

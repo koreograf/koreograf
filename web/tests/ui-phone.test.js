@@ -6,6 +6,8 @@ const { pathToFileURL } = require("node:url");
 const test = require("node:test");
 const { mediaBlock, rule, stylesheet } = require("./css.js");
 
+require("./test-dom.js").install();
+
 const load = (path) => import(pathToFileURL(join(__dirname, "..", "js", path)).href);
 
 test("the shell wraps headers and uses the dynamic viewport", () => {
@@ -31,7 +33,6 @@ test("the drawer toggle and nav links are touch sized", () => {
 });
 
 test("the shared table labels every cell from the header row", async () => {
-  require("./test-dom.js").install();
   const { table } = await load("core/dom.js");
   const html = table(
     ["Name", "Tool", ""],
@@ -114,4 +115,62 @@ test("a fullscreen overlay keeps the shared chrome and scrolls its body", () => 
   assert.match(full, /safe-area-inset-bottom/, "the fullscreen overlay ignores the safe area");
   assert.match(rule(css, ".dialog-body")[1], /overflow:\s*auto/, "the dialog body does not scroll");
   assert.match(rule(css, ".dialog-form")[1], /display:\s*flex/, "the edit chrome is not the shared form layout");
+});
+
+test("the dashboard writes the chart count into the visible day", async () => {
+  const { dashboardBody } = await load("features/dashboard.js");
+  const html = dashboardBody({ series: [{ date: "2026-11-20", started: 4, successful: 3, failed: 1, canceled: 0 }], cache: {} }, "1");
+  assert.match(html, /class="chart-day-total"[^>]*>4</, "the finished day total is not visible");
+  assert.match(html, /aria-label="[^"]*4[^"]*"/, "the day count is not in the accessible name");
+  assert.match(rule(stylesheet(), ".chart-day-total")[1], /font-size:\s*11px/, "the day total does not fit a narrow chart");
+});
+
+test("the workflow run lines reflow into labelled rows", async () => {
+  const { readFileSync } = require("node:fs");
+  const source = readFileSync(join(__dirname, "..", "js", "features", "workflows", "run.js"), "utf8");
+  for (const key of ["start", "name", "status", "end", "duration"]) {
+    assert.match(source, new RegExp(`data-label="\\$\\{h\\("${key}"\\)\\}"`), `the run line lost the ${key} label`);
+  }
+  const block = mediaBlock(stylesheet(), "@media (max-width: 640px)");
+  assert.match(block, /\.run-line\s*\{[^}]*min-width:\s*0/, "the run line keeps its wide minimum");
+  assert.match(block, /\.run-line\.head\s*\{\s*display:\s*none/, "the run line keeps its desktop header");
+  assert.match(block, /\.run-line > span\[data-label\]::before/, "the narrow run line has no labels");
+});
+
+test("the phone job log starts wrapped", async () => {
+  const state = await load("core/state.js");
+  const previous = window.matchMedia;
+  window.matchMedia = (query) => ({ media: query, matches: true, addEventListener() {}, removeEventListener() {} });
+  try {
+    state.setMe({ is_admin: true, display_name: "Admin", teams: [{ id: "t1", name: "Team", role: "owner" }] });
+    state.setTeamId("t1");
+    const job = {
+      id: "j1",
+      name: "Job",
+      tool: "shell",
+      status: "successful",
+      trigger: "manual",
+      launched_by: "admin",
+      created_at: "2026-01-01T00:00:00Z",
+      events: [{ id: 1, stream: "stdout", line: "one long line" }],
+      parameters: null,
+      extra_vars: {},
+    };
+    globalThis.fetch = async (path) => {
+      let body = [];
+      if (path.startsWith("/api/v1/jobs/")) body = job;
+      else if (path.startsWith("/api/v1/maintenance")) body = { active: false };
+      else if (path.includes("/version")) body = { version: "1", commit: "abcdef" };
+      else if (path.includes("/assistant")) body = { enabled: false };
+      return { ok: true, status: 200, text: async () => JSON.stringify(body) };
+    };
+    const router = await load("core/router.js");
+    await load("features/jobs.js");
+    location.hash = "#/jobs/j1";
+    await router.matchRoute("#/jobs/:id").handler({ id: "j1" });
+    assert.equal(document.querySelector("#log-wrap").checked, true, "the phone log does not start wrapped");
+    assert.equal(document.querySelector("#log").classList.contains("wrap"), true, "the phone log ignores its first wrap state");
+  } finally {
+    window.matchMedia = previous;
+  }
 });
