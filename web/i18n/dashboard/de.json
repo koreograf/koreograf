@@ -1,4 +1,5 @@
 {
+  "chart_day_hint": "Tippe auf einen Tag, um die Aufteilung zu sehen.",
   "collections_roles_and_opentofu_providers_stay_between_runs": "Collections, Rollen und OpenTofu-Provider bleiben zwischen den Läufen liegen.",
   "dashboard": "Dashboard",
   "dependency_cache": "Abhängigkeits-Cache",

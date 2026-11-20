@@ -229,9 +229,11 @@ Something stays a page when it needs its own address, a deep link to a record, a
 ## Responsive behavior
 
 - At 900 px the sidebar becomes an off-canvas panel with `.nav-toggle` and `.scrim`; `.main` padding drops to 16 px. The schedule layout stacks, and `.dialog-footer` becomes visible.
-- The workflow editor keeps its page width at 900 px: only the canvas pans and zooms, and the read-only node summary becomes a collapsible bottom sheet. Editing a node or an edge opens an overlay.
-- At 600 px `.overlay` loses its padding and `.overlay-card` becomes full screen.
-- Tables scroll inside `.table-wrap`. Add a minimum width only to a table that needs it, as `.inventory-hosts-table` and `.schedule-table` do.
+- Below 900 px, or on a coarse pointer without hover, the workflow editor is view-only on phones. It shows the `workflow_desktop_only` note, disables the name and description fields, and hides Save, Launch, the history row, the danger tab, and the node menus. The canvas still pans and zooms, and selecting a node or edge opens the existing read-only inspector. Rotating or resizing the phone keeps this mode; editing a workflow is a desktop task.
+- At 640 px every list table, including `.schedule-table` and `.inventory-hosts-table`, becomes stacked card rows with a `data-label` from the header. Filter rows stack, and `.kv` puts its label above the value. The inventory host list keeps a compact `#host-sort` select because the sortable table header is hidden.
+- At 600 px `.overlay` loses its padding and `.overlay-card` becomes full screen. The dialog body still scrolls, and the shared edit chrome keeps its tabs and action row. The job log starts wrapped; the wrap checkbox can still turn it off. Dashboard days are buttons: tapping or focusing one writes the status split below the chart.
+- Tables scroll inside `.table-wrap`. Add a minimum width only to a table that needs it; on phones the schedule and host tables drop that minimum and use the card layout instead.
+- On a coarse pointer, buttons, compact buttons, nav links, switches, chip remove buttons, dialog tabs, language options, vault options, checkbox rows, and inspector or canvas controls are at least 44 px.
 - Check every UI change at 1280 px and 390 px, in German and English.
 
 ## Pull request checklist

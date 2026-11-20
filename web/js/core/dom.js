@@ -23,12 +23,14 @@ export function emptyState(message, href, label) {
   return `<div class="empty-state"><p>${h(message)}</p>${action}</div>`;
 }
 
+// Each row is one complete <tr> string. Cells without a label borrow the
+// matching header text so the stacked card rows stay readable on phones.
 function labelCells(row, headers) {
   let column = 0;
-  return String(row).replace(/<td\b([^>]*)>/g, (tag, attrs) => {
+  return String(row).replace(/<td\b((?:[^>"']|"[^"]*"|'[^']*')*)>/g, (tag, attrs) => {
     const label = headers[column];
-    const span = /colspan\s*=\s*"?(\d+)/i.exec(attrs);
-    column += span ? Number(span[1]) : 1;
+    const span = /colspan\s*=\s*(?:"(\d+)"|'(\d+)'|(\d+))/i.exec(attrs);
+    column += span ? Number(span[1] || span[2] || span[3]) : 1;
     if (!label || /data-label\s*=/i.test(attrs)) return tag;
     return `<td${attrs} data-label="${esc(label)}">`;
   });

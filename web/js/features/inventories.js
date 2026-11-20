@@ -390,7 +390,7 @@ async function pageInventories() {
       const label = kinds.length ? [...new Set(kinds)].join(", ") : sourceKindLabel(item.source_kind);
       const count = item.source_count != null ? item.source_count : kinds.length;
       const insecure = (item.sources || []).some(certificateCheckOff) || certificateCheckOff({ kind: item.source_kind, source: item.source });
-      return `<tr><td><a href="#/inventories/${esc(item.id)}">${esc(item.name)}</a></td><td class="narrow-hide">${esc(count)}</td><td class="narrow-hide">${esc(label)}${certificateBadge(insecure)}</td><td data-label="${h("hosts")}">${esc(item.host_count)}</td><td>${can("operator") ? `<a class="btn" href="#/inventories?edit=${esc(item.id)}">${h("edit")}</a>` : ""}</td></tr>`;
+      return `<tr><td><a href="#/inventories/${esc(item.id)}">${esc(item.name)}</a></td><td class="narrow-hide">${esc(count)}</td><td class="narrow-hide">${esc(label)}${certificateBadge(insecure)}</td><td>${esc(item.host_count)}</td><td>${can("operator") ? `<a class="btn" href="#/inventories?edit=${esc(item.id)}">${h("edit")}</a>` : ""}</td></tr>`;
     });
     const host = document.querySelector("#inventory-table");
     if (!shown.length) {
@@ -552,6 +552,10 @@ async function pageInventory(id) {
     `<option value="">${h("all_groups")}</option>`,
     ...groups.map((group) => `<option value="${esc(group)}"${group === view.group ? " selected" : ""}>${esc(group)}</option>`),
   ].join("");
+  const sortOptions = ["name", "address", "groups"].flatMap((field) => [
+    `<option value="${field}"${view.sort === field ? " selected" : ""}>${h(field)} ↑</option>`,
+    `<option value="-${field}"${view.sort === `-${field}` ? " selected" : ""}>${h(field)} ↓</option>`,
+  ]).join("");
   const sourceCards = (item.sources || []).map((source) => `
     <section class="card" style="margin-top:10px">
       <div class="spread">
@@ -582,6 +586,7 @@ async function pageInventory(id) {
           <input class="search" id="host-search" type="search" value="${esc(view.search)}" placeholder="${h("search_hosts")}" aria-label="${h("search_hosts")}" autocomplete="off">
           <label class="field"><span>${h("group")}</span><select id="host-group" aria-label="${h("group")}">${groupOptions}</select></label>
           <label class="field"><span>${h("page_size")}</span><select id="host-size" aria-label="${h("page_size")}">${[25, 50, 100].map((size) => `<option value="${size}"${size === view.size ? " selected" : ""}>${size}</option>`).join("")}</select></label>
+          <label class="field host-sort-field"><span>${h("sort_by")}</span><select id="host-sort" aria-label="${h("sort_by")}">${sortOptions}</select></label>
         </div>
         <p class="small muted" id="host-total" tabindex="-1" aria-live="polite"></p>
         <div id="host-table"></div>
@@ -618,6 +623,7 @@ async function pageInventory(id) {
   const hostSearch = document.querySelector("#host-search");
   const hostGroup = document.querySelector("#host-group");
   const hostSize = document.querySelector("#host-size");
+  const hostSort = document.querySelector("#host-sort");
   const hostTable = document.querySelector("#host-table");
   const hostTotal = document.querySelector("#host-total");
   const hostPager = document.querySelector("#host-pager");
@@ -701,6 +707,12 @@ async function pageInventory(id) {
     view.page = 1;
     rememberHash(true);
     loadHosts("#host-size");
+  });
+  hostSort.addEventListener("change", () => {
+    view.sort = hostSort.value || "name";
+    view.page = 1;
+    rememberHash(true);
+    loadHosts("#host-sort");
   });
   hostTable.addEventListener("click", (event) => {
     const clear = event.target.closest("#clear-host-filter");
