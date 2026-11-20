@@ -120,6 +120,19 @@ docker compose exec koreograf cat /var/lib/koreograf/initial-admin-password
 docker compose exec koreograf rm /var/lib/koreograf/initial-admin-password
 ```
 
+### PostgreSQL
+
+SQLite stays the default. The `docker-compose.postgres.yml` overlay adds a pinned `postgres:17` on the private Compose network, with no published host port, and waits for its `pg_isready` healthcheck before Koreograf starts:
+
+```bash
+openssl rand -hex 24 > postgres-password
+chmod 0400 postgres-password
+sudo chown 10001:10001 postgres-password
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
+```
+
+Both services use `restart: unless-stopped`, and the base hardening stays in place. The overlay forwards `KOREOGRAF_DATABASE_URL`, `KOREOGRAF_DATABASE_PASSWORD_FILE`, `KOREOGRAF_DATABASE_POOL_SIZE`, and `KOREOGRAF_DATABASE_CA_FILE`; the password is only in `postgres-password`. `sslmode=disable` is safe only inside that private network. Requirements, the backup hint, and the move from an existing SQLite volume are in [PostgreSQL](postgresql.md#docker-compose).
+
 ### Company certificate authorities
 
 Koreograf trusts a company CA in addition to the public roots. Put the certificates in a directory on the host and mount it read-only at `/etc/koreograf/ca`. The directory holds files named `*.pem` or `*.crt`. Other files are ignored. The files must be readable by uid 10001. A missing or empty directory leaves trust unchanged. A file that is not a PEM, or one that cannot be read, stops the start with one English line that names the file. Certificate verification is never turned off by this directory.

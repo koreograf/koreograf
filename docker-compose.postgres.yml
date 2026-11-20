@@ -1,0 +1,54 @@
+# Runs Koreograf on a private PostgreSQL instead of the default SQLite file.
+# Create the password file first, then start the stack:
+#   openssl rand -hex 24 > postgres-password
+#   chmod 0400 postgres-password
+#   sudo chown 10001:10001 postgres-password
+#   docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
+#
+# The base file stays in charge of the Koreograf service. This overlay only adds
+# the database, the database settings, and the password secret. PostgreSQL has
+# no published host port, so it is reachable only on the Compose network.
+services:
+  db:
+    # PostgreSQL 17 keeps its data in /var/lib/postgresql/data.
+    # PostgreSQL 18 and newer use a different path; change the volume with the image.
+    image: postgres:17
+    # Starts again after a Docker daemon restart or a host reboot.
+    # A container stopped with docker compose stop stays stopped.
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: koreograf
+      POSTGRES_USER: koreograf
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    volumes:
+      - koreograf-db:/var/lib/postgresql/data
+    secrets:
+      - postgres_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U koreograf -d koreograf"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  koreograf:
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # sslmode=disable is safe only on this private Compose network.
+      # The bundled database has no TLS certificate.
+      KOREOGRAF_DATABASE_URL: ${KOREOGRAF_DATABASE_URL:-postgresql://koreograf@db:5432/koreograf?sslmode=disable}
+      KOREOGRAF_DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
+      KOREOGRAF_DATABASE_POOL_SIZE: ${KOREOGRAF_DATABASE_POOL_SIZE:-8}
+      KOREOGRAF_DATABASE_CA_FILE: ${KOREOGRAF_DATABASE_CA_FILE:-}
+    secrets:
+      - postgres_password
+
+volumes:
+  koreograf-db:
+
+secrets:
+  postgres_password:
+    # One line with the password. Point KOREOGRAF_POSTGRES_PASSWORD_FILE at another
+    # host path when the file does not live next to this checkout.
+    file: ${KOREOGRAF_POSTGRES_PASSWORD_FILE:-./postgres-password}

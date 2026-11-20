@@ -39,6 +39,14 @@ The port mapping is `127.0.0.1:8080:8080`, so the UI is only on loopback. Change
 
 The service sets `restart: unless-stopped`, so the container starts again after a Docker daemon restart or a host reboot. A container stopped with `docker compose stop` stays stopped.
 
+To run on PostgreSQL instead of SQLite, use the overlay. It starts a pinned PostgreSQL on a private network with no published host port and reads the password from `postgres-password`; create that file first as described in [PostgreSQL](docs/postgresql.md#docker-compose).
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
+```
+
+SQLite remains the default without the overlay.
+
 The UI is at `http://127.0.0.1:8080`. Sign in as `admin`. The generated password is one line in the container. The file is mode `0600`, and the password is not written to the log.
 
 Lists open their create and edit forms as overlays, so the list stays in view. A template uses tabs for General, Target, Options, and Variables. `#/templates?new=1` and `#/templates?edit=<id>&tab=target` open the same overlay after a reload, and Back closes it. A workflow is created in a small overlay and then opens in the editor.

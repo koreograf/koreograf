@@ -68,55 +68,53 @@ Raise the pool size when many requests wait on the database. Keep the total acro
 
 ### Docker Compose
 
-Create the database on an existing PostgreSQL server, put the URL and the password file into `.env`, and mount the secret:
+The repository ships `docker-compose.postgres.yml` as an overlay on `docker-compose.yml`. It adds a pinned `postgres:17`, a named `koreograf-db` volume, and a `pg_isready` healthcheck, and points Koreograf at that database. PostgreSQL publishes no host port, so it is reachable only on the Compose network. SQLite stays the default when you start only `docker-compose.yml`; do not turn the normal quick start into a PostgreSQL stack.
+
+Create the password file once and start the stack:
+
+```bash
+git clone https://github.com/koreograf/koreograf.git
+cd koreograf
+cp .env.example .env
+openssl rand -hex 24 > postgres-password
+chmod 0400 postgres-password
+sudo chown 10001:10001 postgres-password
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
+```
+
+Both containers mount the file at `/run/secrets/postgres_password`. Koreograf runs as uid 10001, so that user must be able to read it; PostgreSQL reads it as root before it drops privileges. If the file lives elsewhere, set `KOREOGRAF_POSTGRES_PASSWORD_FILE` in `.env`. No password is in the YAML or in `.env`, and `postgres-password` is gitignored.
+
+The overlay sets these database values, and the base file keeps its own service definition:
 
 ```dotenv
-KOREOGRAF_DATABASE_URL='postgresql://koreograf@db.example.com:5432/koreograf?sslmode=require'
-KOREOGRAF_DATABASE_PASSWORD_FILE=/run/secrets/koreograf_database_password
+KOREOGRAF_DATABASE_URL=postgresql://koreograf@db:5432/koreograf?sslmode=disable
+KOREOGRAF_DATABASE_PASSWORD_FILE=/run/secrets/postgres_password
+KOREOGRAF_DATABASE_POOL_SIZE=8
 ```
 
-```yaml
-services:
-  koreograf:
-    environment:
-      KOREOGRAF_DATABASE_URL: ${KOREOGRAF_DATABASE_URL:-}
-      KOREOGRAF_DATABASE_PASSWORD_FILE: /run/secrets/koreograf_database_password
-    volumes:
-      - ./postgres-password:/run/secrets/koreograf_database_password:ro
+`sslmode=disable` is safe only inside this private Compose network; the bundled PostgreSQL has no certificate. An external database uses `sslmode=require`, or `verify-full` with `KOREOGRAF_DATABASE_CA_FILE`. When `KOREOGRAF_DATABASE_URL` is empty, the overlay uses the line above; set it only to override the target.
+
+Both services set `restart: unless-stopped`, and Koreograf uses `depends_on: condition: service_healthy` so it starts after `pg_isready` passes. Check the engine:
+
+```bash
+curl -fsS http://127.0.0.1:8080/healthz
 ```
 
-`docker-compose.yml` already forwards `KOREOGRAF_DATABASE_URL` from `.env`. Add the password-file variable and the mount, or place the password in the URL. For a stand-alone Compose PostgreSQL, add a service and use a private network:
+The answer is `ok (postgresql)`. Compose prefixes the named volumes with the project name, so `docker volume ls` shows `<project>_koreograf-db` next to `<project>_koreograf-data`.
 
-```yaml
-services:
-  db:
-    image: postgres:17
-    environment:
-      POSTGRES_DB: koreograf
-      POSTGRES_USER: koreograf
-      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
-    volumes:
-      - koreograf-db:/var/lib/postgresql/data
-      - ./postgres-password:/run/secrets/postgres_password:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U koreograf -d koreograf"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
+Back up through **Backup** in the UI or the API; the archive is the same SQLite file plus `secret.key`, and it restores on either engine. A `pg_dump` is not required, but the `koreograf-db` volume can be snapshotted too. See [Database and backup](backup-restore.md).
 
-  koreograf:
-    depends_on:
-      db:
-        condition: service_healthy
-    environment:
-      KOREOGRAF_DATABASE_URL: postgresql://koreograf@db:5432/koreograf?sslmode=disable
-      KOREOGRAF_DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
+To keep data from an existing SQLite volume, take a backup first, then migrate while Koreograf is stopped:
 
-volumes:
-  koreograf-db:
+```bash
+docker compose stop koreograf
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d db
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml run --rm koreograf \
+  koreograf db migrate --to 'postgresql://koreograf@db:5432/koreograf?sslmode=disable'
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
 ```
 
-The `postgres:17` image and the healthcheck are examples; use the version your company supports. Keep `sslmode=disable` inside a private Compose network only.
+`docker compose stop koreograf` uses the same project name as the base stack. The one-off container reads the data volume and `KOREOGRAF_DATABASE_PASSWORD_FILE` from the overlay. The fresh target is empty. Alternatively, start the base stack and use **Settings → Database** while it still runs on SQLite, then restart with the overlay. Migration and rollback rules are below.
 
 ### Binary
 
