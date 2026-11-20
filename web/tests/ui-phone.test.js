@@ -59,6 +59,10 @@ test("the shared table labels every cell from the header row", async () => {
   const tricky = table(["Name", "Note"], ['<tr><td title="a > b">one</td><td>two</td></tr>']);
   assert.match(tricky, /<td title="a > b" data-label="Name">one<\/td>/);
   assert.match(tricky, /<td data-label="Note">two<\/td>/);
+  const nested = table(["Name", "Note", "Last"], ['<tr><td>one</td><td><table><tr><td>inner</td></tr></table></td><td>last</td></tr>']);
+  assert.match(nested, /<td data-label="Name">one<\/td>/);
+  assert.match(nested, /<td data-label="Note"><table><tr><td>inner<\/td><\/tr><\/table><\/td>/);
+  assert.match(nested, /<td data-label="Last">last<\/td>/);
 });
 
 test("the narrow card rows cover schedules and inventory hosts", () => {
