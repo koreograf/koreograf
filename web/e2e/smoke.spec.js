@@ -1,6 +1,10 @@
 "use strict";
 
 const { expect, test } = require("@playwright/test");
+const { execFileSync } = require("node:child_process");
+const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require("node:fs");
+const { tmpdir } = require("node:os");
+const { join } = require("node:path");
 const { password, username } = require("./env");
 
 const catalog = {
@@ -998,4 +1002,114 @@ test.describe("dark theme", () => {
     expect(await themeAttribute(page)).toBe("dark");
     expect(await page.evaluate(() => localStorage.getItem("koreograf.theme"))).toBe("system");
   });
+});
+
+test("an operator syncs a project and an inventory from their lists", async ({ page }) => {
+  test.setTimeout(120000);
+  await signInInEnglish(page);
+  const teams = await (await page.request.get("/api/v1/teams")).json();
+  const team = teams.find((item) => item.name === "Plattform") || teams[0];
+  const members = await (await page.request.get(`/api/v1/teams/${team.id}/members`)).json();
+  for (const [username, displayName, password, role] of [
+    ["sync-operator", "Sync Operator", "operator-pass", "operator"],
+    ["sync-viewer", "Sync Viewer", "viewer-pass", "viewer"],
+  ]) {
+    const users = await (await page.request.get("/api/v1/users")).json();
+    if (!users.some((user) => user.username === username)) {
+      const created = await page.request.post("/api/v1/users", {
+        data: { username, display_name: displayName, password },
+      });
+      expect(created.status()).toBe(201);
+    }
+    if (!members.some((member) => member.username === username)) {
+      const member = await page.request.post(`/api/v1/teams/${team.id}/members`, {
+        data: { username, role },
+      });
+      expect(member.status()).toBe(201);
+    }
+  }
+
+  const suffix = Date.now();
+  const projectName = `List sync project ${suffix}`;
+  const inventoryName = `List sync inventory ${suffix}`;
+  mkdirSync(join(tmpdir(), "koreograf-e2e-projects"), { recursive: true });
+  const repo = mkdtempSync(join(tmpdir(), "koreograf-e2e-projects", "repo-"));
+  execFileSync("git", ["init", "-b", "main", repo]);
+  execFileSync("git", ["-C", repo, "config", "user.email", "test@example.com"]);
+  execFileSync("git", ["-C", repo, "config", "user.name", "Koreograf Test"]);
+  mkdirSync(join(repo, "inventory"));
+  writeFileSync(join(repo, "inventory", "hosts.ini"), "[all]\nlocalhost ansible_connection=local\n");
+  writeFileSync(join(repo, "site.yml"), "- hosts: all\n  tasks: []\n");
+  execFileSync("git", ["-C", repo, "add", "inventory/hosts.ini", "site.yml"]);
+  execFileSync("git", ["-C", repo, "commit", "-m", "main"]);
+  const demo = `file://${repo}`;
+  const createdProject = await page.request.post("/api/v1/projects", {
+    headers: { "X-Team-Id": team.id },
+    data: { name: projectName, source_type: "git", source: demo, revision: "main" },
+  });
+  expect(createdProject.status()).toBe(201);
+  const project = await createdProject.json();
+  const synced = await page.request.post(`/api/v1/projects/${project.id}/sync`, {
+    headers: { "X-Team-Id": team.id },
+    data: {},
+  });
+  expect(synced.status()).toBe(200);
+  const createdInventory = await page.request.post("/api/v1/inventories", {
+    headers: { "X-Team-Id": team.id },
+    data: {
+      name: inventoryName,
+      sources: [{ kind: "project", project_id: project.id, path: "inventory/hosts.ini" }],
+    },
+  });
+  expect(createdInventory.status()).toBe(201);
+
+  const delayed = (pattern) => page.route(pattern, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await route.continue();
+  });
+  await delayed("**/api/v1/projects/*/sync");
+  await delayed("**/api/v1/inventories/*/sync");
+
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
+  await page.getByLabel("Username").fill("sync-operator");
+  await page.getByLabel("Password").fill("operator-pass");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page.getByRole("navigation")).toBeVisible();
+  await page.locator("#team-select").selectOption(team.id);
+
+  await page.getByRole("navigation").getByRole("link", { name: "Projects", exact: true }).click();
+  const projectRow = page.getByRole("row", { name: new RegExp(projectName) });
+  await expect(projectRow).toBeVisible();
+  const projectSync = projectRow.getByRole("button", { name: "Sync", exact: true });
+  await expect(projectSync).toBeVisible();
+  await projectSync.click();
+  await expect(projectRow.getByRole("button", { name: "Syncing…", exact: true })).toBeDisabled();
+  await expect(projectRow.locator('td[data-label="Last sync"]')).toContainText("sync-operator", { timeout: 30000 });
+  await expect(projectRow.locator('td[data-label="Last sync"]')).toContainText("Success");
+
+  await page.getByRole("navigation").getByRole("link", { name: "Inventories", exact: true }).click();
+  const inventoryRow = page.getByRole("row", { name: new RegExp(inventoryName) });
+  await expect(inventoryRow).toBeVisible();
+  const inventorySync = inventoryRow.getByRole("button", { name: "Refresh", exact: true });
+  await expect(inventorySync).toBeVisible();
+  await inventorySync.click();
+  await expect(inventoryRow.getByRole("button", { name: "Refreshing…", exact: true })).toBeDisabled();
+  await expect(inventoryRow.locator('td[data-label="Last sync"]')).toContainText("sync-operator", { timeout: 30000 });
+  await expect(inventoryRow.locator('td[data-label="Last sync"]')).toContainText("Success");
+
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Sign in", exact: true })).toBeVisible();
+  await page.getByLabel("Username").fill("sync-viewer");
+  await page.getByLabel("Password").fill("viewer-pass");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page.getByRole("navigation")).toBeVisible();
+  await page.locator("#team-select").selectOption(team.id);
+  await page.getByRole("navigation").getByRole("link", { name: "Projects", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Projects" })).toBeVisible();
+  await expect(page.locator("[data-sync-project]")).toHaveCount(0);
+  await page.getByRole("navigation").getByRole("link", { name: "Inventories", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Inventories" })).toBeVisible();
+  await expect(page.locator("[data-sync-inventory]")).toHaveCount(0);
+  rmSync(repo, { recursive: true, force: true });
 });
