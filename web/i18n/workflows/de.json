@@ -114,6 +114,7 @@
   "workflow_2": "+ Workflow",
   "workflow_changed_hint": "Eine andere Person hat diesen Workflow seit dem Laden gespeichert. Lade den gespeicherten Stand neu oder überschreibe ihn mit deinen Änderungen.",
   "workflow_changed_title": "Workflow geändert",
+  "workflow_desktop_only": "Dieser Editor ist auf dem Telefon schreibgeschützt. Bearbeite den Workflow am Desktop.",
   "workflow_graph": "Workflow-Diagramm",
   "workflow_keyboard_help": "Tastatur: Mit Tab zu einem Knoten oder einer Kante. Enter öffnet das Bearbeitungsfenster eines Knotens oder wählt eine Kante, Leertaste wählt, Entf entfernt die fokussierte Kante oder den Knoten. Im Verbindungsmodus verbindet Enter oder Leertaste auf dem Ziel, Escape bricht ab. Umschalt+F10 öffnet das Flächenmenü. Mit + und − zoomst du, 0 setzt auf 100 %, F passt den Graphen ein, Strg+Mausrad zoomt.",
   "zoom_in": "Vergrößern",

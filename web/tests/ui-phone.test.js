@@ -5,6 +5,7 @@ const { join } = require("node:path");
 const { pathToFileURL } = require("node:url");
 const test = require("node:test");
 const { mediaBlock, rule, stylesheet } = require("./css.js");
+const { catalog } = require("./catalog.js");
 
 require("./test-dom.js").install();
 
@@ -170,6 +171,41 @@ test("the phone job log starts wrapped", async () => {
     await router.matchRoute("#/jobs/:id").handler({ id: "j1" });
     assert.equal(document.querySelector("#log-wrap").checked, true, "the phone log does not start wrapped");
     assert.equal(document.querySelector("#log").classList.contains("wrap"), true, "the phone log ignores its first wrap state");
+  } finally {
+    window.matchMedia = previous;
+  }
+});
+
+test("the workflow editor is view-only on a phone", async () => {
+  const state = await load("core/state.js");
+  const i18n = await load("core/i18n.js");
+  i18n.setCatalog("de", catalog("de"));
+  i18n.setCatalog("en", catalog("en"));
+  await i18n.setLang("en");
+  state.setMe({ is_admin: false, display_name: "Olga", teams: [{ id: "t1", name: "Plattform", role: "operator" }] });
+  state.setTeamId("t1");
+  globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => "[]" });
+  const previous = window.matchMedia;
+  window.matchMedia = (query) => ({ media: query, matches: true, addEventListener() {}, removeEventListener() {} });
+  try {
+    const editor = await load("features/workflows/editor.js");
+    editor.mountEditor(
+      { id: "w1", name: "Deploy", description: "", graph: { nodes: [{ id: "n1", template_id: "t1", name: "One", x: 20, y: 20 }], edges: [] } },
+      [{ id: "t1", name: "Deploy", tool: "shell", spec: {} }],
+      false,
+      {},
+      { inventories: [], credentials: [] },
+      {},
+    );
+    const note = document.querySelector("#wf-desktop-note");
+    assert.ok(note, "the phone editor has no desktop note");
+    assert.match(note.innerHTML, /desktop/i);
+    assert.match(document.querySelector(".top .pill.read-only").innerHTML, /read-only/i);
+    for (const selector of ["#wf-save", "#wf-launch", "#wf-undo", "#wf-redo", "#wf-delete", "[data-node-menu]", "[data-add-port]", "#wf-add-first"]) {
+      assert.equal(document.querySelector(selector), null, `the phone editor still shows ${selector}`);
+    }
+    assert.equal(document.querySelector("#wf-name").disabled, true, "the phone editor keeps the name field editable");
+    assert.equal(document.querySelector("#wf-description").disabled, true, "the phone editor keeps the description field editable");
   } finally {
     window.matchMedia = previous;
   }
