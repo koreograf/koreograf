@@ -363,6 +363,77 @@ jobs:
               for p in ports
           ), ports
           PY
+      - name: Render the PostgreSQL overlay
+        run: |
+          touch postgres-password
+          docker compose -f docker-compose.yml -f docker-compose.postgres.yml \
+            config --format json > /tmp/compose-postgres.json
+          python3 - << 'PY'
+          import json
+
+          data = json.load(open("/tmp/compose-postgres.json"))
+          services = data["services"]
+
+          def env_map(value):
+              if not isinstance(value, list):
+                  return value
+              mapped = {}
+              for item in value:
+                  if isinstance(item, str) and "=" in item:
+                      key, val = item.split("=", 1)
+                      mapped[key] = val
+              return mapped
+
+          db = services["db"]
+          koreograf = services["koreograf"]
+
+          assert db["image"].startswith("postgres:"), db["image"]
+          assert db["restart"] == "unless-stopped", db.get("restart")
+          assert koreograf["restart"] == "unless-stopped", koreograf.get("restart")
+          assert not db.get("ports"), db.get("ports")
+          healthcheck = db.get("healthcheck") or {}
+          assert "pg_isready" in " ".join(healthcheck.get("test", [])), healthcheck
+          volumes = db.get("volumes") or []
+          assert any(
+              volume.get("type") == "volume"
+              and volume.get("target") == "/var/lib/postgresql/data"
+              for volume in volumes
+          ), volumes
+
+          depends = koreograf.get("depends_on") or {}
+          assert depends.get("db", {}).get("condition") == "service_healthy", depends
+
+          assert koreograf["user"] == "10001:10001", koreograf.get("user")
+          assert koreograf["read_only"] is True, koreograf.get("read_only")
+          assert "ALL" in koreograf.get("cap_drop", []), koreograf.get("cap_drop")
+          assert "no-new-privileges:true" in koreograf.get("security_opt", []), koreograf.get(
+              "security_opt"
+          )
+          ports = koreograf["ports"]
+          assert any(
+              p.get("host_ip") == "127.0.0.1"
+              and str(p.get("published")) == "8080"
+              and p.get("target") == 8080
+              for p in ports
+          ), ports
+
+          env = env_map(koreograf["environment"])
+          assert env["KOREOGRAF_DATABASE_URL"] == (
+              "postgresql://koreograf@db:5432/koreograf?sslmode=disable"
+          ), env["KOREOGRAF_DATABASE_URL"]
+          assert env["KOREOGRAF_DATABASE_PASSWORD_FILE"] == (
+              "/run/secrets/postgres_password"
+          ), env["KOREOGRAF_DATABASE_PASSWORD_FILE"]
+
+          db_env = env_map(db["environment"])
+          assert db_env.get("POSTGRES_PASSWORD") is None, db_env.get("POSTGRES_PASSWORD")
+          assert db_env["POSTGRES_PASSWORD_FILE"] == "/run/secrets/postgres_password", db_env
+          assert "postgres_password" in data.get("secrets", {}), data.get("secrets")
+
+          rendered = json.dumps(data)
+          assert "POSTGRES_PASSWORD=" not in rendered, rendered
+          assert "postgresql://koreograf:" not in rendered, rendered
+          PY
 
   image:
     name: image

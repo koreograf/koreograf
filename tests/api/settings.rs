@@ -2882,6 +2882,46 @@ fn the_compose_service_restarts_after_a_daemon_restart() {
 }
 
 #[test]
+fn the_compose_postgres_overlay_keeps_the_database_private() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let overlay = std::fs::read_to_string(root.join("docker-compose.postgres.yml"))
+        .expect("docker-compose.postgres.yml");
+    assert!(
+        overlay.contains("image: postgres:17"),
+        "the overlay should pin PostgreSQL to a supported major version"
+    );
+    assert!(
+        !overlay.contains("ports:"),
+        "the database must stay on the private Compose network"
+    );
+    assert!(
+        !overlay.contains("POSTGRES_PASSWORD:") && !overlay.contains("password="),
+        "the overlay must not inline a database password"
+    );
+    let base =
+        std::fs::read_to_string(root.join("docker-compose.yml")).expect("docker-compose.yml");
+    assert!(base.contains("read_only: true"));
+    assert!(base.contains("user: \"10001:10001\""));
+    assert!(base.contains("127.0.0.1:${KOREOGRAF_PORT:-8080}:8080"));
+    assert!(
+        !overlay.contains("read_only"),
+        "the overlay must not set read_only; the base file owns the hardening"
+    );
+    assert!(
+        overlay
+            .lines()
+            .all(|line| !line.trim_start().starts_with("user:")),
+        "the overlay must not set user; the base file owns the hardening"
+    );
+    let docs =
+        std::fs::read_to_string(root.join("docs/postgresql.md")).expect("docs/postgresql.md");
+    assert!(
+        docs.contains("docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d")
+    );
+    assert!(docs.contains("sslmode=disable"));
+}
+
+#[test]
 fn the_packages_ship_a_systemd_unit_and_a_pinned_nfpm_config() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let nfpm = std::fs::read_to_string(root.join("packaging/nfpm.yaml")).expect("nfpm.yaml");

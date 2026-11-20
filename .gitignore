@@ -15,6 +15,9 @@
 secret.key
 initial-admin-password
 
+# Password file mounted by docker-compose.postgres.yml
+/postgres-password
+
 # SQLite files that might appear outside data/
 *.db
 *.db-wal
