@@ -354,6 +354,7 @@ jobs:
           image = svc["image"]
           assert image.startswith("ghcr.io/koreograf/koreograf:"), image
           assert not svc.get("build"), svc.get("build")
+          assert svc["restart"] == "unless-stopped", svc.get("restart")
           ports = svc["ports"]
           assert any(
               p.get("host_ip") == "127.0.0.1"

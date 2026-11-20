@@ -37,6 +37,8 @@ The local image is tagged `koreograf:local`. buildx is only for publishing a mul
 
 The port mapping is `127.0.0.1:8080:8080`, so the UI is only on loopback. Change it to `8080:8080` to publish every interface, and put TLS on a reverse proxy when other machines should reach the UI.
 
+The service sets `restart: unless-stopped`, so the container starts again after a Docker daemon restart or a host reboot. A container stopped with `docker compose stop` stays stopped.
+
 The UI is at `http://127.0.0.1:8080`. Sign in as `admin`. The generated password is one line in the container. The file is mode `0600`, and the password is not written to the log.
 
 Lists open their create and edit forms as overlays, so the list stays in view. A template uses tabs for General, Target, Options, and Variables. `#/templates?new=1` and `#/templates?edit=<id>&tab=target` open the same overlay after a reload, and Back closes it. A workflow is created in a small overlay and then opens in the editor.
