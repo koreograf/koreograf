@@ -2866,6 +2866,22 @@ fn the_image_labels_name_the_version_and_the_source() {
 }
 
 #[test]
+fn the_compose_service_restarts_after_a_daemon_restart() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let compose =
+        std::fs::read_to_string(root.join("docker-compose.yml")).expect("docker-compose.yml");
+    assert!(
+        compose.contains("restart: unless-stopped"),
+        "docker-compose.yml needs restart: unless-stopped"
+    );
+    let docs = std::fs::read_to_string(root.join("docs/installation.md")).expect("installation.md");
+    assert!(
+        docs.contains("`restart: unless-stopped`") && docs.contains("host reboot"),
+        "docs/installation.md should state the restart behaviour"
+    );
+}
+
+#[test]
 fn the_packages_ship_a_systemd_unit_and_a_pinned_nfpm_config() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let nfpm = std::fs::read_to_string(root.join("packaging/nfpm.yaml")).expect("nfpm.yaml");

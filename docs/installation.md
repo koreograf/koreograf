@@ -113,6 +113,8 @@ docker compose up -d
 
 The UI is at `http://127.0.0.1:8080`. Sign in as `admin`. Read the generated password, then delete the file after the first sign-in. Koreograf does not remove it.
 
+The service sets `restart: unless-stopped`, so it starts again after a Docker daemon restart or a host reboot. A container stopped with `docker compose stop` stays stopped.
+
 ```bash
 docker compose exec koreograf cat /var/lib/koreograf/initial-admin-password
 docker compose exec koreograf rm /var/lib/koreograf/initial-admin-password

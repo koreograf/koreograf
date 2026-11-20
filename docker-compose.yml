@@ -3,6 +3,9 @@ services:
     # Published image. A local build uses docker-compose.build.yml and the tag koreograf:local.
     image: ghcr.io/koreograf/koreograf:0.1.0-alpha.12 # x-release-please-version
     pull_policy: missing
+    # Starts again after a Docker daemon restart or a host reboot.
+    # A container stopped with docker compose stop stays stopped.
+    restart: unless-stopped
     user: "10001:10001"
     read_only: true
     tmpfs:
