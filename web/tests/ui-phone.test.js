@@ -112,7 +112,9 @@ test("coarse pointer controls reach 44 px", () => {
     assert.match(coarse, new RegExp(`${escaped}\\s*\\{[^}]*min-height:\\s*44px`), `${selector} is below 44 px`);
     assert.match(coarse, new RegExp(`${escaped}\\s*\\{[^}]*min-width:\\s*44px`), `${selector} is below 44 px`);
   }
-  assert.match(coarse, /textarea\s*\{[^}]*min-height:\s*44px/, "form controls stay small on touch screens");
+  assert.match(coarse, /select\s*\{[^}]*min-height:\s*44px/, "form controls stay small on touch screens");
+  assert.match(coarse, /textarea\s*\{[^}]*min-height:\s*88px/, "the touch rule shrinks a text area");
+  assert.match(coarse, /\.overlay-card\.dialog textarea\s*\{[^}]*min-height:\s*44px/, "dialog text areas stay small on touch screens");
 });
 
 test("a fullscreen overlay keeps the shared chrome and scrolls its body", () => {

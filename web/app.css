@@ -201,7 +201,8 @@ a { color: var(--accent); }
 
 .main { padding: 22px 28px calc(48px + env(safe-area-inset-bottom)); min-width: 0; }
 .top { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16px; align-items: flex-end; margin-bottom: 18px; }
-h1 { font-family: var(--serif); font-size: 32px; font-weight: 500; margin: 0; letter-spacing: -0.03em; }
+.top > div { min-width: 0; }
+h1 { font-family: var(--serif); font-size: 32px; font-weight: 500; margin: 0; letter-spacing: -0.03em; overflow-wrap: anywhere; }
 h2 { font-size: 18px; margin: 0 0 10px; }
 .muted { color: var(--muted); overflow-wrap: anywhere; }
 .small { font-size: 13px; }
@@ -579,7 +580,7 @@ textarea.secret-mask { -webkit-text-security: disc; }
 .overlay-card.dialog.tabbed { max-height: min(90vh, 860px); }
 .overlay-card.dialog.wide { width: min(920px, 100%); }
 .dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 16px 8px; flex: none; }
-.dialog-head h2 { margin: 0; }
+.dialog-head h2 { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .dialog-close { font-size: 20px; line-height: 1; padding: 4px 10px; }
 .dialog-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--line); margin: 0; padding: 0 16px; flex: none; }
 .dialog-tab {
@@ -1363,7 +1364,9 @@ code, .mono { font-family: var(--mono); font-size: 13px; word-break: break-all; 
   .canvas-controls .btn { min-height: 44px; min-width: 44px; }
   .node-menu-button { width: 44px; height: 44px; min-height: 44px; min-width: 44px; }
   .wf-port-add { width: 44px; height: 44px; min-height: 44px; min-width: 44px; }
-  input:not([type="checkbox"]):not([type="radio"]), select, textarea { min-height: 44px; }
+  input:not([type="checkbox"]):not([type="radio"]), select { min-height: 44px; }
+  textarea { min-height: 88px; }
+  .overlay-card.dialog textarea { min-height: 44px; }
   .chips input.chip-entry { min-height: 0; }
   .weekday-row label, .check-row { min-height: 44px; }
 }
