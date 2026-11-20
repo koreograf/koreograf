@@ -764,6 +764,24 @@ test("a finished workflow run shows its path, closes output on Escape and is rea
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
 });
 
+test("the workflow editor turns view-only when the window becomes a phone", async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await signInInEnglish(page);
+  await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
+  await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeVisible();
+
+  await page.setViewportSize({ width: 844, height: 390 });
+  await expect(page.locator("#wf-desktop-note")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Launch", exact: true })).toHaveCount(0);
+  await expect(page.locator("#wf-tab-danger")).toHaveCount(0);
+
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeVisible();
+  await expect(page.locator("#wf-desktop-note")).toHaveCount(0);
+});
+
 test("a viewer inspects a workflow node without edit controls", async ({ page }) => {  await signInInEnglish(page);
   const teams = await (await page.request.get("/api/v1/teams")).json();
   const team = teams.find((item) => item.name === "Plattform") || teams[0];

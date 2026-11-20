@@ -107,11 +107,11 @@ export async function pageRun(id) {
       const start = nodeStart(phase);
       const end = phase && phase.finished_at ? phase.finished_at : "";
       return `<button class="run-line ${esc(status)}" type="button" data-run-node="${esc(node.id)}">
-        <span class="mono">${esc(clock(start))}</span>
-        <span>${esc(node.name)}</span>
-        <span>${esc(statusLabel(status))}</span>
-        <span class="mono">${esc(clock(end))}</span>
-        <span class="mono">${esc(spanText(start, end, status))}</span>
+        <span class="mono" data-label="${h("start")}">${esc(clock(start))}</span>
+        <span data-label="${h("name")}">${esc(node.name)}</span>
+        <span data-label="${h("status")}">${esc(statusLabel(status))}</span>
+        <span class="mono" data-label="${h("end")}">${esc(clock(end))}</span>
+        <span class="mono" data-label="${h("duration")}">${esc(spanText(start, end, status))}</span>
       </button>`;
     }).join("");
     host.innerHTML = `

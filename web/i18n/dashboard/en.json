@@ -1,4 +1,5 @@
 {
+  "chart_day_hint": "Tap a day to see the split.",
   "collections_roles_and_opentofu_providers_stay_between_runs": "Collections, roles, and OpenTofu providers stay between runs.",
   "dashboard": "Dashboard",
   "dependency_cache": "Dependency cache",

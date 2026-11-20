@@ -120,7 +120,7 @@ async function pageJobs() {
         : emptyState("empty_jobs", can("operator") ? "#/templates" : "", "launch_a_template");
     } else {
       const rows = current.map((job) =>
-        `<tr><td><a href="#/jobs/${esc(job.id)}">${esc(job.name)}</a></td><td class="tool narrow-hide">${esc(job.tool)}</td><td>${pill(job.status)}</td><td class="small narrow-hide">${esc(job.trigger)}</td><td class="small muted" data-label="${h("created")}"><time datetime="${esc(job.created_at)}" title="${esc(when(job.created_at))}">${esc(when(job.created_at))}</time><br><span class="small">${esc(relativeTime(job.created_at))}</span></td><td class="small muted narrow-hide">${esc(spanText(job.started_at, job.finished_at, job.status))}</td><td>${jobListActions(job)}</td></tr>`
+        `<tr><td><a href="#/jobs/${esc(job.id)}">${esc(job.name)}</a></td><td class="tool narrow-hide">${esc(job.tool)}</td><td>${pill(job.status)}</td><td class="small narrow-hide">${esc(job.trigger)}</td><td class="small muted"><time datetime="${esc(job.created_at)}" title="${esc(when(job.created_at))}">${esc(when(job.created_at))}</time><br><span class="small">${esc(relativeTime(job.created_at))}</span></td><td class="small muted narrow-hide">${esc(spanText(job.started_at, job.finished_at, job.status))}</td><td>${jobListActions(job)}</td></tr>`
       );
       jobTable.innerHTML = table([t("name"), t("tool"), t("status"), t("trigger"), t("created"), t("duration"), ""], rows);
     }
@@ -425,6 +425,10 @@ function paintLogSearch(log, state, jump) {
   else updateSearchCount(state);
 }
 
+function phoneWidth() {
+  return typeof window.matchMedia === "function" && window.matchMedia("(max-width: 600px)").matches;
+}
+
 function bindJobLog(log, job) {
   const state = logState(log);
   state.tool = job.tool || "";
@@ -460,8 +464,8 @@ function bindJobLog(log, job) {
     if (end) end.hidden = bottom;
   });
   if (wrap) {
-    wrap.checked = false;
-    log.classList.remove("wrap");
+    wrap.checked = phoneWidth();
+    log.classList.toggle("wrap", wrap.checked);
     wrap.addEventListener("change", () => log.classList.toggle("wrap", wrap.checked));
   }
   if (first) {

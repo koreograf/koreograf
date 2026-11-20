@@ -114,6 +114,7 @@
   "workflow_2": "+ Workflow",
   "workflow_changed_hint": "Another editor saved this workflow since you loaded it. Reload the saved version or overwrite it with your changes.",
   "workflow_changed_title": "Workflow changed",
+  "workflow_desktop_only": "This editor is read-only on a phone. Edit the workflow on a desktop.",
   "workflow_graph": "Workflow graph",
   "workflow_keyboard_help": "Keyboard: Tab to a node or edge. Enter opens a node's edit overlay or selects an edge, Space selects, and Delete removes the focused edge or node. In connect mode, Enter or Space on the target connects it and Escape cancels. Shift+F10 opens the canvas menu. Use + and − to zoom, 0 resets to 100 %, F fits the graph, and Ctrl+wheel zooms.",
   "zoom_in": "Zoom in",

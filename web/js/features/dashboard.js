@@ -65,7 +65,10 @@ export function dashboardTabs(tab) {
   return `<div class="spread tab-bar"><div class="tabs" role="tablist" aria-label="${h("overview")} / ${h("dashboard")}">${item("overview")}${item("dashboard")}</div></div>`;
 }
 
+let chartSerial = 0;
+
 function dashboardChart(series, values, heading, legend) {
+  const chartId = `chart-${chartSerial += 1}`;
   const totals = series.map((day) => values.reduce((sum, key) => sum + (Number(day[key]) || 0), 0));
   const max = Math.max(1, ...totals);
   const days = series.map((day, index) => {
@@ -77,9 +80,9 @@ function dashboardChart(series, values, heading, legend) {
     }).join("");
     const height = Math.max(4, Math.round((totals[index] / max) * 100));
     const bar = bars ? `<div class="chart-bar" style="height:${height}%">${bars}</div>` : "";
-    return `<div class="chart-day" title="${esc(title)}"><div class="chart-bars">${bar}</div><span class="chart-day-label">${esc(shortDay(day.date))}</span></div>`;
+    return `<button class="chart-day" type="button" data-chart-day data-chart-target="${chartId}" data-chart-title="${esc(title)}" aria-label="${esc(title)}"><span class="chart-day-total">${totals[index]}</span><div class="chart-bars">${bar}</div><span class="chart-day-label">${esc(shortDay(day.date))}</span></button>`;
   }).join("");
-  return `<section class="card"><div class="spread"><h2>${h(heading)}</h2>${legend ? `<div class="row">${legend}</div>` : ""}</div><div class="chart" role="img" aria-label="${h(heading)}">${days}</div></section>`;
+  return `<section class="card"><div class="spread"><h2>${h(heading)}</h2>${legend ? `<div class="row">${legend}</div>` : ""}</div><div class="chart" role="group" aria-label="${h(heading)}">${days}</div><p class="small muted chart-detail" data-chart-detail="${chartId}" aria-live="polite">${h("chart_day_hint")}</p></section>`;
 }
 
 export function dashboardBody(data, range) {
@@ -106,6 +109,19 @@ export function dashboardBody(data, range) {
         </div>
       </section>
     </div>`;
+}
+
+function bindDashboardCharts() {
+  const details = [...document.querySelectorAll("[data-chart-detail]")];
+  document.querySelectorAll("[data-chart-day]").forEach((button) => {
+    const detail = details.find((node) => node.dataset.chartDetail === button.dataset.chartTarget);
+    if (!detail) return;
+    const show = () => {
+      detail.textContent = button.dataset.chartTitle || "";
+    };
+    button.addEventListener("click", show);
+    button.addEventListener("focus", show);
+  });
 }
 
 function bindDashboard(tab, range) {
@@ -141,6 +157,7 @@ function bindDashboard(tab, range) {
       if (active) active.focus();
     });
   });
+  bindDashboardCharts();
 }
 
 async function pageDashboardTab() {

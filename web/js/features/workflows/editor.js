@@ -1,7 +1,7 @@
 import * as appState from "../../core/state.js";
 import { api } from "../../core/api.js";
 import { confirmDialog, openDialog } from "../../core/dialog.js";
-import { can, go, handle, shell } from "../../core/app.js";
+import { can, go, handle, route, shell } from "../../core/app.js";
 import { bindChips, flushChips } from "../../core/chips.js";
 import { credentialKindLabel } from "../../core/credentials.js";
 import { esc, h, selectOptions, table } from "../../core/dom.js";
@@ -57,7 +57,12 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   const runActions = hooks && hooks.runActions ? hooks.runActions : "";
   const lists = catalogs || { inventories: [], credentials: [] };
   const runs = lists.runs || [];
-  const editable = !readonly && can("operator");
+  const compactQuery = typeof window.matchMedia === "function"
+    ? window.matchMedia("(max-width: 900px), (hover: none) and (pointer: coarse)")
+    : null;
+  const compactEditor = () => (compactQuery ? compactQuery.matches : Number(window.innerWidth) <= 900);
+  let editable = !readonly && can("operator") && !compactEditor();
+  const phoneViewer = !readonly && !editable && compactEditor();
   const team = ((appState.me && appState.me.teams) || []).find((item) => item.id === appState.teamId);
   const teamName = team ? team.name : "";
   const readOnlyHint = () => (teamName ? t("read_only_hint", { team: teamName }) : t("read_only_hint_no_team"));
@@ -82,7 +87,8 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     ? `<a class="btn" href="#/workflows/${esc(workflow.workflow_id)}">${h("back_to_the_workflow")}</a>`
     : "";
   const tabbed = !readonly;
-  const canDelete = can("operator");
+  const canDelete = can("operator") && !compactEditor();
+  const desktopNote = phoneViewer ? `<p class="banner warn" id="wf-desktop-note" role="status">${h("workflow_desktop_only")}</p>` : "";
   const tabItems = tabbed
     ? [["editor", "editor"], ["schedules", "schedules"], ["runs", "runs"], ...(canDelete ? [["danger", "danger_zone"]] : [])]
     : [];
@@ -104,15 +110,16 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
     <div class="editor-stack">
     ${tabBar}
     <div id="wf-panel-editor"${tabbed ? ` role="tabpanel" aria-labelledby="wf-tab-editor"${activeTab === "editor" ? "" : " hidden"}` : ""}>
+      ${desktopNote}
       <div class="editor-body">
         <div class="canvas-column">
           ${readonly ? `<div class="run-status-bar" id="run-status-bar" role="status"><span class="small muted">${h("status")}</span><span class="pill ${esc(workflow.status || "pending")}" id="run-state-top">${esc(statusLabel(workflow.status || "pending"))}</span></div>` : ""}
           ${readonly ? "" : `
             <div class="field-row wf-meta-row" style="margin-bottom:10px">
-              <label class="field wf-name-field"><span>${h("name")}</span><input class="fit" id="wf-name" value="${esc(workflow.name)}" ${can("operator") ? "" : "disabled"}></label>
-              <label class="field wf-description-field"><span>${h("description")}</span><input class="fit" id="wf-description" maxlength="1000" value="${esc(workflow.description)}" title="${esc(workflow.description)}" ${can("operator") ? "" : "disabled"}></label>
+              <label class="field wf-name-field"><span>${h("name")}</span><input class="fit" id="wf-name" value="${esc(workflow.name)}" ${editable ? "" : "disabled"}></label>
+              <label class="field wf-description-field"><span>${h("description")}</span><input class="fit" id="wf-description" maxlength="1000" value="${esc(workflow.description)}" title="${esc(workflow.description)}" ${editable ? "" : "disabled"}></label>
             </div>`}
-          <p class="small muted" id="wf-hint" role="status" aria-live="polite">${readonly ? h("colors_show_the_run_a_click_shows_the") : editable ? h("drag_nodes_and_use_the_canvas_menus") : esc(readOnlyHint())}</p>
+          <p class="small muted" id="wf-hint" role="status" aria-live="polite">${readonly ? h("colors_show_the_run_a_click_shows_the") : editable ? h("drag_nodes_and_use_the_canvas_menus") : phoneViewer ? h("workflow_desktop_only") : esc(readOnlyHint())}</p>
           <p class="small muted" id="wf-keyboard-help">${h(readonly ? "run_keyboard_help" : editable ? "workflow_keyboard_help" : "viewer_keyboard_help")}</p>
           <div class="canvas" id="canvas" tabindex="0" role="application" aria-label="${h("workflow_graph")}" aria-describedby="wf-keyboard-help">
             <div class="canvas-controls" role="group" aria-label="${h("canvas_controls")}">
@@ -159,7 +166,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
       </section>
     </div>`}
     ${editable ? `<div class="toast" id="wf-toast" role="status" aria-live="polite" hidden></div>` : ""}
-    </div>`, readonly ? `${back}${runActions}` : can("operator") ? `
+    </div>`, readonly ? `${back}${runActions}` : editable ? `
       <span class="row" role="group" aria-label="${h("history")}"><button class="btn" id="wf-undo" type="button" aria-keyshortcuts="Control+Z Meta+Z" disabled>${h("undo")}</button><button class="btn" id="wf-redo" type="button" aria-keyshortcuts="Control+Shift+Z Control+Y Meta+Shift+Z" disabled>${h("redo")}</button></span><span class="small muted" id="wf-status" role="status" aria-live="polite">${h("all_changes_saved")}</span><span class="small wf-validation" id="wf-validation" role="status" aria-live="polite"></span><button class="btn" id="wf-save" type="button">${h("save")}</button><button class="btn primary" id="wf-launch" type="button" aria-describedby="wf-validation">${h("launch")}</button>` : `<span class="pill read-only">${h("read_only")}</span>`);
 
   document.title = readonly
@@ -184,6 +191,23 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   const touchPointers = new Map();
 
   const narrowQuery = typeof window.matchMedia === "function" ? window.matchMedia("(max-width: 900px)") : null;
+
+  const editorRoot = document.querySelector(".editor-stack");
+  function watchCompactMode() {
+    if (readonly || !compactQuery || typeof compactQuery.addEventListener !== "function") return;
+    const onChange = () => {
+      if (!editorRoot || !editorRoot.isConnected) {
+        compactQuery.removeEventListener("change", onChange);
+        return;
+      }
+      const nextEditable = !readonly && can("operator") && !compactEditor();
+      if (nextEditable === editable) return;
+      compactQuery.removeEventListener("change", onChange);
+      route();
+    };
+    compactQuery.addEventListener("change", onChange);
+  }
+  watchCompactMode();
 
   function narrowScreen() {
     if (narrowQuery) return narrowQuery.matches;

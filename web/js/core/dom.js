@@ -23,11 +23,38 @@ export function emptyState(message, href, label) {
   return `<div class="empty-state"><p>${h(message)}</p>${action}</div>`;
 }
 
+// Each row is one complete <tr> string. Cells without a label borrow the
+// matching header text so the stacked card rows stay readable on phones.
+// Nested tables and extra rows are ignored so they cannot shift the labels.
+function labelCells(row, headers) {
+  let column = 0;
+  let rowDepth = 0;
+  let tableDepth = 0;
+  return String(row).replace(/<(\/?)([a-zA-Z][\w-]*)\b((?:[^>"']|"[^"]*"|'[^']*')*)>/g, (tag, closing, rawName, attrs) => {
+    const name = rawName.toLowerCase();
+    if (name === "tr") {
+      rowDepth += closing ? -1 : 1;
+      return tag;
+    }
+    if (name === "table") {
+      tableDepth += closing ? -1 : 1;
+      return tag;
+    }
+    if (name !== "td" || closing || rowDepth !== 1 || tableDepth !== 0) return tag;
+    const label = headers[column];
+    const span = /colspan\s*=\s*(?:"(\d+)"|'(\d+)'|(\d+))/i.exec(attrs);
+    column += span ? Number(span[1] || span[2] || span[3]) : 1;
+    if (!label || /data-label\s*=/i.test(attrs)) return tag;
+    return `<${rawName}${attrs} data-label="${esc(label)}">`;
+  });
+}
+
 export function table(headers, rows) {
+  const names = headers || [];
   const body = rows.length
-    ? rows.join("")
-    : `<tr><td class="muted" colspan="${headers.length}">${h("nothing_here")}</td></tr>`;
-  return `<div class="table-wrap"><table class="table"><thead><tr>${headers.map((item) => `<th>${esc(item)}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table></div>`;
+    ? rows.map((row) => labelCells(row, names)).join("")
+    : `<tr><td class="muted" colspan="${names.length}">${h("nothing_here")}</td></tr>`;
+  return `<div class="table-wrap"><table class="table"><thead><tr>${names.map((item) => `<th>${esc(item)}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 export function roleOptions(selected) {

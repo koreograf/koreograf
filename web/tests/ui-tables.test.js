@@ -7,11 +7,12 @@ const { mediaBlock, rule, stylesheet } = require("./css.js");
 test("narrow tables use card rows", () => {
   const css = stylesheet();
   const block = mediaBlock(css, "@media (max-width: 640px)");
-  assert.ok(block.includes(".table-wrap:not(.schedule-table):not(.inventory-hosts-table) .table"));
+  assert.ok(block.includes(".table-wrap .table"));
   assert.ok(block.includes("display: block;"));
-  assert.ok(block.includes(".table-wrap:not(.schedule-table):not(.inventory-hosts-table) .table thead { display: none; }"));
-  assert.ok(block.includes(".table-wrap:not(.schedule-table):not(.inventory-hosts-table) .table .narrow-hide { display: none; }"));
+  assert.ok(block.includes(".table-wrap .table thead { display: none; }"));
+  assert.ok(block.includes(".table-wrap .table .narrow-hide { display: none; }"));
   assert.ok(block.includes("content: attr(data-label)"));
+  assert.ok(block.includes(".table-wrap.schedule-table .table,\n  .table-wrap.inventory-hosts-table .table { min-width: 0; }"));
   assert.ok(css.includes(".schedule-table .table { min-width: 52rem; }"));
   assert.ok(css.includes(".inventory-hosts-table .table { min-width: 44rem; }"));
   assert.ok(css.includes(".table { width: 100%; border-collapse: collapse; }"));
