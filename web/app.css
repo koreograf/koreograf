@@ -1335,9 +1335,12 @@ code, .mono { font-family: var(--mono); font-size: 13px; word-break: break-all; 
 
 @media (max-width: 600px) {
   .overlay, .overlay.tabbed { padding: 0; align-items: stretch; }
-  .overlay-card, .overlay-card.dialog, .overlay-card.dialog.tabbed { width: 100%; max-width: none; max-height: none; height: 100%; border-radius: 0; }
+  .overlay-card, .overlay-card.dialog, .overlay-card.dialog.tabbed { width: 100%; max-width: none; max-height: none; height: 100vh; height: 100dvh; border-radius: 0; }
+  .dialog-head { padding-top: calc(16px + env(safe-area-inset-top)); padding-left: calc(16px + env(safe-area-inset-left)); padding-right: calc(16px + env(safe-area-inset-right)); }
+  .dialog-body { padding-left: calc(16px + env(safe-area-inset-left)); padding-right: calc(16px + env(safe-area-inset-right)); }
+  .dialog-actions { padding-bottom: calc(12px + env(safe-area-inset-bottom)); padding-left: calc(16px + env(safe-area-inset-left)); padding-right: calc(16px + env(safe-area-inset-right)); }
   .overlay-card .log { min-height: 0; }
-  .toast { left: 16px; right: 16px; bottom: 16px; }
+  .toast { left: 16px; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom)); }
   .shortcut-list li { flex-direction: column; gap: 4px; }
   .shortcut-list .mono { min-width: 0; }
 }
@@ -1345,4 +1348,14 @@ code, .mono { font-family: var(--mono); font-size: 13px; word-break: break-all; 
 @media (pointer: coarse) {
   .btn, .table a, .lang-button, .dialog-close { min-height: 44px; min-width: 44px; }
   .nav a { display: flex; align-items: center; min-height: 44px; }
+  .btn.compact { min-height: 44px; min-width: 44px; }
+  .switch { align-items: center; min-height: 44px; min-width: 44px; }
+  .chip-remove { width: 44px; height: 44px; min-height: 44px; min-width: 44px; }
+  .inspector-toggle { min-height: 44px; min-width: 44px; }
+  .canvas-controls .btn { min-height: 44px; min-width: 44px; }
+  .node-menu-button { width: 44px; height: 44px; min-height: 44px; min-width: 44px; }
+  .wf-port-add { width: 44px; height: 44px; min-height: 44px; min-width: 44px; }
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea { min-height: 44px; }
+  .chips input.chip-entry { min-height: 0; }
+  .weekday-row label, .check-row { min-height: 44px; }
 }

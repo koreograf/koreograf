@@ -88,3 +88,30 @@ test("schedule and inventory tables label their stacked rows", async () => {
     assert.match(history, new RegExp(`data-label="${key}"`), `the history table lost the ${key} label`);
   }
 });
+
+test("coarse pointer controls reach 44 px", () => {
+  const coarse = mediaBlock(stylesheet(), "@media (pointer: coarse)");
+  for (const selector of [
+    ".btn.compact",
+    ".switch",
+    ".chip-remove",
+    ".inspector-toggle",
+    ".canvas-controls .btn",
+    ".node-menu-button",
+    ".wf-port-add",
+  ]) {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    assert.match(coarse, new RegExp(`${escaped}\\s*\\{[^}]*min-height:\\s*44px`), `${selector} is below 44 px`);
+    assert.match(coarse, new RegExp(`${escaped}\\s*\\{[^}]*min-width:\\s*44px`), `${selector} is below 44 px`);
+  }
+  assert.match(coarse, /textarea\s*\{[^}]*min-height:\s*44px/, "form controls stay small on touch screens");
+});
+
+test("a fullscreen overlay keeps the shared chrome and scrolls its body", () => {
+  const css = stylesheet();
+  const full = mediaBlock(css, "@media (max-width: 600px)");
+  assert.match(full, /\.overlay-card[^}]*height:\s*100dvh/, "the fullscreen overlay does not use the dynamic viewport");
+  assert.match(full, /safe-area-inset-bottom/, "the fullscreen overlay ignores the safe area");
+  assert.match(rule(css, ".dialog-body")[1], /overflow:\s*auto/, "the dialog body does not scroll");
+  assert.match(rule(css, ".dialog-form")[1], /display:\s*flex/, "the edit chrome is not the shared form layout");
+});
