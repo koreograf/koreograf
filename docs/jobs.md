@@ -20,7 +20,7 @@ An owner of the team can clear the disposable part of the cache with **Clear cac
 
 Every launch goes through one queue. Template launches, relaunches, hook deliveries, schedules, and workflow node jobs all wait for a slot before the runner marks the job `running`. `KOREOGRAF_MAX_CONCURRENT_JOBS` sets how many slots exist: the default is 4, the value is clamped to 1 to 64, and an empty value, a value that is not a number, and `0` use the default. The value comes from the environment, not from Settings.
 
-A job that waits for a slot stays `pending`. The jobs list and the pending gauge on `/metrics` show it that way, and it keeps its place in the queue. Canceling a waiting job sets `canceled` and it never starts, including when it already had a slot offered: the slot then passes to the next job. Cancel at the workflow run level does the same for each pending node job of that run.
+A job that waits for a slot stays `pending`. The jobs list and the pending gauge on `/metrics` show it that way, and waiting jobs start roughly in the order they were queued. Canceling a waiting job sets `canceled` and it never starts, including when it already had a slot offered: the slot then passes to the next job. Cancel at the workflow run level does the same for each pending node job of that run.
 
 Workflow runs are not jobs themselves. A run whose fan-out is wider than the limit still makes progress: its nodes queue in the same way and the run waits until they finish, so the limit never deadlocks the workflow.
 
