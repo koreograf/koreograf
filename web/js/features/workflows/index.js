@@ -2,6 +2,7 @@ import { api } from "../../core/api.js";
 import { can, go, handle, markCreated, needTeam, shell } from "../../core/app.js";
 import { addLink, emptyState, esc, h, table } from "../../core/dom.js";
 import { editQuery, openEditDialog } from "../../core/edit.js";
+import { descriptionField } from "../../core/forms.js";
 import { pill, relativeTime, when } from "../../core/format.js";
 import { t } from "../../core/i18n.js";
 import { registerRedirect, registerRoute } from "../../core/router.js";
@@ -76,7 +77,7 @@ export function openWorkflowDialog() {
     title: t("new_workflow"),
     body: `
       <label class="field required"><span>${h("name")}</span><input name="name" required></label>
-      <label class="field"><span>${h("description")}</span><input name="description" maxlength="1000"></label>`,
+      ${descriptionField()}`,
     submit: t("create_and_open"),
     onSubmit: async ({ form, close }) => {
       const created = await api("POST", "/api/v1/workflows", {

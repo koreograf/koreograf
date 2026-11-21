@@ -4,6 +4,7 @@ import { can, go, handle, markSaved, needTeam, route, shell } from "../core/app.
 import { addLink, esc, h, paramRow, table } from "../core/dom.js";
 import { clearEditHash, editQuery, openEditDialog } from "../core/edit.js";
 import { bytes, environmentToolLabel, scopeLabel } from "../core/format.js";
+import { descriptionField } from "../core/forms.js";
 import { t } from "../core/i18n.js";
 import { registerRedirect, registerRoute } from "../core/router.js";
 
@@ -130,7 +131,7 @@ function openEnvironmentDialog(item) {
         <label class="field"><span>${h("applies_to")}</span><select class="fit" name="scope">${environmentScopeOptions(scope)}</select></label>
       </div>
       <p class="small muted">${h("global_applies_to_every_team_the_organization_applies")}</p>
-      <label class="field"><span>${h("description")}</span><input name="description" maxlength="1000" value="${editing ? esc(item.description) : ""}"></label>`,
+      ${descriptionField(editing ? item.description : "")}`,
     submit: editing ? t("save") : t("create"),
     onSubmit: async ({ form, close }) => {
       const payload = environmentPayload(form);

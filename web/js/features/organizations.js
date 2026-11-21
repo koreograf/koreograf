@@ -3,6 +3,7 @@ import { api } from "../core/api.js";
 import { handle, markSaved, route, shell } from "../core/app.js";
 import { addLink, esc, h, table } from "../core/dom.js";
 import { editQuery, openEditDialog, rememberEditHash } from "../core/edit.js";
+import { descriptionField } from "../core/forms.js";
 import { t } from "../core/i18n.js";
 import { registerRedirect, registerRoute } from "../core/router.js";
 
@@ -18,7 +19,7 @@ function openOrganizationDialog(item, readOnly = false, initialTab = "") {
   const editing = Boolean(item);
   const general = `
     <label class="field required"><span>${h("name")}</span><input name="name" required value="${editing ? esc(item.name) : ""}"></label>
-    <label class="field"><span>${h("description")}</span><input name="description" maxlength="1000" value="${editing ? esc(item.description || "") : ""}"></label>`;
+    ${descriptionField(editing ? item.description : "")}`;
   const rows = editing ? (item.teams || []).map((team) =>
     `<tr><td>${esc(team.name)}</td><td>${esc(team.description || "")}</td><td class="small muted">${esc(team.ldap_group || "")}</td></tr>`
   ) : [];

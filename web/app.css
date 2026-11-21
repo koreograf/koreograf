@@ -701,6 +701,7 @@ textarea.secret-mask { -webkit-text-security: disc; }
   padding: 8px 10px;
 }
 textarea { min-height: 88px; resize: vertical; }
+.description-field textarea { field-sizing: content; max-height: 20rem; }
 /* Author display rules would otherwise beat the user-agent [hidden] style. */
 [hidden] { display: none !important; }
 .banner { border-radius: 10px; padding: 10px 12px; }

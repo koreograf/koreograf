@@ -4,6 +4,7 @@ import { can, handle, markSaved, roleLabel, route, shell } from "../core/app.js"
 import { addLink, esc, h, orgOptions, roleLegend, roleOptions, table } from "../core/dom.js";
 import { clearEditHash, editQuery, openEditDialog } from "../core/edit.js";
 import { sourceLabel } from "../core/format.js";
+import { descriptionField } from "../core/forms.js";
 import { t } from "../core/i18n.js";
 import { registerRedirect, registerRoute } from "../core/router.js";
 
@@ -27,7 +28,7 @@ function openTeamDialog(item, organizations, defaultOrganizationId) {
     title: editing ? item.name : t("new_team_2"),
     body: `
       <label class="field required"><span>${h("name")}</span><input name="name" required value="${editing ? esc(item.name) : ""}"></label>
-      <label class="field"><span>${h("description")}</span><input name="description" maxlength="1000" value="${editing ? esc(item.description || "") : ""}"></label>
+      ${descriptionField(editing ? item.description : "")}
       <label class="field"><span>${h("ldap_or_ad_group")}</span><input name="ldap_group" value="${editing ? esc(item.ldap_group || "") : ""}" placeholder="${h("cn_or_dn_for_example_platform")}"></label>
       ${organizationField}`,
     submit: editing ? t("save_team") : t("create"),

@@ -165,10 +165,10 @@ async function teamHeaders(page) {
   return { "X-Team-Id": profile.teams[0].id };
 }
 
-async function createShellTemplate(page, name, script, prompt = false) {
+async function createShellTemplate(page, name, script, prompt = false, description = "") {
   const created = await page.request.post("/api/v1/templates", {
     headers: await teamHeaders(page),
-    data: { name, tool: "shell", spec: { script }, prompt_on_launch: prompt },
+    data: { name, description, tool: "shell", spec: { script }, prompt_on_launch: prompt },
   });
   expect(created.status()).toBe(201);
   return created.json();
@@ -213,6 +213,64 @@ test("signs in, opens a labelled template list and launches from a fullscreen di
   await expect(page).toHaveURL(/#\/jobs\/[0-9a-f-]+$/);
   await expect(page.getByText("mobile prompt ok", { exact: true })).toBeVisible({ timeout: 30000 });
   await noHorizontalScroll(page);
+});
+
+test("shows the whole template description in the edit overlay on a phone", async ({ page }) => {
+  const suffix = `${test.info().project.name}-${Date.now()}`.replace(/\s+/g, "-");
+  const description = "Canary checks for the edge fleet: verify the load balancer, the replica lag & certificate expiry before the rollout moves to the next region.";
+  await signInGerman(page);
+  const template = await createShellTemplate(page, `Mobile description ${suffix}`, "#!/bin/sh\ntrue\n", false, description);
+
+  const check = async (language, viewport) => {
+    const where = `${language} ${viewport.width}x${viewport.height}`;
+    const heading = language === "de" ? "Vorlage bearbeiten" : "Edit template";
+    await page.setViewportSize(viewport);
+    await page.goto(`/#/templates?edit=${template.id}`);
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByRole("heading", { name: heading })).toBeVisible();
+    const field = dialog.locator('textarea[name="description"]');
+    await expect(field, `the description is not a wrapping field at ${where}`).toBeVisible();
+    await expect(field).toHaveValue(description);
+    await expect(field).toHaveAttribute("maxlength", "1000");
+    const geometry = await field.evaluate((element) => ({
+      clientHeight: element.clientHeight,
+      clientWidth: element.clientWidth,
+      scrollHeight: element.scrollHeight,
+      scrollWidth: element.scrollWidth,
+      value: element.value,
+    }));
+    expect(geometry.scrollWidth, `the description clips sideways at ${where}`).toBeLessThanOrEqual(geometry.clientWidth + 1);
+    expect(geometry.scrollHeight, `the description is cut off at ${where}`).toBeLessThanOrEqual(geometry.clientHeight + 1);
+    expect(geometry.value, `the description loses text at ${where}`).toBe(description);
+    await noHorizontalScroll(page);
+
+    const body = dialog.locator(".dialog-body");
+    expect(await body.evaluate((element) => getComputedStyle(element).overflowY), `the overlay stops scrolling at ${where}`).toBe("auto");
+    const fullHeight = viewport.height;
+    await page.setViewportSize({ width: viewport.width, height: 480 });
+    await expect.poll(
+      () => body.evaluate((element) => element.scrollHeight > element.clientHeight),
+      { message: `the overlay does not scroll its body at ${where}` },
+    ).toBe(true);
+    const scrolled = await body.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+      return element.scrollTop;
+    });
+    expect(scrolled, `the overlay body does not scroll at ${where}`).toBeGreaterThan(0);
+    await page.setViewportSize({ width: viewport.width, height: fullHeight });
+    await noHorizontalScroll(page);
+    await dialog.getByRole("button", { name: language === "de" ? "Schließen" : "Close" }).click();
+    await expect(dialog).toHaveCount(0);
+  };
+
+  const viewports = [{ width: 360, height: 732 }, { width: 412, height: 923 }];
+  for (const viewport of viewports) await check("de", viewport);
+
+  await openMenu(page, "Menü");
+  await page.getByRole("button", { name: "Sprache" }).click();
+  await page.getByRole("option", { name: /English/ }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Templates" })).toBeVisible();
+  for (const viewport of viewports) await check("en", viewport);
 });
 
 test("keeps the launch dialog limit field clear of the action bar", async ({ page }) => {
