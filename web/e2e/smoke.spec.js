@@ -246,6 +246,49 @@ test("an administrator navigates every route, launches the demo shell job and sw
   expect(new URL(page.url()).hash).toMatch(/^#\/workflows\/[^?]+$/);
 });
 
+test("an owner clears the dashboard cache and a viewer has no button", async ({ page }) => {
+  await signInInEnglish(page);
+  const team = await page.evaluate(async () => (await (await fetch("/api/v1/me")).json()).teams[0].id);
+  await page.getByRole("tab", { name: "Dashboard", exact: true }).click();
+  const clear = page.getByRole("button", { name: "Clear cache", exact: true });
+  await expect(clear).toBeVisible();
+  await clear.click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toHaveClass(/overlay-card/);
+  await expect(dialog.getByRole("heading", { name: "Clear cache", exact: true })).toBeVisible();
+  await expect(dialog.getByText(/OpenTofu state is kept/)).toBeVisible();
+  await dialog.getByRole("button", { name: "Clear cache", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByText("Saved.", { exact: true })).toBeVisible();
+  const card = page.locator("section").filter({ has: page.getByRole("heading", { name: "Dependency cache", exact: true }) });
+  await expect(card.locator(".stat strong").nth(0)).toHaveText("0");
+  await expect(card.locator(".stat strong").nth(1)).toHaveText("0");
+  await expect(card.locator(".stat strong").nth(2)).toHaveText("0 B");
+
+  const suffix = Date.now();
+  const username = `cache-viewer-${suffix}`;
+  const headers = { "X-Team-Id": team };
+  const created = await page.request.post("/api/v1/users", {
+    headers,
+    data: { username, display_name: "Cache Viewer", password: "cache-viewer-pass" },
+  });
+  expect(created.status()).toBe(201);
+  const member = await page.request.post(`/api/v1/teams/${team}/members`, {
+    headers,
+    data: { username, role: "viewer" },
+  });
+  expect(member.status()).toBe(201);
+
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await page.getByLabel("Username").fill(username);
+  await page.getByLabel("Password").fill("cache-viewer-pass");
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page.getByRole("navigation")).toBeVisible();
+  await page.getByRole("tab", { name: "Dashboard", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Dependency cache", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Clear cache", exact: true })).toHaveCount(0);
+});
+
 test("a long template entry stays on one line at 1440 px and hides at 375 px", async ({ page }) => {
   await signInInEnglish(page);
   const teamId = await page.evaluate(async () => {

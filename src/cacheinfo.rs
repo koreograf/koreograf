@@ -1,7 +1,12 @@
 use std::fs;
+use std::io;
 use std::path::Path;
 
 use serde::Serialize;
+
+/// The disposable parts of the team cache. OpenTofu state and anything else
+/// under `data/cache/<team>/` stays.
+pub const CLEARABLE: [&str; 3] = ["collections", "roles", "tofu"];
 
 #[derive(Debug, Serialize)]
 pub struct CacheEntry {
@@ -28,6 +33,42 @@ pub fn team_cache(data_dir: &Path, team_id: &str) -> CacheReport {
         collections: list_collections(&collections_root),
         roles: list_roles(&root.join("roles")),
     }
+}
+
+/// Removes the three disposable cache directories of one team. A missing
+/// directory is fine, and a symlink is left alone rather than followed.
+/// OpenTofu state and every unrecognised entry stay.
+pub fn clear_team_cache(data_dir: &Path, team_id: &str) -> io::Result<()> {
+    let cache_root = data_dir.join("cache");
+    let Ok(cache_meta) = fs::symlink_metadata(&cache_root) else {
+        return Ok(());
+    };
+    if cache_meta.file_type().is_symlink() || !cache_meta.is_dir() {
+        return Ok(());
+    }
+    let root = cache_root.join(team_id);
+    let Ok(root_meta) = fs::symlink_metadata(&root) else {
+        return Ok(());
+    };
+    if root_meta.file_type().is_symlink() || !root_meta.is_dir() {
+        return Ok(());
+    }
+    for name in CLEARABLE {
+        let path = root.join(name);
+        let Ok(meta) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if meta.file_type().is_symlink() || !meta.is_dir() {
+            continue;
+        }
+        // `remove_dir_all` removes a nested symlink instead of its target.
+        match fs::remove_dir_all(&path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(())
 }
 
 pub fn dir_size(path: &Path) -> u64 {

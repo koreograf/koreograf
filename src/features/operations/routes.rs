@@ -17,6 +17,7 @@ use super::service::{save, view};
 use crate::cacheinfo::{self, CacheEntry};
 use crate::db::{self, Delivery};
 use crate::error::{ApiError, ApiJson, AppResult};
+use crate::features::activity;
 use crate::features::identity as auth;
 use crate::features::identity::{AuthUser, Role};
 use crate::http::{gate, team_header};
@@ -31,7 +32,7 @@ pub(crate) fn routes() -> Router<Shared> {
         .route("/dashboard", get(dashboard))
         .route("/runner", get(runner_status))
         .route("/runner/preflight", get(runner_preflight))
-        .route("/cache", get(cache))
+        .route("/cache", get(cache).delete(clear_cache))
         .route("/plugins", get(plugins))
         .merge(admin_routes())
 }
@@ -610,8 +611,41 @@ pub async fn cache(
         tofu_bytes: report.tofu_bytes,
         collections: report.collections,
         roles: report.roles,
-        note: "the_cache_lives_under_data_cache_and_stays",
+        note: "the_cache_holds_dependencies_and_keeps_the_opentofu_state",
     }))
+}
+
+/// Clears the disposable cache of one team. The route stays owner-only, and a
+/// pending or running job of that team blocks it so a job never loses the
+/// collections or providers it is using.
+pub async fn clear_cache(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    user: AuthUser,
+) -> AppResult<StatusCode> {
+    let team = team_header(&headers)?;
+    gate(&state, &user, &team, Role::Owner)?;
+    if state.store().team_jobs_busy(&team)? {
+        return Err(ApiError::conflict("a_job_is_running"));
+    }
+    let team_name = state
+        .store()
+        .team_by_id(&team)?
+        .map(|item| item.name)
+        .unwrap_or_default();
+    cacheinfo::clear_team_cache(&state.cfg.data_dir, &team)
+        .map_err(|err| ApiError::Internal(format!("clear the cache: {err}")))?;
+    activity::note(
+        &state,
+        &team,
+        &user.username,
+        "delete",
+        "cache",
+        &team,
+        &team_name,
+        "success",
+    );
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn plugins(user: AuthUser) -> Json<PluginListResponse> {

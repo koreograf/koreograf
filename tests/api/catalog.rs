@@ -1081,7 +1081,7 @@ async fn system_catalog_endpoints_return_the_documented_shape() {
         json!({
             "collections": [],
             "collections_bytes": 0,
-            "note": "the_cache_lives_under_data_cache_and_stays",
+            "note": "the_cache_holds_dependencies_and_keeps_the_opentofu_state",
             "roles": [],
             "roles_bytes": 0,
             "tofu_bytes": 0

@@ -191,7 +191,7 @@
   "the_backup_is_empty_or_too_large": "Die Sicherung ist leer oder zu groß.",
   "the_backup_is_from_a_newer_koreograf": "Die Sicherung stammt von einem neueren Koreograf. Aktualisiere diese Installation, bevor du sie einspielst.",
   "the_become_method_is_invalid": "Become-Methode ist ungültig.",
-  "the_cache_lives_under_data_cache_and_stays": "Der Cache liegt unter data/cache und bleibt zwischen den Läufen erhalten.",
+  "the_cache_holds_dependencies_and_keeps_the_opentofu_state": "Der Cache enthält Collections, Rollen und OpenTofu-Provider. Der OpenTofu-Status bleibt erhalten.",
   "the_certificate_store_could_not_be_built": "Der Zertifikatsspeicher konnte nicht aufgebaut werden.",
   "the_credential_is_not_a_source_control_credential": "Der gewählte Zugang ist kein Quellcode-Zugang.",
   "the_data_directory_is_not_empty": "Das Datenverzeichnis enthält bereits Daten.",

@@ -33,6 +33,7 @@ pub(crate) trait Backend: Send + Sync {
     fn restore_sqlite(&self, source: &Path) -> AppResult<()>;
     fn busy(&self) -> AppResult<bool>;
     fn pending_jobs(&self) -> AppResult<i64>;
+    fn team_jobs_busy(&self, team_id: &str) -> AppResult<bool>;
     fn ping(&self) -> AppResult<()>;
     fn settings_rows(&self) -> AppResult<HashMap<String, String>>;
     fn set_setting(&self, key: &str, value: &str) -> AppResult<()>;
@@ -372,6 +373,11 @@ impl Backend for SqliteBackend {
     fn pending_jobs(&self) -> AppResult<i64> {
         let live = lock(&self.conn)?;
         crate::features::operations::pending_jobs(&live)
+    }
+
+    fn team_jobs_busy(&self, team_id: &str) -> AppResult<bool> {
+        let live = lock(&self.conn)?;
+        crate::features::operations::team_jobs_busy(&live, team_id)
     }
 
     fn ping(&self) -> AppResult<()> {
@@ -1552,6 +1558,19 @@ impl Backend for PostgresBackend {
                 )
                 .await?;
             Ok(row.get(0))
+        })
+    }
+
+    fn team_jobs_busy(&self, team_id: &str) -> AppResult<bool> {
+        self.with_client(|client| async move {
+            let row = client
+                .query_one(
+                    &store::sql::postgres(jobs::store::TEAM_JOBS_BUSY),
+                    &[&team_id],
+                )
+                .await?;
+            let count: i64 = row.get(0);
+            Ok(count > 0)
         })
     }
 

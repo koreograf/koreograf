@@ -16,6 +16,6 @@ pub(crate) use routes::routes;
 pub(crate) use service::{audit_entry, audit_line, export, parse_form_target, restore, target_url};
 pub(crate) use service::{
     busy, configured_mode, copy_database, job_labels, load, log_cache, pending_jobs, prepare,
-    report, scrape, Metrics,
+    report, scrape, team_jobs_busy, Metrics,
 };
 pub use service::{db_migrate, db_migrate_requested};

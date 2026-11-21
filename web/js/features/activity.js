@@ -7,7 +7,7 @@ import { handle, needTeam, shell } from "../core/app.js";
 import { pill, relativeTime, when } from "../core/format.js";
 
 const ACTIONS = ["sync", "create", "update", "delete", "launch", "cancel", "relaunch"];
-const OBJECT_TYPES = ["project", "inventory", "inventory_source", "template", "credential", "environment", "schedule", "workflow", "job", "workflow_run"];
+const OBJECT_TYPES = ["project", "inventory", "inventory_source", "template", "credential", "environment", "schedule", "workflow", "job", "workflow_run", "cache"];
 
 const ACTION_KEYS = {
   sync: "action_sync",
@@ -30,6 +30,7 @@ const OBJECT_KEYS = {
   workflow: "object_workflow",
   job: "object_job",
   workflow_run: "object_workflow_run",
+  cache: "object_cache",
 };
 
 export function actionLabel(action) {

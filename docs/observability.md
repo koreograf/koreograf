@@ -24,6 +24,8 @@ If the UI port is reachable from a wider network, an internal-only `KOREOGRAF_BI
 
 Counters live in memory and start at zero after a restart. Prometheus treats that jump as a restart. Cache numbers are read from disk on each scrape, even when no job is running. The time of a role is the log line. `koreograf_role_results_total` counts results and has no timestamp.
 
+A team owner can clear the cache from the dashboard or with `DELETE /api/v1/cache`. That removes `data/cache/<team>/collections`, `roles`, and `tofu`, so the three cache gauges fall to zero on the next scrape. `data/cache/<team>/tofu-state` and unrecognised entries stay, and a pending or running job of that team blocks the clear with `409 a_job_is_running`. Maintenance mode also blocks it. The action appends a `delete` entry on `cache` to the activity log; a refusal appends nothing. The activity log is separate from this scrape output.
+
 | Metric | Type | Labels |
 | --- | --- | --- |
 | `koreograf_jobs_started_total` | counter | `tool`, `playbook` |
