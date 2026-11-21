@@ -3531,6 +3531,11 @@ impl Backend for PostgresBackend {
                     &[&id, &now],
                 )
                 .await?;
+                tx.execute(
+                    &store::sql::postgres(jobs::store::RECONCILE_WORKFLOW_NODES),
+                    &[&id],
+                )
+                .await?;
             }
             tx.commit().await?;
             Ok(jobs::store::Interrupted {

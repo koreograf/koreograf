@@ -42,6 +42,10 @@ pub(crate) const RECONCILE_WORKFLOW_JOB: &str =
     "UPDATE workflow_jobs SET status = 'failed', finished_at = ?2
      WHERE id = ?1 AND status IN ('pending', 'running')";
 
+pub(crate) const RECONCILE_WORKFLOW_NODES: &str = "UPDATE workflow_nodes
+     SET phase = CASE WHEN phase = 'running' THEN 'failed' ELSE 'skipped' END
+     WHERE workflow_job_id = ?1 AND phase IN ('pending', 'running')";
+
 /// Jobs and workflow runs that a restart left without a process.
 pub(crate) struct Interrupted {
     pub(crate) job_ids: Vec<String>,
@@ -286,6 +290,7 @@ pub(crate) fn reconcile_interrupted(c: &mut Connection, line: &str) -> AppResult
     })?;
     for id in &workflow_ids {
         tx.execute(RECONCILE_WORKFLOW_JOB, params![id, &now])?;
+        tx.execute(RECONCILE_WORKFLOW_NODES, params![id])?;
     }
     tx.commit()?;
     Ok(Interrupted {

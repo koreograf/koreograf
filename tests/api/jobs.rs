@@ -1996,7 +1996,12 @@ fn interrupted_rows(team: &str) -> String {
             ('recovery-run', NULL, '{team}', 'Run', 'running', '{{}}', 'admin', 'manual',
              '2026-01-01T00:00:00Z', NULL),
             ('recovery-run-done', NULL, '{team}', 'Done run', 'successful', '{{}}',
-             'admin', 'manual', '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z');"
+             'admin', 'manual', '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z');
+         INSERT INTO workflow_nodes (workflow_job_id, node_id, phase, job_id) VALUES
+            ('recovery-run', 'running-node', 'running', NULL),
+            ('recovery-run', 'pending-node', 'pending', NULL),
+            ('recovery-run', 'done-node', 'successful', NULL),
+            ('recovery-run-done', 'done-node', 'successful', NULL);"
     )
 }
 
@@ -2062,6 +2067,22 @@ async fn a_boot_fails_jobs_and_workflow_runs_a_stopped_process_left() {
             .await,
         1
     );
+    for (node, phase) in [
+        ("running-node", "failed"),
+        ("pending-node", "skipped"),
+        ("done-node", "successful"),
+    ] {
+        assert_eq!(
+            harness
+                .sql_text(&format!(
+                    "SELECT phase FROM workflow_nodes
+                     WHERE workflow_job_id = 'recovery-run' AND node_id = '{node}'"
+                ))
+                .await,
+            vec![phase.to_string()],
+            "{node} kept an unfinished phase"
+        );
+    }
 
     let (status, me, cookie) = call(
         &harness.app,
@@ -2094,6 +2115,12 @@ async fn a_boot_fails_jobs_and_workflow_runs_a_stopped_process_left() {
     let runs = harness
         .sql_text("SELECT id || '=' || COALESCE(finished_at, '') FROM workflow_jobs ORDER BY id")
         .await;
+    let nodes = harness
+        .sql_text(
+            "SELECT workflow_job_id || '=' || node_id || '=' || phase
+             FROM workflow_nodes ORDER BY workflow_job_id, node_id",
+        )
+        .await;
     harness.reboot();
     assert_eq!(
         harness
@@ -2108,6 +2135,15 @@ async fn a_boot_fails_jobs_and_workflow_runs_a_stopped_process_left() {
             )
             .await,
         runs
+    );
+    assert_eq!(
+        harness
+            .sql_text(
+                "SELECT workflow_job_id || '=' || node_id || '=' || phase
+                 FROM workflow_nodes ORDER BY workflow_job_id, node_id"
+            )
+            .await,
+        nodes
     );
     for id in ["recovery-running", "recovery-pending"] {
         assert_eq!(
