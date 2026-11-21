@@ -940,6 +940,10 @@ async fn client(
     // lookup cannot swap in a loopback or link-local target between the check
     // and the request. A proxy still makes its own connection.
     if let Some((host, port)) = pinned_host(&source.api_endpoint) {
+        // With a proxy the proxy resolves the name itself, so only a lookup
+        // that succeeds is useful here. Without a proxy, fail closed: a name
+        // that does not resolve cannot have passed the policy safely.
+        let proxied = proxy.is_set();
         let lookup = tokio::time::timeout(
             ENDPOINT_LOOKUP_TIMEOUT,
             tokio::net::lookup_host((host.as_str(), port)),
@@ -947,6 +951,7 @@ async fn client(
         .await;
         let addresses: Vec<SocketAddr> = match lookup {
             Ok(Ok(addresses)) => addresses.collect(),
+            Ok(Err(_)) | Err(_) if proxied => Vec::new(),
             Ok(Err(_)) => {
                 return Err(crate::error::message(
                     "netbox_is_not_reachable_err",
@@ -960,7 +965,7 @@ async fn client(
                 ));
             }
         };
-        if addresses.is_empty() {
+        if addresses.is_empty() && !proxied {
             return Err(crate::error::message(
                 "netbox_is_not_reachable_err",
                 &[("err", "the NetBox address could not be resolved")],
@@ -969,7 +974,9 @@ async fn client(
         if addresses.iter().any(|address| blocked_ip(address.ip())) {
             return Err("netbox_endpoint_is_blocked".into());
         }
-        builder = builder.resolve_to_addrs(&host, &addresses);
+        if !addresses.is_empty() {
+            builder = builder.resolve_to_addrs(&host, &addresses);
+        }
     }
     if source.validate_certs {
         match crate::tls::reqwest_roots() {

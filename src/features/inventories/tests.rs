@@ -1185,9 +1185,39 @@ async fn a_client_refuses_a_name_that_does_not_resolve() {
         query: Vec::new(),
         virtual_machines: false,
     };
-    let proxy = crate::features::operations::ProxySettings::inherit();
+    let proxy = crate::features::operations::ProxySettings {
+        url: String::new(),
+        username: String::new(),
+        password: String::new(),
+        no_proxy: String::new(),
+        explicit: true,
+    };
     let error = client(&source, &proxy).await.unwrap_err();
     assert!(error.contains("netbox_is_not_reachable"), "{error}");
+}
+
+#[tokio::test]
+async fn a_client_leaves_resolution_to_a_configured_proxy() {
+    let source = NetboxSource {
+        api_endpoint: "http://does-not-exist.invalid/".into(),
+        validate_certs: true,
+        group_by: Vec::new(),
+        group_names_raw: false,
+        load_config_context: false,
+        max_hosts: DEFAULT_MAX_HOSTS,
+        query: Vec::new(),
+        virtual_machines: false,
+    };
+    let proxy = crate::features::operations::ProxySettings {
+        url: "http://proxy.invalid:3128".into(),
+        username: String::new(),
+        password: String::new(),
+        no_proxy: String::new(),
+        explicit: true,
+    };
+    client(&source, &proxy)
+        .await
+        .expect("a proxy resolves the NetBox name");
 }
 
 #[tokio::test]
