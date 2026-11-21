@@ -13,6 +13,43 @@ use serde_json::json;
 
 use super::*;
 
+#[tokio::test]
+async fn valid_endpoint_rejects_loopback_link_local_and_metadata_targets() {
+    for url in [
+        "http://127.0.0.1/",
+        "http://127.0.0.1:8000/api/",
+        "http://[::1]/",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://[fe80::1]/",
+        "http://[::ffff:127.0.0.1]/",
+        "http://[::ffff:169.254.169.254]/",
+        "http://100.100.100.200/latest/meta-data/",
+        "http://[fd00:ec2::254]/",
+        "http://0.0.0.0/",
+        "http://[::]/",
+        "http://localhost/",
+        "http://localhost:8000/",
+        "http://LOCALHOST./",
+        "http://netbox.localhost/",
+    ] {
+        assert!(!valid_endpoint(url).await, "{url} should be blocked");
+    }
+}
+
+#[tokio::test]
+async fn valid_endpoint_keeps_public_and_documented_private_netbox_addresses() {
+    for url in [
+        "https://203.0.113.10/",
+        "https://netbox.example.com/",
+        "http://10.20.30.40:8000/",
+        "http://192.168.10.5/",
+        "http://172.16.4.2/",
+        "http://[fd00::10]/",
+    ] {
+        assert!(valid_endpoint(url).await, "{url} should stay allowed");
+    }
+}
+
 #[test]
 fn reads_hosts_groups_and_skips_children() {
     let body = "\
@@ -1107,6 +1144,28 @@ async fn fetches_devices_and_virtual_machines() {
     assert!(ini.contains("[sites_berlin]"));
     let denied = fetch_ini(&source, "wrong-token", &proxy).await.unwrap_err();
     assert!(denied.contains("403"), "{denied}");
+}
+
+#[tokio::test]
+async fn a_fetch_refuses_link_local_and_metadata_targets() {
+    for endpoint in [
+        "http://169.254.169.254/latest/meta-data/",
+        "http://[fe80::1]/",
+    ] {
+        let source = NetboxSource {
+            api_endpoint: endpoint.into(),
+            validate_certs: true,
+            group_by: Vec::new(),
+            group_names_raw: false,
+            load_config_context: false,
+            max_hosts: DEFAULT_MAX_HOSTS,
+            query: Vec::new(),
+            virtual_machines: false,
+        };
+        let proxy = crate::features::operations::ProxySettings::inherit();
+        let error = fetch_ini(&source, "token", &proxy).await.unwrap_err();
+        assert_eq!(error, "netbox_endpoint_is_blocked", "{endpoint}");
+    }
 }
 
 #[tokio::test]

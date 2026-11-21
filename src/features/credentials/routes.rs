@@ -14,7 +14,7 @@ use crate::features::identity::{AuthUser, Role};
 use crate::http::{gate, no_content, require_name, team_header};
 use crate::Shared;
 
-use super::service::{check, describe, known_kind, merge_secret};
+use super::service::{check, check_netbox_endpoint, describe, known_kind, merge_secret};
 
 pub(crate) fn routes() -> Router<Shared> {
     Router::new()
@@ -123,6 +123,11 @@ async fn create_credential(
     }
     if let Err(message) = check(&body.kind, &body.secret) {
         return Err(ApiError::bad(message));
+    }
+    if body.kind == "netbox" {
+        check_netbox_endpoint(&body.secret)
+            .await
+            .map_err(ApiError::bad)?;
     }
     if body.secret.to_string().len() > 256 * 1024 {
         return Err(ApiError::bad("the_secret_is_too_large"));
@@ -288,6 +293,11 @@ async fn update_credential(
         merge_secret(&item.kind, &previous, &body.secret, &body.clear).map_err(ApiError::bad)?;
     if let Err(message) = check(&item.kind, &secret) {
         return Err(ApiError::bad(message));
+    }
+    if item.kind == "netbox" {
+        check_netbox_endpoint(&secret)
+            .await
+            .map_err(ApiError::bad)?;
     }
     let raw = secret.to_string();
     if raw.len() > 256 * 1024 {

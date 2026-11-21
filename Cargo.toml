@@ -7,6 +7,11 @@ license = "MIT"
 description = "Prototype for team-scoped automation with a dependency cache and workflows"
 publish = false
 
+[features]
+# Integration tests need to reach their in-process mock server on a literal
+# loopback address. Release builds use the default feature set and stay strict.
+test-helpers = []
+
 [dependencies]
 anyhow = "1"
 async-stream = "0.3"

@@ -180,7 +180,7 @@ Every inventory source that uses a NetBox credential uses the same credential ro
 
 ### Credentials
 
-`POST /api/v1/credentials` takes `name`, `kind`, and `secret`. A NetBox credential needs a `token` and a `url`; the URL is `http` or `https`. A stored credential from an older release without a URL is disabled until an owner adds one. One credential of each kind can be attached to a template. Vault may repeat when each `vault_id` is unique, and only one vault credential may omit the id. `credential_ids` on a template is the list. `credential_id` is the single-id form.
+`POST /api/v1/credentials` takes `name`, `kind`, and `secret`. A NetBox credential needs a `token` and a `url`; the URL is `http` or `https`. A NetBox URL passes the same address policy on credential create and update, inventory source create and update, preview, and connection test: loopback (`127.0.0.0/8`, `::1`), link-local and cloud metadata (`169.254.0.0/16`, `100.64.0.0/10`, `fe80::/10`, `fd00:ec2::254`), unspecified, multicast, broadcast, and IPv4-mapped forms of those answer 400 `netbox_endpoint_is_blocked` and the request is not made. The policy checks literal addresses and hostnames after a bounded DNS lookup. RFC1918 ranges and IPv6 unique-local addresses (`fc00::/7`) stay allowed because an internal NetBox is a supported deployment. A stored credential from an older release without a URL is disabled until an owner adds one. One credential of each kind can be attached to a template. Vault may repeat when each `vault_id` is unique, and only one vault credential may omit the id. `credential_ids` on a template is the list. `credential_id` is the single-id form.
 
 | Kind | `secret` fields |
 | --- | --- |

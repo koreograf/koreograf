@@ -280,6 +280,31 @@ impl AppState {
             .decrypt(packed)
     }
 
+    /// Stores a credential an integration test could not create through the
+    /// API, for example one whose address the current policy blocks.
+    #[cfg(feature = "test-helpers")]
+    pub fn store_credential_for_test(
+        &self,
+        team_id: &str,
+        name: &str,
+        kind: &str,
+        secret: &serde_json::Value,
+    ) -> Result<String, ApiError> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let item = db::Credential {
+            id: id.clone(),
+            team_id: team_id.to_string(),
+            name: name.to_string(),
+            kind: kind.to_string(),
+            secret_blob: self.encrypt(&secret.to_string())?,
+            created_at: db::now(),
+            auto: false,
+            disabled: false,
+        };
+        self.store().insert_credential(&item)?;
+        Ok(id)
+    }
+
     pub(crate) fn replace_cipher(&self, cipher: crypto::Cipher) -> Result<(), ApiError> {
         let mut guard = self
             .cipher

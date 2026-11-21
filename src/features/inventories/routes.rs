@@ -23,8 +23,8 @@ use crate::Shared;
 
 use super::model::{NetboxResult, NetboxSource, DEFAULT_MAX_HOSTS, MAX_HOSTS_LIMIT};
 use super::service::{
-    classify_inventory, fetch, parse_filters, parse_hosts, preview, source_json_with_collisions,
-    test_connection, valid_endpoint, valid_token,
+    check_request_endpoint, classify_inventory, fetch, parse_filters, parse_hosts, preview,
+    source_json_with_collisions, test_connection, valid_token,
 };
 
 pub(crate) fn routes() -> Router<Shared> {
@@ -318,7 +318,8 @@ pub async fn create_netbox(
         &body.credential_id,
         &body.token,
         &body.api_endpoint,
-    )?;
+    )
+    .await?;
     ensure_certificate_override(&state, &user, &team, true, body.validate_certs, None)?;
     let source = netbox_source_fields(NetboxFields {
         api_endpoint: &access.api_endpoint,
@@ -329,7 +330,8 @@ pub async fn create_netbox(
         max_hosts: body.max_hosts,
         query_filters: &body.query_filters,
         virtual_machines: body.virtual_machines,
-    })?;
+    })
+    .await?;
     let fetched = fetch_netbox(&state, &source, &access.token).await?;
     let inventory_id = Uuid::new_v4().to_string();
     let item = Inventory {
@@ -377,9 +379,11 @@ pub async fn test_netbox(
         &body.credential_id,
         &body.token,
         &body.api_endpoint,
-    )?;
+    )
+    .await?;
     ensure_certificate_override(&state, &user, &team, true, body.validate_certs, None)?;
-    let source = connection_source(&access.api_endpoint, &access.token, body.validate_certs)?;
+    let source =
+        connection_source(&access.api_endpoint, &access.token, body.validate_certs).await?;
     let proxy = crate::features::operations::load(&state)?.proxy;
     let version = test_connection(&source, &access.token, &proxy)
         .await
@@ -401,7 +405,8 @@ pub async fn preview_netbox(
         &body.credential_id,
         &body.token,
         &body.api_endpoint,
-    )?;
+    )
+    .await?;
     ensure_certificate_override(&state, &user, &team, true, body.validate_certs, None)?;
     let source = netbox_source_fields(NetboxFields {
         api_endpoint: &access.api_endpoint,
@@ -412,7 +417,8 @@ pub async fn preview_netbox(
         max_hosts: body.max_hosts,
         query_filters: &body.query_filters,
         virtual_machines: body.virtual_machines,
-    })?;
+    })
+    .await?;
     let fetched = fetch_netbox(&state, &source, &access.token).await?;
     let report = preview(&fetched.body);
     Ok(Json(NetboxPreviewResponse {
@@ -554,7 +560,7 @@ fn stored_netbox(source_json: &str) -> AppResult<StoredNetbox> {
     serde_json::from_str(source_json).map_err(|_| ApiError::bad("the_netbox_source_is_incomplete"))
 }
 
-fn netbox_credential(
+async fn netbox_credential(
     state: &Shared,
     credential_id: &str,
     team_id: &str,
@@ -570,9 +576,7 @@ fn netbox_credential(
     if url.is_empty() {
         return Err(ApiError::bad("netbox_needs_an_address"));
     }
-    if !valid_endpoint(&url) {
-        return Err(ApiError::bad("the_netbox_address_must_be_http_or_https"));
-    }
+    check_request_endpoint(&url).await.map_err(ApiError::bad)?;
     Ok((token, url))
 }
 
@@ -586,7 +590,7 @@ async fn refresh_netbox(
     let credential_id = credential_id
         .as_deref()
         .ok_or_else(|| ApiError::bad("netbox_credential_is_required"))?;
-    let (token, url) = netbox_credential(state, credential_id, team_id)?;
+    let (token, url) = netbox_credential(state, credential_id, team_id).await?;
     let source = NetboxSource {
         api_endpoint: url,
         validate_certs: stored.validate_certs,
@@ -620,14 +624,14 @@ struct NetboxFields<'a> {
     virtual_machines: bool,
 }
 
-fn netbox_config(
+async fn netbox_config(
     fields: &NetboxFields<'_>,
     query: Vec<(String, String)>,
 ) -> AppResult<NetboxSource> {
     let endpoint = fields.api_endpoint.trim().trim_end_matches('/').to_string();
-    if !valid_endpoint(&endpoint) {
-        return Err(ApiError::bad("the_netbox_address_must_be_http_or_https"));
-    }
+    check_request_endpoint(&endpoint)
+        .await
+        .map_err(ApiError::bad)?;
     if fields.max_hosts == 0 || fields.max_hosts > MAX_HOSTS_LIMIT {
         return Err(ApiError::bad_vars(
             "netbox_host_limit_is_out_of_range",
@@ -653,7 +657,7 @@ fn netbox_config(
     })
 }
 
-fn connection_source(
+async fn connection_source(
     api_endpoint: &str,
     token: &str,
     validate_certs: bool,
@@ -674,11 +678,12 @@ fn connection_source(
         },
         Vec::new(),
     )
+    .await
 }
 
-fn netbox_source_fields(fields: NetboxFields<'_>) -> AppResult<NetboxSource> {
+async fn netbox_source_fields(fields: NetboxFields<'_>) -> AppResult<NetboxSource> {
     let query = parse_filters(fields.query_filters).map_err(ApiError::bad)?;
-    netbox_config(&fields, query)
+    netbox_config(&fields, query).await
 }
 
 struct NetboxAccess {
@@ -687,7 +692,7 @@ struct NetboxAccess {
     api_endpoint: String,
 }
 
-fn netbox_access(
+async fn netbox_access(
     state: &Shared,
     team: &str,
     credential_id: &str,
@@ -701,7 +706,7 @@ fn netbox_access(
         }
         return Err(ApiError::bad("netbox_credential_is_required"));
     }
-    let (token, url) = netbox_credential(state, credential_id, team)?;
+    let (token, url) = netbox_credential(state, credential_id, team).await?;
     let endpoint = api_endpoint.trim();
     if !endpoint.is_empty() && !endpoint_matches(endpoint, &url) {
         return Err(ApiError::bad("netbox_endpoint_must_match_credential"));
@@ -1275,7 +1280,8 @@ async fn resolve_netbox_update(
         credential_id,
         body.token.as_deref().unwrap_or(""),
         body.api_endpoint.as_deref().unwrap_or(""),
-    )?;
+    )
+    .await?;
     let query = match &body.query_filters {
         Some(filters) => parse_filters(filters).map_err(ApiError::bad)?,
         None => stored.query.clone(),
@@ -1295,7 +1301,8 @@ async fn resolve_netbox_update(
             virtual_machines: body.virtual_machines.unwrap_or(stored.virtual_machines),
         },
         query,
-    )?;
+    )
+    .await?;
     ensure_certificate_override(state, user, team, true, validate_certs, Some(&stored))?;
     let name = updated_name(body.name.clone(), &source.name, "netbox")?;
     let fetched = fetch_netbox(state, &parsed, &access.token).await?;
@@ -1386,7 +1393,8 @@ async fn resolve_source(
                 &input.credential_id,
                 &input.token,
                 &input.api_endpoint,
-            )?;
+            )
+            .await?;
             ensure_certificate_override(state, user, team, true, input.validate_certs, None)?;
             let parsed = netbox_source_fields(NetboxFields {
                 api_endpoint: &access.api_endpoint,
@@ -1397,7 +1405,8 @@ async fn resolve_source(
                 max_hosts: input.max_hosts,
                 query_filters: &input.query_filters,
                 virtual_machines: input.virtual_machines,
-            })?;
+            })
+            .await?;
             let fetched = fetch_netbox(state, &parsed, &access.token).await?;
             Ok(ResolvedSource {
                 credential_id: Some(access.credential_id),

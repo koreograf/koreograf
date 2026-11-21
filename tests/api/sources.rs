@@ -597,3 +597,144 @@ async fn netbox_endpoints_return_the_documented_shape() {
         )
     );
 }
+
+#[cfg(feature = "test-helpers")]
+#[tokio::test(flavor = "multi_thread")]
+async fn netbox_credentials_and_the_test_path_reject_blocked_targets() {
+    let harness = TestApp::boot("sources-netbox-blocked", Options::default());
+    let app = harness.app.clone();
+    let state = harness.state.clone();
+    let dir = harness.dir.clone();
+    let (cookie, team) = admin(&app).await;
+    let (endpoint, hits) = netbox_mock().await;
+    let blocked = endpoint.replacen("127.0.0.1", "localhost", 1);
+
+    let (status, body, _) = call(
+        &app,
+        "POST",
+        "/api/v1/credentials",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Blocked NetBox",
+            "kind": "netbox",
+            "secret": {"token": "secret-token", "url": blocked},
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "netbox_endpoint_is_blocked", "{body}");
+    assert!(!body.to_string().contains("localhost"), "{body}");
+
+    let credential_id = create_credential(
+        &app,
+        &cookie,
+        &team,
+        "NetBox mock",
+        "netbox",
+        json!({"token": "secret-token", "url": endpoint}),
+    )
+    .await;
+
+    let (status, body, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/v1/credentials/{credential_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "NetBox mock", "secret": {"url": blocked}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "netbox_endpoint_is_blocked", "{body}");
+
+    let (status, tested, _) = call(
+        &app,
+        "POST",
+        "/api/v1/inventories/netbox/test",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"credential_id": credential_id})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{tested}");
+    assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    let blocked_id = state
+        .store_credential_for_test(
+            &team,
+            "Stored blocked target",
+            "netbox",
+            &json!({"token": "secret-token", "url": blocked}),
+        )
+        .expect("store blocked credential");
+    let (status, body, _) = call(
+        &app,
+        "POST",
+        "/api/v1/inventories/netbox/test",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"credential_id": blocked_id})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "netbox_endpoint_is_blocked", "{body}");
+    assert_eq!(
+        hits.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the blocked target must not be reached"
+    );
+
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "username": "operator",
+            "display_name": "operator",
+            "password": "operator-pass",
+            "is_admin": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{team}/members"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"username": "operator", "role": "operator"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, operator_me, operator_cookie) = call(
+        &app,
+        "POST",
+        "/api/v1/login",
+        None,
+        None,
+        Some(json!({"username": "operator", "password": "operator-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{operator_me}");
+    let operator_cookie = operator_cookie.expect("operator cookie");
+    let (status, body, _) = call(
+        &app,
+        "POST",
+        "/api/v1/credentials",
+        Some(&operator_cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Operator blocked NetBox",
+            "kind": "netbox",
+            "secret": {"token": "secret-token", "url": blocked},
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
