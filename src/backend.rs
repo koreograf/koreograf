@@ -237,6 +237,7 @@ pub(crate) trait Backend: Send + Sync {
     fn set_failed_hosts(&self, id: &str, failed_hosts: &str) -> AppResult<()>;
     fn set_job_parameters(&self, id: &str, parameters: &str) -> AppResult<()>;
     fn finish_job(&self, id: &str, status: &str) -> AppResult<bool>;
+    fn reconcile_interrupted(&self, line: &str) -> AppResult<jobs::store::Interrupted>;
     fn insert_event(&self, job_id: &str, stream: &str, line: &str) -> AppResult<()>;
     fn events_after(&self, job_id: &str, after: i64, limit: i64) -> AppResult<Vec<JobEvent>>;
     fn events_count_between(&self, job_id: &str, after: i64, before: i64) -> AppResult<i64>;
@@ -1076,6 +1077,11 @@ impl Backend for SqliteBackend {
     fn finish_job(&self, id: &str, status: &str) -> AppResult<bool> {
         let conn = lock(&self.conn)?;
         jobs::store::finish_job(&conn, id, status)
+    }
+
+    fn reconcile_interrupted(&self, line: &str) -> AppResult<jobs::store::Interrupted> {
+        let mut conn = lock(&self.conn)?;
+        jobs::store::reconcile_interrupted(&mut conn, line)
     }
 
     fn insert_event(&self, job_id: &str, stream: &str, line: &str) -> AppResult<()> {
@@ -3487,6 +3493,50 @@ impl Backend for PostgresBackend {
                 )
                 .await?;
             Ok(changed == 1)
+        })
+    }
+
+    fn reconcile_interrupted(&self, line: &str) -> AppResult<jobs::store::Interrupted> {
+        self.with_client(|mut client| async move {
+            let tx = client.transaction().await?;
+            let now = db::now();
+            let rows = tx
+                .query(&store::sql::postgres(jobs::store::INTERRUPTED_JOBS), &[])
+                .await?;
+            let mut job_ids = Vec::with_capacity(rows.len());
+            for row in &rows {
+                let id: String = row.get(0);
+                tx.execute(
+                    &store::sql::postgres(jobs::store::RECONCILE_JOB),
+                    &[&id, &now],
+                )
+                .await?;
+                tx.execute(
+                    &store::sql::postgres(jobs::store::INSERT_EVENT),
+                    &[&id, &now, &"system", &line],
+                )
+                .await?;
+                job_ids.push(id);
+            }
+            let runs = tx
+                .query(
+                    &store::sql::postgres(jobs::store::INTERRUPTED_WORKFLOW_JOBS),
+                    &[],
+                )
+                .await?;
+            for row in &runs {
+                let id: String = row.get(0);
+                tx.execute(
+                    &store::sql::postgres(jobs::store::RECONCILE_WORKFLOW_JOB),
+                    &[&id, &now],
+                )
+                .await?;
+            }
+            tx.commit().await?;
+            Ok(jobs::store::Interrupted {
+                job_ids,
+                workflow_jobs: i64::try_from(runs.len()).unwrap_or(i64::MAX),
+            })
         })
     }
 

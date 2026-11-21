@@ -26,6 +26,28 @@ pub(crate) const SET_JOB_PARAMETERS: &str = "UPDATE jobs SET parameters = ?2 WHE
 pub(crate) const FINISH_JOB: &str = "UPDATE jobs SET status = ?2, finished_at = ?3
      WHERE id = ?1 AND status IN ('pending', 'running')";
 
+/// The line a startup reconciliation leaves on every job it marks failed.
+pub(crate) const RESTARTED_BEFORE_FINISH: &str = "The server restarted before this job finished.";
+
+pub(crate) const INTERRUPTED_JOBS: &str =
+    "SELECT id FROM jobs WHERE status IN ('pending', 'running') ORDER BY id";
+
+pub(crate) const RECONCILE_JOB: &str = "UPDATE jobs SET status = 'failed', finished_at = ?2
+     WHERE id = ?1 AND status IN ('pending', 'running')";
+
+pub(crate) const INTERRUPTED_WORKFLOW_JOBS: &str =
+    "SELECT id FROM workflow_jobs WHERE status IN ('pending', 'running') ORDER BY id";
+
+pub(crate) const RECONCILE_WORKFLOW_JOB: &str =
+    "UPDATE workflow_jobs SET status = 'failed', finished_at = ?2
+     WHERE id = ?1 AND status IN ('pending', 'running')";
+
+/// Jobs and workflow runs that a restart left without a process.
+pub(crate) struct Interrupted {
+    pub(crate) job_ids: Vec<String>,
+    pub(crate) workflow_jobs: i64,
+}
+
 pub(crate) const INSERT_EVENT: &str =
     "INSERT INTO job_events (job_id, ts, stream, line) VALUES (?1, ?2, ?3, ?4)";
 
@@ -244,6 +266,32 @@ pub(crate) fn set_job_parameters(c: &Connection, id: &str, parameters: &str) -> 
 pub(crate) fn finish_job(c: &Connection, id: &str, status: &str) -> AppResult<bool> {
     let changed = c.execute(FINISH_JOB, params![id, status, db::now()])?;
     Ok(changed == 1)
+}
+
+/// Fails every job and workflow run that a stopped process left unfinished.
+///
+/// One transaction covers the status updates and the system event lines, so a
+/// failure leaves the whole set as it was.
+pub(crate) fn reconcile_interrupted(c: &mut Connection, line: &str) -> AppResult<Interrupted> {
+    let tx = c.transaction()?;
+    let now = db::now();
+    let job_ids: Vec<String> =
+        sql::sqlite_all(&tx, INTERRUPTED_JOBS, [], |row| SqlRow::get(row, 0))?;
+    for id in &job_ids {
+        tx.execute(RECONCILE_JOB, params![id, &now])?;
+        insert_event(&tx, id, "system", line)?;
+    }
+    let workflow_ids: Vec<String> = sql::sqlite_all(&tx, INTERRUPTED_WORKFLOW_JOBS, [], |row| {
+        SqlRow::get(row, 0)
+    })?;
+    for id in &workflow_ids {
+        tx.execute(RECONCILE_WORKFLOW_JOB, params![id, &now])?;
+    }
+    tx.commit()?;
+    Ok(Interrupted {
+        job_ids,
+        workflow_jobs: i64::try_from(workflow_ids.len()).unwrap_or(i64::MAX),
+    })
 }
 
 pub(crate) fn insert_event(

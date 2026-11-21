@@ -2674,6 +2674,21 @@ impl Metrics {
         emit(job_id, events);
     }
 
+    /// Drops an observation for a job that no process owns any more.
+    pub(crate) fn discard(&self, job_id: &str) {
+        if let Ok(mut book) = self.inner.lock() {
+            book.open.remove(job_id);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_open(&self, job_id: &str) -> bool {
+        self.inner
+            .lock()
+            .map(|book| book.open.contains_key(job_id))
+            .unwrap_or(false)
+    }
+
     /// A tag filter reached hosts and never ran a task other than Gathering Facts.
     pub(crate) fn tag_filter_matched_nothing(&self, job_id: &str) -> bool {
         self.inner

@@ -42,6 +42,7 @@ use rusqlite::Connection;
 
 use crate::backend::Backend;
 use crate::error::ApiError;
+use crate::features::jobs::store::Interrupted;
 use crate::runner::RunningProc;
 
 pub use config::{
@@ -167,6 +168,36 @@ impl AppState {
         self.backend.as_ref()
     }
 
+    /// Fails jobs and workflow runs that a stopped process left unfinished.
+    ///
+    /// The backend updates the rows and appends the event line in one
+    /// transaction. Memory from the old process is dropped afterwards so a
+    /// later cancel or relaunch starts from the stored state.
+    pub(crate) fn reconcile_interrupted(&self) -> Result<Interrupted, ApiError> {
+        let interrupted = self
+            .store()
+            .reconcile_interrupted(features::jobs::store::RESTARTED_BEFORE_FINISH)?;
+        if let Ok(mut canceled) = self.canceled.lock() {
+            for id in &interrupted.job_ids {
+                canceled.remove(id);
+            }
+        }
+        if let Ok(mut procs) = self.procs.lock() {
+            for id in &interrupted.job_ids {
+                procs.remove(id);
+            }
+        }
+        for id in &interrupted.job_ids {
+            self.metrics.discard(id);
+        }
+        tracing::info!(
+            jobs = interrupted.job_ids.len(),
+            workflow_jobs = interrupted.workflow_jobs,
+            "reconciled interrupted jobs"
+        );
+        Ok(interrupted)
+    }
+
     pub(crate) fn preflight_report(&self) -> Option<preflight::Report> {
         self.preflight.lock().ok().and_then(|report| report.clone())
     }
@@ -241,6 +272,9 @@ pub fn boot_with(mut cfg: Config, database: DatabaseConfig) -> anyhow::Result<Sh
         preflight: Mutex::new(None),
         catalogs,
     });
+    // No runner exists before the port opens, so anything still pending or
+    // running belongs to the previous process.
+    state.reconcile_interrupted()?;
     if state.engine() == "sqlite" {
         features::credentials::backfill_netbox_urls(&state)?;
     }
