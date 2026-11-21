@@ -10,6 +10,13 @@ async function noHorizontalScroll(page) {
   ).toBe(true);
 }
 
+async function expectTouchTarget(locator, name, { square = true } = {}) {
+  const box = await locator.boundingBox();
+  expect(box, `${name} is rendered`).not.toBeNull();
+  expect(box.height, `${name} is at least 44 px high`).toBeGreaterThanOrEqual(44);
+  if (square) expect(box.width, `${name} is at least 44 px wide`).toBeGreaterThanOrEqual(44);
+}
+
 async function signIn(page) {
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Sprache" })).toBeVisible();
@@ -222,6 +229,87 @@ test("keeps schedules readable and its touch targets at least 44 px", async ({ p
   expect(target.height).toBeGreaterThanOrEqual(44);
   expect(target.width).toBeGreaterThanOrEqual(44);
   await noHorizontalScroll(page);
+});
+
+test("keeps every phone touch target at least 44 px", async ({ page }) => {
+  test.setTimeout(90000);
+  const suffix = `${test.info().project.name}-${Date.now()}`.replace(/\s+/g, "-");
+  await signIn(page);
+  const schedule = await createSchedule(page, `Touch targets ${suffix}`);
+  const jobTemplate = await createShellTemplate(page, `Touch log ${suffix}`, "#!/bin/sh\necho \"touch log ok\"\n");
+  const headers = await teamHeaders(page);
+  const launched = await page.request.post(`/api/v1/templates/${jobTemplate.id}/launch`, { headers, data: { extra_vars: {} } });
+  expect(launched.status()).toBe(202);
+  const job = await launched.json();
+
+  for (const viewport of [{ width: 360, height: 732 }, { width: 412, height: 923 }]) {
+    const where = `${viewport.width}x${viewport.height}`;
+    await page.setViewportSize(viewport);
+
+    await openMenu(page);
+    await expectTouchTarget(page.getByRole("navigation").getByRole("link", { name: "Templates", exact: true }), `${where} nav link`);
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("button", { name: "Menu", exact: true })).toHaveAttribute("aria-expanded", "false");
+
+    await goTo(page, "Schedules");
+    const scheduleRow = page.locator(".schedule-table tbody tr").filter({ hasText: schedule.name }).first();
+    await expect(scheduleRow).toBeVisible();
+    await expectTouchTarget(scheduleRow.locator(".btn.compact").first(), `${where} compact button`);
+    await expectTouchTarget(scheduleRow.locator(".switch").first(), `${where} switch`);
+
+    await goTo(page, "Templates");
+    await page.locator("#template-table tbody tr").filter({ hasText: "Self-Heal" }).first().getByRole("link").first().click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByRole("heading", { name: "Edit template" })).toBeVisible();
+    await expectTouchTarget(dialog.getByRole("tab", { name: "General", exact: true }), `${where} dialog tab`);
+    await expectTouchTarget(dialog.locator(".field.check").filter({ hasText: "Prompt on launch" }), `${where} checkbox row`);
+    await dialog.getByRole("tab", { name: "Target", exact: true }).click();
+    await expectTouchTarget(dialog.locator('select[name="project_id"]'), `${where} dialog select`);
+    await dialog.getByRole("tab", { name: "Options", exact: true }).click();
+    await expectTouchTarget(dialog.locator(".chip-entry").first(), `${where} chip entry`);
+    await dialog.getByRole("button", { name: "Close" }).click();
+
+    await page.goto(`/#/jobs/${job.id}`);
+    await expect(page.locator("#log-wrap")).toBeVisible({ timeout: 30000 });
+    await expectTouchTarget(page.locator("label:has(#log-wrap)"), `${where} log wrap checkbox`);
+    await noHorizontalScroll(page);
+
+    await goTo(page, "Overview");
+    await page.getByRole("tab", { name: "Dashboard", exact: true }).click();
+    await expect(page.getByRole("heading", { level: 2, name: "Jobs finished per day" })).toBeVisible();
+    await page.getByRole("button", { name: "14 days", exact: true }).click();
+    const days = page.locator("[data-chart-day]");
+    await expect(days).toHaveCount(28);
+    const boxes = await days.evaluateAll((elements) => elements.map((element) => {
+      const rect = element.getBoundingClientRect();
+      return { height: rect.height, width: rect.width };
+    }));
+    for (const [index, box] of boxes.entries()) {
+      expect(box.width, `${where} chart day ${index + 1} is at least 44 px wide`).toBeGreaterThanOrEqual(44);
+      expect(box.height, `${where} chart day ${index + 1} is at least 44 px high`).toBeGreaterThanOrEqual(44);
+    }
+    const scrolls = await page.locator(".chart").evaluateAll((charts) => charts.map((chart) => ({
+      left: chart.scrollLeft,
+      max: chart.scrollWidth - chart.clientWidth,
+      visibleWidth: chart.clientWidth,
+    })));
+    for (const scroll of scrolls) {
+      expect(scroll.max, `${where} the 14-day chart scrolls on a phone`).toBeGreaterThan(0);
+      expect(scroll.visibleWidth, `${where} the chart still shows a group of days`).toBeGreaterThan(44 * 4);
+      expect(scroll.left, `${where} the chart opens on the newest day`).toBe(scroll.max);
+    }
+    const detail = page.locator("[data-chart-detail]").first();
+    await page.locator(".chart").first().locator("[data-chart-day]").last().click();
+    await expect(detail).toContainText(/successful|failed|canceled/i);
+    expect(await page.locator(".chart-day-total").allTextContents()).not.toHaveLength(0);
+    await noHorizontalScroll(page);
+
+    await openMenu(page);
+    await page.getByRole("button", { name: "Language" }).click();
+    const option = page.getByRole("option", { name: /English/ });
+    await expectTouchTarget(option, `${where} language option`);
+    await option.click();
+  }
 });
 
 test("shows an inventory host list with a compact sort control", async ({ page }) => {

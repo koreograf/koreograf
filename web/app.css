@@ -1389,14 +1389,32 @@ code, .mono { font-family: var(--mono); font-size: 13px; word-break: break-all; 
   .node-menu-button { width: 44px; height: 44px; min-height: 44px; min-width: 44px; }
   .wf-port-add { width: 44px; height: 44px; min-height: 44px; min-width: 44px; }
   input:not([type="checkbox"]):not([type="radio"]), select { min-height: 44px; }
-  textarea { min-height: 88px; }
-  .overlay-card.dialog textarea { min-height: 88px; }
-  .chips input.chip-entry { min-height: 0; }
+  .overlay-card.dialog input:not([type="checkbox"]):not([type="radio"]),
+  .overlay-card.dialog select,
+  .overlay-card.dialog textarea { min-height: 44px; }
+  textarea, .overlay-card.dialog textarea { min-height: 88px; }
+  .chips input.chip-entry,
+  .overlay-card.dialog .chips input.chip-entry { min-height: 44px; }
   .weekday-row label, .check-row { min-height: 44px; }
+  .field.check input,
+  .check-row input,
+  .weekday-row input[type="checkbox"],
+  .row > input[type="checkbox"] { width: 1.5rem; height: 1.5rem; }
   .lang-menu [role="option"] { min-height: 44px; }
   .dialog-tab { min-height: 44px; }
   .vault-option { min-height: 44px; }
   .account-link { display: flex; align-items: center; min-height: 44px; }
+  .version-line a { display: flex; align-items: center; min-height: 44px; }
+  .skip-link { min-height: 44px; }
   .row:has(> input[type="checkbox"]) { min-height: 44px; }
-  .field.check { min-height: 44px; }
+  .field.check { min-height: 44px; min-width: 44px; }
+  button.run-line { min-height: 44px; }
+  .advanced-fieldset summary,
+  .log-setup summary,
+  .node-params summary,
+  .node-section summary { min-height: 44px; padding-block: 11px; }
+  .chart { justify-content: flex-start; overflow-x: auto; overscroll-behavior-x: contain; }
+  .chart-day { flex: 0 1 64px; min-width: 44px; width: 44px; max-width: 64px; }
+  .chart-day:first-child { margin-left: auto; }
+  .chart-day:last-child { margin-right: auto; }
 }
