@@ -22,5 +22,8 @@
   "token_lifetime_365_days": "365 days",
   "token_lifetime_90_days": "90 days",
   "token_lifetime_never": "No expiry",
-  "token_never_expires": "Never expires"
+  "token_never_expires": "Never expires",
+  "token_scope": "Scope",
+  "token_scope_read": "Read-only",
+  "token_scope_write": "Read and write"
 }

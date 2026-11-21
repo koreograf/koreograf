@@ -1261,16 +1261,22 @@ test("the account page creates a token with a lifetime and shows its expiry", as
   await expect(page.getByRole("heading", { level: 1, name: "My account" })).toBeVisible();
 
   const form = page.locator("#token-form");
+  const scope = form.locator('select[name="scope"]');
+  await expect(scope).toBeVisible();
+  await expect(scope).toHaveValue("write");
+  await expect(scope.locator("option")).toHaveText(["Read and write", "Read-only"]);
   const lifetime = form.locator('select[name="expires_in_days"]');
   await expect(lifetime).toBeVisible();
   await expect(lifetime).toHaveValue("90");
   await expect(lifetime.locator("option")).toHaveText(["30 days", "90 days", "365 days", "No expiry"]);
+  await scope.selectOption("read");
   await lifetime.selectOption("30");
   await form.locator('input[name="name"]').fill("Playwright token");
   await form.getByRole("button", { name: "Create token", exact: true }).click();
 
   const row = page.getByRole("row", { name: /Playwright token/ });
   await expect(row).toBeVisible();
+  await expect(row.locator('td[data-label="Scope"]')).toContainText("Read-only");
   const expires = row.locator('td[data-label="Expires"]');
   await expect(expires).not.toHaveText("Never expires");
   await expect(expires).toContainText(/\d{2}\/\d{2}\/\d{4}/);
@@ -1278,6 +1284,7 @@ test("the account page creates a token with a lifetime and shows its expiry", as
   const tokens = await page.evaluate(async () => (await (await fetch("/api/v1/me/tokens")).json()));
   const created = tokens.find((item) => item.name === "Playwright token");
   expect(created).toBeTruthy();
+  expect(created.scope).toBe("read");
   expect(created.expired).toBe(false);
   expect(typeof created.expires_at).toBe("string");
 });

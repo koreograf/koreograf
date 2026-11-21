@@ -46,6 +46,9 @@ pub enum ApiError {
     /// A personal API token whose stored expiry is in the past.
     #[error("the token has expired")]
     TokenExpired,
+    /// A read-only personal API token used for a mutating request.
+    #[error("the token is read-only")]
+    ReadOnlyToken,
     /// A rejected sign-in. The key stays the same for every cause.
     #[error("sign-in failed")]
     SignInFailed,
@@ -195,6 +198,11 @@ impl IntoResponse for ApiError {
             Self::TokenExpired => (
                 StatusCode::UNAUTHORIZED,
                 "token_expired".to_string(),
+                BTreeMap::new(),
+            ),
+            Self::ReadOnlyToken => (
+                StatusCode::FORBIDDEN,
+                "token_is_read_only".to_string(),
                 BTreeMap::new(),
             ),
             Self::SignInFailed => (

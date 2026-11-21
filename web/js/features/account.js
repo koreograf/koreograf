@@ -42,6 +42,12 @@ export function tokenExpiryCell(token, now = Date.now()) {
     : date;
 }
 
+export function tokenScopeCell(token) {
+  return token.scope === "read"
+    ? `<span class="pill">${h("token_scope_read")}</span>`
+    : `<span class="muted">${h("token_scope_write")}</span>`;
+}
+
 async function pageAccount() {
   appState.setMe(await api("GET", "/api/v1/me"));
   const sessions = await api("GET", "/api/v1/me/sessions");
@@ -57,6 +63,7 @@ async function pageAccount() {
     return `<tr>
       <td>${esc(item.name)}</td>
       <td class="mono">${esc(item.prefix)}</td>
+      <td>${tokenScopeCell(item)}</td>
       <td class="small muted">${esc(when(item.created_at))}</td>
       <td>${tokenExpiryCell(item)}</td>
       <td class="small muted">${used}</td>
@@ -105,6 +112,13 @@ async function pageAccount() {
             <input name="name" required>
           </label>
           <label class="field">
+            <span>${h("token_scope")}</span>
+            <select class="fit" name="scope">
+              <option value="write" selected>${h("token_scope_write")}</option>
+              <option value="read">${h("token_scope_read")}</option>
+            </select>
+          </label>
+          <label class="field">
             <span>${h("token_lifetime")}</span>
             <select class="fit" name="expires_in_days">
               <option value="30">${h("token_lifetime_30_days")}</option>
@@ -115,7 +129,7 @@ async function pageAccount() {
           </label>
           <div><button class="btn pill primary" type="submit">${h("create_token")}</button></div>
         </form>
-        ${table([t("name"), t("prefix"), t("created"), t("expires"), t("last_used"), t("actions")], tokenRows)}
+        ${table([t("name"), t("prefix"), t("token_scope"), t("created"), t("expires"), t("last_used"), t("actions")], tokenRows)}
       </section>
     </div>`);
   const form = document.querySelector("#account-form");
@@ -135,7 +149,7 @@ async function pageAccount() {
       event.preventDefault();
       try {
         const days = tokenForm.expires_in_days.value;
-        const payload = { name: tokenForm.name.value };
+        const payload = { name: tokenForm.name.value, scope: tokenForm.scope.value };
         payload.expires_in_days = days === "" ? null : Number(days);
         const created = await api("POST", "/api/v1/me/tokens", payload);
         revealToken = created.secret;

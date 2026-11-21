@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::error::{ApiError, AppResult};
 
-pub(crate) const SCHEMA_VERSION: u32 = 7;
+pub(crate) const SCHEMA_VERSION: u32 = 8;
 const BASELINE_VERSION: u32 = 1;
 
 /// A session row moves its last-seen time at most once per interval, so a
@@ -99,6 +99,12 @@ pub(crate) const SQLITE_MIGRATIONS: &[Migration] = &[
             ("sessions", "last_seen_at"),
         ],
     },
+    Migration {
+        version: 8,
+        name: "0008_api_token_scope",
+        sql: include_str!("../migrations/sqlite/0008_api_token_scope.sql"),
+        legacy_columns: &[("api_tokens", "scope")],
+    },
 ];
 
 pub(crate) const POSTGRES_MIGRATIONS: &[Migration] = &[
@@ -147,6 +153,12 @@ pub(crate) const POSTGRES_MIGRATIONS: &[Migration] = &[
             ("sessions", "created_at"),
             ("sessions", "last_seen_at"),
         ],
+    },
+    Migration {
+        version: 8,
+        name: "0008_api_token_scope",
+        sql: include_str!("../migrations/postgres/0008_api_token_scope.sql"),
+        legacy_columns: &[("api_tokens", "scope")],
     },
 ];
 
@@ -709,6 +721,7 @@ pub struct ApiToken {
     pub id: String,
     pub name: String,
     pub prefix: String,
+    pub scope: String,
     pub created_at: String,
     pub last_used_at: Option<String>,
     pub expires_at: Option<String>,
@@ -718,6 +731,7 @@ pub struct ApiToken {
 pub struct ApiTokenTimes {
     pub created_at: String,
     pub expires_at: Option<String>,
+    pub scope: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1874,6 +1888,8 @@ mod tests {
         ensure_schema(&conn).unwrap();
         conn.execute("ALTER TABLE api_tokens DROP COLUMN expires_at", [])
             .unwrap();
+        conn.execute("ALTER TABLE api_tokens DROP COLUMN scope", [])
+            .unwrap();
         conn.execute(
             "INSERT INTO users (id, username, display_name, password_hash, auth_source,
                 is_admin, disabled, created_at)
@@ -1889,14 +1905,15 @@ mod tests {
         .unwrap();
         conn.pragma_update(None, "user_version", 5).unwrap();
         ensure_schema(&conn).unwrap();
-        let expires: Option<String> = conn
+        let (expires, scope): (Option<String>, String) = conn
             .query_row(
-                "SELECT expires_at FROM api_tokens WHERE id = 'token'",
+                "SELECT expires_at, scope FROM api_tokens WHERE id = 'token'",
                 [],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
         assert!(expires.is_none(), "an existing token was locked out");
+        assert_eq!(scope, "write", "an existing token lost write access");
         assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
     }
 

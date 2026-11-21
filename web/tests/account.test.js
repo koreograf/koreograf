@@ -86,3 +86,18 @@ test("the token expiry cell shows the date and marks an expired token", async ()
   assert.match(never, /Läuft nie ab/);
   assert.doesNotMatch(never, /class="pill"/);
 });
+
+test("a read-only token is marked in the token list", async () => {
+  const { tokenScopeCell } = await load();
+  const i18n = await import(pathToFileURL(join(__dirname, "..", "js", "core", "i18n.js")).href);
+  i18n.setCatalog("de", {
+    token_scope_read: "Nur lesen",
+    token_scope_write: "Lesen und schreiben",
+  });
+  const read = tokenScopeCell({ scope: "read" });
+  assert.match(read, /class="pill"/);
+  assert.match(read, /Nur lesen/);
+  const write = tokenScopeCell({ scope: "write" });
+  assert.doesNotMatch(write, /class="pill"/);
+  assert.match(write, /Lesen und schreiben/);
+});

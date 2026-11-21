@@ -49,15 +49,17 @@ pub(crate) const USER_BY_SESSION: &str = "SELECT u.id, u.username, u.display_nam
  FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?1";
 
 pub(crate) const CREATE_API_TOKEN: &str =
-    "INSERT INTO api_tokens (id, user_id, name, prefix, token_hash, created_at, expires_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
+    "INSERT INTO api_tokens (id, user_id, name, prefix, token_hash, created_at, expires_at, scope)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
 pub(crate) const LIST_API_TOKENS: &str =
-    "SELECT id, name, prefix, created_at, last_used_at, expires_at
+    "SELECT id, name, prefix, scope, created_at, last_used_at, expires_at
  FROM api_tokens WHERE user_id = ?1 ORDER BY created_at, name";
 pub(crate) const DELETE_API_TOKEN: &str = "DELETE FROM api_tokens WHERE id = ?1 AND user_id = ?2";
 pub(crate) const USER_BY_API_TOKEN: &str =
     "SELECT u.id, u.username, u.display_name, u.password_hash,
         u.auth_source, u.is_admin, u.disabled, u.created_at, u.email, t.id, t.expires_at
+ FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?1";
+pub(crate) const API_TOKEN_READ_ONLY: &str = "SELECT t.scope, t.expires_at, u.disabled
  FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?1";
 pub(crate) const TOUCH_API_TOKEN: &str = "UPDATE api_tokens SET last_used_at = ?2 WHERE id = ?1";
 
@@ -270,7 +272,8 @@ pub(crate) fn create_api_token(
             prefix,
             token_hash,
             times.created_at,
-            times.expires_at
+            times.expires_at,
+            times.scope
         ],
     )?;
     Ok(())
@@ -282,6 +285,21 @@ pub(crate) fn list_api_tokens(c: &Connection, user_id: &str) -> AppResult<Vec<Ap
 
 pub(crate) fn delete_api_token(c: &Connection, id: &str, user_id: &str) -> AppResult<bool> {
     Ok(c.execute(DELETE_API_TOKEN, params![id, user_id])? > 0)
+}
+
+pub(crate) fn api_token_read_only(c: &Connection, token_hash: &str) -> AppResult<bool> {
+    let found = sql::sqlite_opt(c, API_TOKEN_READ_ONLY, [token_hash], |row| {
+        Ok((
+            SqlRow::get::<String>(row, 0)?,
+            SqlRow::get::<Option<String>>(row, 1)?,
+            SqlRow::get::<bool>(row, 2)?,
+        ))
+    })?;
+    Ok(matches!(
+        found,
+        Some((scope, expires_at, false))
+            if scope == "read" && !db::has_expired(expires_at.as_deref())
+    ))
 }
 
 pub(crate) fn user_by_api_token(c: &Connection, token_hash: &str) -> AppResult<Option<User>> {
@@ -330,9 +348,10 @@ pub(crate) fn row_api_token<R: SqlRow>(row: &R) -> AppResult<ApiToken> {
         id: row.get(0)?,
         name: row.get(1)?,
         prefix: row.get(2)?,
-        created_at: row.get(3)?,
-        last_used_at: row.get(4)?,
-        expires_at: row.get(5)?,
+        scope: row.get(3)?,
+        created_at: row.get(4)?,
+        last_used_at: row.get(5)?,
+        expires_at: row.get(6)?,
     })
 }
 

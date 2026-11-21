@@ -40,6 +40,12 @@ pub fn api_token_user(state: &Shared, token: &str) -> AppResult<Option<AuthUser>
     Ok(Some(user.into()))
 }
 
+/// True for a live read-only token. Invalid, expired, and disabled accounts
+/// are false so the normal auth path keeps its 401 answer.
+pub fn api_token_read_only(state: &Shared, token: &str) -> AppResult<bool> {
+    state.store().api_token_read_only(&hash_api_token(token))
+}
+
 pub fn authorize(
     store: &dyn crate::backend::Backend,
     user: &AuthUser,
