@@ -1243,3 +1243,91 @@ fn job_page_counts_only_this_jobs_omitted_events() {
     assert!(events.iter().all(|event| !event.line.starts_with("other-")));
     let _ = std::fs::remove_dir_all(&state.cfg.data_dir);
 }
+
+#[test]
+fn the_prune_visits_only_finished_jobs_with_events_in_batches() {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-prune-batch-{nanos}"));
+    std::fs::create_dir_all(&dir).expect("dir");
+    let backend =
+        crate::backend::open(&crate::config::DatabaseConfig::Sqlite, &dir).expect("database");
+    let mut conn = backend.sqlite().expect("sqlite").lock().expect("lock");
+    let cutoff = crate::db::minus_days(5).expect("cutoff");
+    let old = crate::db::minus_days(10).expect("old");
+    let recent = crate::db::now();
+    let insert_job =
+        |conn: &rusqlite::Connection, id: &str, status: &str, finished: Option<&str>| {
+            conn.execute(
+                "INSERT INTO jobs (
+                id, team_id, name, tool, status, extra_vars, launched_by, trigger,
+                started_at, finished_at, created_at
+             ) VALUES (?1, 'team', 'Prune', 'shell', ?2, '{}', 'admin', 'manual',
+                ?3, ?4, ?3)",
+                rusqlite::params![id, status, old, finished],
+            )
+            .expect("job");
+        };
+    let insert_event = |conn: &rusqlite::Connection, id: &str| {
+        conn.execute(
+            "INSERT INTO job_events (job_id, ts, stream, line) VALUES (?1, ?2, 'stdout', 'line')",
+            rusqlite::params![id, old],
+        )
+        .expect("event");
+    };
+    for index in 0..5 {
+        let id = format!("old-events-{index}");
+        insert_job(&conn, &id, "successful", Some(&old));
+        insert_event(&conn, &id);
+    }
+    for index in 0..3 {
+        insert_job(&conn, &format!("old-bare-{index}"), "failed", Some(&old));
+    }
+    insert_job(&conn, "old-running", "running", None);
+    insert_event(&conn, "old-running");
+    insert_job(&conn, "recent", "successful", Some(&recent));
+    insert_event(&conn, "recent");
+
+    let mut batches = 0;
+    let mut jobs = 0;
+    let mut events = 0;
+    loop {
+        let batch =
+            crate::features::jobs::store::prune_job_logs(&mut conn, &cutoff, 2).expect("batch");
+        if batch.job_ids.is_empty() {
+            break;
+        }
+        assert!(batch.job_ids.len() <= 2);
+        batches += 1;
+        jobs += batch.job_ids.len();
+        events += batch.events;
+        assert!(batches < 10, "the batch loop did not stop");
+    }
+    assert_eq!(batches, 3);
+    assert_eq!(jobs, 5);
+    assert_eq!(events, 5);
+
+    let again =
+        crate::features::jobs::store::prune_job_logs(&mut conn, &cutoff, 2).expect("second pass");
+    assert!(again.job_ids.is_empty());
+    assert_eq!(again.events, 0);
+
+    let bare = crate::features::jobs::store::job(&conn, "old-bare-0")
+        .expect("job lookup")
+        .expect("old job");
+    assert_eq!(bare.status, "failed");
+    assert!(bare
+        .finished_at
+        .as_deref()
+        .is_some_and(|at| at < cutoff.as_str()));
+    let running = crate::features::jobs::store::job(&conn, "old-running")
+        .expect("job lookup")
+        .expect("running job");
+    assert_eq!(running.status, "running");
+
+    drop(conn);
+    drop(backend);
+    let _ = std::fs::remove_dir_all(dir);
+}

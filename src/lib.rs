@@ -212,6 +212,12 @@ impl AppState {
         features::jobs::prune_finished_job_logs(self)
     }
 
+    /// Starts the background retention task. It prunes once now and then once
+    /// a day. The server calls this after the port is bound.
+    pub fn spawn_log_retention(self: &Shared) {
+        features::jobs::spawn_log_retention(self.clone());
+    }
+
     pub(crate) fn preflight_report(&self) -> Option<preflight::Report> {
         self.preflight.lock().ok().and_then(|report| report.clone())
     }
@@ -294,9 +300,6 @@ pub fn boot_with(mut cfg: Config, database: DatabaseConfig) -> anyhow::Result<Sh
     // No runner exists before the port opens, so anything still pending or
     // running belongs to the previous process.
     state.reconcile_interrupted()?;
-    if let Err(err) = state.prune_job_logs() {
-        tracing::warn!(error = %err, "job log retention");
-    }
     if state.engine() == "sqlite" {
         features::credentials::backfill_netbox_urls(&state)?;
     }
@@ -335,11 +338,13 @@ pub async fn serve(cfg: Config) -> anyhow::Result<()> {
     if state.engine() == "sqlite" {
         features::schedules::spawn(state.clone());
     }
-    features::jobs::spawn_log_retention(state.clone());
     let bind = state.cfg.bind.clone();
     let data_dir = state.cfg.data_dir.display().to_string();
     let app = router(state.clone());
     let listener = tokio::net::TcpListener::bind(&bind).await?;
+    // The first retention pass can touch a large history. Start it only once
+    // the port is open so it cannot delay the first request.
+    state.spawn_log_retention();
     if state.cfg.mcp {
         tracing::info!("MCP over HTTP is enabled at POST /mcp");
     } else {

@@ -58,9 +58,15 @@ The job page shows a **Structured** and a **Raw log** switch when the job is Ans
 
 `KOREOGRAF_JOB_LOG_RETENTION_DAYS` bounds the output and the work directory. The default is 30 days; `0` turns pruning off. Only finished jobs count: a job needs a status of `successful`, `failed`, or `canceled` and a `finished_at` older than the cutoff. `pending` and `running` jobs and a job without `finished_at` keep their events and directory.
 
-A prune runs once at startup and then at most once every 24 hours while the process is up. For each such job it deletes that job's `job_events` rows in one transaction, one statement per job, and removes `data/jobs/<id>`. The directory removal never follows a symlink and treats a missing directory as already gone. The `jobs` row stays with its status, timings, name, trigger, launch actor, failed hosts, and workflow references, so history, the dashboard, metrics, and host run history keep working. No credential file, extra variable, or other secret is read or logged during the prune.
+A prune runs once shortly after startup and then at most once every 24 hours while the process is up. The first pass runs in the background after the port is open, on the blocking pool, so a large history does not delay the first start. It deletes `job_events` only for finished jobs that still have events, in bounded batches, and releases the database lock between batches. A separate sweep removes `data/jobs/<id>` for every finished job past the cutoff. It reads the work-directory listing and asks the database about only those ids, so it does not walk the whole job history. A second run therefore does no event delete for a job whose output is already gone. The directory removal never follows a symlink and treats a missing directory as already gone. The `jobs` row stays with its status, timings, name, trigger, launch actor, failed hosts, and workflow references, so history, the dashboard, metrics, and host run history keep working. No credential file, extra variable, or other secret is read or logged during the prune.
+
+When a pass removes events or directories it writes one log line with the job, event, and directory counts, and names `KOREOGRAF_JOB_LOG_RETENTION_DAYS`. An operator can use that line to see why old output disappeared.
 
 A pruned job still opens from the job list. Its log area shows the normal empty state and `GET /api/jobs/{id}/output` returns no lines.
+
+### Upgrading
+
+Installations that predate retention kept every finished job's output and work directory. The default of 30 days now applies on the first start after the upgrade: output and `data/jobs/<id>` directories older than 30 days are removed shortly after the port opens. To keep more, set `KOREOGRAF_JOB_LOG_RETENTION_DAYS` before that first start. `0` keeps everything. The `jobs` rows stay either way, so history, metrics, and host run history are unaffected.
 
 ## Prompt on launch
 
