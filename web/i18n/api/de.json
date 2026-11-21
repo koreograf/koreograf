@@ -1,4 +1,5 @@
 {
+  "a_job_is_running": "Ein Auftrag läuft. Warte, bis er beendet ist, bevor du den Cache leerst.",
   "a_node_has_no_id": "Ein Knoten hat keine ID.",
   "a_passphrase_needs_a_private_key": "Passphrase braucht einen privaten Schlüssel.",
   "a_project_stays_in_the_organization_of_the": "Ein Projekt bleibt in der Organisation des gewählten Teams.",

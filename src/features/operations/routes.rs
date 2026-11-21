@@ -625,16 +625,22 @@ pub async fn clear_cache(
 ) -> AppResult<StatusCode> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Owner)?;
-    if state.store().team_jobs_busy(&team)? {
-        return Err(ApiError::conflict("a_job_is_running"));
-    }
     let team_name = state
         .store()
         .team_by_id(&team)?
         .map(|item| item.name)
         .unwrap_or_default();
-    cacheinfo::clear_team_cache(&state.cfg.data_dir, &team)
-        .map_err(|err| ApiError::Internal(format!("clear the cache: {err}")))?;
+    {
+        let _cache = state
+            .cache
+            .lock()
+            .map_err(|_| ApiError::Internal("cache lock is damaged".into()))?;
+        if state.store().team_jobs_busy(&team)? {
+            return Err(ApiError::conflict("a_job_is_running"));
+        }
+        cacheinfo::clear_team_cache(&state.cfg.data_dir, &team)
+            .map_err(|err| ApiError::Internal(format!("clear the cache: {err}")))?;
+    }
     activity::note(
         &state,
         &team,

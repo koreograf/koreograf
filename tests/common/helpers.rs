@@ -735,6 +735,7 @@ pub fn collect_rust_keys(dir: &Path, keys: &mut BTreeSet<String>) {
             .unwrap_or_else(|err| panic!("read {}: {err}", path.display()));
         push_call_key(&text, "ApiError::bad(", keys);
         push_call_key(&text, "ApiError::bad_vars(", keys);
+        push_call_key(&text, "ApiError::conflict(", keys);
         push_call_key(&text, "ApiError::too_large(", keys);
         push_call_key(&text, "::message(", keys);
         push_err_key(&text, keys);
