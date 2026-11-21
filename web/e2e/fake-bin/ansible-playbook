@@ -1,0 +1,41 @@
+#!/bin/sh
+# Playwright fixture. It stands in for ansible-playbook on CI, where Ansible is
+# not installed, and emits the same raw lines plus the Koreograf sidecar that
+# the real callback plugin writes.
+set -eu
+
+events="${KOREOGRAF_WORK}/ansible-events.jsonl"
+
+mkdir -p "${KOREOGRAF_WORK}"
+cat >>"$events" <<'EOF'
+{"type":"play_start","play":"Structured demo","index":1}
+{"type":"task_start","play":"Structured demo","play_index":1,"index":1,"task":"Install packages","role":"web"}
+{"type":"host_result","play":"Structured demo","play_index":1,"index":1,"task":"Install packages","role":"web","host":"localhost","status":"changed","duration":1.2,"msg":"1 package changed","stdout":"installed nginx"}
+{"type":"task_start","play":"Structured demo","play_index":1,"index":2,"task":"Check service"}
+{"type":"host_result","play":"Structured demo","play_index":1,"index":2,"task":"Check service","host":"localhost","status":"failed","duration":0.4,"msg":"Service is not running","stderr":"nginx: down","rc":1}
+{"type":"task_start","play":"Structured demo","play_index":1,"index":3,"task":"Read a secret"}
+{"type":"host_result","play":"Structured demo","play_index":1,"index":3,"task":"Read a secret","host":"localhost","status":"ok","duration":0.1,"censored":true}
+{"type":"playbook_end"}
+EOF
+
+cat <<'EOF'
+PLAY [Structured demo] *********************************************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [localhost]
+
+TASK [web : Install packages] **************************************************
+changed: [localhost] => {"changed": true, "msg": "1 package changed"}
+RAW LOG MARKER: the raw log stays unchanged.
+
+TASK [Check service] ***********************************************************
+fatal: [localhost]: FAILED! => {"changed": false, "msg": "Service is not running", "rc": 1}
+
+TASK [Read a secret] ***********************************************************
+ok: [localhost] => {"censored": "the output has been hidden"}
+
+PLAY RECAP *********************************************************************
+localhost                  : ok=2    changed=1    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0
+EOF
+
+exit 2

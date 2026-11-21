@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+mod ansible_events;
 mod backend;
 mod cacheinfo;
 mod config;

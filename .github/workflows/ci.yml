@@ -212,7 +212,7 @@ jobs:
       - name: Test the web modules
         run: node --test 'web/tests/*.test.js'
       - name: Parse the image harness
-        run: python3 -m py_compile tests/harness/scripts/image-smoke.py tests/harness/scripts/unix-socket.py
+        run: python3 -m py_compile tests/harness/scripts/image-smoke.py tests/harness/scripts/unix-socket.py src/ansible_events.py
 
   browser:
     name: browser

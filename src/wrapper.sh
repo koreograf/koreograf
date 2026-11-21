@@ -178,6 +178,11 @@ run_ansible() {
   export ANSIBLE_HOST_KEY_CHECKING=False
   export ANSIBLE_FORCE_COLOR=0
   export ANSIBLE_RETRY_FILES_ENABLED=0
+  # Structured events stay next to the unchanged stdout log. The callback is a
+  # notification plugin, so the default stdout callback keeps its output.
+  export ANSIBLE_CALLBACK_PLUGINS="$KOREOGRAF_WORK/callback_plugins${ANSIBLE_CALLBACK_PLUGINS:+:$ANSIBLE_CALLBACK_PLUGINS}"
+  export ANSIBLE_CALLBACKS_ENABLED="koreograf_events${ANSIBLE_CALLBACKS_ENABLED:+,$ANSIBLE_CALLBACKS_ENABLED}"
+  export ANSIBLE_KOREOGRAF_EVENTS="$KOREOGRAF_WORK/ansible-events.jsonl"
   export ANSIBLE_LOCAL_TEMP="$KOREOGRAF_WORK/tmp"
   export ANSIBLE_SSH_CONTROL_PATH_DIR="$KOREOGRAF_WORK/tmp/cp"
   if [ -n "${KOREOGRAF_PRIVATE_KEY:-}" ]; then

@@ -32,6 +32,28 @@ On the job page, `fatal:`, `UNREACHABLE!`, `ERROR!`, and a recap line with `fail
 
 Above the log, an Ansible job shows a result summary built from its `PLAY RECAP` lines: one row per host with `ok`, `changed`, `unreachable`, `failed`, `skipped`, `rescued`, and `ignored`. A host with a failed or unreachable count is marked. The summary updates while the job runs and stays hidden when the output has no recap. The search field highlights every match without changing the log text, shows `n of m`, and moves to the next or previous match with Enter or Shift+Enter; it keeps working while output streams in. **Jump to first failure** scrolls to the first line that the page marks as a failure. **Wrap lines** is off by default. The log scrolls to the end only while the reader is already at the bottom; scrolling up stops that, and **Jump to end** turns it back on. The log stays plain text: a line with `<script>` or `&lt;` is shown literally, including while a search match is highlighted.
 
+## Structured Ansible output
+
+An Ansible job also writes a structured event stream next to its stdout. The runner writes a small Koreograf callback plugin into `callback_plugins/koreograf_events.py` in the job work directory, adds that directory to `ANSIBLE_CALLBACK_PLUGINS`, and enables the `koreograf_events` notification callback in `ANSIBLE_CALLBACKS_ENABLED`. The default stdout callback stays in place, so `stdout` and `stderr` are unchanged. A container job sees the same directory through its `/runner/work` mount; no image or execution environment needs a new file. OpenTofu and Shell jobs write no structured events.
+
+The callback appends one JSON object per line to `ansible-events.jsonl` in the work directory. A tailer in the runner reads that file while the job runs and stores each event in `job_events` under the `ansible` stream. The raw log queries leave that stream out, so `GET /api/jobs/{id}/output`, the stored page events, the line budget, the 8 MiB cap, and the gap notice work exactly as before. The stream survives job retention pruning because it lives in the same table and is deleted with the job's other events.
+
+The event types are:
+
+```json
+{"type":"play_start","play":"Site","index":1}
+{"type":"task_start","play":"Site","play_index":1,"index":1,"task":"Deploy","role":"web","handler":false}
+{"type":"host_result","play":"Site","play_index":1,"index":1,"task":"Deploy","role":"web","host":"web-1","status":"failed","duration":1.25,"msg":"boom","stdout":"…","stderr":"…","diff":"…","rc":2,"changed":true}
+{"type":"playbook_end"}
+{"type":"limit","events":2000,"bytes":4194304}
+```
+
+`status` is one of `ok`, `changed`, `failed`, `skipped`, or `unreachable`. `duration` is seconds as a float and is present when Ansible reported the task start. `msg`, `stdout`, `stderr`, and `diff` are optional. `diff` is the JSON text of Ansible's diff value.
+
+A result with `_ansible_no_log` or Ansible's `censored` marker stores only `"censored": true`; `msg`, `stdout`, `stderr`, and `diff` are not written at all. The runner sanitises every line again: it accepts only the fields above, trims each text field to 4,000 characters (the same bound as a raw log line), replaces the job work directory and data directory with `[work]`, and stops after 2,000 events or 4 MiB with one final `limit` event. A malformed line is skipped. Paths on the remote host are left as Ansible reported them.
+
+The job page shows a **Structured** and a **Raw log** switch when the job is Ansible and events exist. The structured view is a plays → tasks → hosts tree with a status colour and label on every node, per-task duration, collapsible sections, a host filter, a status filter, and a failed-first order. A host row expands to its message, standard output, standard error, return code, and diff. The existing `PLAY RECAP` table and every raw-log tool stay in place. The switch stores the choice in `localStorage` under `koreograf.job-output-view`. Without events, for an OpenTofu or Shell job, and after a pruned job, the page stays on the raw log and does not show an empty tree. Live events arrive on the existing `/api/jobs/{id}/events` SSE stream as `ansible` events; the page does not poll.
+
 ## Retention
 
 `KOREOGRAF_JOB_LOG_RETENTION_DAYS` bounds the output and the work directory. The default is 30 days; `0` turns pruning off. Only finished jobs count: a job needs a status of `successful`, `failed`, or `canceled` and a `finished_at` older than the cutoff. `pending` and `running` jobs and a job without `finished_at` keep their events and directory.

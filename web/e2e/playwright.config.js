@@ -7,7 +7,7 @@ const { dataDir, password, port, root, username } = require("./env");
 
 module.exports = defineConfig({
   testDir: __dirname,
-  testMatch: /(smoke|mobile)\.spec\.js/,
+  testMatch: /(smoke|mobile|structured)\.spec\.js/,
   timeout: 30000,
   fullyParallel: false,
   workers: 1,
@@ -21,6 +21,7 @@ module.exports = defineConfig({
   },
   projects: [
     { name: "chromium", testMatch: "smoke.spec.js", use: { ...devices["Desktop Chrome"] } },
+    { name: "structured", testMatch: "structured.spec.js", use: { ...devices["Desktop Chrome"] } },
     { name: "iPhone 13", testMatch: "mobile.spec.js", use: { ...devices["iPhone 13"], browserName: "chromium" } },
     { name: "Pixel 7", testMatch: "mobile.spec.js", use: { ...devices["Pixel 7"] } },
   ],
@@ -43,6 +44,7 @@ module.exports = defineConfig({
       KOREOGRAF_LOCAL_RUNNER_FOR: "admins",
       KOREOGRAF_JOB_TIMEOUT_SECS: "120",
       RUST_LOG: "koreograf=warn",
+      PATH: `${join(__dirname, "fake-bin")}:${process.env.PATH || ""}`,
     },
   },
 });
