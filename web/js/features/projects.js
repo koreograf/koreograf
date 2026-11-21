@@ -4,7 +4,7 @@ import { confirmDialog } from "../core/dialog.js";
 import { can, go, handle, markSaved, needTeam, route, shell } from "../core/app.js";
 import { addLink, emptyState, esc, h, orgOptions, paramRow, selectOptions, table } from "../core/dom.js";
 import { clearEditHash, editQuery, openEditDialog, rememberEditHash } from "../core/edit.js";
-import { when } from "../core/format.js";
+import { lastSyncActor, lastSyncCell, when } from "../core/format.js";
 import { t } from "../core/i18n.js";
 import { registerRedirect, registerRoute } from "../core/router.js";
 import { openCredentialCreator } from "./credentials.js";
@@ -13,6 +13,10 @@ function grantLabel(item) {
   return item.team_ids && item.team_ids.length
     ? t("count_teams", { count: item.team_ids.length })
     : t("all_teams_in_the_organization");
+}
+
+export function canSyncProject(item) {
+  return can("operator") && Boolean(item) && item.source_type === "git";
 }
 
 export function projectMatches(item, needle) {
@@ -66,7 +70,7 @@ function bindProjectCredential(form, credentials) {
 
 async function pageProjects() {
   if (!needTeam()) return;
-  const projects = await api("GET", "/api/v1/projects");
+  let projects = await api("GET", "/api/v1/projects");
   shell(t("projects"), `
     <section class="card">
       <input class="search" id="project-search" placeholder="${h("search_projects")}" autocomplete="off">
@@ -83,10 +87,34 @@ async function pageProjects() {
         : emptyState("empty_projects", can("operator") ? "#/projects?new=1" : "", "new_project");
       return;
     }
-    const rows = shown.map((item) =>
-      `<tr><td><a href="#/projects/${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(item.organization_name || "")}</td><td>${esc(item.source_type)}</td><td class="small muted">${esc(grantLabel(item))}</td><td>${can("operator") ? `<a class="btn" href="#/projects?edit=${esc(item.id)}">${h("edit")}</a>` : ""}</td></tr>`
-    );
-    host.innerHTML = table([t("name"), t("organization"), t("type"), t("visibility"), ""], rows);
+    const rows = shown.map((item) => {
+      const sync = canSyncProject(item)
+        ? `<button class="btn" type="button" data-sync-project="${esc(item.id)}">${h("sync")}</button>`
+        : "";
+      const actions = can("operator")
+        ? `<div class="row"><a class="btn" href="#/projects?edit=${esc(item.id)}">${h("edit")}</a>${sync}</div>`
+        : sync;
+      return `<tr><td><a href="#/projects/${esc(item.id)}">${esc(item.name)}</a></td><td>${esc(item.organization_name || "")}</td><td>${esc(item.source_type)}</td><td class="small muted">${esc(grantLabel(item))}</td><td class="small">${lastSyncCell(item)}</td><td>${actions}</td></tr>`;
+    });
+    host.innerHTML = table([t("name"), t("organization"), t("type"), t("visibility"), t("last_sync"), ""], rows);
+    document.querySelectorAll("[data-sync-project]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        if (button.disabled) return;
+        button.disabled = true;
+        button.setAttribute("aria-busy", "true");
+        button.textContent = t("syncing");
+        try {
+          await api("POST", `/api/v1/projects/${encodeURIComponent(button.dataset.syncProject)}/sync`, {});
+          projects = await api("GET", "/api/v1/projects");
+          drawProjects();
+        } catch (error) {
+          button.disabled = false;
+          button.removeAttribute("aria-busy");
+          button.textContent = t("sync");
+          handle(error);
+        }
+      });
+    });
   };
   document.querySelector("#project-search").addEventListener("input", drawProjects);
   drawProjects();
@@ -193,11 +221,13 @@ async function openProjectDialog(item, initialTab = "") {
 
 function projectSyncText(project) {
   const status = { success: t("success"), failed: t("failed") }[project.last_sync_status] || t("never");
-  return t("last_synced_value", {
+  const base = t("last_synced_value", {
     time: project.last_sync_at ? when(project.last_sync_at) : t("never"),
     commit: project.last_sync_commit || "—",
     status,
   });
+  const actor = lastSyncActor(project);
+  return actor ? `${base} · ${actor}` : base;
 }
 
 async function pageProject(id) {

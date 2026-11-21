@@ -51,6 +51,7 @@ pub(super) struct ProjectResponse {
     pub(super) last_sync_at: String,
     pub(super) last_sync_commit: String,
     pub(super) last_sync_status: String,
+    pub(super) last_sync_by: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) sync: Option<SyncResponse>,
 }
@@ -76,6 +77,7 @@ impl ProjectResponse {
             last_sync_at: project.last_sync_at.clone(),
             last_sync_commit: project.last_sync_commit.clone(),
             last_sync_status: project.last_sync_status.clone(),
+            last_sync_by: project.last_sync_by.clone(),
             sync: None,
         }
     }

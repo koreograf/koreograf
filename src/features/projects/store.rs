@@ -11,7 +11,7 @@ pub(crate) const INSERT_PROJECT: &str = "INSERT INTO projects (
 pub(crate) const LIST_PROJECTS: &str =
     "SELECT p.id, p.team_id, COALESCE(p.organization_id, ''), COALESCE(o.name, ''), \
      p.name, p.source_type, p.source, p.revision, p.credential_id, p.created_at, p.admin_saved, \
-     p.last_sync_at, p.last_sync_commit, p.last_sync_status
+     p.last_sync_at, p.last_sync_commit, p.last_sync_status, p.last_sync_by
      FROM projects p
      JOIN teams t ON t.id = ?1
      LEFT JOIN organizations o ON o.id = p.organization_id
@@ -26,7 +26,7 @@ pub(crate) const LIST_PROJECTS: &str =
 pub(crate) const PROJECT_BY_ID: &str =
     "SELECT p.id, p.team_id, COALESCE(p.organization_id, ''), COALESCE(o.name, ''), \
      p.name, p.source_type, p.source, p.revision, p.credential_id, p.created_at, p.admin_saved, \
-     p.last_sync_at, p.last_sync_commit, p.last_sync_status
+     p.last_sync_at, p.last_sync_commit, p.last_sync_status, p.last_sync_by
      FROM projects p
      LEFT JOIN organizations o ON o.id = p.organization_id WHERE p.id = ?1";
 pub(crate) const PROJECT_VISIBLE: &str = "SELECT 1 FROM projects p
@@ -63,10 +63,10 @@ pub(crate) const SET_PROJECT_DETAILS: &str =
 pub(crate) const SET_PROJECT_CREDENTIAL: &str =
     "UPDATE projects SET credential_id = ?2 WHERE id = ?1";
 pub(crate) const SET_PROJECT_SYNC_SUCCESS: &str =
-    "UPDATE projects SET last_sync_at = ?2, last_sync_commit = ?3, last_sync_status = 'success'
-     WHERE id = ?1";
+    "UPDATE projects SET last_sync_at = ?2, last_sync_commit = ?3, last_sync_status = 'success',
+     last_sync_by = ?4 WHERE id = ?1";
 pub(crate) const SET_PROJECT_SYNC_FAILED: &str =
-    "UPDATE projects SET last_sync_status = 'failed' WHERE id = ?1";
+    "UPDATE projects SET last_sync_status = 'failed', last_sync_by = ?2 WHERE id = ?1";
 pub(crate) const SET_PROJECT_ADMIN_SAVED: &str =
     "UPDATE projects SET admin_saved = ?2 WHERE id = ?1";
 
@@ -192,16 +192,17 @@ pub(crate) fn set_project_sync_success(
     id: &str,
     at: &str,
     commit: &str,
+    by: &str,
 ) -> AppResult<()> {
-    let changed = c.execute(SET_PROJECT_SYNC_SUCCESS, params![id, at, commit])?;
+    let changed = c.execute(SET_PROJECT_SYNC_SUCCESS, params![id, at, commit, by])?;
     if changed == 0 {
         return Err(ApiError::NotFound);
     }
     Ok(())
 }
 
-pub(crate) fn set_project_sync_failed(c: &Connection, id: &str) -> AppResult<()> {
-    let changed = c.execute(SET_PROJECT_SYNC_FAILED, [id])?;
+pub(crate) fn set_project_sync_failed(c: &Connection, id: &str, by: &str) -> AppResult<()> {
+    let changed = c.execute(SET_PROJECT_SYNC_FAILED, params![id, by])?;
     if changed == 0 {
         return Err(ApiError::NotFound);
     }
@@ -245,6 +246,7 @@ pub(crate) fn row_project<R: SqlRow>(row: &R) -> AppResult<Project> {
         last_sync_at: row.get(11)?,
         last_sync_commit: row.get(12)?,
         last_sync_status: row.get(13)?,
+        last_sync_by: row.get(14)?,
     })
 }
 

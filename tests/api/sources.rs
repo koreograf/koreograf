@@ -100,6 +100,9 @@ fn inventory_shape(
         "sources": sources,
         "host_count": hosts.len(),
         "group_count": group_count,
+        "last_sync_at": "",
+        "last_sync_by": "",
+        "last_sync_status": "",
         "hosts": hosts,
     })
 }
@@ -373,7 +376,13 @@ async fn source_endpoints_return_the_documented_shape() {
                 ],
                 2,
             ),
-            json!({"collisions": [], "dropped_vars": []}),
+            json!({
+                "collisions": [],
+                "dropped_vars": [],
+                "last_sync_at": synced_source["last_sync_at"].clone(),
+                "last_sync_by": "admin",
+                "last_sync_status": "success",
+            }),
         )
     );
 
@@ -405,7 +414,13 @@ async fn source_endpoints_return_the_documented_shape() {
                 ],
                 2,
             ),
-            json!({"collisions": [], "dropped_vars": []}),
+            json!({
+                "collisions": [],
+                "dropped_vars": [],
+                "last_sync_at": synced["last_sync_at"].clone(),
+                "last_sync_by": "admin",
+                "last_sync_status": "success",
+            }),
         )
     );
 
@@ -430,21 +445,28 @@ async fn source_endpoints_return_the_documented_shape() {
     );
     assert_eq!(
         deleted,
-        inventory_shape(
-            &deleted,
-            &team,
-            "Sources shape",
-            PROJECT_INI,
-            "project",
-            json!({"path": "inventory/hosts.ini", "project_id": project_id}),
-            Value::Null,
-            vec![remaining],
-            vec![host(
-                "db-1",
-                json!(["db"]),
-                json!({"ansible_host": "10.0.0.9"})
-            )],
-            1,
+        with_extras(
+            inventory_shape(
+                &deleted,
+                &team,
+                "Sources shape",
+                PROJECT_INI,
+                "project",
+                json!({"path": "inventory/hosts.ini", "project_id": project_id}),
+                Value::Null,
+                vec![remaining],
+                vec![host(
+                    "db-1",
+                    json!(["db"]),
+                    json!({"ansible_host": "10.0.0.9"})
+                )],
+                1,
+            ),
+            json!({
+                "last_sync_at": deleted["last_sync_at"].clone(),
+                "last_sync_by": "admin",
+                "last_sync_status": "success",
+            }),
         )
     );
 

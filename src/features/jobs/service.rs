@@ -707,7 +707,7 @@ pub fn discard_project_checkout(state: &Shared, project: &db::Project) {
     let _ = std::fs::remove_dir_all(dest);
 }
 
-pub async fn sync_project(state: &Shared, project: &db::Project) -> AppResult<String> {
+pub async fn sync_project(state: &Shared, project: &db::Project, by: &str) -> AppResult<String> {
     if project.source_type != "git" {
         return Ok(project.source.clone());
     }
@@ -730,11 +730,12 @@ pub async fn sync_project(state: &Shared, project: &db::Project) -> AppResult<St
                 &project.id,
                 &db::now(),
                 commit.as_deref().unwrap_or(""),
+                by,
             )?;
             Ok(path.display().to_string())
         }
         Err(err) => {
-            state.store().set_project_sync_failed(&project.id)?;
+            state.store().set_project_sync_failed(&project.id, by)?;
             Err(ApiError::from(err))
         }
     }

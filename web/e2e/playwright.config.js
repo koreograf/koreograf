@@ -1,5 +1,7 @@
 "use strict";
 
+const { tmpdir } = require("node:os");
+const { join } = require("node:path");
 const { defineConfig, devices } = require("@playwright/test");
 const { dataDir, password, port, root, username } = require("./env");
 
@@ -36,6 +38,7 @@ module.exports = defineConfig({
       KOREOGRAF_DATABASE_URL: "",
       KOREOGRAF_ADMIN_USER: username,
       KOREOGRAF_ADMIN_PASSWORD: password,
+      KOREOGRAF_PROJECT_ROOTS: join(tmpdir(), "koreograf-e2e-projects"),
       KOREOGRAF_RUNNER: "local",
       KOREOGRAF_LOCAL_RUNNER_FOR: "admins",
       KOREOGRAF_JOB_TIMEOUT_SECS: "120",

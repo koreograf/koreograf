@@ -142,8 +142,9 @@ pub(crate) trait Backend: Send + Sync {
     fn replace_project_teams(&self, project_id: &str, team_ids: &[String]) -> AppResult<()>;
     fn set_project_credential(&self, id: &str, credential_id: Option<&str>) -> AppResult<()>;
     fn set_project_admin_saved(&self, id: &str, admin_saved: bool) -> AppResult<()>;
-    fn set_project_sync_success(&self, id: &str, at: &str, commit: &str) -> AppResult<()>;
-    fn set_project_sync_failed(&self, id: &str) -> AppResult<()>;
+    fn set_project_sync_success(&self, id: &str, at: &str, commit: &str, by: &str)
+        -> AppResult<()>;
+    fn set_project_sync_failed(&self, id: &str, by: &str) -> AppResult<()>;
     fn list_inventories(&self, team_id: &str) -> AppResult<Vec<Inventory>>;
     fn inventory(&self, id: &str) -> AppResult<Option<Inventory>>;
     fn insert_inventory(
@@ -178,7 +179,10 @@ pub(crate) trait Backend: Send + Sync {
         inventory_id: &str,
         bodies: &[(String, String)],
         admin_saved: bool,
+        at: &str,
+        by: &str,
     ) -> AppResult<()>;
+    fn set_inventory_sync_failed(&self, inventory_id: &str, by: &str) -> AppResult<()>;
     fn delete_inventory(&self, id: &str, team_id: &str) -> AppResult<()>;
     fn templates_using_inventory(
         &self,
@@ -700,14 +704,20 @@ impl Backend for SqliteBackend {
         projects::store::set_project_admin_saved(&conn, id, admin_saved)
     }
 
-    fn set_project_sync_success(&self, id: &str, at: &str, commit: &str) -> AppResult<()> {
+    fn set_project_sync_success(
+        &self,
+        id: &str,
+        at: &str,
+        commit: &str,
+        by: &str,
+    ) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        projects::store::set_project_sync_success(&conn, id, at, commit)
+        projects::store::set_project_sync_success(&conn, id, at, commit, by)
     }
 
-    fn set_project_sync_failed(&self, id: &str) -> AppResult<()> {
+    fn set_project_sync_failed(&self, id: &str, by: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        projects::store::set_project_sync_failed(&conn, id)
+        projects::store::set_project_sync_failed(&conn, id, by)
     }
 
     fn list_inventories(&self, team_id: &str) -> AppResult<Vec<Inventory>> {
@@ -830,6 +840,8 @@ impl Backend for SqliteBackend {
         inventory_id: &str,
         bodies: &[(String, String)],
         admin_saved: bool,
+        at: &str,
+        by: &str,
     ) -> AppResult<()> {
         let mut conn = lock(&self.conn)?;
         let tx = conn.transaction()?;
@@ -838,8 +850,14 @@ impl Backend for SqliteBackend {
         }
         inventories::store::refresh_inventory_summary(&tx, inventory_id)?;
         inventories::store::set_inventory_admin_saved(&tx, inventory_id, admin_saved)?;
+        inventories::store::set_inventory_sync_success(&tx, inventory_id, at, by)?;
         tx.commit()?;
         Ok(())
+    }
+
+    fn set_inventory_sync_failed(&self, inventory_id: &str, by: &str) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        inventories::store::set_inventory_sync_failed(&conn, inventory_id, by)
     }
 
     fn delete_inventory(&self, id: &str, team_id: &str) -> AppResult<()> {
@@ -2349,12 +2367,18 @@ impl Backend for PostgresBackend {
         })
     }
 
-    fn set_project_sync_success(&self, id: &str, at: &str, commit: &str) -> AppResult<()> {
+    fn set_project_sync_success(
+        &self,
+        id: &str,
+        at: &str,
+        commit: &str,
+        by: &str,
+    ) -> AppResult<()> {
         self.with_client(|client| async move {
             let changed = client
                 .execute(
                     &store::sql::postgres(projects::store::SET_PROJECT_SYNC_SUCCESS),
-                    &[&id, &at, &commit],
+                    &[&id, &at, &commit, &by],
                 )
                 .await?;
             if changed == 0 {
@@ -2364,12 +2388,12 @@ impl Backend for PostgresBackend {
         })
     }
 
-    fn set_project_sync_failed(&self, id: &str) -> AppResult<()> {
+    fn set_project_sync_failed(&self, id: &str, by: &str) -> AppResult<()> {
         self.with_client(|client| async move {
             let changed = client
                 .execute(
                     &store::sql::postgres(projects::store::SET_PROJECT_SYNC_FAILED),
-                    &[&id],
+                    &[&id, &by],
                 )
                 .await?;
             if changed == 0 {
@@ -2618,6 +2642,8 @@ impl Backend for PostgresBackend {
         inventory_id: &str,
         bodies: &[(String, String)],
         admin_saved: bool,
+        at: &str,
+        by: &str,
     ) -> AppResult<()> {
         self.with_client(|mut client| async move {
             let transaction = client.transaction().await?;
@@ -2636,7 +2662,28 @@ impl Backend for PostgresBackend {
                     &[&inventory_id, &(admin_saved as i32)],
                 )
                 .await?;
+            transaction
+                .execute(
+                    &store::sql::postgres(inventories::store::SET_INVENTORY_SYNC_SUCCESS),
+                    &[&inventory_id, &at, &by],
+                )
+                .await?;
             transaction.commit().await?;
+            Ok(())
+        })
+    }
+
+    fn set_inventory_sync_failed(&self, inventory_id: &str, by: &str) -> AppResult<()> {
+        self.with_client(|client| async move {
+            let changed = client
+                .execute(
+                    &store::sql::postgres(inventories::store::SET_INVENTORY_SYNC_FAILED),
+                    &[&inventory_id, &by],
+                )
+                .await?;
+            if changed == 0 {
+                return Err(ApiError::NotFound);
+            }
             Ok(())
         })
     }
@@ -4067,6 +4114,7 @@ mod migration_tests {
             version: db::SCHEMA_VERSION + 1,
             name: "9999_broken",
             sql: "CREATE TABLE broken (id TEXT",
+            legacy_columns: &[],
         }];
         assert!(
             db::apply_postgres_migrations(&client, &migrations, db::SCHEMA_VERSION)

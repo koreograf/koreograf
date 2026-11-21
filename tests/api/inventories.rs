@@ -2889,3 +2889,225 @@ async fn inventory_sources_and_ansible_check_options() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn inventory_syncs_roll_up_the_operator_and_the_result() {
+    let harness = TestApp::boot("inventory-sync-rollup", Options::default());
+    let app = harness.app.clone();
+    let dir = harness.dir.clone();
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("admin session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let examples = format!("{}/examples/demo", env!("CARGO_MANIFEST_DIR"));
+    let (status, project, _) = call(
+        &app,
+        "POST",
+        "/api/v1/projects",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Inventory source", "source_type": "path", "source": examples})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{project}");
+    let project_id = project["id"].as_str().unwrap().to_string();
+
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        "/api/v1/users",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "username": "sync-operator",
+            "display_name": "Sync operator",
+            "password": "operator-pass"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/teams/{team}/members"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"username": "sync-operator", "role": "operator"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, operator_me, operator_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "sync-operator", "password": "operator-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{operator_me}");
+    let operator_cookie = operator_cookie.expect("operator session cookie");
+
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/v1/inventories",
+        Some(&operator_cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Synced inventory",
+            "sources": [{
+                "kind": "project",
+                "project_id": project_id,
+                "path": "inventory/hosts.ini"
+            }]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let inventory_id = created["id"].as_str().unwrap().to_string();
+    let source_id = created["sources"][0]["id"].as_str().unwrap().to_string();
+    assert_eq!(created["last_sync_status"], "");
+    assert_eq!(created["last_sync_by"], "");
+
+    let (status, per_source, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/inventories/{inventory_id}/sources/{source_id}/sync"),
+        Some(&operator_cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{per_source}");
+    assert_eq!(per_source["last_sync_status"], "success");
+    assert_eq!(per_source["last_sync_by"], "sync-operator");
+    assert!(!per_source["last_sync_at"].as_str().unwrap().is_empty());
+
+    let (status, whole, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/inventories/{inventory_id}/sync"),
+        Some(&operator_cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{whole}");
+    assert_eq!(whole["last_sync_status"], "success");
+    assert_eq!(whole["last_sync_by"], "sync-operator");
+    let successful_at = whole["last_sync_at"].clone();
+
+    let (status, listed, _) = call(
+        &app,
+        "GET",
+        "/api/v1/inventories",
+        Some(&operator_cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let summary = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == inventory_id)
+        .unwrap();
+    assert_eq!(summary["last_sync_status"], "success");
+    assert_eq!(summary["last_sync_by"], "sync-operator");
+    assert_eq!(summary["last_sync_at"], successful_at);
+
+    let (status, _, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/v1/projects/{project_id}"),
+        Some(&operator_cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, failed, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/inventories/{inventory_id}/sync"),
+        Some(&operator_cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_ne!(status, StatusCode::OK, "{failed}");
+    let (status, after, _) = call(
+        &app,
+        "GET",
+        &format!("/api/v1/inventories/{inventory_id}"),
+        Some(&operator_cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{after}");
+    assert_eq!(after["last_sync_status"], "failed");
+    assert_eq!(after["last_sync_by"], "sync-operator");
+    assert_eq!(after["last_sync_at"], successful_at);
+
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        "/api/v1/users",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "username": "sync-viewer",
+            "display_name": "Sync viewer",
+            "password": "viewer-pass"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/teams/{team}/members"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"username": "sync-viewer", "role": "viewer"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, viewer_me, viewer_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "sync-viewer", "password": "viewer-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{viewer_me}");
+    let viewer_cookie = viewer_cookie.expect("viewer session cookie");
+    let (status, denied, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/inventories/{inventory_id}/sync"),
+        Some(&viewer_cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
