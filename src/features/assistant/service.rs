@@ -811,7 +811,18 @@ pub(super) async fn api_text(
     let mut builder = axum::http::Request::builder().method(method).uri(path);
     builder = match credential {
         Credential::Cookie(token) => {
-            builder.header(header::COOKIE, format!("koreograf_session={token}"))
+            // This is an in-process call, not a browser request. Give the
+            // origin guard the origin the deployment would compare against.
+            let configured = state
+                .cfg
+                .public_url
+                .iter()
+                .find(|item| url::Url::parse(item).is_ok());
+            let origin = configured.map(String::as_str).unwrap_or("http://localhost");
+            builder
+                .header(header::HOST, "localhost")
+                .header(header::ORIGIN, origin)
+                .header(header::COOKIE, format!("koreograf_session={token}"))
         }
         Credential::Bearer(token) => {
             builder.header(header::AUTHORIZATION, format!("Bearer {token}"))

@@ -1334,7 +1334,8 @@ async fn cross_origin_api_writes_are_refused() {
         host: &'a str,
         origin: Option<&'a str>,
         referer: Option<&'a str>,
-        cookie: &'a str,
+        cookie: Option<&'a str>,
+        bearer: Option<&'a str>,
         team: &'a str,
         body: &'a str,
     }
@@ -1343,10 +1344,15 @@ async fn cross_origin_api_writes_are_refused() {
         let mut builder = Request::builder()
             .method(call.method)
             .uri("/api/inventories")
-            .header("cookie", call.cookie)
             .header("x-team-id", call.team)
             .header("content-type", "application/json")
             .header("host", call.host);
+        if let Some(cookie) = call.cookie {
+            builder = builder.header("cookie", cookie);
+        }
+        if let Some(bearer) = call.bearer {
+            builder = builder.header("authorization", format!("Bearer {bearer}"));
+        }
         if let Some(origin) = call.origin {
             builder = builder.header("origin", origin);
         }
@@ -1404,7 +1410,8 @@ async fn cross_origin_api_writes_are_refused() {
             host: "127.0.0.1:8080",
             origin: Some("https://koreograf.example.com"),
             referer: None,
-            cookie: &cookie,
+            cookie: Some(&cookie),
+            bearer: None,
             team: &team,
             body: &body,
         },
@@ -1420,7 +1427,8 @@ async fn cross_origin_api_writes_are_refused() {
             host: "koreograf.test:8080",
             origin: Some("https://other.example"),
             referer: None,
-            cookie: &cookie,
+            cookie: Some(&cookie),
+            bearer: None,
             team: &team,
             body: &body,
         },
@@ -1435,7 +1443,8 @@ async fn cross_origin_api_writes_are_refused() {
             host: "koreograf.test:8080",
             origin: Some("http://koreograf.test:9999"),
             referer: None,
-            cookie: &cookie,
+            cookie: Some(&cookie),
+            bearer: None,
             team: &team,
             body: &body,
         },
@@ -1450,7 +1459,8 @@ async fn cross_origin_api_writes_are_refused() {
             host: "koreograf.test",
             origin: Some("http://koreograf.test:9999"),
             referer: None,
-            cookie: &cookie,
+            cookie: Some(&cookie),
+            bearer: None,
             team: &team,
             body: &body,
         },
@@ -1469,7 +1479,8 @@ async fn cross_origin_api_writes_are_refused() {
             host: "koreograf.example.com",
             origin: Some("https://koreograf.example.com"),
             referer: None,
-            cookie: &cookie,
+            cookie: Some(&cookie),
+            bearer: None,
             team: &team,
             body: &body,
         },
@@ -1488,7 +1499,8 @@ async fn cross_origin_api_writes_are_refused() {
             host: "koreograf.test:8080",
             origin: Some("null"),
             referer: None,
-            cookie: &cookie,
+            cookie: Some(&cookie),
+            bearer: None,
             team: &team,
             body: &body,
         },
@@ -1503,7 +1515,8 @@ async fn cross_origin_api_writes_are_refused() {
             host: "koreograf.test:8080",
             origin: None,
             referer: Some("https://other.example/page"),
-            cookie: &cookie,
+            cookie: Some(&cookie),
+            bearer: None,
             team: &team,
             body: &body,
         },
@@ -1511,6 +1524,24 @@ async fn cross_origin_api_writes_are_refused() {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "foreign referer");
 
+    let referer_body = json!({"name": "Origin referer", "body": "[web]\nhost-r\n"}).to_string();
+    let status = send(
+        app.clone(),
+        Call {
+            method: "POST",
+            host: "koreograf.test:8080",
+            origin: None,
+            referer: Some("http://koreograf.test:8080/page"),
+            cookie: Some(&cookie),
+            bearer: None,
+            team: &team,
+            body: &referer_body,
+        },
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "same-origin referer");
+
+    let ipv6_body = json!({"name": "Origin ipv6", "body": "[web]\nhost-6\n"}).to_string();
     let status = send(
         app.clone(),
         Call {
@@ -1518,9 +1549,10 @@ async fn cross_origin_api_writes_are_refused() {
             host: "[::1]:8080",
             origin: Some("http://[::1]:8080"),
             referer: None,
-            cookie: &cookie,
+            cookie: Some(&cookie),
+            bearer: None,
             team: &team,
-            body: &body,
+            body: &ipv6_body,
         },
     )
     .await;
@@ -1534,13 +1566,68 @@ async fn cross_origin_api_writes_are_refused() {
             host: "koreograf.test:8080",
             origin: None,
             referer: None,
-            cookie: &cookie,
+            cookie: Some(&cookie),
+            bearer: None,
             team: &team,
             body: &body,
         },
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "no origin allows scripts");
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "cookie without origin or referer"
+    );
+
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/me/tokens",
+        Some(&cookie),
+        None,
+        Some(json!({"name": "origin token"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let token = created["secret"].as_str().unwrap().to_string();
+
+    let bearer_body = json!({"name": "Origin bearer", "body": "[web]\nhost-b\n"}).to_string();
+    let status = send(
+        app.clone(),
+        Call {
+            method: "POST",
+            host: "koreograf.test:8080",
+            origin: None,
+            referer: None,
+            cookie: None,
+            bearer: Some(&token),
+            team: &team,
+            body: &bearer_body,
+        },
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "bearer token without headers");
+
+    let both_body = json!({"name": "Origin both", "body": "[web]\nhost-x\n"}).to_string();
+    let status = send(
+        app.clone(),
+        Call {
+            method: "POST",
+            host: "koreograf.test:8080",
+            origin: None,
+            referer: None,
+            cookie: Some(&cookie),
+            bearer: Some(&token),
+            team: &team,
+            body: &both_body,
+        },
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "bearer token wins over the cookie"
+    );
 
     let status = send(
         app,
@@ -1549,7 +1636,8 @@ async fn cross_origin_api_writes_are_refused() {
             host: "koreograf.test:8080",
             origin: Some("https://other.example"),
             referer: None,
-            cookie: &cookie,
+            cookie: Some(&cookie),
+            bearer: None,
             team: &team,
             body: "",
         },
