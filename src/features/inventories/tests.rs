@@ -25,7 +25,12 @@ async fn valid_endpoint_rejects_loopback_link_local_and_metadata_targets() {
         "http://[::ffff:169.254.169.254]/",
         "http://100.100.100.200/latest/meta-data/",
         "http://[fd00:ec2::254]/",
+        "http://[64:ff9b::7f00:1]/",
+        "http://[64:ff9b::a9fe:a9fe]/",
+        "http://[2002:7f00:1::]/",
+        "http://[2002:a9fe:a9fe::]/",
         "http://0.0.0.0/",
+        "http://0.1.2.3/",
         "http://[::]/",
         "http://localhost/",
         "http://localhost:8000/",
@@ -1166,6 +1171,23 @@ async fn a_fetch_refuses_link_local_and_metadata_targets() {
         let error = fetch_ini(&source, "token", &proxy).await.unwrap_err();
         assert_eq!(error, "netbox_endpoint_is_blocked", "{endpoint}");
     }
+}
+
+#[tokio::test]
+async fn a_client_refuses_a_name_that_does_not_resolve() {
+    let source = NetboxSource {
+        api_endpoint: "http://does-not-exist.invalid/".into(),
+        validate_certs: true,
+        group_by: Vec::new(),
+        group_names_raw: false,
+        load_config_context: false,
+        max_hosts: DEFAULT_MAX_HOSTS,
+        query: Vec::new(),
+        virtual_machines: false,
+    };
+    let proxy = crate::features::operations::ProxySettings::inherit();
+    let error = client(&source, &proxy).await.unwrap_err();
+    assert!(error.contains("netbox_is_not_reachable"), "{error}");
 }
 
 #[tokio::test]

@@ -574,11 +574,12 @@ const ENDPOINT_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 /// AWS exposes its IPv6 instance metadata service on this unique-local
 /// address. The rest of `fc00::/7` stays available for an internal NetBox.
 const AWS_IPV6_METADATA: Ipv6Addr = Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254);
+const NAT64_PREFIX: [u8; 12] = [0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0];
 
 /// True when the URL passes the strict address policy. DNS names are resolved
 /// with a bounded lookup; a name that does not resolve now is left to the
 /// request so an offline setup can still save its credential.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub async fn valid_endpoint(url: &str) -> bool {
     endpoint_error_with(url, false).await.is_ok()
 }
@@ -688,18 +689,7 @@ async fn check_domain(domain: &str, port: u16) -> Result<(), EndpointError> {
 fn blocked_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => blocked_ipv4(ip),
-        IpAddr::V6(ip) => {
-            if ip.is_loopback()
-                || ip.is_unicast_link_local()
-                || ip.is_unspecified()
-                || ip.is_multicast()
-                || ip == AWS_IPV6_METADATA
-            {
-                return true;
-            }
-            // `::ffff:127.0.0.1` and the deprecated `::127.0.0.1` form.
-            ip.to_ipv4().is_some_and(blocked_ipv4)
-        }
+        IpAddr::V6(ip) => blocked_ipv6(ip),
     }
 }
 
@@ -709,8 +699,38 @@ fn blocked_ipv4(ip: Ipv4Addr) -> bool {
         || ip.is_unspecified()
         || ip.is_broadcast()
         || ip.is_multicast()
+        // `0.0.0.0/8` is this network and never a public target.
+        || ip.octets()[0] == 0
         // Shared address space, including the metadata service on 100.100.100.200.
         || (ip.octets()[0] == 100 && (64..=127).contains(&ip.octets()[1]))
+}
+
+fn blocked_ipv6(ip: Ipv6Addr) -> bool {
+    if ip.is_loopback()
+        || ip.is_unicast_link_local()
+        || ip.is_unspecified()
+        || ip.is_multicast()
+        || ip == AWS_IPV6_METADATA
+    {
+        return true;
+    }
+    // IPv4-mapped (`::ffff:127.0.0.1`), IPv4-compatible (`::127.0.0.1`),
+    // NAT64 (`64:ff9b::/96`), and 6to4 (`2002::/16`) forms carry an IPv4
+    // address that must pass the same check.
+    ip.to_ipv4().is_some_and(blocked_ipv4) || embedded_ipv4(ip).is_some_and(blocked_ipv4)
+}
+
+fn embedded_ipv4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
+    let octets = ip.octets();
+    if octets[..12] == NAT64_PREFIX {
+        return Some(Ipv4Addr::new(
+            octets[12], octets[13], octets[14], octets[15],
+        ));
+    }
+    if octets[0] == 0x20 && octets[1] == 0x02 {
+        return Some(Ipv4Addr::new(octets[2], octets[3], octets[4], octets[5]));
+    }
+    None
 }
 
 pub fn source_json(source: &NetboxSource) -> Value {
@@ -925,15 +945,31 @@ async fn client(
             tokio::net::lookup_host((host.as_str(), port)),
         )
         .await;
-        if let Ok(Ok(addresses)) = lookup {
-            let addresses: Vec<SocketAddr> = addresses.collect();
-            if addresses.iter().any(|address| blocked_ip(address.ip())) {
-                return Err("netbox_endpoint_is_blocked".into());
+        let addresses: Vec<SocketAddr> = match lookup {
+            Ok(Ok(addresses)) => addresses.collect(),
+            Ok(Err(_)) => {
+                return Err(crate::error::message(
+                    "netbox_is_not_reachable_err",
+                    &[("err", "the NetBox address could not be resolved")],
+                ));
             }
-            if !addresses.is_empty() {
-                builder = builder.resolve_to_addrs(&host, &addresses);
+            Err(_) => {
+                return Err(crate::error::message(
+                    "netbox_is_not_reachable_err",
+                    &[("err", "the NetBox address lookup timed out")],
+                ));
             }
+        };
+        if addresses.is_empty() {
+            return Err(crate::error::message(
+                "netbox_is_not_reachable_err",
+                &[("err", "the NetBox address could not be resolved")],
+            ));
         }
+        if addresses.iter().any(|address| blocked_ip(address.ip())) {
+            return Err("netbox_endpoint_is_blocked".into());
+        }
+        builder = builder.resolve_to_addrs(&host, &addresses);
     }
     if source.validate_certs {
         match crate::tls::reqwest_roots() {
