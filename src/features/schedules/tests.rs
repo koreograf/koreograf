@@ -593,6 +593,7 @@ fn admins_config(dir: &std::path::Path) -> crate::config::Config {
         job_output_lines: 8_000,
         job_log_retention_days: 30,
         max_concurrent_jobs: 4,
+        max_concurrent_jobs_per_team: 4,
         local_jobs: crate::config::LocalJobs::Admins,
         project_roots: vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples")],
         hsts: false,

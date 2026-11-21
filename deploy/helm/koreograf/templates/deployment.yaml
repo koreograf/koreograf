@@ -70,6 +70,8 @@ spec:
               value: {{ .Values.runner.localJobs | default "admins" | quote }}
             - name: KOREOGRAF_MAX_CONCURRENT_JOBS
               value: {{ .Values.runner.maxConcurrentJobs | default 4 | quote }}
+            - name: KOREOGRAF_MAX_CONCURRENT_JOBS_PER_TEAM
+              value: {{ .Values.runner.maxConcurrentJobsPerTeam | default 2 | quote }}
             - name: KOREOGRAF_JOB_LOG_RETENTION_DAYS
               value: {{ if hasKey .Values.runner "jobLogRetentionDays" }}{{ .Values.runner.jobLogRetentionDays | quote }}{{ else }}"30"{{ end }}
             - name: KOREOGRAF_COOKIE_SECURE

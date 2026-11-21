@@ -1,4 +1,5 @@
 mod model;
+pub(crate) mod queue;
 mod routes;
 mod service;
 pub(crate) mod store;

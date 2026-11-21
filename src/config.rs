@@ -444,6 +444,13 @@ pub const MAX_CONCURRENT_JOBS_MIN: usize = 1;
 /// Highest accepted concurrency limit.
 pub const MAX_CONCURRENT_JOBS_MAX: usize = 64;
 
+/// Default number of jobs that one team may run at the same time.
+pub const MAX_CONCURRENT_JOBS_PER_TEAM_DEFAULT: usize = 2;
+/// Lowest accepted per-team limit.
+pub const MAX_CONCURRENT_JOBS_PER_TEAM_MIN: usize = 1;
+/// Highest accepted per-team limit.
+pub const MAX_CONCURRENT_JOBS_PER_TEAM_MAX: usize = 64;
+
 /// Reads `KOREOGRAF_JOB_LOG_RETENTION_DAYS`. `0` disables pruning; an empty
 /// value and a value that is not a number fall back to the default.
 pub fn parse_job_log_retention_days(value: &str) -> u64 {
@@ -475,6 +482,50 @@ pub fn effective_max_concurrent_jobs(limit: usize) -> usize {
     }
 }
 
+/// Reads `KOREOGRAF_MAX_CONCURRENT_JOBS_PER_TEAM`. An empty value, a value
+/// that is not a number, and `0` fall back to the default. Every other value
+/// is clamped to [`MAX_CONCURRENT_JOBS_PER_TEAM_MIN`]..=[`MAX_CONCURRENT_JOBS_PER_TEAM_MAX`].
+/// The startup also clamps the result to the global limit; see
+/// [`team_limit_within_global`].
+pub fn parse_max_concurrent_jobs_per_team(value: &str) -> usize {
+    effective_max_concurrent_jobs_per_team(
+        value
+            .trim()
+            .parse::<usize>()
+            .unwrap_or(MAX_CONCURRENT_JOBS_PER_TEAM_DEFAULT),
+    )
+}
+
+/// Guards a per-team limit that did not come through
+/// [`parse_max_concurrent_jobs_per_team`], such as a directly built [`Config`].
+/// `0` uses the default.
+pub fn effective_max_concurrent_jobs_per_team(limit: usize) -> usize {
+    if limit == 0 {
+        MAX_CONCURRENT_JOBS_PER_TEAM_DEFAULT
+    } else {
+        limit.clamp(
+            MAX_CONCURRENT_JOBS_PER_TEAM_MIN,
+            MAX_CONCURRENT_JOBS_PER_TEAM_MAX,
+        )
+    }
+}
+
+/// Clamps the per-team limit to the global limit and logs one warning when the
+/// configured value is above it. Both values are effective values from
+/// [`effective_max_concurrent_jobs`] and
+/// [`effective_max_concurrent_jobs_per_team`].
+pub fn team_limit_within_global(global: usize, per_team: usize) -> usize {
+    if per_team <= global {
+        return per_team;
+    }
+    tracing::warn!(
+        per_team,
+        global,
+        "KOREOGRAF_MAX_CONCURRENT_JOBS_PER_TEAM is above KOREOGRAF_MAX_CONCURRENT_JOBS; the per-team limit is clamped to the global limit"
+    );
+    global
+}
+
 #[derive(Clone)]
 pub struct Config {
     pub bind: String,
@@ -497,6 +548,9 @@ pub struct Config {
     pub job_log_retention_days: u64,
     /// `KOREOGRAF_MAX_CONCURRENT_JOBS`. Jobs wait as `pending` for a slot.
     pub max_concurrent_jobs: usize,
+    /// `KOREOGRAF_MAX_CONCURRENT_JOBS_PER_TEAM`. One team holds at most this
+    /// many running jobs; it is never above `max_concurrent_jobs`.
+    pub max_concurrent_jobs_per_team: usize,
     /// `KOREOGRAF_LOCAL_RUNNER_FOR`. Not a saved setting.
     pub local_jobs: LocalJobs,
     /// Allowed path-project directories. `from_env` always includes `examples_dir`.
@@ -582,6 +636,10 @@ impl Config {
             max_concurrent_jobs: parse_max_concurrent_jobs(&env_or(
                 "KOREOGRAF_MAX_CONCURRENT_JOBS",
                 "4",
+            )),
+            max_concurrent_jobs_per_team: parse_max_concurrent_jobs_per_team(&env_or(
+                "KOREOGRAF_MAX_CONCURRENT_JOBS_PER_TEAM",
+                "2",
             )),
             local_jobs: LocalJobs::parse(&env_string("KOREOGRAF_LOCAL_RUNNER_FOR")),
             project_roots,
@@ -763,6 +821,63 @@ mod tests {
         assert_eq!(parse_max_concurrent_jobs("2"), 2);
         assert_eq!(parse_max_concurrent_jobs("64"), MAX_CONCURRENT_JOBS_MAX);
         assert_eq!(parse_max_concurrent_jobs("65"), MAX_CONCURRENT_JOBS_MAX);
+    }
+
+    #[test]
+    fn the_per_team_limit_parses_its_default_floor_and_ceiling() {
+        assert_eq!(
+            parse_max_concurrent_jobs_per_team(""),
+            MAX_CONCURRENT_JOBS_PER_TEAM_DEFAULT
+        );
+        assert_eq!(
+            parse_max_concurrent_jobs_per_team("0"),
+            MAX_CONCURRENT_JOBS_PER_TEAM_DEFAULT
+        );
+        assert_eq!(
+            parse_max_concurrent_jobs_per_team("nonsense"),
+            MAX_CONCURRENT_JOBS_PER_TEAM_DEFAULT
+        );
+        assert_eq!(
+            parse_max_concurrent_jobs_per_team(" 1 "),
+            MAX_CONCURRENT_JOBS_PER_TEAM_MIN
+        );
+        assert_eq!(parse_max_concurrent_jobs_per_team("2"), 2);
+        assert_eq!(
+            parse_max_concurrent_jobs_per_team("64"),
+            MAX_CONCURRENT_JOBS_PER_TEAM_MAX
+        );
+        assert_eq!(
+            parse_max_concurrent_jobs_per_team("65"),
+            MAX_CONCURRENT_JOBS_PER_TEAM_MAX
+        );
+    }
+
+    #[test]
+    fn a_per_team_limit_above_the_global_limit_is_clamped_with_one_warning() {
+        let buf = Buf(Arc::new(Mutex::new(Vec::new())));
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(buf.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            assert_eq!(team_limit_within_global(4, 2), 2);
+            assert_eq!(team_limit_within_global(4, 4), 4);
+            assert_eq!(team_limit_within_global(4, 9), 4);
+        });
+        let text = String::from_utf8(buf.0.lock().expect("log lock").clone()).expect("utf-8");
+        assert!(
+            text.contains("KOREOGRAF_MAX_CONCURRENT_JOBS_PER_TEAM"),
+            "{text}"
+        );
+        assert!(text.contains("per_team=9"), "{text}");
+        assert!(text.contains("global=4"), "{text}");
+        assert_eq!(
+            text.matches("KOREOGRAF_MAX_CONCURRENT_JOBS_PER_TEAM")
+                .count(),
+            1,
+            "{text}"
+        );
     }
 
     #[test]

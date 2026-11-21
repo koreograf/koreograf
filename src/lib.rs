@@ -73,8 +73,10 @@ pub struct AppState {
     /// Jobs whose later output is discarded. Set when cancel commits.
     pub(crate) canceled: Mutex<HashSet<String>>,
     /// One permit per running job. Every launch waits here before the runner
-    /// marks the job running, so the extra jobs stay `pending`.
-    pub(crate) job_slots: tokio::sync::Semaphore,
+    /// marks the job running, so the extra jobs stay `pending`. The queue also
+    /// caps how many of those permits one team may hold and hands a freed
+    /// place to the oldest waiting job across teams.
+    pub(crate) job_queue: features::jobs::queue::JobQueue,
     pub(crate) preflight: Mutex<Option<preflight::Report>>,
     pub(crate) catalogs: i18n::Catalogs,
 }
@@ -280,9 +282,12 @@ pub fn boot_with(mut cfg: Config, database: DatabaseConfig) -> anyhow::Result<Sh
     let cipher = crypto::load_cipher(&cfg.data_dir)?;
     seed::seed(backend.as_ref(), &cfg)?;
     cfg.admin_password = None;
-    let job_slots = tokio::sync::Semaphore::new(config::effective_max_concurrent_jobs(
-        cfg.max_concurrent_jobs,
-    ));
+    let global_slots = config::effective_max_concurrent_jobs(cfg.max_concurrent_jobs);
+    let per_team_slots = config::team_limit_within_global(
+        global_slots,
+        config::effective_max_concurrent_jobs_per_team(cfg.max_concurrent_jobs_per_team),
+    );
+    let job_queue = features::jobs::queue::JobQueue::new(global_slots, per_team_slots);
     let state = Arc::new(AppState {
         backend,
         cfg,
@@ -293,7 +298,7 @@ pub fn boot_with(mut cfg: Config, database: DatabaseConfig) -> anyhow::Result<Sh
         cache: Mutex::new(()),
         procs: Mutex::new(HashMap::new()),
         canceled: Mutex::new(HashSet::new()),
-        job_slots,
+        job_queue,
         preflight: Mutex::new(None),
         catalogs,
     });
