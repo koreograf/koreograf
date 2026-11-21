@@ -25,6 +25,7 @@ pub(crate) const TABLES: &[&str] = &[
     "jobs",
     "job_events",
     "host_results",
+    "activity",
     "workflow_nodes",
     "hooks",
     "hook_deliveries",

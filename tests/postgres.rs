@@ -31,6 +31,7 @@ const PORTABLE_TABLES: &[&str] = &[
     "jobs",
     "job_events",
     "host_results",
+    "activity",
     "workflow_nodes",
     "hooks",
     "hook_deliveries",
@@ -99,6 +100,16 @@ fn seed_sqlite_source(dir: &Path) -> std::sync::Arc<koreograf::AppState> {
             [],
         )
         .expect("host result");
+        conn.execute(
+            "INSERT INTO activity (
+                id, team_id, actor, action, object_type, object_id, object_name, result, created_at
+             ) VALUES (
+                'activity-copy', 'team-copy', 'admin', 'create', 'project', 'project-copy',
+                'Copied project', 'success', '2026-01-01T00:00:00Z'
+             )",
+            [],
+        )
+        .expect("activity entry");
     }
     state
 }
