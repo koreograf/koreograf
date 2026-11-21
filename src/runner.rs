@@ -6229,6 +6229,7 @@ exit 0
             job_timeout_secs: 60,
             job_output_lines: lines,
             job_log_retention_days: 30,
+            workflow_run_retention_days: 90,
             max_concurrent_jobs: 4,
             max_concurrent_jobs_per_team: 4,
             local_jobs: crate::config::LocalJobs::All,

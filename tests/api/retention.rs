@@ -464,3 +464,293 @@ async fn many_old_jobs_lose_only_the_output_and_dirs_they_still_have() {
         1
     );
 }
+
+fn workflow_options(workflow_run_retention_days: u64) -> Options {
+    Options {
+        workflow_run_retention_days,
+        ..Options::default()
+    }
+}
+
+fn seed_workflow_runs(team: &str, old: &str, recent: &str) -> String {
+    format!(
+        "INSERT INTO workflow_jobs (
+            id, workflow_id, team_id, name, status, extra_vars, launched_by, trigger,
+            created_at, finished_at
+         ) VALUES
+            ('wf-retention-successful', NULL, '{team}', 'Old successful', 'successful',
+             '{{}}', 'admin', 'manual', '{old}', '{old}'),
+            ('wf-retention-failed', NULL, '{team}', 'Old failed', 'failed',
+             '{{}}', 'admin', 'manual', '{old}', '{old}'),
+            ('wf-retention-canceled', NULL, '{team}', 'Old canceled', 'canceled',
+             '{{}}', 'admin', 'manual', '{old}', '{old}'),
+            ('wf-retention-recent', NULL, '{team}', 'Recent', 'successful',
+             '{{}}', 'admin', 'manual', '{recent}', '{recent}'),
+            ('wf-retention-running', NULL, '{team}', 'Running', 'running',
+             '{{}}', 'admin', 'manual', '{old}', NULL),
+            ('wf-retention-no-finish', NULL, '{team}', 'No finish', 'successful',
+             '{{}}', 'admin', 'manual', '{old}', NULL);
+         INSERT INTO workflow_nodes (workflow_job_id, node_id, phase, job_id) VALUES
+            ('wf-retention-successful', 'one', 'successful', NULL),
+            ('wf-retention-successful', 'two', 'skipped', NULL),
+            ('wf-retention-failed', 'one', 'failed', NULL),
+            ('wf-retention-canceled', 'one', 'canceled', NULL),
+            ('wf-retention-recent', 'one', 'successful', NULL),
+            ('wf-retention-recent', 'two', 'successful', NULL),
+            ('wf-retention-running', 'one', 'running', NULL),
+            ('wf-retention-no-finish', 'one', 'successful', NULL);"
+    )
+}
+
+async fn workflow_run_count(harness: &TestApp, id: &str) -> i64 {
+    harness
+        .sql_i64(&format!(
+            "SELECT COUNT(*) FROM workflow_jobs WHERE id = '{id}'"
+        ))
+        .await
+}
+
+async fn workflow_node_count(harness: &TestApp, id: &str) -> i64 {
+    harness
+        .sql_i64(&format!(
+            "SELECT COUNT(*) FROM workflow_nodes WHERE workflow_job_id = '{id}'"
+        ))
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn workflow_run_retention_removes_only_old_finished_runs_and_their_nodes() {
+    let harness = TestApp::boot("workflow-retention", workflow_options(5));
+    let (cookie, team) = harness.sign_in().await;
+    let old = stamp(10);
+    let recent = stamp(0);
+    harness
+        .execute_sql(&seed_workflow_runs(&team, &old, &recent))
+        .await;
+
+    harness.state.prune_workflow_runs().expect("prune");
+
+    for id in [
+        "wf-retention-successful",
+        "wf-retention-failed",
+        "wf-retention-canceled",
+    ] {
+        assert_eq!(workflow_run_count(&harness, id).await, 0, "{id} stayed");
+        assert_eq!(
+            workflow_node_count(&harness, id).await,
+            0,
+            "{id} kept nodes"
+        );
+    }
+    for id in [
+        "wf-retention-recent",
+        "wf-retention-running",
+        "wf-retention-no-finish",
+    ] {
+        assert_eq!(workflow_run_count(&harness, id).await, 1, "{id} went");
+    }
+    assert_eq!(
+        workflow_node_count(&harness, "wf-retention-recent").await,
+        2
+    );
+    assert_eq!(
+        workflow_node_count(&harness, "wf-retention-running").await,
+        1
+    );
+    assert_eq!(
+        workflow_node_count(&harness, "wf-retention-no-finish").await,
+        1
+    );
+
+    let (status, _) = harness
+        .call(
+            "GET",
+            "/api/workflow-jobs/wf-retention-successful",
+            Some(&cookie),
+            Some(&team),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let runs = harness
+        .sql_text(
+            "SELECT id || '=' || COALESCE(finished_at, '')
+             FROM workflow_jobs WHERE id LIKE 'wf-retention-%' ORDER BY id",
+        )
+        .await;
+    let nodes = harness
+        .sql_text(
+            "SELECT workflow_job_id || '=' || node_id || '=' || phase
+             FROM workflow_nodes
+             WHERE workflow_job_id LIKE 'wf-retention-%'
+             ORDER BY workflow_job_id, node_id",
+        )
+        .await;
+    harness.state.prune_workflow_runs().expect("second prune");
+    assert_eq!(
+        harness
+            .sql_text(
+                "SELECT id || '=' || COALESCE(finished_at, '')
+                 FROM workflow_jobs WHERE id LIKE 'wf-retention-%' ORDER BY id",
+            )
+            .await,
+        runs
+    );
+    assert_eq!(
+        harness
+            .sql_text(
+                "SELECT workflow_job_id || '=' || node_id || '=' || phase
+                 FROM workflow_nodes
+                 WHERE workflow_job_id LIKE 'wf-retention-%'
+                 ORDER BY workflow_job_id, node_id",
+            )
+            .await,
+        nodes
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn zero_disables_workflow_run_retention() {
+    let harness = TestApp::boot("workflow-retention-off", workflow_options(0));
+    let team = harness
+        .sql_text("SELECT id FROM teams ORDER BY id LIMIT 1")
+        .await
+        .remove(0);
+    let old = stamp(10);
+    harness
+        .execute_sql(&format!(
+            "INSERT INTO workflow_jobs (
+                id, workflow_id, team_id, name, status, extra_vars, launched_by, trigger,
+                created_at, finished_at
+             ) VALUES ('wf-retention-kept', NULL, '{team}', 'Kept', 'successful',
+                '{{}}', 'admin', 'manual', '{old}', '{old}');
+             INSERT INTO workflow_nodes (workflow_job_id, node_id, phase, job_id)
+             VALUES ('wf-retention-kept', 'one', 'successful', NULL);"
+        ))
+        .await;
+
+    harness.state.prune_workflow_runs().expect("prune");
+
+    assert_eq!(workflow_run_count(&harness, "wf-retention-kept").await, 1);
+    assert_eq!(workflow_node_count(&harness, "wf-retention-kept").await, 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn deleting_a_workflow_removes_its_runs_and_nodes_only() {
+    let harness = TestApp::boot("workflow-delete", Options::default());
+    let (cookie, team) = harness.sign_in().await;
+    let old = stamp(10);
+    harness
+        .execute_sql(&format!(
+            "INSERT INTO workflows (
+                id, team_id, name, description, graph, created_at, admin_saved, version
+             ) VALUES
+                ('wf-delete-one', '{team}', 'Delete one', '', '{{}}', '{old}', 1, 1),
+                ('wf-delete-two', '{team}', 'Delete two', '', '{{}}', '{old}', 1, 1);
+             INSERT INTO workflow_jobs (
+                id, workflow_id, team_id, name, status, extra_vars, launched_by, trigger,
+                created_at, finished_at
+             ) VALUES
+                ('wf-run-one', 'wf-delete-one', '{team}', 'One', 'successful',
+                 '{{}}', 'admin', 'manual', '{old}', '{old}'),
+                ('wf-run-two', 'wf-delete-two', '{team}', 'Two', 'successful',
+                 '{{}}', 'admin', 'manual', '{old}', '{old}'),
+                ('wf-run-manual', NULL, '{team}', 'Manual', 'successful',
+                 '{{}}', 'admin', 'manual', '{old}', '{old}');
+             INSERT INTO workflow_nodes (workflow_job_id, node_id, phase, job_id) VALUES
+                ('wf-run-one', 'one', 'successful', NULL),
+                ('wf-run-two', 'one', 'successful', NULL),
+                ('wf-run-manual', 'one', 'successful', NULL);"
+        ))
+        .await;
+
+    let (status, body) = harness
+        .call(
+            "DELETE",
+            "/api/workflows/wf-delete-one",
+            Some(&cookie),
+            Some(&team),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    assert_eq!(
+        harness
+            .sql_i64("SELECT COUNT(*) FROM workflows WHERE id = 'wf-delete-one'")
+            .await,
+        0
+    );
+    assert_eq!(workflow_run_count(&harness, "wf-run-one").await, 0);
+    assert_eq!(workflow_node_count(&harness, "wf-run-one").await, 0);
+    assert_eq!(
+        harness
+            .sql_i64("SELECT COUNT(*) FROM workflows WHERE id = 'wf-delete-two'")
+            .await,
+        1
+    );
+    assert_eq!(workflow_run_count(&harness, "wf-run-two").await, 1);
+    assert_eq!(workflow_node_count(&harness, "wf-run-two").await, 1);
+    assert_eq!(workflow_run_count(&harness, "wf-run-manual").await, 1);
+    assert_eq!(workflow_node_count(&harness, "wf-run-manual").await, 1);
+
+    let (status, _) = harness
+        .call(
+            "GET",
+            "/api/workflows/wf-delete-one",
+            Some(&cookie),
+            Some(&team),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = harness
+        .call(
+            "GET",
+            "/api/workflow-jobs/wf-run-one",
+            Some(&cookie),
+            Some(&team),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_startup_workflow_prune_runs_in_the_background_task_after_boot() {
+    let mut harness = TestApp::boot("workflow-retention-startup", workflow_options(5));
+    let team = harness
+        .sql_text("SELECT id FROM teams ORDER BY id LIMIT 1")
+        .await
+        .remove(0);
+    let old = stamp(10);
+    harness
+        .execute_sql(&format!(
+            "INSERT INTO workflow_jobs (
+                id, workflow_id, team_id, name, status, extra_vars, launched_by, trigger,
+                created_at, finished_at
+             ) VALUES ('wf-retention-boot', NULL, '{team}', 'Boot', 'successful',
+                '{{}}', 'admin', 'manual', '{old}', '{old}');
+             INSERT INTO workflow_nodes (workflow_job_id, node_id, phase, job_id)
+             VALUES ('wf-retention-boot', 'one', 'successful', NULL);"
+        ))
+        .await;
+
+    harness.reboot();
+
+    // Boot leaves the history alone; the first prune is a background task.
+    assert_eq!(workflow_run_count(&harness, "wf-retention-boot").await, 1);
+    assert_eq!(workflow_node_count(&harness, "wf-retention-boot").await, 1);
+
+    harness.state.spawn_workflow_run_retention();
+    for _ in 0..300 {
+        if workflow_run_count(&harness, "wf-retention-boot").await == 0
+            && workflow_node_count(&harness, "wf-retention-boot").await == 0
+        {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("the background workflow retention task did not prune wf-retention-boot");
+}

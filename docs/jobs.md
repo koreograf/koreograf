@@ -75,6 +75,8 @@ A pruned job still opens from the job list. Its log area shows the normal empty 
 
 Installations that predate retention kept every finished job's output and work directory. The default of 30 days now applies on the first start after the upgrade: output and `data/jobs/<id>` directories older than 30 days are removed shortly after the port opens. To keep more, set `KOREOGRAF_JOB_LOG_RETENTION_DAYS` before that first start. `0` keeps everything. The `jobs` rows stay either way, so history, metrics, and host run history are unaffected.
 
+Workflow runs follow their own bound, `KOREOGRAF_WORKFLOW_RUN_RETENTION_DAYS`; see [Workflows and webhooks](workflows-webhooks.md#retention). That prune removes the `workflow_jobs` and `workflow_nodes` rows of a finished run and never deletes a job or its output.
+
 ## Prompt on launch
 
 A template can ask before it starts. The launch button then opens a dialog filled with the template's inventory, credentials, limit, tags, skip tags, job type, verbosity, and extra variables. Cancel starts nothing. Confirm runs that one job with the dialog values and leaves the template row unchanged. An Ansible template without prompt on launch also offers Launch with options for operators. That action opens the same dialog and sends `launch_with_options: true` with the run overrides. `POST /api/templates/{id}/launch` with only `extra_vars`, or with none of the prompt fields, still uses the template. The same applies to hooks and scripts. Inventory, credentials, and the Ansible fields above are accepted only when prompt on launch is on, or when that explicit flag asks for the options run.

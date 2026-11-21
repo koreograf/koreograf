@@ -36,6 +36,8 @@ services:
       KOREOGRAF_JOB_OUTPUT_LINES: ${KOREOGRAF_JOB_OUTPUT_LINES:-8000}
       # Days to keep job output and work directories of finished jobs. 0 keeps them.
       KOREOGRAF_JOB_LOG_RETENTION_DAYS: ${KOREOGRAF_JOB_LOG_RETENTION_DAYS:-30}
+      # Days to keep finished workflow runs and their nodes. 0 keeps them.
+      KOREOGRAF_WORKFLOW_RUN_RETENTION_DAYS: ${KOREOGRAF_WORKFLOW_RUN_RETENTION_DAYS:-90}
       # Jobs that may run at the same time. Others wait as pending.
       KOREOGRAF_MAX_CONCURRENT_JOBS: ${KOREOGRAF_MAX_CONCURRENT_JOBS:-4}
       # Jobs one team may run at the same time. Never above the global limit.

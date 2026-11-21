@@ -22,6 +22,32 @@ pub(crate) const UPDATE_WORKFLOW: &str = "UPDATE workflows
 
 pub(crate) const DELETE_WORKFLOW: &str = "DELETE FROM workflows WHERE id = ?1 AND team_id = ?2";
 
+pub(crate) const DELETE_WORKFLOW_NODES_FOR_WORKFLOW: &str = "DELETE FROM workflow_nodes
+     WHERE workflow_job_id IN (SELECT id FROM workflow_jobs WHERE workflow_id = ?1)";
+
+pub(crate) const DELETE_WORKFLOW_JOBS_FOR_WORKFLOW: &str =
+    "DELETE FROM workflow_jobs WHERE workflow_id = ?1";
+
+/// Finished runs past the retention cutoff. A run without `finished_at` and a
+/// pending or running run never match.
+pub(crate) const FINISHED_WORKFLOW_RUNS_BEFORE: &str = "SELECT id FROM workflow_jobs
+     WHERE status IN ('successful', 'failed', 'canceled')
+       AND finished_at IS NOT NULL
+       AND finished_at < ?1
+     ORDER BY finished_at, id
+     LIMIT ?2";
+
+pub(crate) const DELETE_WORKFLOW_NODES_FOR_RUN: &str =
+    "DELETE FROM workflow_nodes WHERE workflow_job_id = ?1";
+
+pub(crate) const DELETE_WORKFLOW_RUN: &str = "DELETE FROM workflow_jobs WHERE id = ?1";
+
+/// Runs and nodes that one prune batch removed.
+pub(crate) struct PrunedWorkflowRuns {
+    pub(crate) run_ids: Vec<String>,
+    pub(crate) nodes: usize,
+}
+
 pub(crate) fn workflow_by_id_sql() -> String {
     format!("SELECT {WORKFLOW_COLUMNS} FROM workflows WHERE id = ?1")
 }
@@ -130,15 +156,21 @@ pub(crate) fn workflow(c: &Connection, id: &str) -> AppResult<Option<Workflow>> 
     sql::sqlite_opt(c, &workflow_by_id_sql(), [id], sqlite_row_workflow)
 }
 
-pub(crate) fn delete_workflow(c: &Connection, id: &str, team_id: &str) -> AppResult<()> {
-    let changed = c.execute(DELETE_WORKFLOW, params![id, team_id])?;
+/// Deletes the workflow, its schedules, and every run and node it owns in one
+/// transaction, so a deleted workflow leaves no history behind.
+pub(crate) fn delete_workflow(c: &mut Connection, id: &str, team_id: &str) -> AppResult<()> {
+    let tx = c.transaction()?;
+    let changed = tx.execute(DELETE_WORKFLOW, params![id, team_id])?;
     if changed == 0 {
         return Err(ApiError::NotFound);
     }
-    c.execute(
+    tx.execute(DELETE_WORKFLOW_NODES_FOR_WORKFLOW, params![id])?;
+    tx.execute(DELETE_WORKFLOW_JOBS_FOR_WORKFLOW, params![id])?;
+    tx.execute(
         crate::features::schedules::store::DELETE_SCHEDULES_FOR,
         params!["workflow", id],
     )?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -163,6 +195,30 @@ pub(crate) fn insert_workflow_job(c: &Connection, item: &WorkflowJob) -> AppResu
         ],
     )?;
     Ok(())
+}
+
+/// Deletes up to `limit` finished runs older than `cutoff` and their nodes in
+/// one transaction. The caller repeats the call until it returns no runs, so
+/// the database lock is released between batches.
+pub(crate) fn prune_workflow_runs(
+    c: &mut Connection,
+    cutoff: &str,
+    limit: i64,
+) -> AppResult<PrunedWorkflowRuns> {
+    let tx = c.transaction()?;
+    let run_ids: Vec<String> = sql::sqlite_all(
+        &tx,
+        FINISHED_WORKFLOW_RUNS_BEFORE,
+        params![cutoff, limit],
+        |row| SqlRow::get(row, 0),
+    )?;
+    let mut nodes = 0usize;
+    for id in &run_ids {
+        nodes = nodes.saturating_add(tx.execute(DELETE_WORKFLOW_NODES_FOR_RUN, [id])?);
+        tx.execute(DELETE_WORKFLOW_RUN, [id])?;
+    }
+    tx.commit()?;
+    Ok(PrunedWorkflowRuns { run_ids, nodes })
 }
 
 pub(crate) fn workflow_job(c: &Connection, id: &str) -> AppResult<Option<WorkflowJob>> {
