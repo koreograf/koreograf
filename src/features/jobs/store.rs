@@ -26,6 +26,16 @@ pub(crate) const SET_JOB_PARAMETERS: &str = "UPDATE jobs SET parameters = ?2 WHE
 pub(crate) const FINISH_JOB: &str = "UPDATE jobs SET status = ?2, finished_at = ?3
      WHERE id = ?1 AND status IN ('pending', 'running')";
 
+/// Finished jobs whose output is past the retention cutoff. The job row is
+/// never deleted; only its events and work directory go.
+pub(crate) const FINISHED_JOBS_BEFORE: &str = "SELECT id FROM jobs
+     WHERE status IN ('successful', 'failed', 'canceled')
+       AND finished_at IS NOT NULL
+       AND finished_at < ?1
+     ORDER BY id";
+
+pub(crate) const DELETE_JOB_EVENTS: &str = "DELETE FROM job_events WHERE job_id = ?1";
+
 /// The line a startup reconciliation leaves on every job it marks failed.
 pub(crate) const RESTARTED_BEFORE_FINISH: &str = "The server restarted before this job finished.";
 
@@ -50,6 +60,12 @@ pub(crate) const RECONCILE_WORKFLOW_NODES: &str = "UPDATE workflow_nodes
 pub(crate) struct Interrupted {
     pub(crate) job_ids: Vec<String>,
     pub(crate) workflow_jobs: i64,
+}
+
+/// Finished jobs whose event rows were removed, and how many rows went.
+pub(crate) struct PrunedJobLogs {
+    pub(crate) job_ids: Vec<String>,
+    pub(crate) events: usize,
 }
 
 pub(crate) const INSERT_EVENT: &str =
@@ -273,6 +289,24 @@ pub(crate) fn set_job_parameters(c: &Connection, id: &str, parameters: &str) -> 
 pub(crate) fn finish_job(c: &Connection, id: &str, status: &str) -> AppResult<bool> {
     let changed = c.execute(FINISH_JOB, params![id, status, db::now()])?;
     Ok(changed == 1)
+}
+
+/// Deletes the events of every finished job older than `cutoff`.
+///
+/// One transaction covers the whole set and each job's events go in a single
+/// statement. The jobs row stays, so history, metrics and host results keep
+/// working. The work directories are removed by the caller.
+pub(crate) fn prune_job_logs(c: &mut Connection, cutoff: &str) -> AppResult<PrunedJobLogs> {
+    let tx = c.transaction()?;
+    let job_ids: Vec<String> = sql::sqlite_all(&tx, FINISHED_JOBS_BEFORE, [cutoff], |row| {
+        SqlRow::get(row, 0)
+    })?;
+    let mut events = 0usize;
+    for id in &job_ids {
+        events = events.saturating_add(tx.execute(DELETE_JOB_EVENTS, [id])?);
+    }
+    tx.commit()?;
+    Ok(PrunedJobLogs { job_ids, events })
 }
 
 /// Fails every job and workflow run that a stopped process left unfinished.

@@ -434,12 +434,24 @@ pub const OUTPUT_LINES_MIN: u64 = 100;
 /// Highest accepted output line limit.
 pub const OUTPUT_LINES_MAX: u64 = 100_000;
 
+/// Default days that finished job logs and work directories are kept.
+pub const JOB_LOG_RETENTION_DAYS_DEFAULT: u64 = 30;
+
 /// Default number of jobs that run at the same time.
 pub const MAX_CONCURRENT_JOBS_DEFAULT: usize = 4;
 /// Lowest accepted concurrency limit. Anything below waits for a slot.
 pub const MAX_CONCURRENT_JOBS_MIN: usize = 1;
 /// Highest accepted concurrency limit.
 pub const MAX_CONCURRENT_JOBS_MAX: usize = 64;
+
+/// Reads `KOREOGRAF_JOB_LOG_RETENTION_DAYS`. `0` disables pruning; an empty
+/// value and a value that is not a number fall back to the default.
+pub fn parse_job_log_retention_days(value: &str) -> u64 {
+    value
+        .trim()
+        .parse()
+        .unwrap_or(JOB_LOG_RETENTION_DAYS_DEFAULT)
+}
 
 /// Reads `KOREOGRAF_MAX_CONCURRENT_JOBS`. An empty value, a value that is not
 /// a number, and `0` fall back to the default. Every other value is clamped to
@@ -481,6 +493,8 @@ pub struct Config {
     pub job_timeout_secs: u64,
     /// `KOREOGRAF_JOB_OUTPUT_LINES`. Lines kept for each of stdout and stderr.
     pub job_output_lines: u64,
+    /// `KOREOGRAF_JOB_LOG_RETENTION_DAYS`. `0` keeps finished job logs forever.
+    pub job_log_retention_days: u64,
     /// `KOREOGRAF_MAX_CONCURRENT_JOBS`. Jobs wait as `pending` for a slot.
     pub max_concurrent_jobs: usize,
     /// `KOREOGRAF_LOCAL_RUNNER_FOR`. Not a saved setting.
@@ -561,6 +575,10 @@ impl Config {
                 .parse()
                 .unwrap_or(OUTPUT_LINES_DEFAULT)
                 .clamp(OUTPUT_LINES_MIN, OUTPUT_LINES_MAX),
+            job_log_retention_days: parse_job_log_retention_days(&env_or(
+                "KOREOGRAF_JOB_LOG_RETENTION_DAYS",
+                "30",
+            )),
             max_concurrent_jobs: parse_max_concurrent_jobs(&env_or(
                 "KOREOGRAF_MAX_CONCURRENT_JOBS",
                 "4",
@@ -716,6 +734,21 @@ mod tests {
             effective_project_roots(vec![examples.clone()], &examples),
             vec![examples]
         );
+    }
+
+    #[test]
+    fn the_job_log_retention_parses_its_default_and_off_switch() {
+        assert_eq!(
+            parse_job_log_retention_days(""),
+            JOB_LOG_RETENTION_DAYS_DEFAULT
+        );
+        assert_eq!(
+            parse_job_log_retention_days("nonsense"),
+            JOB_LOG_RETENTION_DAYS_DEFAULT
+        );
+        assert_eq!(parse_job_log_retention_days("0"), 0);
+        assert_eq!(parse_job_log_retention_days(" 7 "), 7);
+        assert_eq!(parse_job_log_retention_days("3650"), 3650);
     }
 
     #[test]

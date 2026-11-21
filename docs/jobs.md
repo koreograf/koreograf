@@ -32,6 +32,14 @@ On the job page, `fatal:`, `UNREACHABLE!`, `ERROR!`, and a recap line with `fail
 
 Above the log, an Ansible job shows a result summary built from its `PLAY RECAP` lines: one row per host with `ok`, `changed`, `unreachable`, `failed`, `skipped`, `rescued`, and `ignored`. A host with a failed or unreachable count is marked. The summary updates while the job runs and stays hidden when the output has no recap. The search field highlights every match without changing the log text, shows `n of m`, and moves to the next or previous match with Enter or Shift+Enter; it keeps working while output streams in. **Jump to first failure** scrolls to the first line that the page marks as a failure. **Wrap lines** is off by default. The log scrolls to the end only while the reader is already at the bottom; scrolling up stops that, and **Jump to end** turns it back on. The log stays plain text: a line with `<script>` or `&lt;` is shown literally, including while a search match is highlighted.
 
+## Retention
+
+`KOREOGRAF_JOB_LOG_RETENTION_DAYS` bounds the output and the work directory. The default is 30 days; `0` turns pruning off. Only finished jobs count: a job needs a status of `successful`, `failed`, or `canceled` and a `finished_at` older than the cutoff. `pending` and `running` jobs and a job without `finished_at` keep their events and directory.
+
+A prune runs once at startup and then at most once every 24 hours while the process is up. For each such job it deletes that job's `job_events` rows in one transaction, one statement per job, and removes `data/jobs/<id>`. The directory removal never follows a symlink and treats a missing directory as already gone. The `jobs` row stays with its status, timings, name, trigger, launch actor, failed hosts, and workflow references, so history, the dashboard, metrics, and host run history keep working. No credential file, extra variable, or other secret is read or logged during the prune.
+
+A pruned job still opens from the job list. Its log area shows the normal empty state and `GET /api/jobs/{id}/output` returns no lines.
+
 ## Prompt on launch
 
 A template can ask before it starts. The launch button then opens a dialog filled with the template's inventory, credentials, limit, tags, skip tags, job type, verbosity, and extra variables. Cancel starts nothing. Confirm runs that one job with the dialog values and leaves the template row unchanged. An Ansible template without prompt on launch also offers Launch with options for operators. That action opens the same dialog and sends `launch_with_options: true` with the run overrides. `POST /api/templates/{id}/launch` with only `extra_vars`, or with none of the prompt fields, still uses the template. The same applies to hooks and scripts. Inventory, credentials, and the Ansible fields above are accepted only when prompt on launch is on, or when that explicit flag asks for the options run.

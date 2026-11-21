@@ -29,6 +29,8 @@ pub struct Options {
     pub admin_user: String,
     /// `KOREOGRAF_MAX_CONCURRENT_JOBS`. Four unless a test needs a queue.
     pub max_concurrent_jobs: usize,
+    /// `KOREOGRAF_JOB_LOG_RETENTION_DAYS`.
+    pub job_log_retention_days: u64,
 }
 
 impl Default for Options {
@@ -41,6 +43,7 @@ impl Default for Options {
             project_roots: vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples")],
             admin_user: "admin".into(),
             max_concurrent_jobs: 4,
+            job_log_retention_days: 30,
         }
     }
 }
@@ -58,6 +61,7 @@ pub fn config(data_dir: &Path, options: &Options) -> Config {
         container_image: options.container_image,
         job_timeout_secs: 60,
         job_output_lines: 8_000,
+        job_log_retention_days: options.job_log_retention_days,
         max_concurrent_jobs: options.max_concurrent_jobs,
         local_jobs: LocalJobs::All,
         project_roots: options.project_roots.clone(),
@@ -88,6 +92,7 @@ pub struct TestApp {
     pub app: axum::Router,
     pub state: Shared,
     pub dir: PathBuf,
+    pub options: Options,
     pub database_url: Option<String>,
     pub database_name: Option<String>,
     pub postgres_base: Option<String>,
@@ -114,6 +119,7 @@ impl TestApp {
             app: koreograf::router(state.clone()),
             state,
             dir,
+            options,
             database_url: None,
             database_name: None,
             postgres_base: None,
@@ -139,6 +145,7 @@ impl TestApp {
             app: koreograf::router(state.clone()),
             state,
             dir,
+            options,
             database_url: Some(database_url),
             database_name: Some(name),
             postgres_base: Some(base),
@@ -155,7 +162,7 @@ impl TestApp {
     }
 
     pub fn try_reboot(&mut self) -> anyhow::Result<()> {
-        let cfg = config(&self.dir, &Options::default());
+        let cfg = config(&self.dir, &self.options);
         let state = match &self.database_url {
             Some(url) => {
                 let database = koreograf::parse_database_config(url, None, None)

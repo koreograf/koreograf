@@ -74,6 +74,7 @@ fn history_config(dir: &Path) -> crate::Config {
         container_image: false,
         job_timeout_secs: 60,
         job_output_lines: 8_000,
+        job_log_retention_days: 30,
         max_concurrent_jobs: 4,
         local_jobs: crate::config::LocalJobs::All,
         project_roots: Vec::new(),
