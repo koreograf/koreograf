@@ -242,6 +242,11 @@ pub(crate) trait Backend: Send + Sync {
     fn set_job_parameters(&self, id: &str, parameters: &str) -> AppResult<()>;
     fn finish_job(&self, id: &str, status: &str) -> AppResult<bool>;
     fn prune_job_logs(&self, cutoff: &str, limit: i64) -> AppResult<jobs::store::PrunedJobLogs>;
+    fn prune_workflow_runs(
+        &self,
+        cutoff: &str,
+        limit: i64,
+    ) -> AppResult<workflows::store::PrunedWorkflowRuns>;
     fn reconcile_interrupted(&self, line: &str) -> AppResult<jobs::store::Interrupted>;
     fn insert_event(&self, job_id: &str, stream: &str, line: &str) -> AppResult<()>;
     fn events_after(&self, job_id: &str, after: i64, limit: i64) -> AppResult<Vec<JobEvent>>;
@@ -1116,6 +1121,15 @@ impl Backend for SqliteBackend {
         jobs::store::prune_job_logs(&mut conn, cutoff, limit)
     }
 
+    fn prune_workflow_runs(
+        &self,
+        cutoff: &str,
+        limit: i64,
+    ) -> AppResult<workflows::store::PrunedWorkflowRuns> {
+        let mut conn = lock(&self.conn)?;
+        workflows::store::prune_workflow_runs(&mut conn, cutoff, limit)
+    }
+
     fn reconcile_interrupted(&self, line: &str) -> AppResult<jobs::store::Interrupted> {
         let mut conn = lock(&self.conn)?;
         jobs::store::reconcile_interrupted(&mut conn, line)
@@ -1277,8 +1291,8 @@ impl Backend for SqliteBackend {
     }
 
     fn delete_workflow(&self, id: &str, team_id: &str) -> AppResult<()> {
-        let conn = lock(&self.conn)?;
-        workflows::store::delete_workflow(&conn, id, team_id)
+        let mut conn = lock(&self.conn)?;
+        workflows::store::delete_workflow(&mut conn, id, team_id)
     }
 
     fn workflow_team(&self, id: &str) -> AppResult<Option<String>> {
@@ -3651,6 +3665,34 @@ impl Backend for PostgresBackend {
         })
     }
 
+    fn prune_workflow_runs(
+        &self,
+        cutoff: &str,
+        limit: i64,
+    ) -> AppResult<workflows::store::PrunedWorkflowRuns> {
+        self.with_client(|mut client| async move {
+            let tx = client.transaction().await?;
+            let rows = tx
+                .query(
+                    &store::sql::postgres(workflows::store::FINISHED_WORKFLOW_RUNS_BEFORE),
+                    &[&cutoff, &limit],
+                )
+                .await?;
+            let run_ids: Vec<String> = rows.iter().map(|row| row.get(0)).collect();
+            let delete_nodes =
+                store::sql::postgres(workflows::store::DELETE_WORKFLOW_NODES_FOR_RUN);
+            let delete_run = store::sql::postgres(workflows::store::DELETE_WORKFLOW_RUN);
+            let mut nodes = 0usize;
+            for id in &run_ids {
+                let affected = tx.execute(&delete_nodes, &[id]).await?;
+                nodes = nodes.saturating_add(usize::try_from(affected).unwrap_or(usize::MAX));
+                tx.execute(&delete_run, &[id]).await?;
+            }
+            tx.commit().await?;
+            Ok(workflows::store::PrunedWorkflowRuns { run_ids, nodes })
+        })
+    }
+
     fn reconcile_interrupted(&self, line: &str) -> AppResult<jobs::store::Interrupted> {
         self.with_client(|mut client| async move {
             let tx = client.transaction().await?;
@@ -4140,6 +4182,18 @@ impl Backend for PostgresBackend {
             if changed == 0 {
                 return Err(ApiError::NotFound);
             }
+            transaction
+                .execute(
+                    &store::sql::postgres(workflows::store::DELETE_WORKFLOW_NODES_FOR_WORKFLOW),
+                    &[&id],
+                )
+                .await?;
+            transaction
+                .execute(
+                    &store::sql::postgres(workflows::store::DELETE_WORKFLOW_JOBS_FOR_WORKFLOW),
+                    &[&id],
+                )
+                .await?;
             transaction
                 .execute(
                     &store::sql::postgres(schedules::store::DELETE_SCHEDULES_FOR),

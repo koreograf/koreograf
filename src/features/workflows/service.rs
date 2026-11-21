@@ -1,8 +1,11 @@
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
 use serde_json::{Map, Value};
 
 use super::model::{Convergence, Graph, GraphEdge, NodeOverrides, NodePhase, Step, When};
+use crate::error::AppResult;
+use crate::{db, Shared};
 
 /// Writes node overrides onto a parameter snapshot from `capture_parameters`.
 pub fn apply_overrides(params: &mut Map<String, Value>, overrides: &NodeOverrides) {
@@ -211,6 +214,67 @@ pub fn settled(graph: &Graph, phase: &HashMap<String, NodePhase>) -> bool {
             .unwrap_or(NodePhase::Pending)
             .is_terminal()
     })
+}
+
+/// Runs and nodes per database batch. The lock is released between batches so
+/// a long history does not stall another request.
+const PRUNE_BATCH: i64 = 500;
+
+/// Deletes finished workflow runs and their nodes past
+/// `KOREOGRAF_WORKFLOW_RUN_RETENTION_DAYS`.
+///
+/// Only a run with a finished status and a `finished_at` older than the
+/// cutoff qualifies. The loop takes the database lock one bounded batch at a
+/// time, and the log line carries the totals for the whole pass.
+pub(crate) fn prune_finished_workflow_runs(state: &crate::AppState) -> AppResult<()> {
+    let days = state.cfg.workflow_run_retention_days;
+    if days == 0 {
+        return Ok(());
+    }
+    let Some(cutoff) = db::minus_days(days) else {
+        return Ok(());
+    };
+    let mut runs = 0usize;
+    let mut nodes = 0usize;
+    loop {
+        let batch = state.store().prune_workflow_runs(&cutoff, PRUNE_BATCH)?;
+        if batch.run_ids.is_empty() {
+            break;
+        }
+        runs = runs.saturating_add(batch.run_ids.len());
+        nodes = nodes.saturating_add(batch.nodes);
+        if batch.run_ids.len() < usize::try_from(PRUNE_BATCH).unwrap_or(usize::MAX) {
+            break;
+        }
+        // Leave a gap for another request before taking the lock again.
+        std::thread::yield_now();
+    }
+    tracing::info!(
+        days,
+        runs,
+        nodes,
+        "pruned finished workflow runs; KOREOGRAF_WORKFLOW_RUN_RETENTION_DAYS sets the cutoff"
+    );
+    Ok(())
+}
+
+/// Runs the workflow-run prune once when the task starts and then once a day.
+/// The server calls this after the port is bound. Each pass runs on the
+/// blocking pool and takes the database lock one batch at a time.
+pub(crate) fn spawn_run_retention(state: Shared) {
+    tokio::spawn(async move {
+        loop {
+            let task_state = state.clone();
+            match tokio::task::spawn_blocking(move || prune_finished_workflow_runs(&task_state))
+                .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => tracing::error!(error = %err, "workflow run retention"),
+                Err(err) => tracing::error!(error = %err, "workflow run retention task stopped"),
+            }
+            tokio::time::sleep(Duration::from_secs(24 * 60 * 60)).await;
+        }
+    });
 }
 
 #[cfg(test)]

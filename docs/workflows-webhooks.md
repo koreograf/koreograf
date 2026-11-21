@@ -8,6 +8,18 @@ Cancel sets the job to `canceled` and stops the controller process. The workflow
 
 A workflow can also start from a schedule in the workflow page's **Schedules** tab, which links as `#/workflows/<id>?tab=schedules`. The delete action is in the **Danger Zone** tab for operators. The form, the missed-run question, and the check interval are in [Schedules](jobs.md#schedules).
 
+## Retention
+
+`KOREOGRAF_WORKFLOW_RUN_RETENTION_DAYS` bounds the run history. The default is 90 days; `0` turns pruning off. Only finished runs count: a run needs a status of `successful`, `failed`, or `canceled` and a `finished_at` older than the cutoff. `pending` and `running` runs and a run without `finished_at` stay.
+
+A prune runs once shortly after startup and then at most once every 24 hours while the process is up. The first pass runs in the background after the port is open, on the blocking pool, so a large history does not delay the first start. It deletes `workflow_jobs` and `workflow_nodes` together in bounded batches and releases the database lock between batches. The job rows and output of the nodes keep following `KOREOGRAF_JOB_LOG_RETENTION_DAYS`; this prune never deletes a job. A second pass therefore removes nothing.
+
+Each pass writes one log line with the run and node counts and names `KOREOGRAF_WORKFLOW_RUN_RETENTION_DAYS`. The workflow history lists the remaining runs, and a pruned run answers `404` like any other missing run.
+
+Deleting a workflow removes its runs and nodes in the same transaction as the workflow and its schedules, so a deleted workflow leaves no history behind. Runs that never belonged to a workflow are not affected.
+
+Installations that predate this bound kept every finished run. The default of 90 days applies on the first start after the upgrade: runs older than 90 days and their nodes are removed shortly after the port opens. To keep more, set `KOREOGRAF_WORKFLOW_RUN_RETENTION_DAYS` before that first start. `0` keeps everything.
+
 ## Webhooks
 
 `POST /hooks/{id}/{token}` is public. The token is the authentication. Alertmanager reads `alerts[].labels.alertname` and `status`. Grafana reads the older format with `state` and `ruleName`. Otherwise an `alertname` field is enough. `alerting` becomes `firing`, and `ok` becomes `resolved`.

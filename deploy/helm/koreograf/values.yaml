@@ -62,6 +62,8 @@ runner:
   maxConcurrentJobsPerTeam: 2
   # Tage, die Ausgabe und Arbeitsverzeichnis fertiger Jobs bleiben. 0 behält sie.
   jobLogRetentionDays: 30
+  # Tage, die fertige Workflow-Läufe und ihre Knoten bleiben. 0 behält sie.
+  workflowRunRetentionDays: 90
   dockerSocket:
     enabled: false
     hostPath: /var/run/docker.sock
