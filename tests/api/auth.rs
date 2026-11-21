@@ -1576,3 +1576,272 @@ async fn api_tokens_expire_after_a_bounded_lifetime() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn browser_sessions_list_current_flags_and_revoke_one_owner_at_a_time() {
+    let harness = TestApp::boot("browser-sessions", Options::default());
+    let app = harness.app.clone();
+    let admin = json!({"username": "admin", "password": "test-admin-pass"});
+
+    let (status, me, cookie_a) = call(
+        &app,
+        "POST",
+        "/api/v1/login",
+        None,
+        None,
+        Some(admin.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie_a = cookie_a.expect("first admin cookie");
+    let admin_id = me["id"].as_str().expect("admin id").to_string();
+
+    let (status, _, cookie_b) = call(
+        &app,
+        "POST",
+        "/api/v1/login",
+        None,
+        None,
+        Some(admin.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let cookie_b = cookie_b.expect("second admin cookie");
+    assert_ne!(cookie_a, cookie_b);
+
+    let (status, listed, _) = call(
+        &app,
+        "GET",
+        "/api/v1/me/sessions",
+        Some(&cookie_a),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let listed = listed.as_array().expect("session array").clone();
+    assert_eq!(listed.len(), 2, "{listed:?}");
+    for session in &listed {
+        let mut keys = session
+            .as_object()
+            .expect("session object")
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["created_at", "current", "expires_at", "id", "last_seen_at"]
+        );
+        assert!(!session["created_at"].as_str().unwrap_or("").is_empty());
+        assert!(!session["expires_at"].as_str().unwrap_or("").is_empty());
+        assert!(session["last_seen_at"].is_string());
+    }
+    let serialized = serde_json::to_string(&listed).expect("json");
+    for cookie in [&cookie_a, &cookie_b] {
+        let token = cookie.split('=').nth(1).expect("cookie token");
+        assert!(!serialized.contains(token), "the cookie token leaked");
+    }
+    let current = listed
+        .iter()
+        .find(|session| session["current"] == true)
+        .expect("one current session");
+    let current_id = current["id"].as_str().expect("current id").to_string();
+    let other = listed
+        .iter()
+        .find(|session| session["current"] == false)
+        .expect("one other session");
+    let other_id = other["id"].as_str().expect("other id").to_string();
+    assert_eq!(
+        listed.iter().filter(|item| item["current"] == true).count(),
+        1
+    );
+
+    harness
+        .execute_sql(&format!(
+            "UPDATE sessions SET last_seen_at = '2999-01-01T00:00:00Z' WHERE id = '{other_id}'"
+        ))
+        .await;
+    harness
+        .execute_sql(&format!(
+            "UPDATE sessions SET last_seen_at = '2998-01-01T00:00:00Z' WHERE id = '{current_id}'"
+        ))
+        .await;
+    // Future values keep the one-minute throttle from rewriting them in this
+    // request, so the newest-activity order stays deterministic.
+    let (status, ordered, _) = call(
+        &app,
+        "GET",
+        "/api/v1/me/sessions",
+        Some(&cookie_a),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ordered}");
+    let ordered = ordered.as_array().expect("session array");
+    assert_eq!(ordered[0]["id"], other_id.as_str());
+    assert_eq!(ordered[0]["current"], false);
+    assert_eq!(ordered[1]["id"], current_id.as_str());
+    assert_eq!(ordered[1]["current"], true);
+
+    harness
+        .execute_sql(&format!(
+            "INSERT INTO sessions (token, user_id, expires_at, id, created_at)
+             VALUES ('expired-token', '{admin_id}', '2020-01-01T00:00:00Z',
+                     'expired-session', '2020-01-01T00:00:00Z')"
+        ))
+        .await;
+    let (status, without_expired, _) = call(
+        &app,
+        "GET",
+        "/api/v1/me/sessions",
+        Some(&cookie_a),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{without_expired}");
+    let without_expired = without_expired.as_array().expect("session array");
+    assert_eq!(without_expired.len(), 2, "{without_expired:?}");
+    assert!(without_expired
+        .iter()
+        .all(|session| session["id"] != "expired-session"));
+
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/v1/users",
+        Some(&cookie_a),
+        None,
+        Some(json!({
+            "username": "session-other",
+            "display_name": "Other Session",
+            "password": "session-other-pass",
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let other_user_id = created["id"].as_str().expect("user id").to_string();
+    let (status, _, other_cookie) = call(
+        &app,
+        "POST",
+        "/api/v1/login",
+        None,
+        None,
+        Some(json!({"username": "session-other", "password": "session-other-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let other_cookie = other_cookie.expect("other user cookie");
+    let (status, other_sessions, _) = call(
+        &app,
+        "GET",
+        "/api/v1/me/sessions",
+        Some(&other_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{other_sessions}");
+    let foreign_id = other_sessions[0]["id"]
+        .as_str()
+        .expect("foreign session id");
+    assert_eq!(other_sessions[0]["current"], true);
+    let (status, foreign, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/v1/me/sessions/{foreign_id}"),
+        Some(&cookie_a),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{foreign}");
+    let (status, still_signed_in, _) =
+        call(&app, "GET", "/api/v1/me", Some(&other_cookie), None, None).await;
+    assert_eq!(status, StatusCode::OK, "{still_signed_in}");
+
+    let reply = call_full(
+        &app,
+        "DELETE",
+        &format!("/api/v1/me/sessions/{other_id}"),
+        Some(&cookie_a),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::NO_CONTENT);
+    assert!(
+        reply.headers.get("set-cookie").is_none(),
+        "revoking another session must not clear the caller cookie"
+    );
+    let (status, revoked, _) = call(&app, "GET", "/api/v1/me", Some(&cookie_b), None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{revoked}");
+    let (status, kept, _) = call(&app, "GET", "/api/v1/me", Some(&cookie_a), None, None).await;
+    assert_eq!(status, StatusCode::OK, "{kept}");
+    let (status, remaining, _) = call(
+        &app,
+        "GET",
+        "/api/v1/me/sessions",
+        Some(&cookie_a),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{remaining}");
+    let remaining = remaining.as_array().expect("session array");
+    assert_eq!(remaining.len(), 1, "{remaining:?}");
+    assert_eq!(remaining[0]["id"], current_id.as_str());
+    assert_eq!(remaining[0]["current"], true);
+
+    let reply = call_full(
+        &app,
+        "DELETE",
+        &format!("/api/v1/me/sessions/{current_id}"),
+        Some(&cookie_a),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::NO_CONTENT);
+    let cleared = reply
+        .headers
+        .get("set-cookie")
+        .and_then(|value| value.to_str().ok())
+        .expect("cleared cookie");
+    assert!(cleared.contains("koreograf_session=;"), "{cleared}");
+    assert!(cleared.contains("Max-Age=0"), "{cleared}");
+    let (status, signed_out, _) =
+        call(&app, "GET", "/api/v1/me", Some(&cookie_a), None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{signed_out}");
+
+    let (status, _, admin_cookie) = call(
+        &app,
+        "POST",
+        "/api/v1/login",
+        None,
+        None,
+        Some(admin.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let admin_cookie = admin_cookie.expect("admin cookie");
+    let (status, disabled, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/v1/users/{other_user_id}"),
+        Some(&admin_cookie),
+        None,
+        Some(json!({
+            "display_name": "Other Session",
+            "is_admin": false,
+            "disabled": true,
+            "password": "",
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{disabled}");
+    let (status, gone, _) = call(&app, "GET", "/api/v1/me", Some(&other_cookie), None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{gone}");
+}

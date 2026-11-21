@@ -12,8 +12,8 @@ use crate::config::{DatabaseConfig, PostgresConfig, SslMode};
 use crate::db::{
     self, ApiToken, ApiTokenTimes, Credential, CredentialUsage, Delivery, Environment, Hook,
     Inventory, InventorySource, Job, JobActivity, JobEvent, JobQuery, Member, NewDelivery,
-    Organization, Project, Schedule, Team, Template, User, UserMembership, Workflow, WorkflowJob,
-    WorkflowNodeRow,
+    Organization, Project, Schedule, Session, Team, Template, User, UserMembership, Workflow,
+    WorkflowJob, WorkflowNodeRow,
 };
 use crate::error::{ApiError, AppResult};
 use crate::features::activity::{self as activity, Activity, ActivityQuery};
@@ -46,6 +46,9 @@ pub(crate) trait Backend: Send + Sync {
     fn create_session(&self, token: &str, user_id: &str) -> AppResult<()>;
     fn delete_session(&self, token: &str) -> AppResult<()>;
     fn purge_sessions(&self) -> AppResult<()>;
+    fn session_id(&self, token: &str) -> AppResult<Option<String>>;
+    fn list_sessions(&self, user_id: &str) -> AppResult<Vec<Session>>;
+    fn revoke_session(&self, id: &str, user_id: &str) -> AppResult<bool>;
     fn insert_user(
         &self,
         id: &str,
@@ -447,6 +450,21 @@ impl Backend for SqliteBackend {
     fn purge_sessions(&self) -> AppResult<()> {
         let conn = lock(&self.conn)?;
         identity_store::purge_sessions(&conn)
+    }
+
+    fn session_id(&self, token: &str) -> AppResult<Option<String>> {
+        let conn = lock(&self.conn)?;
+        identity_store::session_id(&conn, token)
+    }
+
+    fn list_sessions(&self, user_id: &str) -> AppResult<Vec<Session>> {
+        let conn = lock(&self.conn)?;
+        identity_store::list_sessions(&conn, user_id)
+    }
+
+    fn revoke_session(&self, id: &str, user_id: &str) -> AppResult<bool> {
+        let conn = lock(&self.conn)?;
+        identity_store::revoke_session(&conn, id, user_id)
     }
 
     fn insert_user(
@@ -1699,9 +1717,23 @@ impl Backend for PostgresBackend {
             return Ok(None);
         };
         let expires: String = row.try_get(9)?;
-        if expires < db::now() {
+        let session_id: String = row.try_get(10)?;
+        let last_seen_at: Option<String> = row.try_get(11)?;
+        let now = db::now();
+        if expires < now {
             self.delete_session(token)?;
             return Ok(None);
+        }
+        if db::session_touch_due(last_seen_at.as_deref(), &now) {
+            self.with_client(|client| async move {
+                client
+                    .execute(
+                        &store::sql::postgres(identity_store::TOUCH_SESSION),
+                        &[&session_id, &now],
+                    )
+                    .await
+                    .map_err(ApiError::from)
+            })?;
         }
         Ok(Some(identity_store::row_user(&row)?))
     }
@@ -1737,11 +1769,19 @@ impl Backend for PostgresBackend {
     }
 
     fn create_session(&self, token: &str, user_id: &str) -> AppResult<()> {
+        let times = db::session_times();
         self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(identity_store::CREATE_SESSION),
-                    &[&token, &user_id, &db::plus_secs(7 * 24 * 3600)],
+                    &[
+                        &token,
+                        &times.id,
+                        &user_id,
+                        &times.created_at,
+                        &times.last_seen_at,
+                        &times.expires_at,
+                    ],
                 )
                 .await?;
             Ok(())
@@ -1769,6 +1809,41 @@ impl Backend for PostgresBackend {
                 )
                 .await?;
             Ok(())
+        })
+    }
+
+    fn session_id(&self, token: &str) -> AppResult<Option<String>> {
+        self.with_client(|client| async move {
+            let row = client
+                .query_opt(&store::sql::postgres(identity_store::SESSION_ID), &[&token])
+                .await?;
+            Ok(row.map(|row| row.get(0)))
+        })
+    }
+
+    fn list_sessions(&self, user_id: &str) -> AppResult<Vec<Session>> {
+        self.with_client(|client| async move {
+            let rows = client
+                .query(
+                    &store::sql::postgres(identity_store::LIST_SESSIONS),
+                    &[&user_id, &db::now()],
+                )
+                .await?;
+            rows.iter()
+                .map(identity_store::row_session)
+                .collect::<AppResult<Vec<_>>>()
+        })
+    }
+
+    fn revoke_session(&self, id: &str, user_id: &str) -> AppResult<bool> {
+        self.with_client(|client| async move {
+            let changed = client
+                .execute(
+                    &store::sql::postgres(identity_store::DELETE_SESSION_FOR_USER),
+                    &[&id, &user_id],
+                )
+                .await?;
+            Ok(changed > 0)
         })
     }
 

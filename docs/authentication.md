@@ -72,6 +72,14 @@ A signed-in user creates and revokes personal API tokens under **My account** (G
 
 The secret starts with `koro_` and is stored only as a hash. Send it as `Authorization: Bearer <token>`. The token authenticates the same user as the session cookie, and the role checks stay the same. When both a bearer token and a cookie are present, the bearer token wins; a bad token is 401 and does not fall back to the cookie. Team routes still need `X-Team-Id`. A disabled or deleted user cannot use a token. Deleting a user deletes the tokens, and revoking a token does not delete the sessions.
 
+## Browser sessions
+
+A successful sign-in creates a session row with a private UUID `id`, `created_at`, `last_seen_at`, `expires_at`, and the cookie token. The token stays in the database and is never returned. A request through a session moves `last_seen_at` at most once per minute, so the list follows activity without a write on every call. Expired sessions are purged at startup and never listed.
+
+`GET /api/v1/me/sessions` lists the caller's sessions, newest activity first, with `id`, `created_at`, `last_seen_at`, `expires_at`, and `current`. `current` is true for the browser that made the request. `DELETE /api/v1/me/sessions/{id}` ends one session owned by the caller; another user's id is 404. Ending the current session also clears the cookie, so the next request is 401. Ending another session leaves the caller signed in. Disabling an account still deletes all of its sessions.
+
+**My account** (German: **Mein Konto**) lists the sessions and marks the current one. The other rows offer **End session** and ask for confirmation before the session ends.
+
 ## Users and permissions
 
 An administrator sees every account under **Users** (German: **Benutzerkonten**). `GET /api/users` lists them. `GET /api/users/{id}` returns the account and its memberships. The password hash is never returned.
