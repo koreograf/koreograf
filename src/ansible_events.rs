@@ -33,12 +33,28 @@ pub(crate) const MAX_FIELD_CHARS: usize = 4_000;
 pub(crate) const MAX_EVENTS: usize = 2_000;
 /// The whole structured stream stays under this many bytes.
 pub(crate) const MAX_BYTES: usize = 4 * 1024 * 1024;
+/// The final recap chunks have their own budget, so a long run still ends with
+/// a complete totals bar and problem-host list after [`MAX_EVENTS`].
+pub(crate) const MAX_STATS_EVENTS: usize = 256;
+const MAX_STATS_BYTES: usize = 3 * 1024 * 1024;
+/// One stats chunk carries at most this many host rows.
+const MAX_STATS_HOSTS: usize = 256;
 /// A single JSON line above this is dropped instead of buffered forever.
 const MAX_LINE_BYTES: usize = 64 * 1024;
 const POLL: Duration = Duration::from_millis(200);
 
 const TEXT_FIELDS: &[&str] = &["play", "task", "role", "host", "msg", "stdout", "stderr"];
 const NUMBER_FIELDS: &[&str] = &["index", "play_index", "task_index", "rc"];
+/// The per-host counters Ansible reports in `PLAY RECAP`.
+const STATS_FIELDS: &[&str] = &[
+    "ok",
+    "changed",
+    "unreachable",
+    "failed",
+    "skipped",
+    "rescued",
+    "ignored",
+];
 
 /// Writes the callback plugin into `work`. Only Ansible jobs call this.
 pub(crate) fn install(work: &Path) -> std::io::Result<()> {
@@ -183,6 +199,8 @@ pub(crate) struct Capture {
     count: usize,
     bytes: usize,
     limited: bool,
+    stats_count: usize,
+    stats_bytes: usize,
 }
 
 impl Capture {
@@ -192,16 +210,31 @@ impl Capture {
             count: 0,
             bytes: 0,
             limited: false,
+            stats_count: 0,
+            stats_bytes: 0,
         }
     }
 
     /// One accepted line for `job_events`, or `None` when the line is invalid
     /// or the budget is already spent.
+    ///
+    /// A `stats` chunk uses its own budget and is still accepted after the
+    /// per-task stream reached [`MAX_EVENTS`], so the recap survives.
     pub(crate) fn accept(&mut self, raw: &str) -> Option<String> {
+        let (event, stats) = sanitize(raw, &self.scrub)?;
+        if stats {
+            if self.stats_count >= MAX_STATS_EVENTS
+                || self.stats_bytes.saturating_add(event.len()) > MAX_STATS_BYTES
+            {
+                return None;
+            }
+            self.stats_count += 1;
+            self.stats_bytes = self.stats_bytes.saturating_add(event.len());
+            return Some(event);
+        }
         if self.limited {
             return None;
         }
-        let event = sanitize(raw, &self.scrub)?;
         if self.count >= MAX_EVENTS || self.bytes.saturating_add(event.len()) > MAX_BYTES {
             self.limited = true;
             return Some(format!(
@@ -214,17 +247,18 @@ impl Capture {
     }
 }
 
-fn sanitize(raw: &str, scrub: &[String]) -> Option<String> {
+fn sanitize(raw: &str, scrub: &[String]) -> Option<(String, bool)> {
     let value: Value = serde_json::from_str(raw).ok()?;
     let input = value.as_object()?;
     let kind = input.get("type")?.as_str()?;
     let mut out = Map::new();
-    match kind {
+    let stats = match kind {
         "play_start" => {
             let play = text_field(input, "play", scrub)?;
             out.insert("type".into(), Value::String(kind.into()));
             out.insert("play".into(), Value::String(play));
             copy_numbers(input, &mut out, &["index"]);
+            false
         }
         "task_start" => {
             let task = text_field(input, "task", scrub)?;
@@ -242,6 +276,7 @@ fn sanitize(raw: &str, scrub: &[String]) -> Option<String> {
                     out.insert("handler".into(), Value::Bool(true));
                 }
             }
+            false
         }
         "host_result" => {
             let host = text_field(input, "host", scrub)?;
@@ -287,13 +322,55 @@ fn sanitize(raw: &str, scrub: &[String]) -> Option<String> {
                     out.insert("diff".into(), Value::String(text));
                 }
             }
+            false
+        }
+        "stats" => {
+            let total = input
+                .get("total")
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+                .max(0);
+            let part = input
+                .get("part")
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+                .max(0);
+            let parts = input
+                .get("parts")
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+                .max(0);
+            let hosts = input.get("hosts")?.as_array()?;
+            if hosts.len() > MAX_STATS_HOSTS {
+                return None;
+            }
+            let mut rows = Vec::with_capacity(hosts.len());
+            for host in hosts {
+                let row = host.as_object()?;
+                let name = text_field(row, "host", scrub)?;
+                let mut entry = Map::new();
+                entry.insert("host".into(), Value::String(name));
+                for key in STATS_FIELDS {
+                    let count = row.get(*key).and_then(Value::as_i64).unwrap_or(0).max(0);
+                    entry.insert((*key).into(), Value::Number(count.into()));
+                }
+                rows.push(Value::Object(entry));
+            }
+            out.insert("type".into(), Value::String(kind.into()));
+            out.insert("total".into(), Value::Number(total.into()));
+            out.insert("part".into(), Value::Number(part.into()));
+            out.insert("parts".into(), Value::Number(parts.into()));
+            out.insert("hosts".into(), Value::Array(rows));
+            true
         }
         "playbook_end" => {
             out.insert("type".into(), Value::String(kind.into()));
+            false
         }
         _ => return None,
-    }
-    serde_json::to_string(&Value::Object(out)).ok()
+    };
+    let line = serde_json::to_string(&Value::Object(out)).ok()?;
+    Some((line, stats))
 }
 
 fn text_field(input: &Map<String, Value>, key: &str, scrub: &[String]) -> Option<String> {
@@ -465,9 +542,72 @@ mod tests {
     }
 
     #[test]
+    fn a_stats_chunk_keeps_the_host_counters_and_is_bounded() {
+        let mut capture = capture();
+        let line = capture
+            .accept(
+                r#"{"type":"stats","total":2,"part":1,"parts":1,"hosts":[{"host":"web-1","ok":3,"changed":1,"unreachable":0,"failed":0,"skipped":1,"rescued":0,"ignored":0,"extra":"x"},{"host":"web-2","ok":1,"changed":0,"unreachable":1,"failed":1,"skipped":0,"rescued":0,"ignored":0}]}"#,
+            )
+            .expect("stats");
+        let value: Value = serde_json::from_str(&line).expect("json");
+        assert_eq!(value["type"], "stats");
+        assert_eq!(value["total"], 2);
+        assert_eq!(value["parts"], 1);
+        assert_eq!(value["hosts"][0]["changed"], 1);
+        assert_eq!(value["hosts"][1]["unreachable"], 1);
+        assert!(value["hosts"][0].get("extra").is_none());
+        let mut too_many = vec![serde_json::json!({"host": "h"})];
+        too_many.extend(
+            (0..MAX_STATS_HOSTS).map(|index| serde_json::json!({"host": format!("h{index}")})),
+        );
+        let raw = serde_json::json!({
+            "type": "stats",
+            "total": too_many.len(),
+            "hosts": too_many
+        })
+        .to_string();
+        assert!(capture.accept(&raw).is_none());
+    }
+
+    #[test]
+    fn stats_chunks_are_kept_after_the_per_task_budget() {
+        let mut capture = capture();
+        for index in 0..MAX_EVENTS {
+            assert!(capture
+                .accept(&format!(
+                    r#"{{"type":"task_start","task":"Task {index}","index":{index}}}"#
+                ))
+                .is_some());
+        }
+        let marker = capture.accept(r#"{"type":"task_start","task":"late"}"#);
+        assert!(marker
+            .as_deref()
+            .is_some_and(|line| line.contains("\"type\":\"limit\"")));
+        assert!(capture
+            .accept(r#"{"type":"task_start","task":"later"}"#)
+            .is_none());
+        let stats = capture
+            .accept(
+                r#"{"type":"stats","total":5000,"part":19,"parts":19,"hosts":[{"host":"bulk-4999","ok":1,"failed":1,"changed":0,"unreachable":0,"skipped":0,"rescued":0,"ignored":0}]}"#,
+            )
+            .expect("stats after the limit");
+        let value: Value = serde_json::from_str(&stats).expect("json");
+        assert_eq!(value["type"], "stats");
+        assert_eq!(value["total"], 5000);
+        assert_eq!(value["hosts"][0]["host"], "bulk-4999");
+    }
+
+    #[test]
     fn only_ansible_captures_structured_events() {
         assert!(captures("ansible"));
         assert!(!captures("shell"));
         assert!(!captures("opentofu"));
+    }
+
+    #[test]
+    fn the_plugin_emits_a_stats_chunk_before_the_end() {
+        assert!(PLUGIN.contains("v2_playbook_on_stats"));
+        assert!(PLUGIN.contains("\"type\": \"stats\""));
+        assert!(PLUGIN.contains("\"type\": \"playbook_end\""));
     }
 }

@@ -1,12 +1,68 @@
 #!/bin/sh
 # Playwright fixture. It stands in for ansible-playbook on CI, where Ansible is
 # not installed, and emits the same raw lines plus the Koreograf sidecar that
-# the real callback plugin writes.
+# the real callback plugin writes. An inventory with many hosts switches to a
+# bulk fixture so the job page can be checked against the event and line caps.
 set -eu
 
 events="${KOREOGRAF_WORK}/ansible-events.jsonl"
 
 mkdir -p "${KOREOGRAF_WORK}"
+
+hosts=""
+if [ -n "${KOREOGRAF_INVENTORY:-}" ] && [ -f "${KOREOGRAF_INVENTORY}" ]; then
+  hosts=$(awk '!/^[[:space:]]*[#;\[]/ && NF { print $1 }' "${KOREOGRAF_INVENTORY}")
+fi
+count=$(printf '%s\n' "${hosts}" | sed '/^$/d' | wc -l | tr -d ' ')
+
+if [ "${count:-0}" -ge 100 ]; then
+  printf '%s\n' "${hosts}" | awk -v file="${events}" '
+    { names[NR] = $1 }
+    END {
+      n = NR
+      printf "{\"type\":\"play_start\",\"play\":\"Bulk demo\",\"index\":1}\n" >> file
+      printf "{\"type\":\"task_start\",\"play\":\"Bulk demo\",\"play_index\":1,\"index\":1,\"task\":\"Ping\",\"role\":\"bulk\"}\n" >> file
+      for (i = 1; i <= n; i++) {
+        host = names[i]
+        failed = 0
+        unreachable = 0
+        changed = 0
+        if (i == n) failed = 1
+        else if (i == n - 1) unreachable = 1
+        else if (i % 7 == 0) changed = 1
+        printf "{\"type\":\"host_result\",\"play\":\"Bulk demo\",\"play_index\":1,\"index\":1,\"task\":\"Ping\",\"role\":\"bulk\",\"host\":\"%s\",\"status\":\"%s\",\"duration\":0.01,\"changed\":%s}\n", host, (failed ? "failed" : (unreachable ? "unreachable" : (changed ? "changed" : "ok"))), (changed ? "true" : "false") >> file
+      }
+      chunk = 100
+      parts = int((n + chunk - 1) / chunk)
+      for (p = 0; p < parts; p++) {
+        printf "{\"type\":\"stats\",\"total\":%d,\"part\":%d,\"parts\":%d,\"hosts\":[", n, p + 1, parts >> file
+        first = 1
+        for (i = p * chunk + 1; i <= (p + 1) * chunk && i <= n; i++) {
+          host = names[i]
+          failed = (i == n) ? 1 : 0
+          unreachable = (i == n - 1) ? 1 : 0
+          changed = (i < n - 1 && i % 7 == 0) ? 1 : 0
+          ok = (failed || unreachable) ? 0 : 1
+          if (!first) printf "," >> file
+          printf "{\"host\":\"%s\",\"ok\":%d,\"changed\":%d,\"unreachable\":%d,\"failed\":%d,\"skipped\":0,\"rescued\":0,\"ignored\":0}", host, ok, changed, unreachable, failed >> file
+          first = 0
+        }
+        printf "]}\n" >> file
+      }
+      printf "{\"type\":\"playbook_end\"}\n" >> file
+    }'
+  cat <<'EOF'
+PLAY [Bulk demo] ***************************************************************
+
+TASK [Ping] ********************************************************************
+RAW LOG MARKER: the raw log stays unchanged.
+
+PLAY RECAP *********************************************************************
+bulk-5000                  : ok=0    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0
+EOF
+  exit 2
+fi
+
 cat >>"$events" <<'EOF'
 {"type":"play_start","play":"Structured demo","index":1}
 {"type":"task_start","play":"Structured demo","play_index":1,"index":1,"task":"Install packages","role":"web"}
@@ -15,6 +71,7 @@ cat >>"$events" <<'EOF'
 {"type":"host_result","play":"Structured demo","play_index":1,"index":2,"task":"Check service","host":"localhost","status":"failed","duration":0.4,"msg":"Service is not running","stderr":"nginx: down","rc":1}
 {"type":"task_start","play":"Structured demo","play_index":1,"index":3,"task":"Read a secret"}
 {"type":"host_result","play":"Structured demo","play_index":1,"index":3,"task":"Read a secret","host":"localhost","status":"ok","duration":0.1,"censored":true}
+{"type":"stats","total":1,"part":1,"parts":1,"hosts":[{"host":"localhost","ok":2,"changed":1,"unreachable":0,"failed":1,"skipped":0,"rescued":0,"ignored":0}]}
 {"type":"playbook_end"}
 EOF
 

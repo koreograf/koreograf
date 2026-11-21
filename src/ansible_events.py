@@ -27,6 +27,11 @@ CALLBACK_NAME = "koreograf_events"
 CALLBACK_NEEDS_ENABLED = False
 
 MAX_FIELD = 4000
+# A stats chunk stays well below the runner's 64 KiB line bound. The runner
+# reserves room for every chunk after the per-task event budget is spent.
+STATS_LINE = 24000
+STATS_HOSTS = 250
+STATS_FIELDS = ("ok", "changed", "unreachable", "failed", "skipped", "rescued", "ignored")
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _OSC = re.compile(r"\x1b\][^\x1b\x07]*(?:\x07|\x1b\\)")
 _SCRUB_VARS = (
@@ -196,5 +201,52 @@ class CallbackModule(CallbackBase):
     def v2_runner_on_unreachable(self, result):
         self._result(result, "unreachable")
 
+    def _emit_stats(self, rows):
+        """One total plus compact per-host recap chunks.
+
+        The runner caps the per-task stream at 2000 events, so the final recap
+        would otherwise lose hosts that the play only reached late. Chunks are
+        bounded by serialized size so a long host name cannot push one line
+        over the runner's line limit.
+        """
+        chunks = []
+        current = []
+        for row in rows:
+            current.append(row)
+            try:
+                size = len(json.dumps(current, ensure_ascii=False, separators=(",", ":")))
+            except (TypeError, ValueError):
+                size = STATS_LINE + 1
+            if len(current) > 1 and (size > STATS_LINE or len(current) >= STATS_HOSTS):
+                chunks.append(current[:-1])
+                current = [row]
+        chunks.append(current)
+        total = len(rows)
+        parts = len(chunks)
+        for number, chunk in enumerate(chunks, 1):
+            self._emit(
+                {
+                    "type": "stats",
+                    "total": total,
+                    "part": number,
+                    "parts": parts,
+                    "hosts": chunk,
+                }
+            )
+
     def v2_playbook_on_stats(self, stats):
+        try:
+            rows = []
+            for host in sorted(stats.processed):
+                summary = stats.summarize(host)
+                row = {"host": str(host)}
+                for field in STATS_FIELDS:
+                    key = "failures" if field == "failed" else field
+                    value = summary.get(key, 0)
+                    row[field] = max(0, int(value)) if isinstance(value, int) else 0
+                rows.append(row)
+            self._emit_stats(rows)
+        except Exception:
+            # A recap failure must never stop the playbook or the raw log.
+            pass
         self._emit({"type": "playbook_end"})

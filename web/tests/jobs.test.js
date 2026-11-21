@@ -130,6 +130,123 @@ test("live structured events use every seeded id once", async () => {
   assert.equal(state.events.length, 2);
 });
 
+const recapRows = [
+  { host: "web-1", ok: 3, changed: 1, unreachable: 0, failed: 0, skipped: 1, rescued: 0, ignored: 0 },
+  { host: "web-2", ok: 1, changed: 0, unreachable: 0, failed: 1, skipped: 0, rescued: 0, ignored: 0 },
+  { host: "db-1", ok: 0, changed: 0, unreachable: 1, failed: 0, skipped: 0, rescued: 0, ignored: 0 },
+  { host: "db-2", ok: 2, changed: 0, unreachable: 0, failed: 0, skipped: 0, rescued: 1, ignored: 0 },
+  { host: "web-3", ok: 0, changed: 0, unreachable: 0, failed: 0, skipped: 2, rescued: 0, ignored: 0 },
+];
+
+test("the recap totals count one status per host", async () => {
+  const { recapTotals, recapHostStatus } = await load();
+  const totals = recapTotals(recapRows);
+  assert.equal(totals.hosts, 5);
+  assert.deepEqual(totals.counts, {
+    ok: 0,
+    changed: 1,
+    unreachable: 1,
+    failed: 1,
+    skipped: 1,
+    rescued: 1,
+    ignored: 0,
+  });
+  assert.equal(recapHostStatus({ host: "empty" }), "ok");
+  assert.equal(Object.values(totals.counts).reduce((sum, value) => sum + value, 0), totals.hosts);
+});
+
+test("stats chunks aggregate every host and report a missing part", async () => {
+  const { recapFromEvents } = await load();
+  const events = [
+    {
+      id: 1,
+      event: {
+        type: "stats",
+        total: 3,
+        part: 1,
+        parts: 2,
+        hosts: [
+          { host: "bulk-1", ok: 2, changed: 0, unreachable: 0, failed: 0, skipped: 0, rescued: 0, ignored: 0 },
+          { host: "bulk-2", ok: 0, changed: 0, unreachable: 0, failed: 1, skipped: 0, rescued: 0, ignored: 0 },
+        ],
+      },
+    },
+    {
+      id: 2,
+      event: {
+        type: "stats",
+        total: 3,
+        part: 2,
+        parts: 2,
+        hosts: [
+          { host: "bulk-3", ok: 0, changed: 0, unreachable: 1, failed: 0, skipped: 0, rescued: 0, ignored: 0 },
+        ],
+      },
+    },
+  ];
+  const complete = recapFromEvents(events);
+  assert.equal(complete.total, 3);
+  assert.equal(complete.rows.length, 3);
+  assert.equal(complete.complete, true);
+  const partial = recapFromEvents(events.slice(0, 1));
+  assert.equal(partial.rows.length, 2);
+  assert.equal(partial.complete, false);
+});
+
+test("stats rows win over a raw recap line and every host is kept", async () => {
+  const { mergeRecapRows, recapHostStatus } = await load();
+  const raw = [
+    { host: "bulk-1", ok: 0, changed: 0, unreachable: 0, failed: 1, skipped: 0, rescued: 0, ignored: 0 },
+    { host: "old-1", ok: 1, changed: 0, unreachable: 0, failed: 0, skipped: 0, rescued: 0, ignored: 0 },
+  ];
+  const stats = [
+    { host: "bulk-1", ok: 3, changed: 0, unreachable: 0, failed: 0, skipped: 0, rescued: 0, ignored: 0 },
+    { host: "bulk-2", ok: 0, changed: 0, unreachable: 1, failed: 0, skipped: 0, rescued: 0, ignored: 0 },
+  ];
+  const merged = mergeRecapRows(stats, raw);
+  assert.deepEqual(merged.map((row) => row.host).sort(), ["bulk-1", "bulk-2", "old-1"]);
+  assert.equal(recapHostStatus(merged.find((row) => row.host === "bulk-1")), "ok");
+});
+
+test("the host list filters by status and substring and sorts by severity", async () => {
+  const { filterRecapRows } = await load();
+  const problems = filterRecapRows(recapRows, { status: "problems" });
+  assert.deepEqual(problems.map((row) => row.host), ["db-1", "web-2"]);
+  const web = filterRecapRows(recapRows, { status: "all", search: "WEB" });
+  assert.deepEqual(web.map((row) => row.host), ["web-2", "web-1", "web-3"]);
+  const byHost = filterRecapRows(recapRows, { status: "all", sort: "host" });
+  assert.deepEqual(byHost.map((row) => row.host), ["db-1", "db-2", "web-1", "web-2", "web-3"]);
+  const reversed = filterRecapRows(recapRows, { status: "all", sort: "-host" });
+  assert.deepEqual(reversed.map((row) => row.host), ["web-3", "web-2", "web-1", "db-2", "db-1"]);
+  const byFailed = filterRecapRows(recapRows, { status: "all", sort: "failed" });
+  assert.deepEqual(byFailed.map((row) => row.host), ["db-1", "db-2", "web-1", "web-3", "web-2"]);
+});
+
+test("the host list pages with a bounded number of rows", async () => {
+  const { pageRecapRows } = await load();
+  const first = pageRecapRows(recapRows, 1, 2);
+  assert.deepEqual(first.rows.map((row) => row.host), ["web-1", "web-2"]);
+  assert.equal(first.pages, 3);
+  assert.equal(first.from, 1);
+  assert.equal(first.to, 2);
+  const last = pageRecapRows(recapRows, 9, 2);
+  assert.equal(last.page, 3);
+  assert.deepEqual(last.rows.map((row) => row.host), ["web-3"]);
+  assert.equal(last.to, 5);
+  assert.deepEqual(pageRecapRows([], 2, 50), { rows: [], page: 1, pages: 1, total: 0, from: 0, to: 0 });
+});
+
+test("the host filter accepts a substring and a set of recap hosts", async () => {
+  const { buildAnsibleTree, filterAnsibleTree } = await load();
+  const tree = buildAnsibleTree(structuredEvents);
+  const partial = filterAnsibleTree(tree, { host: "we" });
+  assert.equal(partial.plays[0].tasks[0].hosts.length, 2);
+  const only = filterAnsibleTree(tree, { hosts: new Set(["web-1"]) });
+  assert.deepEqual(only.plays[0].tasks.flatMap((task) => task.hosts).map((host) => host.host), ["web-1", "web-1"]);
+  const none = filterAnsibleTree(tree, { hosts: new Set(["db-1"]) });
+  assert.deepEqual(none.plays, []);
+});
+
 test("the output view preference falls back to structured", async () => {
   const { outputViewPreference, rememberOutputView, structuredEventsAvailable } = await load();
   const store = new Map();
