@@ -2,6 +2,12 @@
 
 Koreograf is a Rust prototype: one binary with an HTTP API, a browser UI, and a job runner. Read `README.md` and `docs/` before changing behavior. This file is for coding agents working in the repository.
 
+## Start here
+
+- `git remote -v` shows `origin` → `https://github.com/koreograf/koreograf.git`. The repository has a remote, and work lands through pull requests.
+- `git fetch origin`, then `git switch -c <prefix>/<topic> origin/main`. Never commit or push to `main`.
+- Read the Git section before the first change; it has the pull request and review loop.
+
 ## Language
 
 - `README.md`, `docs/`, code identifiers, and commit messages are English.
@@ -26,11 +32,13 @@ Domain code lives in `src/features/<domain>/` as `mod.rs`, `routes.rs`, `model.r
 
 ## Git
 
-- This repository has no remote. Do not push unless asked.
-- Before the first change of a task, leave `main` with `git switch -c feat/<topic>` (`fix/`, `chore/`, and `docs/` are the other prefixes). Names are lowercase with hyphens.
-- Commit only on that branch. Do not commit directly to `main`.
-- Merge into `main` only when asked, and only as a fast-forward.
+- One issue, one branch from the latest `origin/main`: `feat/`, `fix/`, `docs/`, or `chore/`, lowercase with hyphens. Do not commit or push to `main`.
 - Commit messages stay English Conventional Commits, as under Language. Do not use `git add -A`. Do not commit `data/`, secrets, or build output.
+- Push the branch and open a pull request that references the issue with `Closes #N`, for example `gh pr create --base main`. The title follows the same Conventional Commit rules and becomes the squash commit. Use `feat!:` or `BREAKING CHANGE:` only for a deliberate breaking change.
+- Drive the pull request to merge-ready: run the full local checks, wait until every CI check is green, put the ready checks and the UI checklist (for UI changes) in the body, then comment exactly `ready`. The Reviewer answers with the `review/reviewer` commit status; a GitHub approval is not the signal.
+- Fix every finding, push to the same branch, re-run the checks, and comment `ready` again. Merge with a squash merge only after a review round with no open critical or high findings, when CI is green and the head commit has `review/reviewer=success`; never on `failure` or `pending`. A low optional note does not block a `success` merge. Use `gh pr merge --squash --delete-branch`.
+- Do not force-push, do not approve your own pull request, and never merge with red checks or open critical or high findings. Never merge a pull request labeled `needs-human` unless asked. Do not push release tags; release-please and Kristian handle releases.
+- A behavior fix keeps its docs and tests in the same change.
 
 ## Build and test
 

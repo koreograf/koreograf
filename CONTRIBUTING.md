@@ -10,7 +10,7 @@ Read `docs/ui-style-guide.md` before you change the browser UI. A UI pull reques
 
 Write commit messages in English. Use Conventional Commits. Keep the subject and each body line within 72 characters. On pull requests, commitlint checks the messages.
 
-Work on a branch (`feat/…`, `fix/…`, `docs/…`, `chore/…`, lowercase, hyphens). Do not commit directly to `main`. Merge with a fast-forward when the change is ready.
+Work on a branch from the latest `origin/main` (`feat/…`, `fix/…`, `docs/…`, `chore/…`, lowercase, hyphens), and open a pull request that references the issue. Do not commit or push directly to `main`. After CI is green, comment exactly `ready` so the Reviewer reviews; fix every finding on the same branch and comment `ready` again. Merge with a squash merge only when CI is green, `review/reviewer` is `success`, and a review round has no open critical or high findings; the pull request title becomes the squash commit. Delete the branch after the merge. Only Kristian's coding agent (running with his credentials) or Kristian may merge; external contributors open pull requests and address review comments. Never merge a pull request labeled `needs-human` for a breaking change unless Kristian says so.
 
 Do not use `git add -A`. Do not commit `data/`, secrets, or build output. `data/` holds the SQLite file, `secret.key`, the first admin password, the cache, git checkouts, and job directories.
 
@@ -33,7 +33,7 @@ Every push to a branch and every pull request starts GitHub Actions. The runs ch
 
 ## Releases
 
-Do not edit versions by hand. release-please reads Conventional Commits on `main` and opens one release pull request. Merging that pull request tags the version and publishes the GitHub release. The workflow is `.github/workflows/release-please.yml`.
+Do not edit versions by hand and do not push release tags; Kristian handles releases. release-please reads Conventional Commits on `main` and opens one release pull request. Merging that pull request tags the version and publishes the GitHub release. The workflow is `.github/workflows/release-please.yml`.
 
 `feat:` is a feature. `fix:` and `perf:` are fixes. `feat!:` or a `BREAKING CHANGE:` footer is a breaking change. `docs:`, `chore:`, `ci:`, `test:`, `refactor:`, and `style:` do not release. Squash merges must use the pull request title as the commit. The title check is `.github/workflows/pr-title.yml`. It runs when a pull request is opened, edited, synchronized, or reopened, so an edited title does not keep a stale green check and does not re-run the rest of CI. Make `title` a required check. CI rejects a title that is not a Conventional Commit, that starts with an uppercase letter, that ends with a period, or that is longer than 72 characters.
 
