@@ -1,3 +1,4 @@
+pub(crate) mod activity;
 pub(crate) mod assistant;
 pub(crate) mod credentials;
 pub(crate) mod identity;

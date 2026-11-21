@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::backend::Backend;
 use crate::db::{self, Schedule};
 use crate::error::{ApiError, ApiJson, AppResult};
+use crate::features::activity;
 use crate::features::identity::{AuthUser, Role};
 use crate::http::{gate, no_content, require_name, team_header};
 use crate::Shared;
@@ -256,6 +257,16 @@ pub async fn update(
     item.updated_by = user.username.clone();
     item.launch_block = None;
     db.update_schedule(&item)?;
+    activity::note(
+        &state,
+        &team,
+        &user.username,
+        "update",
+        "schedule",
+        &item.id,
+        &item.name,
+        "success",
+    );
     Ok(Json(ScheduleResponse::from(&item)))
 }
 
@@ -267,8 +278,27 @@ pub async fn remove(
 ) -> AppResult<Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
+    let name = {
+        let db = state.store();
+        db.schedule(&id)?
+            .filter(|item| item.team_id == team)
+            .map(|item| item.name)
+            .unwrap_or_default()
+    };
     let db = state.store();
     db.delete_schedule(&id, &team)?;
+    if !name.is_empty() {
+        activity::note(
+            &state,
+            &team,
+            &user.username,
+            "delete",
+            "schedule",
+            &id,
+            &name,
+            "success",
+        );
+    }
     Ok(no_content())
 }
 
@@ -309,6 +339,16 @@ pub async fn set_enabled(
         item.next_run_at.as_deref(),
         item.occurrence_count,
     )?;
+    activity::note(
+        &state,
+        &team,
+        &user.username,
+        "update",
+        "schedule",
+        &item.id,
+        &item.name,
+        "success",
+    );
     Ok(Json(ScheduleResponse::from(&item)))
 }
 
@@ -407,6 +447,16 @@ async fn create(
         launch_block: None,
     };
     db.insert_schedule(&item)?;
+    activity::note(
+        state,
+        &item.team_id,
+        &user.username,
+        "create",
+        "schedule",
+        &item.id,
+        &item.name,
+        "success",
+    );
     Ok((StatusCode::CREATED, Json(ScheduleResponse::from(&item))))
 }
 

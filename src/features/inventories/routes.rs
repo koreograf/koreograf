@@ -11,6 +11,7 @@ use uuid::Uuid;
 use crate::backend::Backend;
 use crate::db::{self, Environment, Inventory, InventorySource};
 use crate::error::{ApiError, ApiJson, AppResult};
+use crate::features::activity;
 use crate::features::identity::{AuthUser, Role};
 use crate::features::inventories::{self as inventory, EffectiveVar, InventoryData, InventoryHost};
 use crate::features::projects::{project_dir, read_project_file, visible_project};
@@ -437,13 +438,14 @@ pub async fn sync_inventory(
 ) -> AppResult<Json<InventoryDetailResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let sources = {
+    let (name, sources) = {
         let db = state.store();
         let item = db.inventory(&id)?.ok_or(ApiError::NotFound)?;
         if item.team_id != team {
             return Err(ApiError::NotFound);
         }
-        db.list_inventory_sources(&id)?
+        let sources = db.list_inventory_sources(&id)?;
+        (item.name, sources)
     };
     let mut fresh = Vec::new();
     for source in &sources {
@@ -466,6 +468,16 @@ pub async fn sync_inventory(
                 if let Err(write) = state.store().set_inventory_sync_failed(&id, &user.username) {
                     tracing::warn!(inventory = %id, error = %write, "sync failure status");
                 }
+                activity::note(
+                    &state,
+                    &team,
+                    &user.username,
+                    "sync",
+                    "inventory",
+                    &id,
+                    &name,
+                    "failed",
+                );
                 return Err(err);
             }
         }
@@ -487,6 +499,17 @@ pub async fn sync_inventory(
         .collect();
     let db = state.store();
     db.sync_inventory_sources(&id, &bodies, user.is_admin, &db::now(), &user.username)?;
+    activity::note(
+        &state,
+        &team,
+        &user.username,
+        "sync",
+        "inventory",
+        &id,
+        &name,
+        "success",
+    );
+    let db = state.store();
     let item = db.inventory(&id)?.ok_or(ApiError::NotFound)?;
     let mut response = inventory_detail(db, &item)?;
     response.collisions = Some(collisions);
@@ -822,7 +845,18 @@ pub(crate) async fn create_with_sources(
     let db = state.store();
     db.insert_inventory(&item, &sources, true)?;
     let item = db.inventory(&inventory_id)?.ok_or(ApiError::NotFound)?;
-    Ok((StatusCode::CREATED, Json(inventory_detail(db, &item)?)))
+    let response = inventory_detail(db, &item)?;
+    activity::note(
+        &state,
+        &team,
+        &user.username,
+        "create",
+        "inventory",
+        &item.id,
+        &item.name,
+        "success",
+    );
+    Ok((StatusCode::CREATED, Json(response)))
 }
 
 pub async fn add_source(
@@ -963,9 +997,14 @@ pub async fn sync_source(
 ) -> AppResult<Json<InventoryDetailResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let source = {
+    let (name, source) = {
         let db = state.store();
-        owned_source(db, &inventory_id, &source_id, &team)?
+        let source = owned_source(db, &inventory_id, &source_id, &team)?;
+        let name = db
+            .inventory(&inventory_id)?
+            .map(|item| item.name)
+            .unwrap_or_default();
+        (name, source)
     };
     let fetched = match source.kind.as_str() {
         "project" => refresh_project(&state, &team, &source.source_json).map(|body| NetboxResult {
@@ -985,6 +1024,16 @@ pub async fn sync_source(
             {
                 tracing::warn!(inventory = %inventory_id, error = %write, "sync failure status");
             }
+            activity::note(
+                &state,
+                &team,
+                &user.username,
+                "sync",
+                "inventory",
+                &inventory_id,
+                &name,
+                "failed",
+            );
             return Err(err);
         }
     };
@@ -996,6 +1045,17 @@ pub async fn sync_source(
         &db::now(),
         &user.username,
     )?;
+    activity::note(
+        &state,
+        &team,
+        &user.username,
+        "sync",
+        "inventory",
+        &inventory_id,
+        &name,
+        "success",
+    );
+    let db = state.store();
     let item = db.inventory(&inventory_id)?.ok_or(ApiError::NotFound)?;
     let mut response = inventory_detail(db, &item)?;
     response.collisions = Some(fetched.collisions);
@@ -1958,7 +2018,18 @@ pub async fn update_inventory(
     }
     db.set_inventory_admin_saved(&id, user.is_admin)?;
     let item = db.inventory(&id)?.ok_or(ApiError::NotFound)?;
-    Ok(Json(inventory_detail(db, &item)?))
+    let response = inventory_detail(db, &item)?;
+    activity::note(
+        &state,
+        &team,
+        &user.username,
+        "update",
+        "inventory",
+        &item.id,
+        &item.name,
+        "success",
+    );
+    Ok(Json(response))
 }
 
 pub async fn create_inventory(
@@ -1984,7 +2055,7 @@ pub async fn create_inventory(
     check_static_ini(&body.body)?;
     let item = Inventory {
         id: Uuid::new_v4().to_string(),
-        team_id: team,
+        team_id: team.clone(),
         name,
         body: body.body.clone(),
         created_at: db::now(),
@@ -2014,7 +2085,18 @@ pub async fn create_inventory(
     let sources: Vec<db::InventorySource> = source.into_iter().collect();
     let db = state.store();
     db.insert_inventory(&item, &sources, false)?;
-    Ok((StatusCode::CREATED, Json(inventory_detail(db, &item)?)))
+    let response = inventory_detail(db, &item)?;
+    activity::note(
+        &state,
+        &team,
+        &user.username,
+        "create",
+        "inventory",
+        &item.id,
+        &item.name,
+        "success",
+    );
+    Ok((StatusCode::CREATED, Json(response)))
 }
 
 fn inventory_summary(c: &dyn Backend, item: &Inventory) -> AppResult<InventorySummaryResponse> {
@@ -2082,6 +2164,11 @@ pub async fn delete_inventory(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let db = state.store();
+    let name = db
+        .inventory(&id)?
+        .filter(|item| item.team_id == team)
+        .map(|item| item.name)
+        .unwrap_or_default();
     let mut names = db.templates_using_inventory(&id, &team)?;
     names.extend(db.workflows_using_inventory(&id, &team)?);
     if !names.is_empty() {
@@ -2091,6 +2178,18 @@ pub async fn delete_inventory(
         ));
     }
     db.delete_inventory(&id, &team)?;
+    if !name.is_empty() {
+        activity::note(
+            &state,
+            &team,
+            &user.username,
+            "delete",
+            "inventory",
+            &id,
+            &name,
+            "success",
+        );
+    }
     Ok(no_content())
 }
 

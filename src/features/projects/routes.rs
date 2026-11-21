@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::db::{self, Project, Template};
 use crate::error::{ApiError, ApiJson, AppResult};
+use crate::features::activity;
 use crate::features::credentials;
 use crate::features::identity::{AuthUser, Role};
 use crate::features::inventories::{scan_project, ProjectContents};
@@ -148,6 +149,16 @@ pub async fn update_project(
         let updated = db.project(&id)?.ok_or(ApiError::NotFound)?;
         (updated, changed && source_type == "git", discard)
     };
+    activity::note(
+        &state,
+        &team,
+        &user.username,
+        "update",
+        "project",
+        &updated.id,
+        &updated.name,
+        "success",
+    );
     let mut response = ProjectResponse::new(&updated, &team);
     if discard_checkout {
         jobs::discard_project_checkout(&state, &updated);
@@ -214,6 +225,16 @@ pub async fn create_project(
     };
     db.insert_project(&project)?;
     let stored = db.project(&project.id)?.ok_or(ApiError::NotFound)?;
+    activity::note(
+        &state,
+        &team,
+        &user.username,
+        "create",
+        "project",
+        &stored.id,
+        &stored.name,
+        "success",
+    );
     Ok((
         StatusCode::CREATED,
         Json(ProjectResponse::new(&stored, &team)),
@@ -228,7 +249,26 @@ pub async fn delete_project(
 ) -> AppResult<axum::response::Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
+    let name = {
+        let db = state.store();
+        db.project(&id)?
+            .filter(|project| project.team_id == team)
+            .map(|project| project.name)
+            .unwrap_or_default()
+    };
     state.store().delete_project(&id, &team)?;
+    if !name.is_empty() {
+        activity::note(
+            &state,
+            &team,
+            &user.username,
+            "delete",
+            "project",
+            &id,
+            &name,
+            "success",
+        );
+    }
     Ok(no_content())
 }
 
@@ -376,6 +416,16 @@ pub async fn create_template(
     template.admin_saved = user.is_admin;
     let db = state.store();
     db.insert_template(&template, &credential_ids)?;
+    activity::note(
+        &state,
+        &template.team_id,
+        &user.username,
+        "create",
+        "template",
+        &template.id,
+        &template.name,
+        "success",
+    );
     Ok((
         StatusCode::CREATED,
         Json(TemplateResponse::new(&template, &credential_ids)),
@@ -395,6 +445,16 @@ pub async fn update_template(
     template.admin_saved = user.is_admin;
     let db = state.store();
     db.update_template(&template, &credential_ids)?;
+    activity::note(
+        &state,
+        &template.team_id,
+        &user.username,
+        "update",
+        "template",
+        &template.id,
+        &template.name,
+        "success",
+    );
     Ok(Json(TemplateResponse::new(&template, &credential_ids)))
 }
 
@@ -406,8 +466,27 @@ pub async fn delete_template(
 ) -> AppResult<Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
+    let name = {
+        let db = state.store();
+        db.template(&id)?
+            .filter(|template| template.team_id == team)
+            .map(|template| template.name)
+            .unwrap_or_default()
+    };
     let db = state.store();
     db.delete_template(&id, &team)?;
+    if !name.is_empty() {
+        activity::note(
+            &state,
+            &team,
+            &user.username,
+            "delete",
+            "template",
+            &id,
+            &name,
+            "success",
+        );
+    }
     Ok(no_content())
 }
 

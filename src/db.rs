@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::error::{ApiError, AppResult};
 
-pub(crate) const SCHEMA_VERSION: u32 = 4;
+pub(crate) const SCHEMA_VERSION: u32 = 5;
 const BASELINE_VERSION: u32 = 1;
 
 pub fn now() -> String {
@@ -60,6 +60,12 @@ pub(crate) const SQLITE_MIGRATIONS: &[Migration] = &[
             ("inventories", "last_sync_by"),
         ],
     },
+    Migration {
+        version: 5,
+        name: "0005_activity",
+        sql: include_str!("../migrations/sqlite/0005_activity.sql"),
+        legacy_columns: &[],
+    },
 ];
 
 pub(crate) const POSTGRES_MIGRATIONS: &[Migration] = &[
@@ -85,6 +91,12 @@ pub(crate) const POSTGRES_MIGRATIONS: &[Migration] = &[
         version: 4,
         name: "0004_sync_actor",
         sql: include_str!("../migrations/postgres/0004_sync_actor.sql"),
+        legacy_columns: &[],
+    },
+    Migration {
+        version: 5,
+        name: "0005_activity",
+        sql: include_str!("../migrations/postgres/0005_activity.sql"),
         legacy_columns: &[],
     },
 ];

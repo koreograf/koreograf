@@ -12,6 +12,7 @@ use uuid::Uuid;
 use crate::crypto;
 use crate::db::{self, Delivery, Hook, Template, Workflow};
 use crate::error::{ApiError, ApiJson, ApiJsonValue, AppResult};
+use crate::features::activity;
 use crate::features::identity::{AuthUser, Role};
 use crate::features::jobs;
 use crate::features::projects::LaunchBody;
@@ -267,6 +268,16 @@ pub(crate) async fn create_workflow(
     item.admin_saved = user.is_admin;
     let db = state.store();
     db.insert_workflow(&item)?;
+    activity::note(
+        &state,
+        &team,
+        &user.username,
+        "create",
+        "workflow",
+        &item.id,
+        &item.name,
+        "success",
+    );
     Ok((
         StatusCode::CREATED,
         Json(WorkflowResponse::new(&item, None)),
@@ -300,7 +311,18 @@ pub(crate) async fn update_workflow(
     db.update_workflow(&item, expected_version)?;
     let item = db.workflow(&item.id)?.ok_or(ApiError::NotFound)?;
     let last = db.list_workflow_jobs(&item.team_id, &item.id, 1)?;
-    Ok(Json(WorkflowResponse::new(&item, last.first())))
+    let response = WorkflowResponse::new(&item, last.first());
+    activity::note(
+        &state,
+        &team,
+        &user.username,
+        "update",
+        "workflow",
+        &item.id,
+        &item.name,
+        "success",
+    );
+    Ok(Json(response))
 }
 
 pub(crate) async fn delete_workflow(
@@ -311,8 +333,27 @@ pub(crate) async fn delete_workflow(
 ) -> AppResult<Response> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
+    let name = {
+        let db = state.store();
+        db.workflow(&id)?
+            .filter(|item| item.team_id == team)
+            .map(|item| item.name)
+            .unwrap_or_default()
+    };
     let db = state.store();
     db.delete_workflow(&id, &team)?;
+    if !name.is_empty() {
+        activity::note(
+            &state,
+            &team,
+            &user.username,
+            "delete",
+            "workflow",
+            &id,
+            &name,
+            "success",
+        );
+    }
     Ok(no_content())
 }
 
@@ -381,12 +422,25 @@ pub(crate) async fn cancel_workflow_job(
     user: AuthUser,
     Path(id): Path<String>,
 ) -> AppResult<Json<WorkflowJobResponse>> {
-    {
+    let run = {
         let db = state.store();
         let run = db.workflow_job(&id)?.ok_or(ApiError::NotFound)?;
         crate::features::identity::authorize(db, &user, &run.team_id, Role::Operator)?;
-    }
+        run
+    };
     jobs::cancel_workflow(&state, &id)?;
+    if !matches!(run.status.as_str(), "successful" | "failed" | "canceled") {
+        activity::note(
+            &state,
+            &run.team_id,
+            &user.username,
+            "cancel",
+            "workflow_run",
+            &run.id,
+            &run.name,
+            "success",
+        );
+    }
     let db = state.store();
     let run = db.workflow_job(&id)?.ok_or(ApiError::NotFound)?;
     Ok(Json(WorkflowJobResponse::new(db, &run)?))

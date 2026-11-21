@@ -9,6 +9,7 @@ use uuid::Uuid;
 use crate::backend::Backend;
 use crate::db::{self, Credential};
 use crate::error::{ApiError, ApiJson, AppResult};
+use crate::features::activity;
 use crate::features::identity::{AuthUser, Role};
 use crate::http::{gate, no_content, require_name, team_header};
 use crate::Shared;
@@ -129,7 +130,7 @@ async fn create_credential(
     let blob = state.encrypt(&body.secret.to_string())?;
     let item = Credential {
         id: Uuid::new_v4().to_string(),
-        team_id: team,
+        team_id: team.clone(),
         name: require_name(&body.name)?,
         kind: body.kind,
         secret_blob: blob,
@@ -139,6 +140,16 @@ async fn create_credential(
     };
     let db = state.store();
     db.insert_credential(&item)?;
+    activity::note(
+        &state,
+        &team,
+        &user.username,
+        "create",
+        "credential",
+        &item.id,
+        &item.name,
+        "success",
+    );
     Ok((
         StatusCode::CREATED,
         Json(CreatedCredentialResponse {
@@ -158,6 +169,11 @@ async fn delete_credential(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Owner)?;
     let db = state.store();
+    let name = db
+        .credential(&id)?
+        .filter(|item| item.team_id == team)
+        .map(|item| item.name)
+        .unwrap_or_default();
     let names = db
         .credential_usages(&id, &team)?
         .into_iter()
@@ -170,6 +186,18 @@ async fn delete_credential(
         ));
     }
     db.delete_credential(&id, &team)?;
+    if !name.is_empty() {
+        activity::note(
+            &state,
+            &team,
+            &user.username,
+            "delete",
+            "credential",
+            &id,
+            &name,
+            "success",
+        );
+    }
     Ok(no_content())
 }
 
@@ -271,5 +299,15 @@ async fn update_credential(
     let db = state.store();
     db.update_credential(&item)?;
     let usages = usage_list(db, &item.id, &team)?;
+    activity::note(
+        &state,
+        &team,
+        &user.username,
+        "update",
+        "credential",
+        &item.id,
+        &item.name,
+        "success",
+    );
     Ok(Json(credential_detail(&item, &secret, usages)))
 }
