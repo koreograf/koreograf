@@ -118,6 +118,10 @@ export function dashboardBody(data, range) {
 
 function bindDashboardCharts() {
   const details = [...document.querySelectorAll("[data-chart-detail]")];
+  // A phone shows fewer than 14 days at once; keep the newest day in view.
+  document.querySelectorAll(".chart").forEach((chart) => {
+    if (chart.scrollWidth > chart.clientWidth) chart.scrollLeft = chart.scrollWidth;
+  });
   document.querySelectorAll("[data-chart-day]").forEach((button) => {
     const detail = details.find((node) => node.dataset.chartDetail === button.dataset.chartTarget);
     if (!detail) return;
