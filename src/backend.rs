@@ -1789,8 +1789,8 @@ impl Backend for PostgresBackend {
         };
         let scope: String = row.try_get(0)?;
         let expires_at: Option<String> = row.try_get(1)?;
-        let disabled: bool = row.try_get(2)?;
-        Ok(scope == "read" && !disabled && !db::has_expired(expires_at.as_deref()))
+        let disabled: i32 = row.try_get(2)?;
+        Ok(scope == "read" && disabled == 0 && !db::has_expired(expires_at.as_deref()))
     }
 
     fn create_session(&self, token: &str, user_id: &str) -> AppResult<()> {
