@@ -1436,6 +1436,32 @@ async fn cross_origin_api_writes_are_refused() {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "foreign origin");
 
+    let login_body = json!({"username": "admin", "password": "test-admin-pass"}).to_string();
+    let login = |origin: &str| {
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/login")
+            .header("content-type", "application/json")
+            .header("host", "koreograf.test:8080")
+            .header("origin", origin)
+            .body(Body::from(login_body.clone()))
+            .unwrap()
+    };
+    let status = app
+        .clone()
+        .oneshot(login("https://other.example"))
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(status, StatusCode::FORBIDDEN, "foreign origin on login");
+    let status = app
+        .clone()
+        .oneshot(login("http://koreograf.test:8080"))
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(status, StatusCode::OK, "same origin on login");
+
     let status = send(
         app.clone(),
         Call {

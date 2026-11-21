@@ -136,25 +136,31 @@ async fn origin_guard(State(state): State<Shared>, req: Request, next: Next) -> 
     ) {
         return next.run(req).await;
     }
-    if auth::bearer_token(req.headers()).is_some() {
-        return next.run(req).await;
-    }
-    if !session_authenticated(&state, req.headers()) {
-        return next.run(req).await;
-    }
     let source = req
         .headers()
         .get(header::ORIGIN)
         .or_else(|| req.headers().get(header::REFERER));
-    if source.is_some_and(|source| allowed_origin(&state, req.headers(), source)) {
-        next.run(req).await
-    } else {
-        (
+    if let Some(source) = source {
+        // A header that is present must always match, even without a session.
+        if allowed_origin(&state, req.headers(), source) {
+            return next.run(req).await;
+        }
+        return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error": "cross_origin_request_is_not_allowed"})),
         )
-            .into_response()
+            .into_response();
     }
+    // Only a browser client must prove its origin when both headers are absent.
+    if auth::bearer_token(req.headers()).is_some() || !session_authenticated(&state, req.headers())
+    {
+        return next.run(req).await;
+    }
+    (
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({"error": "cross_origin_request_is_not_allowed"})),
+    )
+        .into_response()
 }
 
 fn api_routes() -> Router<Shared> {
