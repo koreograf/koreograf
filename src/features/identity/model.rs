@@ -143,6 +143,9 @@ pub(super) struct TokenBody {
     /// Omitted means the default lifetime; JSON `null` means no expiry.
     #[serde(default, deserialize_with = "deserialize_token_lifetime")]
     pub(super) expires_in_days: Option<Option<i64>>,
+    /// `read` or `write`; omitted means `write`.
+    #[serde(default)]
+    pub(super) scope: Option<String>,
 }
 
 fn deserialize_token_lifetime<'de, D>(deserializer: D) -> Result<Option<Option<i64>>, D::Error>
@@ -214,6 +217,7 @@ pub(super) struct TokenResponse {
     pub(super) id: String,
     pub(super) name: String,
     pub(super) prefix: String,
+    pub(super) scope: String,
     pub(super) created_at: String,
     pub(super) last_used_at: Option<String>,
     pub(super) expires_at: Option<String>,
@@ -242,6 +246,7 @@ pub(super) struct CreatedTokenResponse {
     pub(super) id: String,
     pub(super) name: String,
     pub(super) prefix: String,
+    pub(super) scope: String,
     pub(super) secret: String,
     pub(super) created_at: String,
     pub(super) last_used_at: Option<String>,
@@ -322,6 +327,7 @@ impl TokenResponse {
             id: token.id.clone(),
             name: token.name.clone(),
             prefix: token.prefix.clone(),
+            scope: token.scope.clone(),
             created_at: token.created_at.clone(),
             last_used_at: token.last_used_at.clone(),
             expires_at: token.expires_at.clone(),

@@ -43,6 +43,7 @@ pub(crate) trait Backend: Send + Sync {
     fn user_by_username(&self, username: &str) -> AppResult<Option<User>>;
     fn user_by_session(&self, token: &str) -> AppResult<Option<User>>;
     fn user_by_api_token(&self, token_hash: &str) -> AppResult<Option<User>>;
+    fn api_token_read_only(&self, token_hash: &str) -> AppResult<bool>;
     fn create_session(&self, token: &str, user_id: &str) -> AppResult<()>;
     fn delete_session(&self, token: &str) -> AppResult<()>;
     fn purge_sessions(&self) -> AppResult<()>;
@@ -435,6 +436,11 @@ impl Backend for SqliteBackend {
     fn user_by_api_token(&self, token_hash: &str) -> AppResult<Option<User>> {
         let conn = lock(&self.conn)?;
         identity_store::user_by_api_token(&conn, token_hash)
+    }
+
+    fn api_token_read_only(&self, token_hash: &str) -> AppResult<bool> {
+        let conn = lock(&self.conn)?;
+        identity_store::api_token_read_only(&conn, token_hash)
     }
 
     fn create_session(&self, token: &str, user_id: &str) -> AppResult<()> {
@@ -1768,6 +1774,25 @@ impl Backend for PostgresBackend {
         Ok(Some(identity_store::row_user(&row)?))
     }
 
+    fn api_token_read_only(&self, token_hash: &str) -> AppResult<bool> {
+        let row = self.with_client(|client| async move {
+            client
+                .query_opt(
+                    &store::sql::postgres(identity_store::API_TOKEN_READ_ONLY),
+                    &[&token_hash],
+                )
+                .await
+                .map_err(ApiError::from)
+        })?;
+        let Some(row) = row else {
+            return Ok(false);
+        };
+        let scope: String = row.try_get(0)?;
+        let expires_at: Option<String> = row.try_get(1)?;
+        let disabled: i32 = row.try_get(2)?;
+        Ok(scope == "read" && disabled == 0 && !db::has_expired(expires_at.as_deref()))
+    }
+
     fn create_session(&self, token: &str, user_id: &str) -> AppResult<()> {
         let times = db::session_times();
         self.with_client(|client| async move {
@@ -2023,6 +2048,7 @@ impl Backend for PostgresBackend {
                         &token_hash,
                         &times.created_at,
                         &times.expires_at,
+                        &times.scope,
                     ],
                 )
                 .await?;

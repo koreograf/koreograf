@@ -163,8 +163,42 @@ fn api_prefixes(routes: Router<Shared>) -> Router<Shared> {
         .nest("/api", routes)
 }
 
+fn is_safe_method(method: &Method) -> bool {
+    matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
+}
+
+/// Safe routes with a protected side effect or key material.
+fn is_protected_read(path: &str) -> bool {
+    path.ends_with("/admin/backup") || path.ends_with("/runner/preflight")
+}
+
+/// A read-only personal token may inspect the API but not change it. This runs
+/// before the route so a rejected request never touches `last_used_at`.
+async fn read_only_guard(State(state): State<Shared>, request: Request, next: Next) -> Response {
+    if is_safe_method(request.method()) && !is_protected_read(request.uri().path()) {
+        return next.run(request).await;
+    }
+    let Some(token) = auth::bearer_token(request.headers()) else {
+        return next.run(request).await;
+    };
+    match auth::api_token_read_only(&state, &token) {
+        Ok(true) => ApiError::ReadOnlyToken.into_response(),
+        Ok(false) => next.run(request).await,
+        Err(error) => error.into_response(),
+    }
+}
+
+fn guarded_api_routes(state: Shared) -> Router<Shared> {
+    api_routes()
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            origin_guard,
+        ))
+        .layer(axum::middleware::from_fn_with_state(state, read_only_guard))
+}
+
 pub(crate) fn api_router(state: Shared) -> Router {
-    api_prefixes(api_routes()).with_state(state)
+    api_prefixes(guarded_api_routes(state.clone())).with_state(state)
 }
 
 fn mcp_router(state: Shared) -> Router<Shared> {
@@ -195,6 +229,11 @@ async fn mcp_auth(
     let Some(token) = auth::bearer_token(&headers) else {
         return ApiError::Unauthorized.into_response();
     };
+    match auth::api_token_read_only(&state, &token) {
+        Ok(true) => return ApiError::ReadOnlyToken.into_response(),
+        Ok(false) => {}
+        Err(error) => return error.into_response(),
+    }
     match auth::api_token_user(&state, &token) {
         Ok(Some(_)) => next.run(request).await,
         Ok(None) => ApiError::Unauthorized.into_response(),
@@ -215,9 +254,7 @@ pub fn router(state: Shared) -> Router {
             "/hooks/{id}/{token}",
             post(crate::features::workflows::ingest),
         )
-        .merge(api_prefixes(api_routes().layer(
-            axum::middleware::from_fn_with_state(state.clone(), origin_guard),
-        )));
+        .merge(api_prefixes(guarded_api_routes(state.clone())));
     if state.cfg.mcp {
         app = app.merge(mcp_router(state.clone()));
     }

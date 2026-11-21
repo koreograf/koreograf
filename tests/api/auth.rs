@@ -1153,6 +1153,7 @@ async fn session_endpoints_return_the_documented_shape() {
     assert!(token["created_at"].is_string());
     assert!(token["expires_at"].is_string());
     assert!(token["prefix"].is_string());
+    assert!(token["scope"].is_string());
     assert!(token["secret"].is_string());
     assert_eq!(
         token,
@@ -1163,6 +1164,7 @@ async fn session_endpoints_return_the_documented_shape() {
             "last_used_at": null,
             "name": "shape",
             "prefix": token["prefix"].clone(),
+            "scope": "write",
             "secret": token["secret"].clone()
         })
     );
@@ -1179,7 +1181,8 @@ async fn session_endpoints_return_the_documented_shape() {
             "id": token_id.clone(),
             "last_used_at": null,
             "name": "shape",
-            "prefix": token["prefix"].clone()
+            "prefix": token["prefix"].clone(),
+            "scope": "write"
         }])
     );
 
@@ -1374,6 +1377,262 @@ fn token_seconds(created_at: &str, expires_at: &str) -> i64 {
     let created = chrono::DateTime::parse_from_rfc3339(created_at).expect("created_at");
     let expires = chrono::DateTime::parse_from_rfc3339(expires_at).expect("expires_at");
     (expires - created).num_seconds()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn read_only_api_tokens_cannot_write() {
+    let harness = TestApp::boot_sqlite("token-scope", Options::default());
+    let app = harness.app.clone();
+    let dir = harness.dir.clone();
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("admin cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Read token job",
+            "tool": "shell",
+            "entrypoint": "",
+            "spec": {"script": "true"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().unwrap().to_string();
+
+    let (status, read, _) = call(
+        &app,
+        "POST",
+        "/api/me/tokens",
+        Some(&cookie),
+        None,
+        Some(json!({"name": "read-only", "scope": "read"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{read}");
+    assert_eq!(read["scope"], "read");
+    let read_id = read["id"].as_str().unwrap().to_string();
+    let read_secret = read["secret"].as_str().unwrap().to_string();
+
+    let (status, denied) =
+        call_bearer(&app, "GET", "/api/admin/backup", &read_secret, None, None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+    assert_eq!(denied["error"], "token_is_read_only");
+    let (status, denied) = call_bearer(
+        &app,
+        "GET",
+        "/api/runner/preflight",
+        &read_secret,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+    assert_eq!(denied["error"], "token_is_read_only");
+
+    let (status, denied) = call_bearer(
+        &app,
+        "POST",
+        "/api/templates",
+        &read_secret,
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+    assert_eq!(denied["error"], "token_is_read_only");
+    let (status, denied) = call_bearer(
+        &app,
+        "PUT",
+        &format!("/api/templates/{template_id}"),
+        &read_secret,
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+    assert_eq!(denied["error"], "token_is_read_only");
+    let (status, denied) = call_bearer(
+        &app,
+        "DELETE",
+        &format!("/api/templates/{template_id}"),
+        &read_secret,
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+    assert_eq!(denied["error"], "token_is_read_only");
+    let untouched = harness
+        .sql_i64(&format!(
+            "SELECT COUNT(*) FROM api_tokens WHERE id = '{read_id}' AND last_used_at IS NULL"
+        ))
+        .await;
+    assert_eq!(untouched, 1, "a rejected read token updated last_used_at");
+
+    let (status, templates) = call_bearer(
+        &app,
+        "GET",
+        "/api/templates",
+        &read_secret,
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{templates}");
+    assert!(templates
+        .as_array()
+        .is_some_and(|items| items.iter().any(|item| item["id"] == template_id)));
+    let used = harness
+        .sql_text(&format!(
+            "SELECT COALESCE(last_used_at, '') FROM api_tokens WHERE id = '{read_id}'"
+        ))
+        .await;
+    assert_eq!(used.len(), 1);
+    assert!(
+        !used[0].is_empty(),
+        "the accepted GET did not touch the token"
+    );
+
+    let (status, denied) = call_bearer(
+        &app,
+        "POST",
+        "/api/templates",
+        &read_secret,
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+    assert_eq!(denied["error"], "token_is_read_only");
+    let after = harness
+        .sql_text(&format!(
+            "SELECT COALESCE(last_used_at, '') FROM api_tokens WHERE id = '{read_id}'"
+        ))
+        .await;
+    assert_eq!(after, used, "a rejected read token updated last_used_at");
+
+    let (status, listed) =
+        call_bearer(&app, "GET", "/api/me/tokens", &read_secret, None, None).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let row = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == read_id.as_str())
+        .unwrap();
+    assert_eq!(row["scope"], "read");
+
+    let (status, write, _) = call(
+        &app,
+        "POST",
+        "/api/me/tokens",
+        Some(&cookie),
+        None,
+        Some(json!({"name": "read-write", "scope": "write"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{write}");
+    assert_eq!(write["scope"], "write");
+    let write_secret = write["secret"].as_str().unwrap().to_string();
+    let (status, created) = call_bearer(
+        &app,
+        "POST",
+        "/api/templates",
+        &write_secret,
+        Some(&team),
+        Some(json!({
+            "name": "Write token job",
+            "tool": "shell",
+            "entrypoint": "",
+            "spec": {"script": "true"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let created_id = created["id"].as_str().unwrap().to_string();
+    let (status, _) = call_bearer(
+        &app,
+        "DELETE",
+        &format!("/api/templates/{created_id}"),
+        &write_secret,
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, defaulted, _) = call(
+        &app,
+        "POST",
+        "/api/me/tokens",
+        Some(&cookie),
+        None,
+        Some(json!({"name": "default-scope"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{defaulted}");
+    assert_eq!(defaulted["scope"], "write");
+    let default_secret = defaulted["secret"].as_str().unwrap().to_string();
+    let (status, created) = call_bearer(
+        &app,
+        "POST",
+        "/api/templates",
+        &default_secret,
+        Some(&team),
+        Some(json!({
+            "name": "Default scope job",
+            "tool": "shell",
+            "entrypoint": "",
+            "spec": {"script": "true"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+
+    let (status, invalid, _) = call(
+        &app,
+        "POST",
+        "/api/me/tokens",
+        Some(&cookie),
+        None,
+        Some(json!({"name": "invalid-scope", "scope": "admin"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{invalid}");
+    assert_eq!(invalid["error"], "token_scope_is_read_or_write");
+
+    let (status, _, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/templates/{template_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "session cookie auth changed"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test(flavor = "multi_thread")]

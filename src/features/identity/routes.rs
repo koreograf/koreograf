@@ -246,6 +246,11 @@ pub async fn create_token(
     ApiJson(body): ApiJson<TokenBody>,
 ) -> Result<(StatusCode, Json<CreatedTokenResponse>), ApiError> {
     let name = require_name(&body.name)?;
+    let scope = match body.scope.as_deref() {
+        None | Some("write") => "write",
+        Some("read") => "read",
+        Some(_) => return Err(ApiError::bad("token_scope_is_read_or_write")),
+    };
     let expires_at = match body.expires_in_days {
         None => Some(db::plus_secs(90 * 24 * 3600)),
         Some(None) | Some(Some(0)) => None,
@@ -259,6 +264,7 @@ pub async fn create_token(
     let times = db::ApiTokenTimes {
         created_at,
         expires_at,
+        scope: scope.to_string(),
     };
     state.store().create_api_token(
         &id,
@@ -274,6 +280,7 @@ pub async fn create_token(
             id,
             name,
             prefix,
+            scope: times.scope.clone(),
             secret,
             created_at: times.created_at,
             last_used_at: None,

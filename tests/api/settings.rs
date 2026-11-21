@@ -3686,6 +3686,72 @@ async fn mcp_tools_call_the_http_api() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn mcp_rejects_read_only_tokens() {
+    let harness = TestApp::boot("mcp-read-only", Options::default());
+    let app = harness.app.clone();
+    let dir = harness.dir.clone();
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("admin cookie");
+
+    let (status, read, _) = call(
+        &app,
+        "POST",
+        "/api/me/tokens",
+        Some(&cookie),
+        None,
+        Some(json!({"name": "mcp-read-only", "scope": "read"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{read}");
+    assert_eq!(read["scope"], "read");
+    let read_id = read["id"].as_str().unwrap().to_string();
+    let read_secret = read["secret"].as_str().unwrap().to_string();
+
+    let (status, bytes, _) =
+        mcp_request(&app, Some(&read_secret), None, mcp_initialize_body()).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    let refused: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(refused["error"], "token_is_read_only");
+    let untouched = harness
+        .sql_i64(&format!(
+            "SELECT COUNT(*) FROM api_tokens WHERE id = '{read_id}' AND last_used_at IS NULL"
+        ))
+        .await;
+    assert_eq!(untouched, 1, "a rejected read token updated last_used_at");
+
+    let (status, write, _) = call(
+        &app,
+        "POST",
+        "/api/me/tokens",
+        Some(&cookie),
+        None,
+        Some(json!({"name": "mcp-read-write", "scope": "write"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{write}");
+    let write_secret = write["secret"].as_str().unwrap().to_string();
+    let session = mcp_session(&app, &write_secret).await;
+    assert!(!session.is_empty());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn mcp_http_routes_can_be_turned_off() {
     let dir = temp_dir("mcp-off");
     let mut cfg = config(&dir, &Options::default());

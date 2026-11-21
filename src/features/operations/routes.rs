@@ -445,11 +445,13 @@ pub async fn runner_status(
 
 pub async fn runner_preflight(
     State(state): State<Shared>,
+    headers: HeaderMap,
     user: AuthUser,
 ) -> AppResult<Json<PreflightResponse>> {
     if !user.is_admin {
         return Err(ApiError::Forbidden);
     }
+    auth::reject_read_only_token(&state, &headers)?;
     let effective = super::service::load(&state)?;
     let report = crate::preflight::check(effective.runner, state.cfg.container_image).await;
     let response = PreflightResponse::new(&report);
@@ -728,11 +730,13 @@ pub(super) struct DatabaseMigrateResponse {
 pub async fn download(
     State(state): State<Shared>,
     Query(query): Query<DownloadQuery>,
+    headers: HeaderMap,
     user: AuthUser,
 ) -> AppResult<Response> {
     if !user.is_admin {
         return Err(ApiError::Forbidden);
     }
+    auth::reject_read_only_token(&state, &headers)?;
     let bytes = super::service::export(&state, query.tofu_state)?;
     Ok((
         [
