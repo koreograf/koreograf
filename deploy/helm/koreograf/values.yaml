@@ -64,6 +64,9 @@ runner:
   jobLogRetentionDays: 30
   # Tage, die fertige Workflow-Läufe und ihre Knoten bleiben. 0 behält sie.
   workflowRunRetentionDays: 90
+  # Tage, die eingehende Webhook-Aufrufe bleiben. Je Team bleiben höchstens die
+  # neuesten 1000 Zeilen. 0 behält alle und schaltet beide Grenzen ab.
+  hookDeliveryRetentionDays: 30
   dockerSocket:
     enabled: false
     hostPath: /var/run/docker.sock

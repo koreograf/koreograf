@@ -2,6 +2,7 @@
   "alert_name": "Alert name",
   "delete_this_webhook": "Delete webhook \"{name}\"? Its URL stops working.",
   "deliveries": "Deliveries",
+  "delivery_retention_note": "Retention removes older deliveries: after 30 days by default and at most 1000 per team.",
   "edit_webhook": "Edit webhook",
   "hook_status_any": "any",
   "hook_status_firing": "firing",

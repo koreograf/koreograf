@@ -38,6 +38,8 @@ services:
       KOREOGRAF_JOB_LOG_RETENTION_DAYS: ${KOREOGRAF_JOB_LOG_RETENTION_DAYS:-30}
       # Days to keep finished workflow runs and their nodes. 0 keeps them.
       KOREOGRAF_WORKFLOW_RUN_RETENTION_DAYS: ${KOREOGRAF_WORKFLOW_RUN_RETENTION_DAYS:-90}
+      # Days to keep webhook deliveries. At most 1000 rows per team. 0 keeps all.
+      KOREOGRAF_HOOK_DELIVERY_RETENTION_DAYS: ${KOREOGRAF_HOOK_DELIVERY_RETENTION_DAYS:-30}
       # Jobs that may run at the same time. Others wait as pending.
       KOREOGRAF_MAX_CONCURRENT_JOBS: ${KOREOGRAF_MAX_CONCURRENT_JOBS:-4}
       # Jobs one team may run at the same time. Never above the global limit.

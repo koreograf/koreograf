@@ -258,6 +258,66 @@ pub(crate) fn prune_finished_workflow_runs(state: &crate::AppState) -> AppResult
     Ok(())
 }
 
+/// Deliveries per team and batch for the hook delivery prune.
+const DELIVERY_PRUNE_BATCH: i64 = 500;
+/// Newest deliveries that one team keeps, independent of the day cutoff.
+pub(crate) const HOOK_DELIVERY_KEEP_PER_TEAM: i64 = 1000;
+
+/// Deletes inbound webhook deliveries older than
+/// `KOREOGRAF_HOOK_DELIVERY_RETENTION_DAYS` and rows beyond the newest
+/// [`HOOK_DELIVERY_KEEP_PER_TEAM`] of each team.
+///
+/// The loop takes the database lock one bounded batch at a time and releases
+/// it between batches. The payload is never read or logged; only the removed
+/// count reaches the log.
+pub(crate) fn prune_hook_deliveries(state: &crate::AppState) -> AppResult<()> {
+    let days = state.cfg.hook_delivery_retention_days;
+    if days == 0 {
+        return Ok(());
+    }
+    let Some(cutoff) = db::minus_days(days) else {
+        return Ok(());
+    };
+    let mut removed = 0usize;
+    loop {
+        let batch = state.store().prune_hook_deliveries(
+            &cutoff,
+            HOOK_DELIVERY_KEEP_PER_TEAM,
+            DELIVERY_PRUNE_BATCH,
+        )?;
+        removed = removed.saturating_add(batch);
+        if batch < usize::try_from(DELIVERY_PRUNE_BATCH).unwrap_or(usize::MAX) {
+            break;
+        }
+        // Leave a gap for another request before taking the lock again.
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    tracing::info!(
+        days,
+        deliveries = removed,
+        per_team = HOOK_DELIVERY_KEEP_PER_TEAM,
+        "pruned hook deliveries; KOREOGRAF_HOOK_DELIVERY_RETENTION_DAYS sets the cutoff"
+    );
+    Ok(())
+}
+
+/// Runs the hook delivery prune once when the task starts and then once a
+/// day. The server calls this after the port is bound. Each pass runs on the
+/// blocking pool and takes the database lock one batch at a time.
+pub(crate) fn spawn_delivery_retention(state: Shared) {
+    tokio::spawn(async move {
+        loop {
+            let task_state = state.clone();
+            match tokio::task::spawn_blocking(move || prune_hook_deliveries(&task_state)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => tracing::error!(error = %err, "hook delivery retention"),
+                Err(err) => tracing::error!(error = %err, "hook delivery retention task stopped"),
+            }
+            tokio::time::sleep(Duration::from_secs(24 * 60 * 60)).await;
+        }
+    });
+}
+
 /// Runs the workflow-run prune once when the task starts and then once a day.
 /// The server calls this after the port is bound. Each pass runs on the
 /// blocking pool and takes the database lock one batch at a time.

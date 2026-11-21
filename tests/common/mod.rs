@@ -35,6 +35,8 @@ pub struct Options {
     pub job_log_retention_days: u64,
     /// `KOREOGRAF_WORKFLOW_RUN_RETENTION_DAYS`.
     pub workflow_run_retention_days: u64,
+    /// `KOREOGRAF_HOOK_DELIVERY_RETENTION_DAYS`.
+    pub hook_delivery_retention_days: u64,
 }
 
 impl Default for Options {
@@ -50,6 +52,7 @@ impl Default for Options {
             max_concurrent_jobs_per_team: 2,
             job_log_retention_days: 30,
             workflow_run_retention_days: 90,
+            hook_delivery_retention_days: 30,
         }
     }
 }
@@ -69,6 +72,7 @@ pub fn config(data_dir: &Path, options: &Options) -> Config {
         job_output_lines: 8_000,
         job_log_retention_days: options.job_log_retention_days,
         workflow_run_retention_days: options.workflow_run_retention_days,
+        hook_delivery_retention_days: options.hook_delivery_retention_days,
         max_concurrent_jobs: options.max_concurrent_jobs,
         max_concurrent_jobs_per_team: options.max_concurrent_jobs_per_team,
         local_jobs: LocalJobs::All,

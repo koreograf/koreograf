@@ -53,7 +53,7 @@ async function pageHooks() {
       <input class="search" id="hook-search" placeholder="${h("search_webhooks")}" autocomplete="off">
       <div id="hook-table"></div>
     </section>
-    <section class="card"><h2>${h("deliveries")}</h2>${table([t("hook"), t("status"), t("summary"), t("time")], incoming)}</section>`,
+    <section class="card"><h2>${h("deliveries")}</h2><p class="small muted">${h("delivery_retention_note")}</p>${table([t("hook"), t("status"), t("summary"), t("time")], incoming)}</section>`,
     can("operator") ? addLink("#/hooks?new=1", "webhook_2") : "");
   const drawHooks = () => {
     const needle = document.querySelector("#hook-search").value.trim().toLowerCase();

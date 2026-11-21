@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::error::{ApiError, AppResult};
 
-pub(crate) const SCHEMA_VERSION: u32 = 8;
+pub(crate) const SCHEMA_VERSION: u32 = 9;
 const BASELINE_VERSION: u32 = 1;
 
 /// A session row moves its last-seen time at most once per interval, so a
@@ -105,6 +105,12 @@ pub(crate) const SQLITE_MIGRATIONS: &[Migration] = &[
         sql: include_str!("../migrations/sqlite/0008_api_token_scope.sql"),
         legacy_columns: &[("api_tokens", "scope")],
     },
+    Migration {
+        version: 9,
+        name: "0009_hook_delivery_indexes",
+        sql: include_str!("../migrations/sqlite/0009_hook_delivery_indexes.sql"),
+        legacy_columns: &[],
+    },
 ];
 
 pub(crate) const POSTGRES_MIGRATIONS: &[Migration] = &[
@@ -159,6 +165,12 @@ pub(crate) const POSTGRES_MIGRATIONS: &[Migration] = &[
         name: "0008_api_token_scope",
         sql: include_str!("../migrations/postgres/0008_api_token_scope.sql"),
         legacy_columns: &[("api_tokens", "scope")],
+    },
+    Migration {
+        version: 9,
+        name: "0009_hook_delivery_indexes",
+        sql: include_str!("../migrations/postgres/0009_hook_delivery_indexes.sql"),
+        legacy_columns: &[],
     },
 ];
 

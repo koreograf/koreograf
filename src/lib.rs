@@ -232,6 +232,19 @@ impl AppState {
         features::workflows::spawn_run_retention(self.clone());
     }
 
+    /// Removes inbound webhook deliveries past
+    /// `KOREOGRAF_HOOK_DELIVERY_RETENTION_DAYS` and rows beyond the newest
+    /// 1000 of each team. `0` keeps everything.
+    pub fn prune_hook_deliveries(&self) -> Result<(), ApiError> {
+        features::workflows::prune_hook_deliveries(self)
+    }
+
+    /// Starts the hook delivery retention task. It prunes once now and then
+    /// once a day. The server calls this after the port is bound.
+    pub fn spawn_hook_delivery_retention(self: &Shared) {
+        features::workflows::spawn_delivery_retention(self.clone());
+    }
+
     pub(crate) fn preflight_report(&self) -> Option<preflight::Report> {
         self.preflight.lock().ok().and_then(|report| report.clone())
     }
@@ -363,6 +376,7 @@ pub async fn serve(cfg: Config) -> anyhow::Result<()> {
     // the port is open so it cannot delay the first request.
     state.spawn_log_retention();
     state.spawn_workflow_run_retention();
+    state.spawn_hook_delivery_retention();
     if state.cfg.mcp {
         tracing::info!("MCP over HTTP is enabled at POST /mcp");
     } else {

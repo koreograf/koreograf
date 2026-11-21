@@ -1,11 +1,17 @@
 use axum::http::StatusCode;
 use chrono::{Duration as ChronoDuration, Utc};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::common::*;
 
 fn stamp(days: i64) -> String {
     (Utc::now() - ChronoDuration::days(days))
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string()
+}
+
+fn stamp_seconds(seconds: i64) -> String {
+    (Utc::now() - ChronoDuration::seconds(seconds))
         .format("%Y-%m-%dT%H:%M:%SZ")
         .to_string()
 }
@@ -753,4 +759,223 @@ async fn the_startup_workflow_prune_runs_in_the_background_task_after_boot() {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     panic!("the background workflow retention task did not prune wf-retention-boot");
+}
+
+fn hook_options(hook_delivery_retention_days: u64) -> Options {
+    Options {
+        hook_delivery_retention_days,
+        ..Options::default()
+    }
+}
+
+fn hook_row(id: &str, team: &str, name: &str, token: &str) -> String {
+    format!(
+        "INSERT INTO hooks (
+            id, team_id, name, token, match_alertname, match_status,
+            template_id, workflow_id, extra_vars, enabled, created_at
+         ) VALUES ('{id}', '{team}', '{name}', '{token}', 'DiskSpaceLow', 'firing',
+            NULL, NULL, '{{}}', 1, '{}');\n",
+        stamp(0)
+    )
+}
+
+fn delivery_row(id: &str, hook: &str, created_at: &str) -> String {
+    format!(
+        "INSERT INTO hook_deliveries (
+            id, hook_id, status, summary, payload, job_id, workflow_job_id, created_at
+         ) VALUES ('{id}', '{hook}', 'successful', 'summary', '{{}}', NULL, NULL,
+            '{created_at}');\n"
+    )
+}
+
+async fn delivery_count(harness: &TestApp, hook: &str) -> i64 {
+    harness
+        .sql_i64(&format!(
+            "SELECT COUNT(*) FROM hook_deliveries WHERE hook_id = '{hook}'"
+        ))
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hook_delivery_retention_keeps_the_newest_rows_per_team() {
+    let harness = TestApp::boot("hook-delivery-retention", hook_options(30));
+    let (cookie, team) = harness.sign_in().await;
+    let (status, other) = harness
+        .call(
+            "POST",
+            "/api/teams",
+            Some(&cookie),
+            Some(&team),
+            Some(json!({"name": "Delivery retention"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{other}");
+    let other_team = other["id"].as_str().expect("other team id");
+
+    let old = stamp(40);
+    let recent = stamp(0);
+    let mut seed = String::new();
+    seed.push_str(&hook_row("hook-many", &team, "Many", "token-many"));
+    seed.push_str(&hook_row("hook-other", other_team, "Other", "token-other"));
+    seed.push_str(&delivery_row("delivery-many-old", "hook-many", &old));
+    seed.push_str(&delivery_row("delivery-other-old", "hook-other", &old));
+    seed.push_str(&delivery_row("delivery-orphan-old", "hook-gone", &old));
+    seed.push_str(&delivery_row(
+        "delivery-orphan-recent",
+        "hook-gone",
+        &recent,
+    ));
+    seed.push_str(&delivery_row(
+        "delivery-other-recent",
+        "hook-other",
+        &recent,
+    ));
+    for index in 0..1005 {
+        let id = format!("delivery-many-{index:04}");
+        let created = stamp_seconds(i64::from(1005 - index));
+        seed.push_str(&delivery_row(&id, "hook-many", &created));
+    }
+    harness.execute_sql(&seed).await;
+
+    assert_eq!(delivery_count(&harness, "hook-many").await, 1006);
+
+    harness.state.prune_hook_deliveries().expect("prune");
+
+    assert_eq!(delivery_count(&harness, "hook-many").await, 1000);
+    assert_eq!(delivery_count(&harness, "hook-other").await, 1);
+    let kept = harness
+        .sql_text("SELECT id FROM hook_deliveries WHERE hook_id = 'hook-many' ORDER BY id")
+        .await;
+    assert_eq!(kept.first().map(String::as_str), Some("delivery-many-0005"));
+    assert_eq!(kept.last().map(String::as_str), Some("delivery-many-1004"));
+    assert_eq!(
+        harness
+            .sql_i64(
+                "SELECT COUNT(*) FROM hook_deliveries
+                 WHERE id IN ('delivery-many-0000', 'delivery-many-0001',
+                              'delivery-many-0002', 'delivery-many-0003',
+                              'delivery-many-0004', 'delivery-many-old',
+                              'delivery-other-old', 'delivery-orphan-old',
+                              'delivery-orphan-recent')"
+            )
+            .await,
+        0
+    );
+    assert_eq!(
+        harness
+            .sql_i64(
+                "SELECT COUNT(*) FROM hook_deliveries
+                 WHERE id = 'delivery-other-recent'"
+            )
+            .await,
+        1
+    );
+
+    let (status, page) = harness
+        .call(
+            "GET",
+            "/api/hooks/hook-many/deliveries",
+            Some(&cookie),
+            Some(&team),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page.as_array().map(Vec::len), Some(30), "{page}");
+
+    let before = harness
+        .sql_text("SELECT id FROM hook_deliveries ORDER BY hook_id, created_at DESC, id")
+        .await;
+    harness.state.prune_hook_deliveries().expect("second prune");
+    assert_eq!(
+        harness
+            .sql_text("SELECT id FROM hook_deliveries ORDER BY hook_id, created_at DESC, id")
+            .await,
+        before
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn zero_disables_hook_delivery_retention() {
+    let harness = TestApp::boot("hook-delivery-retention-off", hook_options(0));
+    let team = harness
+        .sql_text("SELECT id FROM teams ORDER BY id LIMIT 1")
+        .await
+        .remove(0);
+    let old = stamp(40);
+    let mut seed = hook_row("hook-kept", &team, "Kept", "token-kept");
+    seed.push_str(&delivery_row("delivery-kept-old", "hook-kept", &old));
+    for index in 0..1001 {
+        let id = format!("delivery-kept-{index:04}");
+        seed.push_str(&delivery_row(&id, "hook-kept", &stamp_seconds(index + 1)));
+    }
+    harness.execute_sql(&seed).await;
+
+    harness.state.prune_hook_deliveries().expect("prune");
+
+    assert_eq!(delivery_count(&harness, "hook-kept").await, 1002);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn deleting_a_hook_removes_its_deliveries_only() {
+    let harness = TestApp::boot("hook-delivery-delete", hook_options(30));
+    let (cookie, team) = harness.sign_in().await;
+    let mut seed = hook_row("hook-delete", &team, "Delete", "token-delete");
+    seed.push_str(&hook_row("hook-keep", &team, "Keep", "token-keep"));
+    seed.push_str(&delivery_row("delivery-delete", "hook-delete", &stamp(0)));
+    seed.push_str(&delivery_row("delivery-keep", "hook-keep", &stamp(0)));
+    harness.execute_sql(&seed).await;
+
+    let (status, body) = harness
+        .call(
+            "DELETE",
+            "/api/hooks/hook-delete",
+            Some(&cookie),
+            Some(&team),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    assert_eq!(
+        harness
+            .sql_i64("SELECT COUNT(*) FROM hooks WHERE id = 'hook-delete'")
+            .await,
+        0
+    );
+    assert_eq!(delivery_count(&harness, "hook-delete").await, 0);
+    assert_eq!(
+        harness
+            .sql_i64("SELECT COUNT(*) FROM hooks WHERE id = 'hook-keep'")
+            .await,
+        1
+    );
+    assert_eq!(delivery_count(&harness, "hook-keep").await, 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_startup_hook_delivery_prune_runs_in_the_background_task_after_boot() {
+    let mut harness = TestApp::boot("hook-delivery-retention-startup", hook_options(5));
+    let team = harness
+        .sql_text("SELECT id FROM teams ORDER BY id LIMIT 1")
+        .await
+        .remove(0);
+    let old = stamp(10);
+    let mut seed = hook_row("hook-boot", &team, "Boot", "token-boot");
+    seed.push_str(&delivery_row("delivery-boot", "hook-boot", &old));
+    harness.execute_sql(&seed).await;
+
+    harness.reboot();
+
+    // Boot leaves the history alone; the first prune is a background task.
+    assert_eq!(delivery_count(&harness, "hook-boot").await, 1);
+
+    harness.state.spawn_hook_delivery_retention();
+    for _ in 0..300 {
+        if delivery_count(&harness, "hook-boot").await == 0 {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("the background hook delivery retention task did not prune hook-boot");
 }

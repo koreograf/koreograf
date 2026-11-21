@@ -78,11 +78,14 @@ pub(crate) fn update_hook(c: &Connection, item: &Hook) -> AppResult<()> {
     Ok(())
 }
 
-pub(crate) fn delete_hook(c: &Connection, id: &str, team_id: &str) -> AppResult<()> {
-    let changed = c.execute(DELETE_HOOK, params![id, team_id])?;
+pub(crate) fn delete_hook(c: &mut Connection, id: &str, team_id: &str) -> AppResult<()> {
+    let tx = c.transaction()?;
+    let changed = tx.execute(DELETE_HOOK, params![id, team_id])?;
     if changed == 0 {
         return Err(ApiError::NotFound);
     }
+    tx.execute(crate::store::deliveries::DELETE_DELIVERIES_FOR_HOOK, [id])?;
+    tx.commit()?;
     Ok(())
 }
 

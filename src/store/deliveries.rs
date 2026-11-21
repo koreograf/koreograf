@@ -13,6 +13,37 @@ pub(crate) const LIST_DELIVERIES: &str =
      FROM hook_deliveries d JOIN hooks h ON h.id = d.hook_id
      WHERE h.team_id = ?1 ORDER BY d.created_at DESC LIMIT ?2";
 
+pub(crate) const DELETE_DELIVERIES_FOR_HOOK: &str =
+    "DELETE FROM hook_deliveries WHERE hook_id = ?1";
+
+/// Old rows plus rows whose hook no longer exists. The second condition
+/// clears deliveries left behind by a hook that was deleted before this
+/// build started removing them with the hook.
+pub(crate) const PRUNE_EXPIRED_DELIVERIES: &str = "DELETE FROM hook_deliveries
+     WHERE id IN (
+        SELECT d.id FROM hook_deliveries d
+        WHERE d.created_at < ?1
+           OR NOT EXISTS (SELECT 1 FROM hooks h WHERE h.id = d.hook_id)
+        ORDER BY d.created_at, d.id
+        LIMIT ?2
+     )";
+
+/// Rows beyond the newest `keep` deliveries of each team, oldest first. The
+/// ranking restarts from the rows that are still present, so a batch loop
+/// converges on the bound.
+pub(crate) const PRUNE_OVER_LIMIT_DELIVERIES: &str = "DELETE FROM hook_deliveries
+     WHERE id IN (
+        SELECT id FROM (
+            SELECT d.id, ROW_NUMBER() OVER (
+                PARTITION BY h.team_id ORDER BY d.created_at DESC, d.id DESC
+            ) AS rn
+            FROM hook_deliveries d JOIN hooks h ON h.id = d.hook_id
+        ) ranked
+        WHERE rn > ?1
+        ORDER BY rn DESC
+        LIMIT ?2
+     )";
+
 pub(crate) fn insert_delivery(c: &Connection, item: NewDelivery<'_>) -> AppResult<()> {
     c.execute(
         INSERT_DELIVERY,
@@ -41,6 +72,27 @@ pub(crate) fn list_deliveries(
         params![team_id, limit],
         sqlite_row_delivery,
     )
+}
+
+/// Deletes up to `limit` deliveries that are older than `cutoff` or beyond
+/// the newest `keep` rows of their team in one transaction. The caller repeats
+/// the call until it returns fewer than `limit` rows, so the database lock is
+/// released between batches.
+pub(crate) fn prune_hook_deliveries(
+    c: &mut Connection,
+    cutoff: &str,
+    keep: i64,
+    limit: i64,
+) -> AppResult<usize> {
+    let tx = c.transaction()?;
+    let mut removed = tx.execute(PRUNE_EXPIRED_DELIVERIES, params![cutoff, limit])?;
+    let remaining = limit.saturating_sub(i64::try_from(removed).unwrap_or(limit));
+    if remaining > 0 {
+        removed = removed
+            .saturating_add(tx.execute(PRUNE_OVER_LIMIT_DELIVERIES, params![keep, remaining])?);
+    }
+    tx.commit()?;
+    Ok(removed)
 }
 
 pub(crate) fn row_delivery<R: SqlRow>(row: &R) -> AppResult<Delivery> {

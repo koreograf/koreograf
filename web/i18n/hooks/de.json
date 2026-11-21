@@ -2,6 +2,7 @@
   "alert_name": "Alertname",
   "delete_this_webhook": "Webhook \"{name}\" löschen? Seine URL funktioniert danach nicht mehr.",
   "deliveries": "Eingänge",
+  "delivery_retention_note": "Ältere Eingänge entfernt die Aufbewahrung: standardmäßig nach 30 Tagen und höchstens 1000 je Team.",
   "edit_webhook": "Webhook bearbeiten",
   "hook_status_any": "beliebig",
   "hook_status_firing": "ausgelöst",
