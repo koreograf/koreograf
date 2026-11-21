@@ -1,4 +1,5 @@
 use std::convert::Infallible;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::{Path, Query, State};
@@ -19,6 +20,7 @@ use crate::http::{gate, team_header};
 use crate::runner;
 use crate::Shared;
 
+use super::service::job_work_dir;
 use super::{cancel, relaunch};
 
 pub(crate) fn routes() -> Router<Shared> {
@@ -28,6 +30,7 @@ pub(crate) fn routes() -> Router<Shared> {
         .route("/jobs/{id}/cancel", post(cancel_job))
         .route("/jobs/{id}/relaunch", post(relaunch_job))
         .route("/jobs/{id}/output", get(job_output))
+        .route("/jobs/{id}/ansible", get(job_host_ansible))
         .route("/jobs/{id}/events", get(job_events))
 }
 
@@ -41,6 +44,19 @@ pub(super) struct RelaunchBody {
 #[derive(Deserialize)]
 pub struct AfterQuery {
     after: Option<i64>,
+}
+
+#[derive(Deserialize)]
+pub struct HostAnsibleQuery {
+    host: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct HostAnsibleResponse {
+    host: String,
+    events: Vec<Value>,
+    truncated: bool,
+    reason: Option<&'static str>,
 }
 
 #[derive(Deserialize, Default)]
@@ -378,6 +394,58 @@ pub async fn job_output(
         body,
     )
         .into_response())
+}
+
+fn valid_host(host: &str) -> bool {
+    !host.is_empty() && host.chars().count() <= 255 && !host.chars().any(char::is_control)
+}
+
+/// One sidecar read can scan up to 64 MiB on the blocking pool, so a queue of
+/// Viewer requests has a small ceiling.
+static HOST_DETAIL_READS: std::sync::LazyLock<Arc<tokio::sync::Semaphore>> =
+    std::sync::LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(4)));
+
+/// One host's task detail from the callback sidecar. A host past the stored
+/// event cap has no rows in `job_events`, so the page asks for that one host
+/// and the response stays bounded.
+pub async fn job_host_ansible(
+    State(state): State<Shared>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    Query(query): Query<HostAnsibleQuery>,
+) -> AppResult<Json<HostAnsibleResponse>> {
+    let host = query.host.unwrap_or_default();
+    if !valid_host(&host) {
+        return Err(ApiError::bad_vars(
+            "invalid_query_parameter",
+            [("field", "host")],
+        ));
+    }
+    {
+        let db = state.store();
+        let job = db.job(&id)?.ok_or(ApiError::NotFound)?;
+        crate::features::identity::authorize(db, &user, &job.team_id, Role::Viewer)?;
+    }
+    let work = job_work_dir(&state.cfg.data_dir, &id).ok_or(ApiError::NotFound)?;
+    let permit = HOST_DETAIL_READS
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| ApiError::Internal("host detail limiter is closed".into()))?;
+    let data_dir = state.cfg.data_dir.clone();
+    let lookup = host.clone();
+    let page = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        crate::ansible_events::host_events(&work, &data_dir, &lookup)
+    })
+    .await
+    .map_err(|err| ApiError::Internal(format!("host detail task failed: {err}")))?;
+    Ok(Json(HostAnsibleResponse {
+        host,
+        events: page.events,
+        truncated: page.truncated,
+        reason: page.reason,
+    }))
 }
 
 pub async fn cancel_job(

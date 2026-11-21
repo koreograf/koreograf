@@ -897,7 +897,7 @@ textarea { min-height: 88px; resize: vertical; }
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.st-empty, .st-limit { margin: 8px 0; }
+.st-empty, .st-limit, .st-detail-note { margin: 8px 0; }
 .tabs { display: flex; gap: 8px; margin: 0; }
 .tab-bar { flex-wrap: wrap; margin: 0 0 12px; }
 .job-sticky {

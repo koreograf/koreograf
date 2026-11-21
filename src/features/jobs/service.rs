@@ -883,7 +883,7 @@ fn prune_job_work_dirs(state: &crate::AppState, cutoff: &str) -> AppResult<usize
     Ok(removed)
 }
 
-fn job_work_dir(data_dir: &Path, id: &str) -> Option<PathBuf> {
+pub(crate) fn job_work_dir(data_dir: &Path, id: &str) -> Option<PathBuf> {
     if id.is_empty()
         || id == "."
         || id == ".."

@@ -1,7 +1,9 @@
 "use strict";
 
+const fs = require("node:fs");
+const { join } = require("node:path");
 const { expect, test } = require("@playwright/test");
-const { password, username } = require("./env");
+const { dataDir, password, username } = require("./env");
 
 async function signIn(page) {
   await page.goto("/");
@@ -242,6 +244,21 @@ test("a job with 5000 hosts keeps the summary complete and the DOM bounded", asy
   await expect(page.locator(".st-host")).toHaveCount(1);
   await expect(page.locator(".st-host")).toContainText("bulk-0001");
 
+  const detailUrl = "**/api/v1/jobs/*/ansible?host=*";
+  await page.route(detailUrl, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await route.continue();
+  });
+  await page.locator("#host-search").fill("bulk-4500");
+  await expect(page.locator('[data-st-select-host="bulk-4500"]')).toBeVisible();
+  await page.locator('[data-st-select-host="bulk-4500"]').click();
+  await expect(page.locator(".st-detail-note")).toContainText("Loading task detail for bulk-4500", { timeout: 1000 });
+  await expect(page.locator(".st-task")).toHaveCount(1);
+  await expect(page.locator(".st-host")).toHaveCount(1);
+  await expect(page.locator(".st-host")).toContainText("bulk-4500");
+  await expect(page.locator(".st-host")).toContainText("bulk ping bulk-4500");
+  await page.unroute(detailUrl);
+
   const renderMs = Number(await structured.getAttribute("data-render-ms"));
   expect(renderMs).toBeGreaterThan(0);
   expect(renderMs).toBeLessThan(1000);
@@ -256,5 +273,19 @@ test("a job with 5000 hosts keeps the summary complete and the DOM bounded", asy
   await page.getByRole("button", { name: "Structured", exact: true }).click();
   await expect(structured).toBeVisible();
   await expect(page.locator("#st-recap-total")).toContainText("5000");
+  await noHorizontalScroll(page);
+
+  fs.rmSync(join(dataDir, "jobs", id, "ansible-events.jsonl"), { force: true });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.reload();
+  await expect(structured).toBeVisible();
+  await page.locator("#host-status").selectOption("all");
+  await page.locator("#host-search").fill("bulk-4500");
+  await expect(page.locator('[data-st-select-host="bulk-4500"]')).toBeVisible();
+  await page.locator('[data-st-select-host="bulk-4500"]').click();
+  await expect(page.locator(".st-detail-note")).toContainText("no longer available");
+  await expect(page.locator(".st-task")).toHaveCount(0);
+  await noHorizontalScroll(page);
+  await page.setViewportSize({ width: 390, height: 844 });
   await noHorizontalScroll(page);
 });
