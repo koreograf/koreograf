@@ -5,9 +5,17 @@
   "copy": "Copy",
   "create_token": "Create token",
   "delete_this_token": "Revoke token \"{name}\"?",
+  "expires": "Expires",
   "last_used": "Last used",
   "my_account": "My account",
   "name_and_email_come_from_the_directory": "Name and email come from the directory.",
   "prefix": "Prefix",
-  "revoke": "Revoke"
+  "revoke": "Revoke",
+  "token_is_expired": "Expired",
+  "token_lifetime": "Lifetime",
+  "token_lifetime_30_days": "30 days",
+  "token_lifetime_365_days": "365 days",
+  "token_lifetime_90_days": "90 days",
+  "token_lifetime_never": "No expiry",
+  "token_never_expires": "Never expires"
 }

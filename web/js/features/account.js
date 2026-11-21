@@ -18,6 +18,15 @@ export function accountPayload(form) {
   return payload;
 }
 
+export function tokenExpiryCell(token, now = Date.now()) {
+  if (!token.expires_at) return `<span class="muted">${h("token_never_expires")}</span>`;
+  const expired = token.expired === true || Date.parse(token.expires_at) <= now;
+  const date = `<span class="small muted">${esc(when(token.expires_at))}</span>`;
+  return expired
+    ? `<span class="pill failed">${h("token_is_expired")}</span> ${date}`
+    : date;
+}
+
 async function pageAccount() {
   appState.setMe(await api("GET", "/api/v1/me"));
   const tokens = await api("GET", "/api/v1/me/tokens");
@@ -33,6 +42,7 @@ async function pageAccount() {
       <td>${esc(item.name)}</td>
       <td class="mono">${esc(item.prefix)}</td>
       <td class="small muted">${esc(when(item.created_at))}</td>
+      <td>${tokenExpiryCell(item)}</td>
       <td class="small muted">${used}</td>
       <td class="actions"><button class="btn compact danger" type="button" data-revoke="${esc(item.id)}" data-name="${esc(item.name)}">${h("revoke")}</button></td>
     </tr>`;
@@ -74,9 +84,18 @@ async function pageAccount() {
             <span>${h("name")}</span>
             <input name="name" required>
           </label>
+          <label class="field">
+            <span>${h("token_lifetime")}</span>
+            <select class="fit" name="expires_in_days">
+              <option value="30">${h("token_lifetime_30_days")}</option>
+              <option value="90" selected>${h("token_lifetime_90_days")}</option>
+              <option value="365">${h("token_lifetime_365_days")}</option>
+              <option value="">${h("token_lifetime_never")}</option>
+            </select>
+          </label>
           <div><button class="btn pill primary" type="submit">${h("create_token")}</button></div>
         </form>
-        ${table([t("name"), t("prefix"), t("created"), t("last_used"), t("actions")], tokenRows)}
+        ${table([t("name"), t("prefix"), t("created"), t("expires"), t("last_used"), t("actions")], tokenRows)}
       </section>
     </div>`);
   const form = document.querySelector("#account-form");
@@ -95,7 +114,10 @@ async function pageAccount() {
     tokenForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       try {
-        const created = await api("POST", "/api/v1/me/tokens", { name: tokenForm.name.value });
+        const days = tokenForm.expires_in_days.value;
+        const payload = { name: tokenForm.name.value };
+        payload.expires_in_days = days === "" ? null : Number(days);
+        const created = await api("POST", "/api/v1/me/tokens", payload);
         revealToken = created.secret;
         await route();
       } catch (error) { handle(error); }

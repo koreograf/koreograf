@@ -1202,3 +1202,30 @@ test("an operator syncs a project and an inventory from their lists", async ({ p
   await expect(page.locator("[data-sync-inventory]")).toHaveCount(0);
   rmSync(repo, { recursive: true, force: true });
 });
+
+test("the account page creates a token with a lifetime and shows its expiry", async ({ page }) => {
+  await signInInEnglish(page);
+  await page.goto("/#/account");
+  await expect(page.getByRole("heading", { level: 1, name: "My account" })).toBeVisible();
+
+  const form = page.locator("#token-form");
+  const lifetime = form.locator('select[name="expires_in_days"]');
+  await expect(lifetime).toBeVisible();
+  await expect(lifetime).toHaveValue("90");
+  await expect(lifetime.locator("option")).toHaveText(["30 days", "90 days", "365 days", "No expiry"]);
+  await lifetime.selectOption("30");
+  await form.locator('input[name="name"]').fill("Playwright token");
+  await form.getByRole("button", { name: "Create token", exact: true }).click();
+
+  const row = page.getByRole("row", { name: /Playwright token/ });
+  await expect(row).toBeVisible();
+  const expires = row.locator('td[data-label="Expires"]');
+  await expect(expires).not.toHaveText("Never expires");
+  await expect(expires).toContainText(/\d{2}\/\d{2}\/\d{4}/);
+
+  const tokens = await page.evaluate(async () => (await (await fetch("/api/v1/me/tokens")).json()));
+  const created = tokens.find((item) => item.name === "Playwright token");
+  expect(created).toBeTruthy();
+  expect(created.expired).toBe(false);
+  expect(typeof created.expires_at).toBe("string");
+});

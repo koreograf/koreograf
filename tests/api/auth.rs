@@ -1151,12 +1151,14 @@ async fn session_endpoints_return_the_documented_shape() {
     let token_id = token["id"].clone();
     assert!(token_id.is_string());
     assert!(token["created_at"].is_string());
+    assert!(token["expires_at"].is_string());
     assert!(token["prefix"].is_string());
     assert!(token["secret"].is_string());
     assert_eq!(
         token,
         json!({
             "created_at": token["created_at"].clone(),
+            "expires_at": token["expires_at"].clone(),
             "id": token_id.clone(),
             "last_used_at": null,
             "name": "shape",
@@ -1172,6 +1174,8 @@ async fn session_endpoints_return_the_documented_shape() {
         tokens,
         json!([{
             "created_at": token["created_at"].clone(),
+            "expires_at": token["expires_at"].clone(),
+            "expired": false,
             "id": token_id.clone(),
             "last_used_at": null,
             "name": "shape",
@@ -1362,6 +1366,213 @@ async fn session_endpoints_return_the_documented_shape() {
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn token_seconds(created_at: &str, expires_at: &str) -> i64 {
+    let created = chrono::DateTime::parse_from_rfc3339(created_at).expect("created_at");
+    let expires = chrono::DateTime::parse_from_rfc3339(expires_at).expect("expires_at");
+    (expires - created).num_seconds()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn api_tokens_expire_after_a_bounded_lifetime() {
+    let harness = TestApp::boot("token-expiry", Options::default());
+    let app = harness.app.clone();
+    let dir = harness.dir.clone();
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("admin cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, defaulted, _) = call(
+        &app,
+        "POST",
+        "/api/me/tokens",
+        Some(&cookie),
+        None,
+        Some(json!({"name": "default-lifetime"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{defaulted}");
+    let defaulted_id = defaulted["id"].as_str().unwrap().to_string();
+    let default_created = defaulted["created_at"].as_str().unwrap().to_string();
+    let default_expiry = defaulted["expires_at"].as_str().unwrap().to_string();
+    let default_secs = token_seconds(&default_created, &default_expiry);
+    assert!(
+        (89 * 86_400..=90 * 86_400 + 5).contains(&default_secs),
+        "the default lifetime is not 90 days: {default_secs} seconds"
+    );
+
+    let (status, one_day, _) = call(
+        &app,
+        "POST",
+        "/api/me/tokens",
+        Some(&cookie),
+        None,
+        Some(json!({"name": "one-day", "expires_in_days": 1})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{one_day}");
+    let one_day_id = one_day["id"].as_str().unwrap().to_string();
+    let one_day_secret = one_day["secret"].as_str().unwrap().to_string();
+    let one_day_secs = token_seconds(
+        one_day["created_at"].as_str().unwrap(),
+        one_day["expires_at"].as_str().unwrap(),
+    );
+    assert!(
+        (86_400 - 5..=86_400 + 5).contains(&one_day_secs),
+        "the one-day lifetime is wrong: {one_day_secs} seconds"
+    );
+
+    let (status, zero, _) = call(
+        &app,
+        "POST",
+        "/api/me/tokens",
+        Some(&cookie),
+        None,
+        Some(json!({"name": "zero-lifetime", "expires_in_days": 0})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{zero}");
+    assert!(zero["expires_at"].is_null(), "{zero}");
+    let zero_secret = zero["secret"].as_str().unwrap().to_string();
+
+    let (status, explicit_null, _) = call(
+        &app,
+        "POST",
+        "/api/me/tokens",
+        Some(&cookie),
+        None,
+        Some(json!({"name": "null-lifetime", "expires_in_days": null})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{explicit_null}");
+    assert!(explicit_null["expires_at"].is_null(), "{explicit_null}");
+
+    for days in [3651, -1] {
+        let (status, rejected, _) = call(
+            &app,
+            "POST",
+            "/api/me/tokens",
+            Some(&cookie),
+            None,
+            Some(json!({"name": "out-of-range", "expires_in_days": days})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{days}: {rejected}");
+        assert_eq!(rejected["error"], "token_lifetime_out_of_range", "{days}");
+    }
+
+    let (status, listed, _) = call(&app, "GET", "/api/me/tokens", Some(&cookie), None, None).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let find = |id: &str| {
+        listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == id)
+            .unwrap()
+    };
+    let defaulted_row = find(&defaulted_id);
+    assert_eq!(defaulted_row["expires_at"], default_expiry);
+    assert_eq!(defaulted_row["expired"], false);
+    let zero_row = find(zero["id"].as_str().unwrap());
+    assert!(zero_row["expires_at"].is_null());
+    assert_eq!(zero_row["expired"], false);
+
+    let (status, bearer_me) = call_bearer(&app, "GET", "/api/me", &zero_secret, None, None).await;
+    assert_eq!(status, StatusCode::OK, "{bearer_me}");
+
+    harness
+        .execute_sql(&format!(
+            "UPDATE api_tokens SET expires_at = '2000-01-01T00:00:00Z' WHERE id = '{one_day_id}'"
+        ))
+        .await;
+    let unchanged = harness
+        .sql_i64(&format!(
+            "SELECT COUNT(*) FROM api_tokens WHERE id = '{one_day_id}' AND last_used_at IS NULL"
+        ))
+        .await;
+    assert_eq!(unchanged, 1, "the expired token already has a last use");
+
+    let (status, expired) = call_bearer(&app, "GET", "/api/me", &one_day_secret, None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{expired}");
+    assert_eq!(expired["error"], "token_expired");
+    let (status, denied_team) = call_bearer(
+        &app,
+        "GET",
+        "/api/templates",
+        &one_day_secret,
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{denied_team}");
+    assert_eq!(denied_team["error"], "token_expired");
+    let (status, denied_admin) =
+        call_bearer(&app, "GET", "/api/users", &one_day_secret, None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{denied_admin}");
+    assert_eq!(denied_admin["error"], "token_expired");
+    let unchanged = harness
+        .sql_i64(&format!(
+            "SELECT COUNT(*) FROM api_tokens WHERE id = '{one_day_id}' AND last_used_at IS NULL"
+        ))
+        .await;
+    assert_eq!(
+        unchanged, 1,
+        "a rejected expired token updated last_used_at"
+    );
+
+    let (status, listed, _) = call(&app, "GET", "/api/me/tokens", Some(&cookie), None, None).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let expired_row = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == one_day_id.as_str())
+        .unwrap();
+    assert_eq!(expired_row["expired"], true);
+    assert_eq!(expired_row["expires_at"], "2000-01-01T00:00:00Z");
+    assert!(!listed.to_string().contains(&one_day_secret));
+
+    let (status, _, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/me/tokens/{one_day_id}"),
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, revoked) = call_bearer(&app, "GET", "/api/me", &one_day_secret, None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{revoked}");
+    assert_eq!(revoked["error"], "sign_in_is_required");
+    let (status, _, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/me/tokens/{one_day_id}"),
+        Some(&cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, still_working) =
+        call_bearer(&app, "GET", "/api/me", &zero_secret, None, None).await;
+    assert_eq!(status, StatusCode::OK, "{still_working}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

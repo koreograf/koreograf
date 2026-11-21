@@ -40,14 +40,15 @@ pub(crate) const USER_BY_SESSION: &str = "SELECT u.id, u.username, u.display_nam
  FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?1";
 
 pub(crate) const CREATE_API_TOKEN: &str =
-    "INSERT INTO api_tokens (id, user_id, name, prefix, token_hash, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
-pub(crate) const LIST_API_TOKENS: &str = "SELECT id, name, prefix, created_at, last_used_at
+    "INSERT INTO api_tokens (id, user_id, name, prefix, token_hash, created_at, expires_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
+pub(crate) const LIST_API_TOKENS: &str =
+    "SELECT id, name, prefix, created_at, last_used_at, expires_at
  FROM api_tokens WHERE user_id = ?1 ORDER BY created_at, name";
 pub(crate) const DELETE_API_TOKEN: &str = "DELETE FROM api_tokens WHERE id = ?1 AND user_id = ?2";
 pub(crate) const USER_BY_API_TOKEN: &str =
     "SELECT u.id, u.username, u.display_name, u.password_hash,
-        u.auth_source, u.is_admin, u.disabled, u.created_at, u.email, t.id
+        u.auth_source, u.is_admin, u.disabled, u.created_at, u.email, t.id, t.expires_at
  FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?1";
 pub(crate) const TOUCH_API_TOKEN: &str = "UPDATE api_tokens SET last_used_at = ?2 WHERE id = ?1";
 
@@ -218,11 +219,19 @@ pub(crate) fn create_api_token(
     name: &str,
     prefix: &str,
     token_hash: &str,
-    created_at: &str,
+    times: &db::ApiTokenTimes,
 ) -> AppResult<()> {
     c.execute(
         CREATE_API_TOKEN,
-        params![id, user_id, name, prefix, token_hash, created_at],
+        params![
+            id,
+            user_id,
+            name,
+            prefix,
+            token_hash,
+            times.created_at,
+            times.expires_at
+        ],
     )?;
     Ok(())
 }
@@ -237,11 +246,18 @@ pub(crate) fn delete_api_token(c: &Connection, id: &str, user_id: &str) -> AppRe
 
 pub(crate) fn user_by_api_token(c: &Connection, token_hash: &str) -> AppResult<Option<User>> {
     let found = sql::sqlite_opt(c, USER_BY_API_TOKEN, [token_hash], |row| {
-        Ok((row_user(row)?, SqlRow::get::<String>(row, 9)?))
+        Ok((
+            row_user(row)?,
+            SqlRow::get::<String>(row, 9)?,
+            SqlRow::get::<Option<String>>(row, 10)?,
+        ))
     })?;
-    let Some((user, token_id)) = found else {
+    let Some((user, token_id, expires_at)) = found else {
         return Ok(None);
     };
+    if db::has_expired(expires_at.as_deref()) {
+        return Err(ApiError::TokenExpired);
+    }
     c.execute(TOUCH_API_TOKEN, params![token_id, db::now()])?;
     Ok(Some(user))
 }
@@ -267,6 +283,7 @@ pub(crate) fn row_api_token<R: SqlRow>(row: &R) -> AppResult<ApiToken> {
         prefix: row.get(2)?,
         created_at: row.get(3)?,
         last_used_at: row.get(4)?,
+        expires_at: row.get(5)?,
     })
 }
 
