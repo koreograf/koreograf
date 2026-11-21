@@ -601,8 +601,9 @@ textarea.secret-mask { -webkit-text-security: disc; }
 .dialog-panel[hidden] { display: none; }
 .dialog-hint { margin: 0; }
 .dialog-form { display: flex; flex-direction: column; min-height: 0; flex: 1; }
-.dialog-body { display: grid; gap: 10px; padding: 8px 16px 16px; overflow: auto; flex: 1; min-height: 0; }
+.dialog-body { display: grid; gap: 10px; padding: 8px 16px 16px; overflow: auto; flex: 1; min-height: 0; scroll-padding-block: 16px; overscroll-behavior: contain; }
 .dialog-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--line); flex: none; }
+.overlay-card.dialog :is(input, select, textarea) { scroll-margin-block: 16px; }
 .dialog-buttons { display: flex; gap: 8px; margin-left: auto; }
 .dialog-danger { display: flex; gap: 8px; }
 .dialog-footer { display: none; flex: none; }

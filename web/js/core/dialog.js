@@ -74,15 +74,52 @@ export function makeModal(overlay, close, opener = focusOpener()) {
       items[0].focus();
     }
   };
+  // A virtual keyboard shrinks the viewport and lifts the action bar while the
+  // focused field keeps its old scroll position. Bring the field back above the
+  // scrolling body's bottom edge instead of letting the bar cover it.
+  const revealFocusedField = () => {
+    const active = document.activeElement;
+    if (!active || !overlay.contains(active) || !active.matches("input, select, textarea")) return;
+    const body = overlay.querySelector(".dialog-body");
+    if (!body || !body.contains(active)) return;
+    const view = body.getBoundingClientRect();
+    const field = active.getBoundingClientRect();
+    const margin = 16;
+    if (field.bottom > view.bottom - margin) {
+      body.scrollTop += Math.ceil(field.bottom - view.bottom + margin);
+    } else if (field.top < view.top + margin) {
+      body.scrollTop -= Math.ceil(view.top - field.top + margin);
+    }
+  };
+  const requestFrame = window.requestAnimationFrame
+    ? window.requestAnimationFrame.bind(window)
+    : (callback) => window.setTimeout(callback, 0);
+  const cancelFrame = window.cancelAnimationFrame
+    ? window.cancelAnimationFrame.bind(window)
+    : (id) => window.clearTimeout(id);
+  let revealFrame = 0;
+  const onViewportChange = () => {
+    if (modalStack[modalStack.length - 1] !== overlay) return;
+    if (revealFrame) cancelFrame(revealFrame);
+    revealFrame = requestFrame(() => {
+      revealFrame = 0;
+      if (overlay.isConnected) revealFocusedField();
+    });
+  };
   const cleanup = () => {
     const index = modalStack.lastIndexOf(overlay);
     if (index >= 0) modalStack.splice(index, 1);
     overlay.removeEventListener("keydown", onKeydown);
     document.removeEventListener("keydown", onKeydown, true);
+    window.removeEventListener("resize", onViewportChange);
+    if (window.visualViewport) window.visualViewport.removeEventListener("resize", onViewportChange);
+    if (revealFrame) cancelFrame(revealFrame);
   };
   modalStack.push(overlay);
   overlay.addEventListener("keydown", onKeydown);
   document.addEventListener("keydown", onKeydown, true);
+  window.addEventListener("resize", onViewportChange);
+  if (window.visualViewport) window.visualViewport.addEventListener("resize", onViewportChange);
   return dismiss;
 }
 
