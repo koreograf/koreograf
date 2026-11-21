@@ -12,7 +12,7 @@ cargo run
 
 `koreograf --version` prints that same version and exits before the server starts. `koreograf doctor` prints the runner preflight in the same block as the startup log and exits with code 2 when the configured mode lacks something. It reads the saved runner mode from `KOREOGRAF_DATA` when that database exists and otherwise uses `KOREOGRAF_RUNNER`. Koreograf never installs a tool and never runs `sudo`.
 
-The preflight checks `ansible-playbook` 2.14 or newer, `tofu` 1.6 or newer, a POSIX `sh`, `git`, `ssh`, and a Docker or Podman CLI whose daemon answers. The tools get two seconds; the container CLI gets ten. The startup log prints the result once and caches it for the **Overview** page. Administrators can refresh it with **Check again** under **Settings → Jobs** or with `GET /api/runner/preflight`. Missing `git` blocks project sync; missing `ssh` is reported for Ansible.
+The preflight checks `ansible-playbook` 2.14 or newer, `tofu` 1.6 or newer, a POSIX `sh`, `git`, `ssh`, and a Docker or Podman CLI whose daemon answers. The tools get two seconds; the container CLI gets ten. The startup log prints the result once and caches it for the **Overview** page. Administrators can refresh it with **Check again** under **Settings → Jobs** or with `GET /api/runner/preflight`; a read-only personal API token cannot refresh it, because the GET writes the cached report. Missing `git` blocks project sync; missing `ssh` is reported for Ansible.
 
 | Tool | Debian and Ubuntu | Fedora and RHEL | macOS | Alpine | Vendor |
 | --- | --- | --- | --- | --- | --- |

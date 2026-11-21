@@ -167,11 +167,15 @@ fn is_safe_method(method: &Method) -> bool {
     matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
 }
 
+/// Safe routes with a protected side effect or key material.
+fn is_protected_read(path: &str) -> bool {
+    path.ends_with("/admin/backup") || path.ends_with("/runner/preflight")
+}
+
 /// A read-only personal token may inspect the API but not change it. This runs
-/// before the route so even a route without an `AuthUser` extractor answers
-/// 403 without touching `last_used_at`.
+/// before the route so a rejected request never touches `last_used_at`.
 async fn read_only_guard(State(state): State<Shared>, request: Request, next: Next) -> Response {
-    if is_safe_method(request.method()) {
+    if is_safe_method(request.method()) && !is_protected_read(request.uri().path()) {
         return next.run(request).await;
     }
     let Some(token) = auth::bearer_token(request.headers()) else {
@@ -179,7 +183,8 @@ async fn read_only_guard(State(state): State<Shared>, request: Request, next: Ne
     };
     match auth::api_token_read_only(&state, &token) {
         Ok(true) => ApiError::ReadOnlyToken.into_response(),
-        _ => next.run(request).await,
+        Ok(false) => next.run(request).await,
+        Err(error) => error.into_response(),
     }
 }
 

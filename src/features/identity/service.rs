@@ -46,6 +46,18 @@ pub fn api_token_read_only(state: &Shared, token: &str) -> AppResult<bool> {
     state.store().api_token_read_only(&hash_api_token(token))
 }
 
+/// A safe route can still return key material or refresh cached state. It
+/// rejects a read token explicitly; a session cookie passes unchanged.
+pub fn reject_read_only_token(state: &Shared, headers: &HeaderMap) -> AppResult<()> {
+    let Some(token) = bearer_token(headers) else {
+        return Ok(());
+    };
+    if api_token_read_only(state, &token)? {
+        return Err(ApiError::ReadOnlyToken);
+    }
+    Ok(())
+}
+
 pub fn authorize(
     store: &dyn crate::backend::Backend,
     user: &AuthUser,
