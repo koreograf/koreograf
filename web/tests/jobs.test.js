@@ -105,10 +105,24 @@ test("an ok result with changed true is shown as changed", async () => {
   assert.deepEqual(tree.plays[0].tasks[0].counts, { changed: 1 });
 });
 
+test("the live cursor stays on the last raw event so a late raw line is not skipped", async () => {
+  const { lastRawEventId, pushStructuredEvent } = await load();
+  const job = {
+    events: [{ id: 100, stream: "stdout" }],
+    ansible_events: [{ id: 102, event: { type: "play_start", play: "Site" } }],
+  };
+  // The structured row was read after the raw page; keeping the cursor on the raw
+  // id replays the raw line with id 101 instead of starting after 102.
+  assert.equal(lastRawEventId(job), 100);
+  assert.equal(lastRawEventId({ events: [], ansible_events: job.ansible_events }), 0);
+  assert.equal(lastRawEventId({}), 0);
+  const state = { events: [...job.ansible_events], seen: new Set([102]) };
+  assert.equal(pushStructuredEvent(state, job.ansible_events[0]), false);
+  assert.equal(state.events.length, 1);
+});
+
 test("live structured events use every seeded id once", async () => {
-  const { lastJobEventId, pushStructuredEvent } = await load();
-  assert.equal(lastJobEventId({ events: [{ id: 3 }], ansible_events: [{ id: 7 }] }), 7);
-  assert.equal(lastJobEventId({ events: [], ansible_events: [] }), 0);
+  const { pushStructuredEvent } = await load();
   const state = { events: [{ id: 7 }], seen: new Set([7]) };
   assert.equal(pushStructuredEvent(state, { id: 7, event: { type: "playbook_end" } }), false);
   assert.equal(state.events.length, 1);

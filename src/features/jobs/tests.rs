@@ -1114,6 +1114,52 @@ fn job_page_and_download_keep_the_raw_log_only() {
 }
 
 #[test]
+fn a_raw_line_between_the_page_reads_is_replayed_from_the_page_cursor() {
+    let state = page_state("page-cursor");
+    {
+        let db = state.db().unwrap();
+        crate::features::jobs::store::insert_event(&db, "job", "stdout", "page line").unwrap();
+    }
+    let page = events_for_page(state.store(), "job").unwrap();
+    let cursor = page.last().map(|event| event.id).unwrap_or(0);
+    assert!(cursor > 0);
+    {
+        let db = state.db().unwrap();
+        crate::features::jobs::store::insert_event(&db, "job", "stdout", "late raw line").unwrap();
+        crate::features::jobs::store::insert_event(
+            &db,
+            "job",
+            crate::ansible_events::STREAM,
+            r#"{"type":"play_start","play":"Site","index":1}"#,
+        )
+        .unwrap();
+    }
+    let structured =
+        crate::features::jobs::routes::ansible_events_for_job(state.store(), "job").unwrap();
+    assert_eq!(structured.len(), 1);
+    let replay = state.store().events_all_after("job", cursor, 200).unwrap();
+    let lines: Vec<&str> = replay.iter().map(|event| event.line.as_str()).collect();
+    assert_eq!(
+        lines,
+        vec![
+            "late raw line",
+            r#"{"type":"play_start","play":"Site","index":1}"#
+        ]
+    );
+    let ansible_id = replay
+        .iter()
+        .find(|event| event.stream == crate::ansible_events::STREAM)
+        .map(|event| event.id)
+        .expect("ansible row");
+    let stale = state
+        .store()
+        .events_all_after("job", ansible_id, 200)
+        .unwrap();
+    assert!(stale.iter().all(|event| event.line != "late raw line"));
+    let _ = std::fs::remove_dir_all(&state.cfg.data_dir);
+}
+
+#[test]
 fn a_job_without_structured_events_keeps_the_raw_log() {
     let state = page_state("no-structured");
     {
