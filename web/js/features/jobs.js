@@ -120,9 +120,9 @@ async function pageJobs() {
         : emptyState("empty_jobs", can("operator") ? "#/templates" : "", "launch_a_template");
     } else {
       const rows = current.map((job) =>
-        `<tr><td><a href="#/jobs/${esc(job.id)}">${esc(job.name)}</a></td><td class="tool narrow-hide">${esc(job.tool)}</td><td>${pill(job.status)}</td><td class="small narrow-hide">${esc(job.trigger)}</td><td class="small muted"><time datetime="${esc(job.created_at)}" title="${esc(when(job.created_at))}">${esc(when(job.created_at))}</time><br><span class="small">${esc(relativeTime(job.created_at))}</span></td><td class="small muted narrow-hide">${esc(spanText(job.started_at, job.finished_at, job.status))}</td><td>${jobListActions(job)}</td></tr>`
+        `<tr><td><a href="#/jobs/${esc(job.id)}">${esc(job.name)}</a></td><td class="tool narrow-hide">${esc(job.tool)}</td><td>${pill(job.status)}</td><td class="small narrow-hide">${esc(job.trigger)}</td><td class="small">${esc(job.launched_by)}</td><td class="small muted"><time datetime="${esc(job.created_at)}" title="${esc(when(job.created_at))}">${esc(when(job.created_at))}</time><br><span class="small">${esc(relativeTime(job.created_at))}</span></td><td class="small muted narrow-hide">${esc(spanText(job.started_at, job.finished_at, job.status))}</td><td>${jobListActions(job)}</td></tr>`
       );
-      jobTable.innerHTML = table([t("name"), t("tool"), t("status"), t("trigger"), t("created"), t("duration"), ""], rows);
+      jobTable.innerHTML = table([t("name"), t("tool"), t("status"), t("trigger"), t("launched_by"), t("created"), t("duration"), ""], rows);
     }
     const offset = (view.page - 1) * view.size;
     const from = total ? Math.min(offset + 1, total) : 0;

@@ -9,6 +9,7 @@
   "jobs_range": "{from}–{to} of {total}",
   "jump_to_end": "Jump to end",
   "jump_to_first_failure": "Jump to first failure",
+  "launched_by": "Launched by",
   "log_gap": "{count} lines in the middle are not shown. Download the output for the full log.",
   "log_search_count": "{current} of {total}",
   "no_jobs_match": "No jobs match the filters.",

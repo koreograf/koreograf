@@ -921,6 +921,52 @@ async function themeAttribute(page) {
   return page.evaluate(() => document.documentElement.dataset.theme);
 }
 
+test("the activity page lists a sync and a launch and the filters narrow it", async ({ page }) => {
+  await signInInEnglish(page);
+  const teamId = await page.evaluate(async () => {
+    const response = await fetch("/api/v1/me");
+    const profile = await response.json();
+    return profile.teams[0].id;
+  });
+  const headers = { "X-Team-Id": teamId };
+  const suffix = Date.now();
+  const projects = await (await page.request.get("/api/v1/projects", { headers })).json();
+  const synced = await page.request.post(`/api/v1/projects/${projects[0].id}/sync`, { headers, data: {} });
+  expect(synced.status()).toBe(200);
+  const created = await page.request.post("/api/v1/templates", {
+    headers,
+    data: { name: `Activity probe ${suffix}`, tool: "shell", spec: { script: "#!/bin/sh\ntrue\n" } },
+  });
+  expect(created.status()).toBe(201);
+  const template = await created.json();
+  const launched = await page.request.post(`/api/v1/templates/${template.id}/launch`, { headers, data: { extra_vars: {} } });
+  expect(launched.status()).toBe(202);
+
+  const nav = page.getByRole("navigation");
+  await nav.getByRole("link", { name: "Activity", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
+  const rows = page.locator("#activity-table tbody tr");
+  const probe = rows.filter({ hasText: `Activity probe ${suffix}` });
+  await expect(probe).toHaveCount(2);
+  await expect(probe.filter({ hasText: "Created" })).toHaveCount(1);
+  await expect(probe.filter({ hasText: "Launched" })).toHaveCount(1);
+  await expect(rows.filter({ hasText: "Synced" }).filter({ hasText: projects[0].name }).first()).toBeVisible();
+
+  await page.locator("#activity-action").selectOption("create");
+  await expect(page).toHaveURL(/action=create/);
+  await expect(probe).toHaveCount(1);
+  await expect(probe.first()).toContainText("Created");
+  await expect(probe.first().locator(".pill.successful")).toHaveText("Successful");
+
+  await page.locator("#activity-object").selectOption("job");
+  await expect(probe).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Clear filter", exact: true }).click();
+  await expect(probe.filter({ hasText: "Launched" })).toHaveCount(1);
+  await expect(page.locator("#activity-action")).toHaveValue("");
+  await expect(page.locator("#activity-object")).toHaveValue("");
+});
+
 test.describe("dark theme", () => {
   test.use({ colorScheme: "dark" });
 

@@ -308,6 +308,7 @@ export function shell(title, body, actions) {
     [t("nav.operations"), [
       ["#/", t("overview")],
       ["#/jobs", t("jobs")],
+      ["#/activity", t("activity")],
       ["#/schedules", t("schedules")],
       ...assistantNavItem(appState.assistantEnabled),
     ]],
@@ -477,6 +478,7 @@ export const ROUTE_TITLES = {
   "": "overview",
   templates: "templates",
   jobs: "jobs",
+  activity: "activity",
   runs: "run_2",
   schedules: "schedules",
   workflows: "workflows",
