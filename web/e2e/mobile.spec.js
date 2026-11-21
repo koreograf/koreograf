@@ -52,6 +52,50 @@ async function goTo(page, label, menu = "Menu") {
   await noHorizontalScroll(page);
 }
 
+async function expectPhoneShell(page, where) {
+  const toggle = page.getByRole("button", { name: "Menu", exact: true });
+  await expect(toggle, `${where} has no hamburger`).toBeVisible();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  const columns = await page.locator(".shell").evaluate((element) => getComputedStyle(element).gridTemplateColumns);
+  expect(columns.trim().split(/\s+/), `${where} keeps a desktop sidebar column`).toHaveLength(1);
+  const side = await page.locator(".side").boundingBox();
+  expect(side, `${where} renders the sidebar`).not.toBeNull();
+  expect(side.x + side.width, `${where} shows the off-canvas sidebar`).toBeLessThanOrEqual(1);
+  const main = await page.locator(".main").boundingBox();
+  expect(main.x, `${where} insets the main column for the sidebar`).toBeLessThanOrEqual(1);
+}
+
+async function expectViewOnlyEditor(page, where) {
+  await expect(page.locator("#wf-desktop-note"), `${where} hides the desktop note`).toBeVisible();
+  await expect(page.locator("#wf-desktop-note")).toContainText("desktop");
+  await expect(page.getByRole("button", { name: "Save", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Launch", exact: true })).toHaveCount(0);
+  await expect(page.locator("#wf-tab-danger")).toHaveCount(0);
+  await expect(page.locator("#wf-delete")).toHaveCount(0);
+  await expect(page.locator("#wf-name")).toBeDisabled();
+  await expect(page.locator("#canvas")).not.toHaveClass(/editable/);
+  await expect(page.locator("[data-node-menu]")).toHaveCount(0);
+  await expect(page.locator("[data-add-port]")).toHaveCount(0);
+  await noHorizontalScroll(page);
+}
+
+async function readCanvasControlsLayout(page) {
+  return page.evaluate(() => {
+    const controls = document.querySelector(".canvas-controls");
+    const panel = document.querySelector(".inspector-panel");
+    const c = controls.getBoundingClientRect();
+    const p = panel.getBoundingClientRect();
+    const hit = document.elementFromPoint(c.left + c.width / 2, c.top + c.height / 2);
+    return {
+      overlap: !(c.right <= p.left || c.left >= p.right || c.bottom <= p.top || c.top >= p.bottom),
+      insideViewport: c.top >= 0 && c.bottom <= window.innerHeight,
+      hitInsideControls: Boolean(hit && hit.closest(".canvas-controls")),
+      controls: { top: c.top, bottom: c.bottom, left: c.left, right: c.right },
+      panel: { top: p.top, bottom: p.bottom, left: p.left, right: p.right },
+    };
+  });
+}
+
 async function readPairLayout(list) {
   return list.evaluate((element) => [...element.querySelectorAll("dt")].map((term) => {
     const label = term.getBoundingClientRect();
@@ -507,21 +551,78 @@ test("lists activity and narrows it to one action", async ({ page }) => {
   await noHorizontalScroll(page);
 });
 
-test("keeps the workflow editor view-only in landscape and after rotation", async ({ page }) => {
+test("keeps the workflow editor view-only on a landscape phone and after rotation", async ({ page }) => {
+  test.setTimeout(90000);
   await signIn(page);
   await goTo(page, "Workflows");
   const portrait = page.viewportSize();
-  const landscape = { width: portrait.height, height: portrait.width };
-  await page.setViewportSize(landscape);
+  const deviceLandscape = { width: portrait.height, height: portrait.width };
   await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
+  await expect(page.locator("#wf-desktop-note")).toBeVisible();
 
-  for (const viewport of [landscape, portrait]) {
+  const node = page.locator('.wf-node[data-id="check"]');
+  const viewports = [
+    { ...portrait, where: "portrait" },
+    { ...deviceLandscape, where: "device landscape" },
+    { width: 923, height: 412, where: "Pixel 9 landscape" },
+    { ...portrait, where: "portrait after rotation" },
+  ];
+
+  for (const viewport of viewports) {
+    const where = `${viewport.where} ${viewport.width}x${viewport.height}`;
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await expectPhoneShell(page, where);
+    await expectViewOnlyEditor(page, where);
+
+    await node.evaluate((element) => element.scrollIntoView({ block: "start" }));
+    const style = await node.getAttribute("style");
+    const box = await node.boundingBox();
+    expect(box, `${where} renders the workflow node`).not.toBeNull();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 48, box.y + box.height / 2 + 36, { steps: 8 });
+    await page.mouse.up();
+    await expect.poll(() => node.getAttribute("style"), { message: `${where} moves a node` }).toBe(style);
+
+    await expect(page.locator("#inspector")).toBeVisible();
+    await expect(page.locator("#inspector")).toContainText("Healthcheck");
+    await noHorizontalScroll(page);
+  }
+});
+
+test("keeps the landscape workflow inspector clear of the canvas toolbar", async ({ page }) => {
+  test.setTimeout(90000);
+  await signIn(page);
+  await goTo(page, "Workflows");
+  await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
+  await expect(page.locator("#wf-desktop-note")).toBeVisible();
+
+  const node = page.locator('.wf-node[data-id="check"]');
+  const viewports = [
+    { width: 923, height: 412 },
+    { width: 732, height: 360 },
+    { width: 756, height: 308 },
+  ];
+
+  for (const viewport of viewports) {
+    const where = `${viewport.width}x${viewport.height}`;
     await page.setViewportSize(viewport);
-    await expect(page.locator("#wf-desktop-note")).toBeVisible();
-    await expect(page.locator("#wf-desktop-note")).toContainText("desktop");
-    await expect(page.getByRole("button", { name: "Save", exact: true })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Launch", exact: true })).toHaveCount(0);
-    await expect(page.locator("#wf-tab-danger")).toHaveCount(0);
+    await expectPhoneShell(page, where);
+    await expectViewOnlyEditor(page, where);
+
+    await node.evaluate((element) => element.scrollIntoView({ block: "start" }));
+    await node.click();
+    await expect(page.locator("#inspector")).toContainText("Healthcheck");
+
+    await page.locator(".canvas-controls").scrollIntoViewIfNeeded();
+    const layout = await readCanvasControlsLayout(page);
+    expect(layout.insideViewport, `${where} keeps the canvas toolbar in the viewport`).toBe(true);
+    expect(layout.overlap, `${where} puts the inspector over the canvas toolbar`).toBe(false);
+    expect(layout.hitInsideControls, `${where} lets the inspector intercept the canvas toolbar`).toBe(true);
+
+    const zoom = await page.locator("#canvas").getAttribute("data-zoom");
+    await page.getByRole("button", { name: "Zoom in", exact: true }).click();
+    await expect.poll(() => page.locator("#canvas").getAttribute("data-zoom"), { message: `${where} cannot zoom the canvas` }).not.toBe(zoom);
     await noHorizontalScroll(page);
   }
 });

@@ -190,8 +190,6 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   let autoPanTimer = null;
   const touchPointers = new Map();
 
-  const narrowQuery = typeof window.matchMedia === "function" ? window.matchMedia("(max-width: 900px)") : null;
-
   const editorRoot = document.querySelector(".editor-stack");
   function watchCompactMode() {
     if (readonly || !compactQuery || typeof compactQuery.addEventListener !== "function") return;
@@ -210,8 +208,7 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   watchCompactMode();
 
   function narrowScreen() {
-    if (narrowQuery) return narrowQuery.matches;
-    return Number(window.innerWidth) <= 900;
+    return compactEditor();
   }
 
   function setInspectorCollapsed(collapsed, focus) {
@@ -1895,8 +1892,8 @@ export function mountEditor(workflow, templates, readonly, phases, catalogs, hoo
   renderNodes();
   renderInspector();
   if (narrowScreen()) setInspectorCollapsed(true, false);
-  if (narrowQuery) {
-    narrowQuery.addEventListener("change", (event) => {
+  if (compactQuery) {
+    compactQuery.addEventListener("change", (event) => {
       if (!editorBody || !editorBody.isConnected) return;
       setInspectorCollapsed(event.matches, false);
     });
