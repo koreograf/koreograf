@@ -1,5 +1,11 @@
 # Jobs
 
+## After a restart
+
+The runner is one process per installation ([beta contract](beta.md)), so a restart leaves no live owner for work that was in flight. On start, after migrations and the demo seed and before the HTTP port opens, Koreograf reconciles that work. Every `jobs` row in `pending` or `running` becomes `failed` with `finished_at` set, and every `workflow_jobs` run in either state becomes `failed` with `finished_at` set. A run's unfinished nodes become `failed` when they were `running` and `skipped` when they were still `pending`, so the run graph does not show live nodes inside a failed run. One transaction covers the status updates and the event lines, so a failure leaves the whole set untouched. Each reconciled job gets one `system` event line, `The server restarted before this job finished.`, through the normal job-event path, and a log line records how many jobs and runs changed.
+
+Finished work (`successful`, `failed`, `canceled`) stays as it is. Nothing is replayed: launch the work again when it should run. In-memory cancel and observation state for the reconciled ids is dropped, so a later cancel or relaunch reads the stored row. A second start finds no unfinished row and changes nothing.
+
 ## What the cache changes
 
 Collections, roles, and OpenTofu providers stay in a cache.

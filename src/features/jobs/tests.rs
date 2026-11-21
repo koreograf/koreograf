@@ -383,6 +383,60 @@ async fn cancel_before_execution_counts_the_job_once() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn reconciliation_clears_cancel_and_observation_memory() {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-reconcile-{nanos}"));
+    let state = crate::boot(config(&dir)).expect("boot");
+    let job_id = "reconciled-job";
+    {
+        let db = state.db().expect("db");
+        db.execute(
+            "INSERT INTO jobs (
+                id, team_id, name, tool, status, extra_vars, launched_by, trigger,
+                started_at, created_at
+             ) VALUES (?1, 'team-recovery', 'Recovered', 'shell', 'running',
+                '{}', 'admin', 'manual', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [job_id],
+        )
+        .expect("job");
+    }
+    state
+        .canceled
+        .lock()
+        .expect("canceled")
+        .insert(job_id.to_string());
+    state.metrics.begin(&crate::features::operations::JobMeta {
+        job_id,
+        team_id: "team-recovery",
+        tool: "shell",
+        playbook: "run.sh",
+        template: "Recovered",
+    });
+    assert!(state.metrics.is_open(job_id));
+
+    let interrupted = state.reconcile_interrupted().expect("reconcile");
+    assert_eq!(interrupted.job_ids, vec![job_id.to_string()]);
+    assert!(!state.canceled.lock().expect("canceled").contains(job_id));
+    assert!(!state.metrics.is_open(job_id));
+    {
+        let db = state.db().expect("db");
+        let (status, finished_at): (String, Option<String>) = db
+            .query_row(
+                "SELECT status, finished_at FROM jobs WHERE id = ?1",
+                [job_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("job row");
+        assert_eq!(status, "failed");
+        assert!(finished_at.is_some());
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 fn admins(dir: &std::path::Path, runner: RunnerMode) -> Config {
     let mut cfg = config(dir);
     cfg.local_jobs = crate::config::LocalJobs::Admins;

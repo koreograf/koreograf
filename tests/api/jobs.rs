@@ -1973,3 +1973,240 @@ async fn cancel_kills_a_detached_child_that_ignores_term() {
     assert!(!events.contains("detached-after"), "{events}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+const RESTARTED_LINE: &str = "The server restarted before this job finished.";
+
+fn interrupted_rows(team: &str) -> String {
+    format!(
+        "INSERT INTO jobs (
+            id, team_id, name, tool, status, extra_vars, launched_by, trigger,
+            started_at, finished_at, created_at
+         ) VALUES
+            ('recovery-running', '{team}', 'Running', 'shell', 'running', '{{}}',
+             'admin', 'manual', '2026-01-01T00:00:00Z', NULL, '2026-01-01T00:00:00Z'),
+            ('recovery-pending', '{team}', 'Pending', 'shell', 'pending', '{{}}',
+             'admin', 'manual', NULL, NULL, '2026-01-01T00:00:00Z'),
+            ('recovery-done', '{team}', 'Done', 'shell', 'successful', '{{}}',
+             'admin', 'manual', '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z',
+             '2026-01-01T00:00:00Z');
+         INSERT INTO workflow_jobs (
+            id, workflow_id, team_id, name, status, extra_vars, launched_by, trigger,
+            created_at, finished_at
+         ) VALUES
+            ('recovery-run', NULL, '{team}', 'Run', 'running', '{{}}', 'admin', 'manual',
+             '2026-01-01T00:00:00Z', NULL),
+            ('recovery-run-done', NULL, '{team}', 'Done run', 'successful', '{{}}',
+             'admin', 'manual', '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z');
+         INSERT INTO workflow_nodes (workflow_job_id, node_id, phase, job_id) VALUES
+            ('recovery-run', 'running-node', 'running', NULL),
+            ('recovery-run', 'pending-node', 'pending', NULL),
+            ('recovery-run', 'done-node', 'successful', NULL),
+            ('recovery-run-done', 'done-node', 'successful', NULL);"
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_boot_fails_jobs_and_workflow_runs_a_stopped_process_left() {
+    let mut harness = TestApp::boot("recovery", Options::default());
+    let team = harness
+        .sql_text("SELECT id FROM teams ORDER BY id LIMIT 1")
+        .await
+        .remove(0);
+    harness.execute_sql(&interrupted_rows(&team)).await;
+
+    harness.reboot();
+
+    for id in ["recovery-running", "recovery-pending"] {
+        let count = harness
+            .sql_i64(&format!(
+                "SELECT COUNT(*) FROM jobs
+                 WHERE id = '{id}' AND status = 'failed' AND finished_at IS NOT NULL"
+            ))
+            .await;
+        assert_eq!(count, 1, "{id} was not reconciled");
+        let events = harness
+            .sql_i64(&format!(
+                "SELECT COUNT(*) FROM job_events
+                 WHERE job_id = '{id}' AND stream = 'system' AND line = '{RESTARTED_LINE}'"
+            ))
+            .await;
+        assert_eq!(events, 1, "{id} has no restart event");
+    }
+    assert_eq!(
+        harness
+            .sql_i64(
+                "SELECT COUNT(*) FROM jobs
+                 WHERE id = 'recovery-done' AND status = 'successful'
+                   AND finished_at = '2026-01-01T00:01:00Z'"
+            )
+            .await,
+        1
+    );
+    assert_eq!(
+        harness
+            .sql_i64("SELECT COUNT(*) FROM job_events WHERE job_id = 'recovery-done'")
+            .await,
+        0
+    );
+    assert_eq!(
+        harness
+            .sql_i64(
+                "SELECT COUNT(*) FROM workflow_jobs
+                 WHERE id = 'recovery-run' AND status = 'failed' AND finished_at IS NOT NULL"
+            )
+            .await,
+        1
+    );
+    assert_eq!(
+        harness
+            .sql_i64(
+                "SELECT COUNT(*) FROM workflow_jobs
+                 WHERE id = 'recovery-run-done' AND status = 'successful'
+                   AND finished_at = '2026-01-01T00:01:00Z'"
+            )
+            .await,
+        1
+    );
+    for (node, phase) in [
+        ("running-node", "failed"),
+        ("pending-node", "skipped"),
+        ("done-node", "successful"),
+    ] {
+        assert_eq!(
+            harness
+                .sql_text(&format!(
+                    "SELECT phase FROM workflow_nodes
+                     WHERE workflow_job_id = 'recovery-run' AND node_id = '{node}'"
+                ))
+                .await,
+            vec![phase.to_string()],
+            "{node} kept an unfinished phase"
+        );
+    }
+
+    let (status, me, cookie) = call(
+        &harness.app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let (status, job, _) = call(
+        &harness.app,
+        "GET",
+        "/api/jobs/recovery-running",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{job}");
+    assert_eq!(job["status"], "failed");
+    assert!(job["finished_at"].is_string(), "{job}");
+    assert!(job["events"].to_string().contains(RESTARTED_LINE), "{job}");
+
+    let jobs = harness
+        .sql_text("SELECT id || '=' || COALESCE(finished_at, '') FROM jobs ORDER BY id")
+        .await;
+    let runs = harness
+        .sql_text("SELECT id || '=' || COALESCE(finished_at, '') FROM workflow_jobs ORDER BY id")
+        .await;
+    let nodes = harness
+        .sql_text(
+            "SELECT workflow_job_id || '=' || node_id || '=' || phase
+             FROM workflow_nodes ORDER BY workflow_job_id, node_id",
+        )
+        .await;
+    harness.reboot();
+    assert_eq!(
+        harness
+            .sql_text("SELECT id || '=' || COALESCE(finished_at, '') FROM jobs ORDER BY id")
+            .await,
+        jobs
+    );
+    assert_eq!(
+        harness
+            .sql_text(
+                "SELECT id || '=' || COALESCE(finished_at, '') FROM workflow_jobs ORDER BY id"
+            )
+            .await,
+        runs
+    );
+    assert_eq!(
+        harness
+            .sql_text(
+                "SELECT workflow_job_id || '=' || node_id || '=' || phase
+                 FROM workflow_nodes ORDER BY workflow_job_id, node_id"
+            )
+            .await,
+        nodes
+    );
+    for id in ["recovery-running", "recovery-pending"] {
+        assert_eq!(
+            harness
+                .sql_i64(&format!(
+                    "SELECT COUNT(*) FROM job_events WHERE job_id = '{id}'"
+                ))
+                .await,
+            1,
+            "{id} gained another event on the second boot"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_reconciliation_leaves_the_whole_set_running() {
+    let mut harness = TestApp::boot_sqlite("recovery-rollback", Options::default());
+    let team = harness
+        .sql_text("SELECT id FROM teams ORDER BY id LIMIT 1")
+        .await
+        .remove(0);
+    harness
+        .execute_sql(&format!(
+            "INSERT INTO jobs (
+                id, team_id, name, tool, status, extra_vars, launched_by, trigger,
+                started_at, created_at
+             ) VALUES
+                ('rollback-a', '{team}', 'A', 'shell', 'running', '{{}}', 'admin',
+                 'manual', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+                ('rollback-b', '{team}', 'B', 'shell', 'running', '{{}}', 'admin',
+                 'manual', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');"
+        ))
+        .await;
+    harness
+        .execute_sql(
+            "CREATE TRIGGER fail_recovery_event BEFORE INSERT ON job_events
+             WHEN NEW.job_id = 'rollback-b'
+             BEGIN
+               SELECT RAISE(ABORT, 'forced recovery failure');
+             END;",
+        )
+        .await;
+
+    assert!(harness.try_reboot().is_err());
+    for id in ["rollback-a", "rollback-b"] {
+        assert_eq!(
+            harness
+                .sql_i64(&format!(
+                    "SELECT COUNT(*) FROM jobs
+                     WHERE id = '{id}' AND status = 'running' AND finished_at IS NULL"
+                ))
+                .await,
+            1,
+            "{id} was half updated"
+        );
+        assert_eq!(
+            harness
+                .sql_i64(&format!(
+                    "SELECT COUNT(*) FROM job_events WHERE job_id = '{id}'"
+                ))
+                .await,
+            0,
+            "{id} kept an event from the rolled-back transaction"
+        );
+    }
+}

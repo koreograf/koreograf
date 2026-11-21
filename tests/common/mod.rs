@@ -145,6 +145,77 @@ impl TestApp {
         self.database_url.is_some()
     }
 
+    /// Boots a second time against the same data directory and database.
+    pub fn reboot(&mut self) {
+        self.try_reboot().expect("reboot");
+    }
+
+    pub fn try_reboot(&mut self) -> anyhow::Result<()> {
+        let cfg = config(&self.dir, &Options::default());
+        let state = match &self.database_url {
+            Some(url) => {
+                let database = koreograf::parse_database_config(url, None, None)
+                    .map_err(anyhow::Error::msg)?;
+                koreograf::boot_with(cfg, database)?
+            }
+            None => koreograf::boot(cfg)?,
+        };
+        self.app = koreograf::router(state.clone());
+        self.state = state;
+        Ok(())
+    }
+
+    /// Runs raw SQL on whichever backend this app uses.
+    pub async fn execute_sql(&self, sql: &str) {
+        match &self.database_url {
+            Some(url) => {
+                postgres_client(url)
+                    .await
+                    .batch_execute(sql)
+                    .await
+                    .expect("sql");
+            }
+            None => {
+                let conn = self.state.db().expect("sqlite");
+                conn.execute_batch(sql).expect("sql");
+            }
+        }
+    }
+
+    pub async fn sql_i64(&self, sql: &str) -> i64 {
+        match &self.database_url {
+            Some(url) => postgres_client(url)
+                .await
+                .query_one(sql, &[])
+                .await
+                .expect("query")
+                .get(0),
+            None => {
+                let conn = self.state.db().expect("sqlite");
+                conn.query_row(sql, [], |row| row.get(0)).expect("query")
+            }
+        }
+    }
+
+    pub async fn sql_text(&self, sql: &str) -> Vec<String> {
+        match &self.database_url {
+            Some(url) => postgres_client(url)
+                .await
+                .query(sql, &[])
+                .await
+                .expect("query")
+                .iter()
+                .map(|row| row.get(0))
+                .collect(),
+            None => {
+                let conn = self.state.db().expect("sqlite");
+                let mut statement = conn.prepare(sql).expect("prepare");
+                let rows = statement.query_map([], |row| row.get(0)).expect("query");
+                rows.map(|row| row.expect("row")).collect()
+            }
+        }
+    }
+
     pub async fn login(&self, username: &str, password: &str) -> String {
         login(&self.app, username, password).await
     }
