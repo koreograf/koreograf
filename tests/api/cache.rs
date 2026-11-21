@@ -260,16 +260,33 @@ async fn a_pending_job_blocks_the_clear_until_it_finishes() {
     let dir = harness.dir.clone();
     let (cookie, team) = harness.sign_in().await;
     let root = seed_dirs(&dir, &team);
-    {
-        let db = harness.state.db().expect("database");
-        db.execute(
-            "INSERT INTO jobs (
-                id, team_id, name, tool, status, extra_vars, launched_by, trigger, created_at
-             ) VALUES ('cache-busy-job', ?1, 'Busy', 'shell', 'pending', '{}', 'admin', 'manual', '2026-01-01T00:00:00Z')",
-            [team.as_str()],
-        )
-        .unwrap();
-    }
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/v1/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Cache busy",
+            "tool": "shell",
+            "entrypoint": "",
+            "spec": {"script": "#!/bin/sh\nsleep 10\n"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().unwrap();
+    let (status, job, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/templates/{template_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"extra_vars": {}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+    let job_id = job["id"].as_str().unwrap();
 
     let (status, refused, _) = call(
         &app,
@@ -287,14 +304,19 @@ async fn a_pending_job_blocks_the_clear_until_it_finishes() {
     assert!(root.join("tofu").exists());
     assert_eq!(activity(&app, &cookie, &team).await["total"], 0);
 
-    {
-        let db = harness.state.db().expect("database");
-        db.execute(
-            "UPDATE jobs SET status = 'successful', finished_at = '2026-01-01T00:00:01Z' WHERE id = 'cache-busy-job'",
-            [],
-        )
-        .unwrap();
-    }
+    let (status, canceled, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/jobs/{job_id}/cancel"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{canceled}");
+    let finished = wait_for_job(&app, &cookie, &team, job_id).await;
+    assert_eq!(finished["status"], "canceled");
+
     let (status, cleared, _) = call(
         &app,
         "DELETE",
