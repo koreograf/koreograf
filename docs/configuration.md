@@ -29,6 +29,7 @@ From `0.1.0-beta.1` onward every name below keeps its meaning and its default; t
 | `KOREOGRAF_JOB_OUTPUT_LINES` | `8000` (100 to 100000) |
 | `KOREOGRAF_JOB_LOG_RETENTION_DAYS` | `30`. Days that output and work directories of finished jobs are kept; `0` disables pruning |
 | `KOREOGRAF_MAX_CONCURRENT_JOBS` | `4` (1 to 64) |
+| `KOREOGRAF_MAX_CONCURRENT_JOBS_PER_TEAM` | `2` (1 to 64, never above the global limit) |
 | `KOREOGRAF_SEED_ENVIRONMENTS` | on. `0`, `false`, `no`, or `off` skips the curated default environments |
 | `KOREOGRAF_SECRET_KEY` | empty, then `data/secret.key`. When set, must be 64 hex characters or startup fails |
 | `KOREOGRAF_METRICS_TOKEN` | empty. `/metrics` stays open. When set, a scrape needs `Authorization: Bearer <token>` or an administrator session cookie |
@@ -95,7 +96,9 @@ The container image has no local tool set and no local runner. There `auto` uses
 
 `KOREOGRAF_JOB_LOG_RETENTION_DAYS` is how many days the output and the work directory of a finished job are kept. The default is 30; `0` disables pruning. A prune runs at startup and then at most once every 24 hours. It removes `job_events` and `data/jobs/<id>` for jobs with a `finished_at` older than the cutoff and leaves the `jobs` row intact. An empty value and a value that is not a number use the default. See [Jobs](jobs.md#retention).
 
-`KOREOGRAF_MAX_CONCURRENT_JOBS` is how many jobs may run at the same time. Every path that starts a job waits here: a template launch, a relaunch, a hook, a schedule, and a workflow node. Further jobs stay `pending` and start roughly in the order they were queued. The default is 4 and the value is clamped to 1 to 64, so `1` runs one job at a time; an empty value, a value that is not a number, and `0` use the default. The queue shows in the jobs list and in `koreograf_jobs_pending` on `/metrics`. Canceling a waiting job marks it `canceled` and it never starts. See [Jobs](jobs.md#concurrency).
+`KOREOGRAF_MAX_CONCURRENT_JOBS` is how many jobs may run at the same time. Every path that starts a job waits here: a template launch, a relaunch, a hook, a schedule, and a workflow node. Further jobs stay `pending` and start in the order they were queued. The default is 4 and the value is clamped to 1 to 64, so `1` runs one job at a time; an empty value, a value that is not a number, and `0` use the default. The queue shows in the jobs list and in `koreograf_jobs_pending` on `/metrics`. Canceling a waiting job marks it `canceled` and it never starts. See [Jobs](jobs.md#concurrency).
+
+`KOREOGRAF_MAX_CONCURRENT_JOBS_PER_TEAM` is how many of those places one team may hold. The default is 2; the value is clamped to 1 to 64 and never above `KOREOGRAF_MAX_CONCURRENT_JOBS`, so the global limit stays the upper bound. A value above the global limit is clamped to it with one warning at startup. When a place frees, the oldest waiting job across all teams takes it; a job whose team already holds its own number of places is skipped. A single-team installation with a per-team value at least as large as the global value therefore behaves exactly as before. An empty value, a value that is not a number, and `0` use the default. See [Jobs](jobs.md#concurrency).
 
 What the database file holds, and which engine serves the backup, is in [Database and backup](backup-restore.md). Log fields are in [Logs and Prometheus](observability.md). Directory, proxy, runner, timeout, and output-line values saved in the UI are in [Organizations, teams, LDAP, and Active Directory](authentication.md#saved-settings).
 

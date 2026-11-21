@@ -55,6 +55,11 @@ runner:
   # Wie viele Jobs gleichzeitig laufen. 1 bis 64; weitere warten als pending.
   # Leer, 0 oder ein ungültiger Wert nutzt die Vorgabe 4.
   maxConcurrentJobs: 4
+  # Wie viele Jobs ein Team gleichzeitig halten darf. 1 bis 64 und nie mehr als
+  # maxConcurrentJobs; ein höherer Wert wird beim Start mit einer Warnung
+  # gekappt. Leer, 0 oder ein ungültiger Wert nutzt die Vorgabe 2. Ein frei
+  # werdender Platz geht an den ältesten wartenden Job über alle Teams.
+  maxConcurrentJobsPerTeam: 2
   # Tage, die Ausgabe und Arbeitsverzeichnis fertiger Jobs bleiben. 0 behält sie.
   jobLogRetentionDays: 30
   dockerSocket:

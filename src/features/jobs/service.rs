@@ -27,7 +27,7 @@ pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
         .map_err(|_| ApiError::Internal("cache lock is damaged".into()))?;
     let settings = crate::features::operations::load(state)?;
     let id = Uuid::new_v4().to_string();
-    {
+    let team_id = {
         let db = state.store();
         let template = db.template(&req.template_id)?.ok_or(ApiError::NotFound)?;
         if template.team_id != req.team_id {
@@ -148,22 +148,37 @@ pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
                 "success",
             );
         }
-    }
+        job.team_id
+    };
+    // Enqueue while the launch still holds the cache lock, so the queue order
+    // matches the order in which the rows were inserted.
+    let admitted = state.job_queue.enqueue(&id, &team_id);
     drop(cache_guard);
     let shared = state.clone();
     let job_id = id.clone();
-    tokio::spawn(run_queued(shared, job_id));
+    tokio::spawn(run_queued(shared, job_id, team_id, admitted));
     Ok(id)
 }
 
-/// Waits for one of the job slots, then hands the job to the runner.
+/// Waits for a job slot, then hands the job to the runner.
 ///
 /// The row stays `pending` while it waits, so the list and the metrics gauge
 /// show the queue. A job that was canceled before it got a slot never starts:
-/// the runner would refuse it anyway, and the permit goes to the next waiter.
-async fn run_queued(state: Shared, job_id: String) {
-    let Ok(_permit) = state.job_slots.acquire().await else {
+/// the queue closes its receiver, or the runner refuses a row that is no
+/// longer `pending`. Either way the place goes to the next waiter.
+async fn run_queued(
+    state: Shared,
+    job_id: String,
+    team_id: String,
+    admitted: tokio::sync::oneshot::Receiver<()>,
+) {
+    if admitted.await.is_err() {
         return;
+    }
+    // Releases the place even when the runner task panics.
+    let _place = Place {
+        state: state.clone(),
+        team_id,
     };
     let pending = state
         .store()
@@ -175,6 +190,18 @@ async fn run_queued(state: Shared, job_id: String) {
         runner::execute(state.clone(), job_id).await;
     } else {
         runner::forget_queued(&state, &job_id);
+    }
+}
+
+/// Returns one global slot and one place of the team when it is dropped.
+struct Place {
+    state: Shared,
+    team_id: String,
+}
+
+impl Drop for Place {
+    fn drop(&mut self) {
+        self.state.job_queue.release(&self.team_id);
     }
 }
 
@@ -967,6 +994,9 @@ pub fn cancel(state: &Shared, job_id: &str) -> AppResult<()> {
         db.insert_event(job_id, "system", "Cancel requested.")?;
         changed.then(|| crate::features::operations::job_labels(&job))
     };
+    // A job that waits for a place leaves the queue here. Its task returns
+    // without running and never takes the slot it was waiting for.
+    state.job_queue.cancel(job_id);
     if let Some(labels) = unstarted {
         let meta = crate::features::operations::JobMeta {
             job_id,

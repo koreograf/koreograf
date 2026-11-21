@@ -29,6 +29,8 @@ pub struct Options {
     pub admin_user: String,
     /// `KOREOGRAF_MAX_CONCURRENT_JOBS`. Four unless a test needs a queue.
     pub max_concurrent_jobs: usize,
+    /// `KOREOGRAF_MAX_CONCURRENT_JOBS_PER_TEAM`. The documented default is 2.
+    pub max_concurrent_jobs_per_team: usize,
     /// `KOREOGRAF_JOB_LOG_RETENTION_DAYS`.
     pub job_log_retention_days: u64,
 }
@@ -43,6 +45,7 @@ impl Default for Options {
             project_roots: vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples")],
             admin_user: "admin".into(),
             max_concurrent_jobs: 4,
+            max_concurrent_jobs_per_team: 2,
             job_log_retention_days: 30,
         }
     }
@@ -63,6 +66,7 @@ pub fn config(data_dir: &Path, options: &Options) -> Config {
         job_output_lines: 8_000,
         job_log_retention_days: options.job_log_retention_days,
         max_concurrent_jobs: options.max_concurrent_jobs,
+        max_concurrent_jobs_per_team: options.max_concurrent_jobs_per_team,
         local_jobs: LocalJobs::All,
         project_roots: options.project_roots.clone(),
         ldap: options.ldap.clone(),
