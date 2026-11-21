@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.1.0-alpha.14](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.13...v0.1.0-alpha.14) (2026-11-21)
+
+
+### Features
+
+* add a docker compose example with postgresql ([#565](https://github.com/koreograf/koreograf/issues/565)) ([d59fcba](https://github.com/koreograf/koreograf/commit/d59fcbaf640bdbf3d99fcd7df6db3e0ee302774a))
+* add an activity log of who changed what and when ([#568](https://github.com/koreograf/koreograf/issues/568)) ([28d5d7f](https://github.com/koreograf/koreograf/commit/28d5d7f14e54794b722f6357f6dff7287416b7a1))
+* bound job log and work-directory retention ([#585](https://github.com/koreograf/koreograf/issues/585)) ([3523d4f](https://github.com/koreograf/koreograf/commit/3523d4fd2595757dd7c83b8c3f2aa8623d31efd5))
+* cap concurrent job execution ([#584](https://github.com/koreograf/koreograf/issues/584)) ([cd8b666](https://github.com/koreograf/koreograf/commit/cd8b6664d158060377a56fbbb959a037b4ce28c2))
+* clear the dependency cache from the ui ([#580](https://github.com/koreograf/koreograf/issues/580)) ([aad0abe](https://github.com/koreograf/koreograf/commit/aad0abecfe89f81b1e9ec5634ec4d26e6e0e8193))
+* expire personal api tokens ([#583](https://github.com/koreograf/koreograf/issues/583)) ([7599a2d](https://github.com/koreograf/koreograf/commit/7599a2de096e408de962008e26173403194032ce))
+* make the web ui usable on phones ([#563](https://github.com/koreograf/koreograf/issues/563)) ([265289e](https://github.com/koreograf/koreograf/commit/265289eb2437f735882ed2215cf5bf16c2be585f))
+* sync inventories and projects from their list views ([#566](https://github.com/koreograf/koreograf/issues/566)) ([ff10dad](https://github.com/koreograf/koreograf/commit/ff10dadec3ea38b832625dee6ae22f6cc528d6ff))
+
+
+### Bug Fixes
+
+* keep the launch dialog action bar off the limit field ([#588](https://github.com/koreograf/koreograf/issues/588)) ([3871b84](https://github.com/koreograf/koreograf/commit/3871b841336e83e097b502d17edb13ec9eb6d3d9))
+* keep the phone workflow editor usable in landscape ([#590](https://github.com/koreograf/koreograf/issues/590)) ([1a34a07](https://github.com/koreograf/koreograf/commit/1a34a078649dd5e1f90b1e64c55dca4c4798b969))
+* raise touch targets to 44px on phones ([#589](https://github.com/koreograf/koreograf/issues/589)) ([13ed2c0](https://github.com/koreograf/koreograf/commit/13ed2c0628e742dd662502da17540a33d317f8e9))
+* recover jobs and workflow runs left running after a restart ([#581](https://github.com/koreograf/koreograf/issues/581)) ([675a19e](https://github.com/koreograf/koreograf/commit/675a19ef23936c61bcd1e37aa93e7eb1ebf33893))
+* restart the compose service after a daemon restart ([#561](https://github.com/koreograf/koreograf/issues/561)) ([003a56e](https://github.com/koreograf/koreograf/commit/003a56e13f3ab8449417254d61b96ee2cee9aee6))
+* stack inspector key/value pairs on narrow screens ([#587](https://github.com/koreograf/koreograf/issues/587)) ([346443a](https://github.com/koreograf/koreograf/commit/346443a340f2b9b9a4478f7cc1abab3e0fb5e1e9))
+* stop the template description field clipping text ([#591](https://github.com/koreograf/koreograf/issues/591)) ([6607d89](https://github.com/koreograf/koreograf/commit/6607d89e07348112614fc91cffa15c3e9e03f1ec))
+
 ## [0.1.0-alpha.13](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.12...v0.1.0-alpha.13) (2026-11-18)
 
 
