@@ -782,12 +782,7 @@ pub(crate) fn prune_finished_job_logs(state: &crate::AppState) -> AppResult<()> 
         // Leave a gap for another request before taking the lock again.
         std::thread::yield_now();
     }
-    let mut directories = 0usize;
-    for id in state.store().finished_jobs_before(&cutoff)? {
-        if remove_job_work_dir(&state.cfg.data_dir, &id) {
-            directories = directories.saturating_add(1);
-        }
-    }
+    let directories = prune_job_work_dirs(state, &cutoff)?;
     if events > 0 || directories > 0 {
         tracing::info!(
             days,
@@ -816,6 +811,49 @@ pub(crate) fn spawn_log_retention(state: Shared) {
             tokio::time::sleep(Duration::from_secs(24 * 60 * 60)).await;
         }
     });
+}
+
+/// Removes the work directories of finished jobs past `cutoff`.
+///
+/// The sweep reads `data/jobs` and asks the database about only those ids. A
+/// finished job normally loses its directory when it ends, so the work stays
+/// with the leftovers instead of the whole job history.
+fn prune_job_work_dirs(state: &crate::AppState, cutoff: &str) -> AppResult<usize> {
+    let root = state.cfg.data_dir.join("jobs");
+    let entries = match fs::read_dir(&root) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(err) => {
+            return Err(ApiError::Internal(format!(
+                "cannot read {}: {err}",
+                root.display()
+            )))
+        }
+    };
+    let mut removed = 0usize;
+    for entry in entries.flatten() {
+        let Ok(id) = entry.file_name().into_string() else {
+            continue;
+        };
+        let Some(job) = state.store().job(&id)? else {
+            continue;
+        };
+        if !matches!(job.status.as_str(), "successful" | "failed" | "canceled") {
+            continue;
+        }
+        let Some(finished_at) = job.finished_at.as_deref() else {
+            continue;
+        };
+        // Stored timestamps share one UTC format, so the text comparison
+        // matches the cutoff query.
+        if finished_at >= cutoff {
+            continue;
+        }
+        if remove_job_work_dir(&state.cfg.data_dir, &id) {
+            removed = removed.saturating_add(1);
+        }
+    }
+    Ok(removed)
 }
 
 fn job_work_dir(data_dir: &Path, id: &str) -> Option<PathBuf> {

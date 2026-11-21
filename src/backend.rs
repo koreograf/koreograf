@@ -239,7 +239,6 @@ pub(crate) trait Backend: Send + Sync {
     fn set_job_parameters(&self, id: &str, parameters: &str) -> AppResult<()>;
     fn finish_job(&self, id: &str, status: &str) -> AppResult<bool>;
     fn prune_job_logs(&self, cutoff: &str, limit: i64) -> AppResult<jobs::store::PrunedJobLogs>;
-    fn finished_jobs_before(&self, cutoff: &str) -> AppResult<Vec<String>>;
     fn reconcile_interrupted(&self, line: &str) -> AppResult<jobs::store::Interrupted>;
     fn insert_event(&self, job_id: &str, stream: &str, line: &str) -> AppResult<()>;
     fn events_after(&self, job_id: &str, after: i64, limit: i64) -> AppResult<Vec<JobEvent>>;
@@ -1097,11 +1096,6 @@ impl Backend for SqliteBackend {
     fn prune_job_logs(&self, cutoff: &str, limit: i64) -> AppResult<jobs::store::PrunedJobLogs> {
         let mut conn = lock(&self.conn)?;
         jobs::store::prune_job_logs(&mut conn, cutoff, limit)
-    }
-
-    fn finished_jobs_before(&self, cutoff: &str) -> AppResult<Vec<String>> {
-        let conn = lock(&self.conn)?;
-        jobs::store::finished_jobs_before(&conn, cutoff)
     }
 
     fn reconcile_interrupted(&self, line: &str) -> AppResult<jobs::store::Interrupted> {
@@ -3579,18 +3573,6 @@ impl Backend for PostgresBackend {
             }
             tx.commit().await?;
             Ok(jobs::store::PrunedJobLogs { job_ids, events })
-        })
-    }
-
-    fn finished_jobs_before(&self, cutoff: &str) -> AppResult<Vec<String>> {
-        self.with_client(|client| async move {
-            let rows = client
-                .query(
-                    &store::sql::postgres(jobs::store::FINISHED_JOBS_BEFORE),
-                    &[&cutoff],
-                )
-                .await?;
-            Ok(rows.iter().map(|row| row.get(0)).collect())
         })
     }
 

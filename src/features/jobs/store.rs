@@ -26,14 +26,6 @@ pub(crate) const SET_JOB_PARAMETERS: &str = "UPDATE jobs SET parameters = ?2 WHE
 pub(crate) const FINISH_JOB: &str = "UPDATE jobs SET status = ?2, finished_at = ?3
      WHERE id = ?1 AND status IN ('pending', 'running')";
 
-/// Finished jobs past the retention cutoff whose work directory may still
-/// exist. The job row is never deleted.
-pub(crate) const FINISHED_JOBS_BEFORE: &str = "SELECT id FROM jobs
-     WHERE status IN ('successful', 'failed', 'canceled')
-       AND finished_at IS NOT NULL
-       AND finished_at < ?1
-     ORDER BY id";
-
 /// Finished jobs past the retention cutoff that still have events to remove.
 /// The `EXISTS` keeps a later run from visiting jobs whose events are already
 /// gone, so its cost stays with the output that remains rather than the whole
@@ -338,12 +330,6 @@ pub(crate) fn prune_job_logs(
     }
     tx.commit()?;
     Ok(PrunedJobLogs { job_ids, events })
-}
-
-/// Finished jobs past `cutoff`, including ones whose events were pruned
-/// earlier. The caller removes a work directory only when it still exists.
-pub(crate) fn finished_jobs_before(c: &Connection, cutoff: &str) -> AppResult<Vec<String>> {
-    sql::sqlite_all(c, FINISHED_JOBS_BEFORE, [cutoff], |row| SqlRow::get(row, 0))
 }
 
 /// Fails every job and workflow run that a stopped process left unfinished.

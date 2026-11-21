@@ -1314,12 +1314,18 @@ fn the_prune_visits_only_finished_jobs_with_events_in_batches() {
     assert!(again.job_ids.is_empty());
     assert_eq!(again.events, 0);
 
-    let dirs =
-        crate::features::jobs::store::finished_jobs_before(&conn, &cutoff).expect("directory ids");
-    assert_eq!(dirs.len(), 8);
-    assert!(dirs.iter().any(|id| id == "old-bare-0"));
-    assert!(!dirs.iter().any(|id| id == "old-running"));
-    assert!(!dirs.iter().any(|id| id == "recent"));
+    let bare = crate::features::jobs::store::job(&conn, "old-bare-0")
+        .expect("job lookup")
+        .expect("old job");
+    assert_eq!(bare.status, "failed");
+    assert!(bare
+        .finished_at
+        .as_deref()
+        .is_some_and(|at| at < cutoff.as_str()));
+    let running = crate::features::jobs::store::job(&conn, "old-running")
+        .expect("job lookup")
+        .expect("running job");
+    assert_eq!(running.status, "running");
 
     drop(conn);
     drop(backend);
