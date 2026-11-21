@@ -290,7 +290,10 @@ pub(crate) fn ansible_events_for_job(
     db: &dyn crate::backend::Backend,
     job_id: &str,
 ) -> AppResult<Vec<AnsibleEventResponse>> {
-    let limit = crate::ansible_events::MAX_EVENTS as i64 + 1;
+    // The recap chunks use their own budget and arrive after the per-task
+    // stream was capped, so they are part of the page response too.
+    let limit =
+        (crate::ansible_events::MAX_EVENTS + crate::ansible_events::MAX_STATS_EVENTS + 2) as i64;
     let rows = db.ansible_events_after(job_id, 0, limit)?;
     Ok(rows.iter().filter_map(AnsibleEventResponse::new).collect())
 }

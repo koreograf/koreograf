@@ -188,7 +188,7 @@ Use `.overlay` for the backdrop and `.overlay-card` for the panel. `openDialog` 
 
 Use `.log` for job output, `.log-tools` for its search and controls, and `pre.vars` for structured data. `.log.wrap` and `.log-summary` are supported variants. Use `code` or `.mono` for inline identifiers. Keep the log text selectable and never put a catalog key in it.
 
-A job output with structured Ansible events uses `.output-view` with `.tabs` for the Structured and Raw log switch. The plays tree sits in `.structured`; its native collapsible sections use `.st-play`, `.st-task`, and `.st-host`, `.st-badge` carries the status word next to its colour, and `.st-pre` holds message, output, and diff text. The recap table, search, and wrap controls stay the same.
+A job output with structured Ansible events uses `.output-view` with `.tabs` for the Structured and Raw log switch. The structured view opens with the compact host summary in `.st-recap`: `.st-counts` holds one `.btn.compact.st-count` per status and `.st-count-value` carries the number. The detailed host list is a `.st-host-panel` `details` element with the shared `.filter-bar`, `.search`, and pager pattern; its rows use the normal `.table-wrap` and `.table` markup, and `.st-count-pair` shows a non-zero counter. The plays tree sits below in `.st-tree`; its native collapsible sections use `.st-play`, `.st-task`, and `.st-host`, `.st-badge` carries the status word next to its colour, `.st-pre` holds message, output, and diff text, and `.st-more` opens the next page of hosts inside one task. The raw log, its search, and its wrap controls stay the same.
 
 ```html
 <div class="log-tools"><input class="search" type="search" aria-label="Search the log"></div>

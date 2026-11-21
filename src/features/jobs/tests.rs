@@ -1179,6 +1179,46 @@ fn a_job_without_structured_events_keeps_the_raw_log() {
 }
 
 #[test]
+fn a_job_above_the_event_budget_still_returns_the_recap_chunks() {
+    let state = page_state("stats-after-limit");
+    {
+        let db = state.db().unwrap();
+        for index in 0..=crate::ansible_events::MAX_EVENTS {
+            crate::features::jobs::store::insert_event(
+                &db,
+                "job",
+                crate::ansible_events::STREAM,
+                &format!(r#"{{"type":"task_start","task":"Task {index}","index":{index}}}"#),
+            )
+            .unwrap();
+        }
+        crate::features::jobs::store::insert_event(
+            &db,
+            "job",
+            crate::ansible_events::STREAM,
+            r#"{"type":"stats","total":5000,"part":19,"parts":19,"hosts":[{"host":"bulk-4999","ok":1,"failed":1,"changed":0,"unreachable":0,"skipped":0,"rescued":0,"ignored":0}]}"#,
+        )
+        .unwrap();
+    }
+    let structured =
+        crate::features::jobs::routes::ansible_events_for_job(state.store(), "job").unwrap();
+    assert_eq!(
+        structured.len(),
+        crate::ansible_events::MAX_EVENTS + 2,
+        "the stats chunk arrives after the per-task cap"
+    );
+    let returned = serde_json::to_value(&structured).expect("json");
+    let stats = returned
+        .as_array()
+        .expect("events")
+        .iter()
+        .filter(|item| item["event"]["type"] == "stats")
+        .count();
+    assert_eq!(stats, 1);
+    let _ = std::fs::remove_dir_all(&state.cfg.data_dir);
+}
+
+#[test]
 fn job_page_keeps_the_start_and_the_end() {
     let state = page_state("head-tail");
     {

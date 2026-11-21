@@ -266,6 +266,19 @@ function failureKind(text) {
 
 const RECAP_FIELDS = ["ok", "changed", "unreachable", "failed", "skipped", "rescued", "ignored"];
 
+/** The order of the clickable counts in the totals bar. */
+export const RECAP_STATUSES = [...RECAP_FIELDS];
+
+const RECAP_RANK = {
+  unreachable: 6,
+  failed: 5,
+  rescued: 4,
+  ignored: 3,
+  changed: 2,
+  ok: 1,
+  skipped: 0,
+};
+
 export function parseRecapLine(text) {
   const match = /^\s*(\S+)\s*:\s*ok=(\d+)\s+changed=(\d+)\s+unreachable=(\d+)\s+failed=(\d+)\s+skipped=(\d+)\s+rescued=(\d+)\s+ignored=(\d+)\s*$/.exec(String(text ?? ""));
   if (!match) return null;
@@ -283,6 +296,131 @@ export function parseRecapLine(text) {
 
 export function recapFailed(row) {
   return Boolean(row && (row.failed > 0 || row.unreachable > 0));
+}
+
+function recapNumber(row, key) {
+  const value = Number(row && row[key]);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/**
+ * One status per host for the totals bar. The first matching counter wins, so
+ * the counts add up to the host total and each count filters the same bucket.
+ */
+export function recapHostStatus(row) {
+  if (recapNumber(row, "unreachable")) return "unreachable";
+  if (recapNumber(row, "failed")) return "failed";
+  if (recapNumber(row, "rescued")) return "rescued";
+  if (recapNumber(row, "ignored")) return "ignored";
+  if (recapNumber(row, "changed")) return "changed";
+  if (recapNumber(row, "ok")) return "ok";
+  if (recapNumber(row, "skipped")) return "skipped";
+  return "ok";
+}
+
+export function recapTotals(rows) {
+  const counts = {};
+  for (const status of RECAP_STATUSES) counts[status] = 0;
+  for (const row of rows || []) counts[recapHostStatus(row)] += 1;
+  return { hosts: (rows || []).length, counts };
+}
+
+/** The compact per-host recap that the callback writes from `v2_playbook_on_stats`. */
+export function recapFromEvents(events) {
+  const rows = new Map();
+  const seen = new Set();
+  let total = 0;
+  let parts = 0;
+  for (const item of events || []) {
+    const event = eventPayload(item);
+    if (!event || event.type !== "stats") continue;
+    const declared = Number(event.total);
+    if (Number.isFinite(declared) && declared > total) total = declared;
+    const declaredParts = Number(event.parts);
+    if (Number.isFinite(declaredParts) && declaredParts > parts) parts = declaredParts;
+    const part = Number(event.part);
+    if (Number.isFinite(part) && part > 0) seen.add(part);
+    for (const host of Array.isArray(event.hosts) ? event.hosts : []) {
+      if (!host || typeof host !== "object" || !host.host) continue;
+      const row = { host: String(host.host) };
+      for (const field of RECAP_FIELDS) row[field] = recapNumber(host, field);
+      rows.set(row.host, row);
+    }
+  }
+  return {
+    rows: [...rows.values()],
+    total: Math.max(total, rows.size),
+    parts,
+    received: seen.size,
+    complete: parts === 0 || seen.size >= parts,
+  };
+}
+
+/** Stats rows win; a raw `PLAY RECAP` line is the fallback for older jobs. */
+export function mergeRecapRows(statsRows, rawRows) {
+  const merged = new Map();
+  for (const row of rawRows || []) {
+    if (row && row.host) merged.set(row.host, row);
+  }
+  for (const row of statsRows || []) {
+    if (row && row.host) merged.set(row.host, row);
+  }
+  return [...merged.values()];
+}
+
+export function recapMatches(row, status) {
+  if (!status || status === "all") return true;
+  if (status === "problems") return recapFailed(row);
+  return recapHostStatus(row) === status;
+}
+
+export function sortRecapRows(rows, sort = "severity") {
+  const field = String(sort || "severity");
+  const descending = field.startsWith("-");
+  const key = descending ? field.slice(1) : field;
+  const listed = [...(rows || [])];
+  const byHost = (left, right) => left.host.localeCompare(right.host);
+  if (key === "host") {
+    listed.sort(byHost);
+    if (descending) listed.reverse();
+    return listed;
+  }
+  if (key === "severity") {
+    listed.sort((left, right) =>
+      (RECAP_RANK[recapHostStatus(right)] - RECAP_RANK[recapHostStatus(left)]) || byHost(left, right));
+    return listed;
+  }
+  if (RECAP_FIELDS.includes(key)) {
+    listed.sort((left, right) => {
+      const delta = recapNumber(right, key) - recapNumber(left, key);
+      return (descending ? delta : -delta) || byHost(left, right);
+    });
+    return listed;
+  }
+  return listed.sort(byHost);
+}
+
+export function filterRecapRows(rows, options = {}) {
+  const needle = String(options.search || "").trim().toLocaleLowerCase();
+  const filtered = (rows || []).filter((row) =>
+    recapMatches(row, options.status) && (!needle || row.host.toLocaleLowerCase().includes(needle)));
+  return sortRecapRows(filtered, options.sort || "severity");
+}
+
+export function pageRecapRows(rows, page = 1, size = 50) {
+  const total = (rows || []).length;
+  const width = Math.max(1, Number(size) || 50);
+  const pages = Math.max(1, Math.ceil(total / width));
+  const current = Math.min(Math.max(1, Number(page) || 1), pages);
+  const offset = (current - 1) * width;
+  return {
+    rows: (rows || []).slice(offset, offset + width),
+    page: current,
+    pages,
+    total,
+    from: total ? offset + 1 : 0,
+    to: Math.min(offset + width, total),
+  };
 }
 
 export function searchSegments(text, query) {
@@ -315,6 +453,7 @@ function logState(log) {
       matches: [],
       current: -1,
       atBottom: true,
+      onRecap: null,
     };
   }
   return log.koreografLog;
@@ -506,15 +645,20 @@ export function hostedNames(tree) {
 
 /** Applies the host and status filters and the failed-first order. */
 export function filterAnsibleTree(tree, options = {}) {
-  const hostFilter = options.host || "";
+  const hostFilter = String(options.host || "").trim().toLocaleLowerCase();
   const statusFilter = options.status || "";
   const failedFirst = options.failedFirst === true;
+  const hostSet = options.hosts instanceof Set
+    ? options.hosts
+    : Array.isArray(options.hosts) ? new Set(options.hosts) : null;
   const plays = [];
   for (const play of (tree && tree.plays) || []) {
     const tasks = [];
     for (const task of play.tasks) {
       const hosts = task.hosts.filter((host) =>
-        (!hostFilter || host.host === hostFilter) && (!statusFilter || host.status === statusFilter));
+        (!hostFilter || host.host.toLocaleLowerCase().includes(hostFilter))
+        && (!hostSet || hostSet.has(host.host))
+        && (!statusFilter || host.status === statusFilter));
       if (!hosts.length) continue;
       const status = worstStatus(hosts);
       const durations = hosts.map((host) => host.duration).filter((value) => value !== null);
@@ -573,46 +717,12 @@ function paintLogLine(line, query) {
   return marks;
 }
 
-function renderRecap(state) {
-  const box = document.querySelector("#log-result");
-  if (!box) return;
-  const rows = [...state.recap.values()];
-  box.hidden = state.tool !== "ansible" || !rows.length;
-  if (box.hidden) {
-    box.replaceChildren();
-    return;
-  }
-  const table = document.createElement("table");
-  const head = document.createElement("tr");
-  ["host", ...RECAP_FIELDS].forEach((key) => {
-    const cell = document.createElement("th");
-    cell.textContent = t(key);
-    head.appendChild(cell);
-  });
-  table.appendChild(head);
-  rows.forEach((row) => {
-    const line = document.createElement("tr");
-    if (recapFailed(row)) {
-      line.className = "fail";
-      line.dataset.failed = "1";
-    }
-    [row.host, ...RECAP_FIELDS.map((field) => String(row[field]))].forEach((value, index) => {
-      const cell = document.createElement(index === 0 ? "th" : "td");
-      if (index > 0) cell.dataset.label = t(RECAP_FIELDS[index - 1]);
-      cell.textContent = value;
-      line.appendChild(cell);
-    });
-    table.appendChild(line);
-  });
-  box.replaceChildren(table);
-}
-
 function updateRecap(state, text) {
   if (state.tool !== "ansible") return;
   const row = parseRecapLine(text);
   if (!row) return;
   state.recap.set(row.host, row);
-  renderRecap(state);
+  if (typeof state.onRecap === "function") state.onRecap();
 }
 
 function updateSearchCount(state) {
@@ -675,7 +785,7 @@ function bindJobLog(log, job) {
   state.matches = [];
   state.current = -1;
   state.atBottom = true;
-  renderRecap(state);
+  state.onRecap = null;
   const search = document.querySelector("#log-search");
   const count = document.querySelector("#log-search-count");
   const first = document.querySelector("#log-first-failure");
@@ -964,33 +1074,92 @@ function stHost(host, key, state) {
   return item;
 }
 
-function bindStructuredOutput(job) {
+const TASK_HOST_PAGE = 50;
+
+function bindStructuredOutput(job, startedAt) {
   const switchBox = document.querySelector("#output-view");
   const box = document.querySelector("#structured-output");
   const treeBox = document.querySelector("#st-tree");
   const log = document.querySelector("#log");
   const tools = document.querySelector("#output-tools");
-  const hostSelect = document.querySelector("#st-host");
+  const hostInput = document.querySelector("#st-host");
+  const hostHints = document.querySelector("#st-host-hints");
   const statusSelect = document.querySelector("#st-status");
   const failedFirst = document.querySelector("#st-failed-first");
-  if (!switchBox || !box || !treeBox || !hostSelect || !statusSelect || !failedFirst) return null;
+  const recapBox = document.querySelector("#log-result");
+  const recapTotal = document.querySelector("#st-recap-total");
+  const recapCounts = document.querySelector("#st-counts");
+  const recapNote = document.querySelector("#st-recap-note");
+  const hostPanel = document.querySelector("#st-host-panel");
+  const hostSearch = document.querySelector("#host-search");
+  const hostStatus = document.querySelector("#host-status");
+  const hostSort = document.querySelector("#host-sort");
+  const hostSize = document.querySelector("#host-size");
+  const hostTable = document.querySelector("#host-table");
+  const hostTotal = document.querySelector("#host-total");
+  const hostPager = document.querySelector("#host-pager");
+  const hostCount = document.querySelector("#st-host-count");
+  if (!switchBox || !box || !treeBox || !hostInput || !statusSelect || !failedFirst
+    || !recapBox || !recapCounts || !hostTable || !hostStatus || !hostSort || !hostSize
+    || !hostTotal || !hostPager) return null;
   const state = {
     events: [...(job.ansible_events || [])],
     seen: new Set((job.ansible_events || []).map((item) => Number(item && item.id)).filter((id) => Number.isFinite(id) && id > 0)),
     tree: { plays: [], truncated: false, limit: 0 },
+    stats: { rows: new Map(), total: 0, parts: 0, received: new Set(), complete: true },
     open: new Map(),
+    taskHosts: new Map(),
     explicit: false,
     view: "raw",
     frame: 0,
     tab: true,
+    rendered: false,
+    startedAt: Number(startedAt) || 0,
+    hostQuery: "",
+    hintsOpen: false,
+    listStatus: "problems",
+    listSearch: "",
+    listSort: "severity",
+    listPage: 1,
+    listSize: 50,
+    countFilter: "",
   };
+  const absorbStats = (item) => {
+    const event = eventPayload(item);
+    if (!event || event.type !== "stats") return;
+    const declaredTotal = Number(event.total);
+    if (Number.isFinite(declaredTotal) && declaredTotal > state.stats.total) {
+      state.stats.total = declaredTotal;
+    }
+    const declaredParts = Number(event.parts);
+    if (Number.isFinite(declaredParts) && declaredParts > state.stats.parts) {
+      state.stats.parts = declaredParts;
+    }
+    const part = Number(event.part);
+    if (Number.isFinite(part) && part > 0) state.stats.received.add(part);
+    for (const host of Array.isArray(event.hosts) ? event.hosts : []) {
+      if (!host || typeof host !== "object" || !host.host) continue;
+      const row = { host: String(host.host) };
+      for (const field of RECAP_FIELDS) row[field] = recapNumber(host, field);
+      state.stats.rows.set(row.host, row);
+    }
+    state.stats.complete = state.stats.parts === 0 || state.stats.received.size >= state.stats.parts;
+  };
+  for (const item of state.events) absorbStats(item);
   state.tree = buildAnsibleTree(state.events);
   state.view = state.tree.plays.length ? outputViewPreference() : "raw";
   if (state.view === "structured") state.explicit = true;
+  if (log) logState(log).onRecap = () => schedule();
+
+  const recapRows = () => {
+    const rawRows = log ? [...logState(log).recap.values()] : [];
+    return mergeRecapRows([...state.stats.rows.values()], rawRows);
+  };
+  const totalHosts = (rows) => Math.max(state.stats.total, rows.length);
 
   const applyView = () => {
     const raw = state.view !== "structured";
-    const available = state.tree.plays.length > 0;
+    const available = state.tree.plays.length > 0 || state.stats.total > 0 || recapRows().length > 0;
     switchBox.hidden = !available || !state.tab;
     switchBox.querySelectorAll("[data-output-view]").forEach((button) => {
       const active = button.dataset.outputView === state.view;
@@ -1002,38 +1171,146 @@ function bindStructuredOutput(job) {
     if (log) log.hidden = !raw || !state.tab;
   };
 
-  const setHostOptions = () => {
-    const names = hostedNames(state.tree);
-    const current = hostSelect.value;
-    const wanted = ["", ...names].join("\u0000");
-    if (hostSelect.dataset.options !== wanted) {
-      hostSelect.dataset.options = wanted;
-      const all = stNode("option", "", t("all_hosts"));
-      all.value = "";
-      hostSelect.replaceChildren(
-        all,
-        ...names.map((name) => {
-          const option = stNode("option", "", name);
-          option.value = name;
-          return option;
-        }),
-      );
-      hostSelect.value = names.includes(current) ? current : "";
-    }
-  };
-
   const isOpen = (key, fallback) => (state.open.has(key) ? state.open.get(key) : fallback);
   const remember = (key, details) => {
     state.open.set(key, details.open);
   };
 
-  const draw = () => {
-    state.frame = 0;
-    setHostOptions();
+  const allHostNames = (rows) => {
+    const names = new Set(hostedNames(state.tree));
+    for (const row of rows) names.add(row.host);
+    return [...names].sort((left, right) => left.localeCompare(right));
+  };
+
+  const selectHost = (name) => {
+    const host = String(name || "");
+    state.hostQuery = host;
+    state.hintsOpen = false;
+    hostInput.value = host;
+    if (hostHints) {
+      hostHints.hidden = true;
+      hostHints.replaceChildren();
+    }
+    draw();
+  };
+
+  const renderHints = (rows) => {
+    if (!hostHints) return;
+    const query = state.hostQuery.trim().toLocaleLowerCase();
+    if (!query || !state.hintsOpen) {
+      hostHints.hidden = true;
+      hostHints.replaceChildren();
+      return;
+    }
+    const matches = allHostNames(rows)
+      .filter((name) => name.toLocaleLowerCase().includes(query))
+      .slice(0, 8);
+    hostHints.replaceChildren(...matches.map((name) => {
+      const button = stNode("button", "btn compact st-hint", name);
+      button.type = "button";
+      button.setAttribute("role", "option");
+      button.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        selectHost(name);
+        hostInput.focus();
+      });
+      return button;
+    }));
+    hostHints.hidden = matches.length === 0;
+  };
+
+  const recapCount = (row) => {
+    const counters = RECAP_FIELDS
+      .filter((field) => recapNumber(row, field))
+      .map((field) => `<span class="st-count-pair"><span>${esc(t(field))}</span><strong>${recapNumber(row, field)}</strong></span>`)
+      .join("");
+    const status = recapHostStatus(row);
+    return `<tr data-host="${esc(row.host)}" data-status="${status}"${recapFailed(row) ? ' class="fail"' : ""}>
+      <td data-label="${esc(t("host"))}"><button class="btn compact st-host-link" type="button" data-st-select-host="${esc(row.host)}">${esc(row.host)}</button></td>
+      <td data-label="${esc(t("status"))}"><span class="st-badge ${status}">${esc(t(status))}</span></td>
+      <td class="small" data-label="${esc(t("counters"))}">${counters}</td>
+    </tr>`;
+  };
+
+  const drawRecap = (rows, total) => {
+    recapBox.hidden = total === 0;
+    if (recapTotal) {
+      recapTotal.textContent = total ? t("hosts_total", { count: total }) : "";
+    }
+    if (!total) {
+      recapCounts.replaceChildren();
+      if (recapNote) recapNote.hidden = true;
+      return;
+    }
+    const totals = recapTotals(rows);
+    recapCounts.replaceChildren(...RECAP_STATUSES.map((status) => {
+      const active = state.countFilter === status;
+      const button = stNode("button", `btn compact st-count ${status}${active ? " primary" : ""}`);
+      button.type = "button";
+      button.dataset.stCount = status;
+      button.setAttribute("aria-pressed", active ? "true" : "false");
+      button.disabled = !totals.counts[status];
+      button.appendChild(stNode("span", "st-count-label", t(status)));
+      button.appendChild(stNode("span", "st-count-value", String(totals.counts[status] || 0)));
+      return button;
+    }));
+    if (recapNote) recapNote.hidden = state.stats.parts === 0 || state.stats.complete;
+  };
+
+  const drawHostList = (rows, total) => {
+    const filtered = filterRecapRows(rows, {
+      status: state.listStatus,
+      search: state.listSearch,
+      sort: state.listSort,
+    });
+    const page = pageRecapRows(filtered, state.listPage, state.listSize);
+    state.listPage = page.page;
+    if (hostPanel) hostPanel.hidden = total === 0;
+    if (hostCount) hostCount.textContent = t("hosts_shown_of_total", { shown: page.rows.length, total });
+    hostTotal.textContent = total
+      ? t("hosts_shown_of_total", { shown: page.rows.length, total })
+      : t("no_hosts_in_recap");
+    if (page.rows.length) {
+      hostTable.innerHTML = `<div class="table-wrap st-host-table"><table class="table"><thead><tr><th>${h("host")}</th><th>${h("status")}</th><th>${h("counters")}</th></tr></thead><tbody>${page.rows.map(recapCount).join("")}</tbody></table></div>`;
+    } else if (rows.length && state.listStatus === "problems" && !rows.some(recapFailed)) {
+      hostTable.innerHTML = `<p class="small muted">${h("no_problem_hosts")}</p><button class="btn" id="show-all-hosts" type="button">${h("all_hosts")}</button>`;
+    } else if (rows.length) {
+      hostTable.innerHTML = `<p class="small muted">${h("no_hosts_match")}</p><button class="btn" id="clear-host-filter" type="button">${h("clear_filter")}</button>`;
+    } else {
+      hostTable.innerHTML = `<p class="small muted">${h("no_hosts_in_recap")}</p>`;
+    }
+    hostPager.innerHTML = page.pages > 1
+      ? `<button class="btn" type="button" data-host-page="${page.page - 1}"${page.page <= 1 ? " disabled" : ""}>${h("previous_page")}</button>
+        <span class="small muted">${h("page_of_pages", { page: page.page, pages: page.pages })}</span>
+        <button class="btn" type="button" data-host-page="${page.page + 1}"${page.page >= page.pages ? " disabled" : ""}>${h("next_page")}</button>`
+      : "";
+  };
+
+  const renderTaskHosts = (task, taskKey, container) => {
+    const limit = state.taskHosts.get(taskKey) || TASK_HOST_PAGE;
+    const shown = task.hosts.slice(0, limit);
+    container.replaceChildren(...shown.map((host) =>
+      stHost(host, `${taskKey}:h:${host.host}`, state)));
+    if (task.hosts.length > shown.length) {
+      const more = stNode("button", "btn compact st-more", t("show_more_hosts", { count: Math.min(TASK_HOST_PAGE, task.hosts.length - shown.length) }));
+      more.type = "button";
+      more.addEventListener("click", () => {
+        state.taskHosts.set(taskKey, limit + TASK_HOST_PAGE);
+        draw();
+      });
+      container.appendChild(more);
+    }
+  };
+
+  const drawTree = (rows) => {
+    const countHosts = state.countFilter
+      ? new Set(rows.filter((row) => recapMatches(row, state.countFilter)).map((row) => row.host))
+      : null;
     const filtered = filterAnsibleTree(state.tree, {
-      host: hostSelect.value,
+      host: state.hostQuery,
       status: statusSelect.value,
       failedFirst: failedFirst.checked,
+      hosts: countHosts,
     });
     const nodes = [];
     for (const play of filtered.plays) {
@@ -1050,8 +1327,8 @@ function bindStructuredOutput(job) {
       for (const task of play.tasks) {
         const taskKey = `p:${play.index}:t:${task.index}`;
         const taskDetails = stNode("details", `st-task ${task.status || ""}`);
-        taskDetails.open = isOpen(taskKey, task.status === "failed" || task.status === "unreachable");
-        taskDetails.addEventListener("toggle", () => remember(taskKey, taskDetails));
+        const reveal = Boolean(state.hostQuery) || task.status === "failed" || task.status === "unreachable";
+        taskDetails.open = isOpen(taskKey, reveal);
         taskDetails.dataset.task = task.name;
         taskDetails.dataset.status = task.status || "";
         const taskHead = stNode("summary", "st-task-head");
@@ -1064,9 +1341,13 @@ function bindStructuredOutput(job) {
         }
         taskDetails.appendChild(taskHead);
         const hosts = stNode("div", "st-hosts");
-        task.hosts.forEach((host) =>
-          hosts.appendChild(stHost(host, `${taskKey}:h:${host.host}`, state)));
         taskDetails.appendChild(hosts);
+        if (taskDetails.open) renderTaskHosts(task, taskKey, hosts);
+        taskDetails.addEventListener("toggle", () => {
+          remember(taskKey, taskDetails);
+          if (taskDetails.open) renderTaskHosts(task, taskKey, hosts);
+          else hosts.replaceChildren();
+        });
         tasks.appendChild(taskDetails);
       }
       details.appendChild(tasks);
@@ -1083,6 +1364,22 @@ function bindStructuredOutput(job) {
     treeBox.replaceChildren(...nodes);
   };
 
+  const draw = () => {
+    state.frame = 0;
+    const rows = recapRows();
+    const total = totalHosts(rows);
+    drawRecap(rows, total);
+    drawHostList(rows, total);
+    drawTree(rows);
+    renderHints(rows);
+    box.dataset.hostTotal = String(total);
+    box.dataset.recapComplete = String(state.stats.parts === 0 || state.stats.complete);
+    if (!state.rendered && state.view === "structured") {
+      state.rendered = true;
+      if (state.startedAt) box.dataset.renderMs = String(Math.max(0, Math.round(performance.now() - state.startedAt)));
+    }
+  };
+
   const schedule = () => {
     if (state.frame) return;
     const run = () => draw();
@@ -1097,12 +1394,104 @@ function bindStructuredOutput(job) {
       applyView();
     });
   });
-  [hostSelect, statusSelect, failedFirst].forEach((control) => {
+  recapCounts.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-st-count]");
+    if (!button || button.disabled) return;
+    const status = button.dataset.stCount;
+    state.countFilter = state.countFilter === status ? "" : status;
+    state.listStatus = state.countFilter || "all";
+    state.listPage = 1;
+    hostStatus.value = state.listStatus;
+    draw();
+  });
+  hostSearch.addEventListener("input", () => {
+    if (hostSearch.hostTimer) window.clearTimeout(hostSearch.hostTimer);
+    hostSearch.hostTimer = window.setTimeout(() => {
+      state.listSearch = hostSearch.value.trim();
+      state.listPage = 1;
+      draw();
+    }, 150);
+  });
+  hostStatus.addEventListener("change", () => {
+    state.listStatus = hostStatus.value || "problems";
+    state.countFilter = "";
+    state.listPage = 1;
+    draw();
+  });
+  hostSort.addEventListener("change", () => {
+    state.listSort = hostSort.value || "severity";
+    state.listPage = 1;
+    draw();
+  });
+  hostSize.addEventListener("change", () => {
+    state.listSize = Number(hostSize.value) || 50;
+    state.listPage = 1;
+    draw();
+  });
+  hostTable.addEventListener("click", (event) => {
+    if (event.target.closest("#show-all-hosts")) {
+      state.listStatus = "all";
+      state.listPage = 1;
+      hostStatus.value = "all";
+      draw();
+      hostStatus.focus();
+      return;
+    }
+    if (event.target.closest("#clear-host-filter")) {
+      state.listSearch = "";
+      state.listStatus = "problems";
+      state.listPage = 1;
+      hostSearch.value = "";
+      hostStatus.value = "problems";
+      draw();
+      hostSearch.focus();
+      return;
+    }
+    const pick = event.target.closest("[data-st-select-host]");
+    if (pick) {
+      selectHost(pick.dataset.stSelectHost);
+      treeBox.scrollIntoView({ block: "start" });
+    }
+  });
+  hostPager.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-host-page]");
+    if (!button || button.disabled) return;
+    state.listPage = Number(button.dataset.hostPage);
+    draw();
+    hostPager.focus();
+  });
+  hostInput.addEventListener("input", () => {
+    state.hintsOpen = true;
+    if (hostInput.hostTimer) window.clearTimeout(hostInput.hostTimer);
+    hostInput.hostTimer = window.setTimeout(() => {
+      state.hostQuery = hostInput.value.trim();
+      draw();
+    }, 120);
+  });
+  hostInput.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      state.hintsOpen = false;
+      if (hostHints) hostHints.hidden = true;
+      return;
+    }
+    if (event.key !== "Enter" || !hostHints || hostHints.hidden) return;
+    const first = hostHints.querySelector("button");
+    if (!first) return;
+    event.preventDefault();
+    selectHost(first.textContent);
+  });
+  hostInput.addEventListener("blur", () => {
+    window.setTimeout(() => {
+      state.hintsOpen = false;
+      if (hostHints) hostHints.hidden = true;
+    }, 150);
+  });
+  [statusSelect, failedFirst].forEach((control) => {
     control.addEventListener("change", () => draw());
   });
   const refresh = () => {
     state.tree = buildAnsibleTree(state.events);
-    const available = state.tree.plays.length > 0;
+    const available = state.tree.plays.length > 0 || state.stats.total > 0;
     if (available && state.view === "raw" && !state.explicit && outputViewPreference() === "structured") {
       state.view = "structured";
     }
@@ -1116,6 +1505,7 @@ function bindStructuredOutput(job) {
   return {
     append(item) {
       if (!pushStructuredEvent(state, item)) return;
+      absorbStats(item);
       refresh();
     },
     reload() {
@@ -1130,6 +1520,7 @@ function bindStructuredOutput(job) {
 
 async function pageJob(id) {
   const live = appState.generation;
+  const startedAt = performance.now();
   const job = await api("GET", `/api/v1/jobs/${encodeURIComponent(id)}`);
   const running = job.status === "pending" || job.status === "running";
   const actions = jobActions(job);
@@ -1167,11 +1558,45 @@ async function pageJob(id) {
       </div>
     </div>
     <div id="panel-output">
-      <div class="result-summary" id="log-result" tabindex="0" hidden></div>
       <div class="log-summary" id="log-summary" hidden></div>
       <div class="structured" id="structured-output" hidden>
+        <section class="st-recap" id="log-result" hidden>
+          <div class="spread st-recap-head">
+            <h2>${h("host_summary")}</h2>
+            <span class="small muted" id="st-recap-total" aria-live="polite"></span>
+          </div>
+          <div class="st-counts" id="st-counts"></div>
+          <p class="small muted st-recap-note" id="st-recap-note" hidden>${h("recap_incomplete")}</p>
+        </section>
+        <details class="st-host-panel" id="st-host-panel" open hidden>
+          <summary class="st-host-panel-head">
+            <h2>${h("host_list")}</h2>
+            <span class="small muted" id="st-host-count"></span>
+          </summary>
+          <div class="filter-bar st-host-filters">
+            <input class="search" id="host-search" type="search" placeholder="${h("search_hosts")}" aria-label="${h("search_hosts")}" autocomplete="off">
+            <label class="field"><span>${h("status")}</span><select id="host-status" aria-label="${h("status")}">
+              <option value="problems" selected>${h("problem_hosts")}</option>
+              <option value="all">${h("all_hosts")}</option>
+              ${RECAP_STATUSES.map((status) => `<option value="${status}">${esc(t(status))}</option>`).join("")}
+            </select></label>
+            <label class="field"><span>${h("sort_by")}</span><select id="host-sort" aria-label="${h("sort_by")}">
+              <option value="severity" selected>${h("severity")}</option>
+              <option value="host">${h("host")} ↑</option>
+              <option value="-host">${h("host")} ↓</option>
+              ${RECAP_FIELDS.map((field) => `<option value="${field}">${esc(t(field))} ↓</option>`).join("")}
+            </select></label>
+            <label class="field"><span>${h("page_size")}</span><select id="host-size" aria-label="${h("page_size")}">${[25, 50, 100].map((size) => `<option value="${size}"${size === 50 ? " selected" : ""}>${size}</option>`).join("")}</select></label>
+          </div>
+          <p class="small muted st-host-total" id="host-total" tabindex="-1" aria-live="polite"></p>
+          <div class="st-host-table-body" id="host-table"></div>
+          <div class="row st-host-pager" id="host-pager" tabindex="-1"></div>
+        </details>
         <div class="filter-bar st-filters">
-          <label class="field"><span>${h("host")}</span><select id="st-host" aria-label="${h("host")}"><option value="">${h("all_hosts")}</option></select></label>
+          <label class="field st-host-field"><span>${h("host")}</span>
+            <input class="search" id="st-host" type="search" placeholder="${h("filter_by_host")}" aria-label="${h("filter_by_host")}" autocomplete="off">
+            <div class="st-hints" id="st-host-hints" role="listbox" hidden></div>
+          </label>
           <label class="field"><span>${h("status")}</span><select id="st-status" aria-label="${h("status")}">
             <option value="">${h("all_statuses")}</option>
             ${["failed", "unreachable", "changed", "ok", "skipped"].map((status) => `<option value="${status}">${esc(t(status))}</option>`).join("")}
@@ -1185,7 +1610,7 @@ async function pageJob(id) {
     <div id="panel-parameters" hidden>${jobParameters(job)}</div>`);
   const badge = document.querySelector(".pill");
   bindJobLog(document.querySelector("#log"), job);
-  const structured = bindStructuredOutput(job);
+  const structured = bindStructuredOutput(job, startedAt);
   (job.events || []).forEach(appendLog);
   const relaunchButtons = () => document.querySelectorAll("[data-action=relaunch], [data-action=relaunch-failed]");
   const startAgain = async (onlyFailed) => {
