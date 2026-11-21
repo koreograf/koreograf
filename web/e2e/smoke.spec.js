@@ -1281,6 +1281,11 @@ test("the account page creates a token with a lifetime and shows its expiry", as
   await expect(expires).not.toHaveText("Never expires");
   await expect(expires).toContainText(/\d{2}\/\d{2}\/\d{4}/);
 
+  await page.getByRole("button", { name: "Language", exact: true }).click();
+  await page.getByRole("option", { name: /Deutsch/ }).click();
+  await expect(scope.locator("option")).toHaveText(["Lesen und schreiben", "Nur lesen"]);
+  await expect(row.locator('td[data-label="Zugriff"]')).toContainText("Nur lesen");
+
   const tokens = await page.evaluate(async () => (await (await fetch("/api/v1/me/tokens")).json()));
   const created = tokens.find((item) => item.name === "Playwright token");
   expect(created).toBeTruthy();
