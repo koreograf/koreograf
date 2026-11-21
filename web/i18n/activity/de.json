@@ -20,6 +20,7 @@
   "filter_object_type": "Objekt",
   "filter_to": "Bis",
   "no_activity_match": "Keine Aktivität passt zu den Filtern.",
+  "object_cache": "Cache",
   "object_credential": "Zugang",
   "object_environment": "Ausführungsumgebung",
   "object_inventory": "Inventar",

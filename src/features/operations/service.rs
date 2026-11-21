@@ -1437,6 +1437,15 @@ pub(crate) fn pending_jobs(c: &Connection) -> AppResult<i64> {
     )?)
 }
 
+pub(crate) fn team_jobs_busy(c: &Connection, team_id: &str) -> AppResult<bool> {
+    let count: i64 = c.query_row(
+        crate::features::jobs::store::TEAM_JOBS_BUSY,
+        [team_id],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
 pub(crate) fn busy(c: &Connection) -> AppResult<bool> {
     let jobs: i64 = c.query_row(
         "SELECT COUNT(*) FROM jobs WHERE status IN ('pending', 'running')",

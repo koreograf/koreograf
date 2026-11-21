@@ -20,6 +20,7 @@
   "filter_object_type": "Object",
   "filter_to": "To",
   "no_activity_match": "No activity matches the filters.",
+  "object_cache": "Cache",
   "object_credential": "Credential",
   "object_environment": "Execution environment",
   "object_inventory": "Inventory",

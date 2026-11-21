@@ -1,6 +1,9 @@
 {
   "chart_day_hint": "Tap a day to see the split.",
-  "collections_roles_and_opentofu_providers_stay_between_runs": "Collections, roles, and OpenTofu providers stay between runs.",
+  "clear_cache": "Clear cache",
+  "clear_cache_confirmation": "Remove the cached collections, roles, and OpenTofu providers for this team? OpenTofu state is kept.",
+  "clearing_cache": "Clearing…",
+  "collections_roles_and_opentofu_providers_stay_between_runs": "Collections, roles, and OpenTofu providers stay between runs until an owner clears them.",
   "dashboard": "Dashboard",
   "dependency_cache": "Dependency cache",
   "get_started": "Get started",

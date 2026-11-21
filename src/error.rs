@@ -114,6 +114,13 @@ impl ApiError {
         })
     }
 
+    pub fn conflict(key: impl Into<String>) -> Self {
+        Self::Conflict(UserMessage {
+            key: key.into(),
+            vars: BTreeMap::new(),
+        })
+    }
+
     pub fn unavailable(key: impl Into<String>) -> Self {
         Self::Unavailable(UserMessage {
             key: key.into(),

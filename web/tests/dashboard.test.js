@@ -24,3 +24,12 @@ test("the dashboard address omits the default range", async () => {
   assert.equal(dashboardAddress("dashboard", "14"), "#/?tab=dashboard&days=14");
   assert.equal(dashboardAddress("overview", "7"), "#/");
 });
+
+test("the clear-cache button is rendered for owners only", async () => {
+  const { cacheClearButton } = await load();
+  assert.equal(cacheClearButton(false), "");
+  const button = cacheClearButton(true);
+  assert.match(button, /data-cache-clear/);
+  assert.match(button, /type="button"/);
+  assert.match(button, /class="btn danger"/);
+});

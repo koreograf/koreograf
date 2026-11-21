@@ -19,6 +19,10 @@ pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
     if state.in_maintenance() {
         return Err(ApiError::bad("maintenance_mode_is_active"));
     }
+    let cache_guard = state
+        .cache
+        .lock()
+        .map_err(|_| ApiError::Internal("cache lock is damaged".into()))?;
     let settings = crate::features::operations::load(state)?;
     let id = Uuid::new_v4().to_string();
     {
@@ -143,6 +147,7 @@ pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
             );
         }
     }
+    drop(cache_guard);
     let shared = state.clone();
     let job_id = id.clone();
     tokio::spawn(async move {

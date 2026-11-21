@@ -8,11 +8,13 @@ Finished work (`successful`, `failed`, `canceled`) stays as it is. Nothing is re
 
 ## What the cache changes
 
-Collections, roles, and OpenTofu providers stay in a cache.
+Collections, roles, and OpenTofu providers stay in a cache until an owner clears it.
 
 AWX installs collections on every run because the execution environment is ephemeral. Koreograf keeps the Galaxy and role cache under `data/cache/<team>/` and mounts it into every run. A second run logs which roles are already cached. If `ansible-galaxy` fails, the job continues with the cache it already has. A Git project's `scm` credential is passed to both `ansible-galaxy collection install` and `ansible-galaxy role install`, so private Git collections and roles work over HTTPS or SSH. The credential is visible only to that step; `ansible-playbook` starts without the Git askpass or SSH helper.
 
 OpenTofu uses `TF_PLUGIN_CACHE_DIR` on that same cache (`data/cache/<team>/tofu`). `TF_DATA_DIR` stays in the job directory. The state file does not. A module with no backend block gets a local backend whose path is `data/cache/<team>/tofu-state/<template>/terraform.tfstate`. The next `plan` or `apply` of that template sees the resources from the last run. Another team has its own directory, so the state does not cross `team_id`. The directory is mode `0700` and the file is mode `0600`. An execution environment mounts that one template directory, and only when the job is OpenTofu. It is part of the cache, so the backup zip leaves it out. A remote backend is the setup to use when the state must outlive this data directory or be used from more than one machine. `apply` writes a warning when the module has no remote backend. A module that already sets `backend "local"` keeps that path, and a relative path is still removed with the job directory. A module that sets any other backend keeps its own state, and this controller does not copy it.
+
+An owner of the team can clear the disposable part of the cache with **Clear cache** on the dashboard's dependency cache card, or with `DELETE /api/v1/cache`. The route removes `data/cache/<team>/collections`, `data/cache/<team>/roles`, and `data/cache/<team>/tofu`. It keeps `tofu-state`, so OpenTofu resources stay known, and it keeps every entry it does not recognise. It does not follow a symlink, treats a missing directory as already clear, and answers `409 a_job_is_running` while that team has a pending or running job. Maintenance mode blocks it like any other write. A clear appends a `delete` entry on `cache` to the activity log; a refused clear appends nothing.
 
 ## Job log
 

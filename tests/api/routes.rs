@@ -45,6 +45,8 @@ async fn each_module_registers_its_routes() {
         for (method, path) in [
             ("GET", "/maintenance"),
             ("GET", "/overview"),
+            ("GET", "/cache"),
+            ("DELETE", "/cache"),
             ("GET", "/assistant"),
             ("GET", "/schedules"),
             ("GET", "/me"),

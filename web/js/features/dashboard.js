@@ -1,6 +1,7 @@
 import * as appState from "../core/state.js";
 import { api } from "../core/api.js";
-import { can, go, handle, needTeam, route, shell } from "../core/app.js";
+import { can, go, handle, markSaved, needTeam, route, shell } from "../core/app.js";
+import { confirmDialog } from "../core/dialog.js";
 import { esc, h, table } from "../core/dom.js";
 import { bytes, pill, preflightNoticeHtml, spanText, when } from "../core/format.js";
 import { currentLanguage, t } from "../core/i18n.js";
@@ -65,6 +66,10 @@ export function dashboardTabs(tab) {
   return `<div class="spread tab-bar"><div class="tabs" role="tablist" aria-label="${h("overview")} / ${h("dashboard")}">${item("overview")}${item("dashboard")}</div></div>`;
 }
 
+export function cacheClearButton(owner) {
+  return owner ? `<button class="btn danger" type="button" data-cache-clear>${h("clear_cache")}</button>` : "";
+}
+
 let chartSerial = 0;
 
 function dashboardChart(series, values, heading, legend) {
@@ -101,7 +106,7 @@ export function dashboardBody(data, range) {
     <div class="stack">
       ${charts}
       <section>
-        <h2>${h("dependency_cache")}</h2>
+        <div class="spread"><h2>${h("dependency_cache")}</h2>${cacheClearButton(can("owner"))}</div>
         <div class="grid-3">
           <article class="card stat"><span class="small muted">${h("collections")}</span><strong>${esc(Number(cache.collections) || 0)}</strong></article>
           <article class="card stat"><span class="small muted">${h("roles")}</span><strong>${esc(Number(cache.roles) || 0)}</strong></article>
@@ -122,6 +127,29 @@ function bindDashboardCharts() {
     button.addEventListener("click", show);
     button.addEventListener("focus", show);
   });
+}
+
+async function clearCache(button) {
+  const confirmed = await confirmDialog({
+    title: t("clear_cache"),
+    body: t("clear_cache_confirmation"),
+    confirmLabel: t("clear_cache"),
+    danger: true,
+  });
+  if (!confirmed) return;
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  button.textContent = t("clearing_cache");
+  try {
+    await api("DELETE", "/api/v1/cache");
+    markSaved();
+    await route();
+  } catch (error) {
+    button.disabled = false;
+    button.removeAttribute("aria-busy");
+    button.textContent = t("clear_cache");
+    handle(error);
+  }
 }
 
 function bindDashboard(tab, range) {
@@ -157,6 +185,8 @@ function bindDashboard(tab, range) {
       if (active) active.focus();
     });
   });
+  const clear = document.querySelector("[data-cache-clear]");
+  if (clear) clear.addEventListener("click", () => clearCache(clear));
   bindDashboardCharts();
 }
 

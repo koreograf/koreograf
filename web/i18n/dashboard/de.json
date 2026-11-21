@@ -1,6 +1,9 @@
 {
   "chart_day_hint": "Tippe auf einen Tag, um die Aufteilung zu sehen.",
-  "collections_roles_and_opentofu_providers_stay_between_runs": "Collections, Rollen und OpenTofu-Provider bleiben zwischen den Läufen liegen.",
+  "clear_cache": "Cache leeren",
+  "clear_cache_confirmation": "Die zwischengespeicherten Collections, Rollen und OpenTofu-Provider dieses Teams entfernen? Der OpenTofu-Status bleibt erhalten.",
+  "clearing_cache": "Wird geleert …",
+  "collections_roles_and_opentofu_providers_stay_between_runs": "Collections, Rollen und OpenTofu-Provider bleiben zwischen den Läufen liegen, bis ein Besitzer sie leert.",
   "dashboard": "Dashboard",
   "dependency_cache": "Abhängigkeits-Cache",
   "get_started": "Erste Schritte",

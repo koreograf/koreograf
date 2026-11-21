@@ -64,6 +64,10 @@ pub struct AppState {
     /// One backup or restore at a time. Take this before the database lock.
     pub(crate) maintenance: Mutex<()>,
     pub(crate) migration: Mutex<features::operations::Runtime>,
+    /// Serialises a cache clear with the insertion of a new job, so the busy
+    /// check cannot miss a launch that happens between the check and the
+    /// delete.
+    pub(crate) cache: Mutex<()>,
     pub(crate) procs: Mutex<HashMap<String, RunningProc>>,
     /// Jobs whose later output is discarded. Set when cancel commits.
     pub(crate) canceled: Mutex<HashSet<String>>,
@@ -267,6 +271,7 @@ pub fn boot_with(mut cfg: Config, database: DatabaseConfig) -> anyhow::Result<Sh
         metrics: features::operations::Metrics::new(),
         maintenance: Mutex::new(()),
         migration: Mutex::new(features::operations::Runtime::default()),
+        cache: Mutex::new(()),
         procs: Mutex::new(HashMap::new()),
         canceled: Mutex::new(HashSet::new()),
         preflight: Mutex::new(None),
