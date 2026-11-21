@@ -14,7 +14,7 @@ A workflow can also start from a schedule in the workflow page's **Schedules** t
 
 A prune runs once shortly after startup and then at most once every 24 hours while the process is up. The first pass runs in the background after the port is open, on the blocking pool, so a large history does not delay the first start. It deletes `workflow_jobs` and `workflow_nodes` together in bounded batches and releases the database lock between batches. The job rows and output of the nodes keep following `KOREOGRAF_JOB_LOG_RETENTION_DAYS`; this prune never deletes a job. A second pass therefore removes nothing.
 
-Each pass writes one log line with the run and node counts and names `KOREOGRAF_WORKFLOW_RUN_RETENTION_DAYS`. The workflow history lists the remaining runs, and a pruned run answers `404` like any other missing run.
+Each pass writes one log line with the run and node counts and names `KOREOGRAF_WORKFLOW_RUN_RETENTION_DAYS`. The workflow history lists the remaining runs, and a pruned run answers `404` like any other missing run. A relaunch of a workflow-node job whose run was pruned cannot resolve the run's workflow. With local runs limited to administrators, that relaunch is refused; start the workflow again instead.
 
 Deleting a workflow removes its runs and nodes in the same transaction as the workflow and its schedules, so a deleted workflow leaves no history behind. Runs that never belonged to a workflow are not affected.
 
