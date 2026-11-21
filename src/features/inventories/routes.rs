@@ -463,9 +463,9 @@ pub async fn sync_inventory(
         match fetched {
             Ok(fetched) => fresh.push((source.id.clone(), fetched)),
             Err(err) => {
-                state
-                    .store()
-                    .set_inventory_sync_failed(&id, &user.username)?;
+                if let Err(write) = state.store().set_inventory_sync_failed(&id, &user.username) {
+                    tracing::warn!(inventory = %id, error = %write, "sync failure status");
+                }
                 return Err(err);
             }
         }
@@ -979,9 +979,12 @@ pub async fn sync_source(
     let fetched = match fetched {
         Ok(fetched) => fetched,
         Err(err) => {
-            state
+            if let Err(write) = state
                 .store()
-                .set_inventory_sync_failed(&inventory_id, &user.username)?;
+                .set_inventory_sync_failed(&inventory_id, &user.username)
+            {
+                tracing::warn!(inventory = %inventory_id, error = %write, "sync failure status");
+            }
             return Err(err);
         }
     };

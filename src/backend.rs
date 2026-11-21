@@ -2675,12 +2675,15 @@ impl Backend for PostgresBackend {
 
     fn set_inventory_sync_failed(&self, inventory_id: &str, by: &str) -> AppResult<()> {
         self.with_client(|client| async move {
-            client
+            let changed = client
                 .execute(
                     &store::sql::postgres(inventories::store::SET_INVENTORY_SYNC_FAILED),
                     &[&inventory_id, &by],
                 )
                 .await?;
+            if changed == 0 {
+                return Err(ApiError::NotFound);
+            }
             Ok(())
         })
     }
