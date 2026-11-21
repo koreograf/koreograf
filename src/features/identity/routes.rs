@@ -15,8 +15,8 @@ use crate::Shared;
 
 use super::model::{
     AccountDetailResponse, AccountListResponse, AccountResponse, AuthUser, ClientPeer,
-    CreatedTokenResponse, LoginBody, MeUpdate, ProfileResponse, Role, TokenBody, TokenListResponse,
-    TokenResponse, UserBody, UserUpdate,
+    CreatedTokenResponse, LoginBody, MeUpdate, ProfileResponse, Role, SessionListResponse,
+    SessionResponse, TokenBody, TokenListResponse, TokenResponse, UserBody, UserUpdate,
 };
 use super::service::{
     authenticate, clear_cookie, client_source, directory_unreachable, disabled_sign_in,
@@ -31,6 +31,8 @@ pub(crate) fn routes() -> Router<Shared> {
         .route("/login", post(login))
         .route("/logout", post(logout))
         .route("/me", get(me).put(update_me))
+        .route("/me/sessions", get(list_sessions))
+        .route("/me/sessions/{id}", delete(revoke_session))
         .route("/me/tokens", get(list_tokens).post(create_token))
         .route("/me/tokens/{id}", delete(delete_token))
         .route("/users", get(list_users).post(create_user))
@@ -139,6 +141,51 @@ pub async fn logout(
         HeaderValue::from_str(&clear_cookie(request_cookie_secure(&state.cfg, &headers)))
             .map_err(|err| ApiError::Internal(err.to_string()))?,
     );
+    Ok(response)
+}
+
+fn current_session_id(state: &Shared, headers: &HeaderMap) -> AppResult<Option<String>> {
+    match read_cookie(headers, "koreograf_session") {
+        Some(token) => state.store().session_id(&token),
+        None => Ok(None),
+    }
+}
+
+pub async fn list_sessions(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    user: AuthUser,
+) -> AppResult<Json<SessionListResponse>> {
+    let current = current_session_id(&state, &headers)?;
+    let sessions = state.store().list_sessions(&user.id)?;
+    Ok(Json(SessionListResponse(
+        sessions
+            .iter()
+            .map(|session| {
+                SessionResponse::new(session, current.as_deref() == Some(session.id.as_str()))
+            })
+            .collect(),
+    )))
+}
+
+pub async fn revoke_session(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    let current = current_session_id(&state, &headers)?;
+    if !state.store().revoke_session(&id, &user.id)? {
+        return Err(ApiError::NotFound);
+    }
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    if current.as_deref() == Some(id.as_str()) {
+        response.headers_mut().insert(
+            header::SET_COOKIE,
+            HeaderValue::from_str(&clear_cookie(request_cookie_secure(&state.cfg, &headers)))
+                .map_err(|err| ApiError::Internal(err.to_string()))?,
+        );
+    }
     Ok(response)
 }
 

@@ -30,6 +30,37 @@ test("the account payload sends a password only when it is filled", async () => 
   });
 });
 
+test("the session list marks the current session and only offers End session for the others", async () => {
+  const { sessionRows } = await load();
+  const i18n = await import(pathToFileURL(join(__dirname, "..", "js", "core", "i18n.js")).href);
+  i18n.setCatalog("de", {
+    current_session: "Diese Sitzung",
+    end_session: "Sitzung beenden",
+    never: "Nie",
+  });
+  const rows = sessionRows([
+    {
+      id: "current-session",
+      current: true,
+      created_at: "2026-01-01T00:00:00Z",
+      last_seen_at: "2026-01-02T00:00:00Z",
+      expires_at: "2026-01-08T00:00:00Z",
+    },
+    {
+      id: "other-session",
+      current: false,
+      created_at: "2026-01-01T00:00:00Z",
+      last_seen_at: null,
+      expires_at: "2026-01-08T00:00:00Z",
+    },
+  ]);
+  assert.match(rows[0], /Diese Sitzung/);
+  assert.doesNotMatch(rows[0], /data-end-session/);
+  assert.match(rows[1], /data-end-session="other-session"/);
+  assert.match(rows[1], /Sitzung beenden/);
+  assert.match(rows[1], /Nie/);
+});
+
 test("the token expiry cell shows the date and marks an expired token", async () => {
   const { tokenExpiryCell } = await load();
   const i18n = await import(pathToFileURL(join(__dirname, "..", "js", "core", "i18n.js")).href);

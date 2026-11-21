@@ -648,6 +648,43 @@ test("keeps the workflow editor view-only on a landscape phone and after rotatio
   }
 });
 
+test("lists sessions on the account page and ends another session", async ({ page }) => {
+  await signIn(page);
+  const second = await page.request.post("/api/v1/login", {
+    data: { username, password },
+  });
+  expect(second.ok()).toBe(true);
+
+  await openMenu(page);
+  await page.locator(".account-link").click();
+  await expect(page.getByRole("heading", { level: 1, name: "My account" })).toBeVisible();
+  await noHorizontalScroll(page);
+
+  const sessions = page.locator("section.card").filter({
+    has: page.getByRole("heading", { name: "Sessions", exact: true }),
+  });
+  const rows = sessions.locator("tbody tr");
+  await expect(rows.first()).toBeVisible();
+  const before = await rows.count();
+  expect(before).toBeGreaterThanOrEqual(2);
+  const current = rows.filter({ hasText: "This session" });
+  await expect(current).toHaveCount(1);
+  await expect(current.locator('td[data-label="Created"]')).toContainText("This session");
+
+  const other = rows.filter({ hasNotText: "This session" }).first();
+  const button = other.getByRole("button", { name: "End session", exact: true });
+  await expect(button).toBeVisible();
+  await expectTouchTarget(button, "End session");
+  await button.click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "End session", exact: true })).toBeVisible();
+  await dialog.getByRole("button", { name: "End session", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(rows).toHaveCount(before - 1);
+  await expect(rows.filter({ hasText: "This session" })).toHaveCount(1);
+  await noHorizontalScroll(page);
+});
+
 test("keeps the landscape workflow inspector clear of the canvas toolbar", async ({ page }) => {
   test.setTimeout(90000);
   await signIn(page);

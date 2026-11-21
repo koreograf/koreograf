@@ -8,8 +8,13 @@ use serde_json::Value;
 
 use crate::error::{ApiError, AppResult};
 
-pub(crate) const SCHEMA_VERSION: u32 = 6;
+pub(crate) const SCHEMA_VERSION: u32 = 7;
 const BASELINE_VERSION: u32 = 1;
+
+/// A session row moves its last-seen time at most once per interval, so a
+/// request does not force a write on every call.
+pub(crate) const SESSION_TOUCH_SECS: i64 = 60;
+pub(crate) const SESSION_LIFETIME_SECS: i64 = 7 * 24 * 3600;
 
 pub fn now() -> String {
     chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
@@ -84,6 +89,16 @@ pub(crate) const SQLITE_MIGRATIONS: &[Migration] = &[
         sql: include_str!("../migrations/sqlite/0006_api_token_expiry.sql"),
         legacy_columns: &[("api_tokens", "expires_at")],
     },
+    Migration {
+        version: 7,
+        name: "0007_session_identity",
+        sql: include_str!("../migrations/sqlite/0007_session_identity.sql"),
+        legacy_columns: &[
+            ("sessions", "id"),
+            ("sessions", "created_at"),
+            ("sessions", "last_seen_at"),
+        ],
+    },
 ];
 
 pub(crate) const POSTGRES_MIGRATIONS: &[Migration] = &[
@@ -122,6 +137,16 @@ pub(crate) const POSTGRES_MIGRATIONS: &[Migration] = &[
         name: "0006_api_token_expiry",
         sql: include_str!("../migrations/postgres/0006_api_token_expiry.sql"),
         legacy_columns: &[("api_tokens", "expires_at")],
+    },
+    Migration {
+        version: 7,
+        name: "0007_session_identity",
+        sql: include_str!("../migrations/postgres/0007_session_identity.sql"),
+        legacy_columns: &[
+            ("sessions", "id"),
+            ("sessions", "created_at"),
+            ("sessions", "last_seen_at"),
+        ],
     },
 ];
 
@@ -693,6 +718,48 @@ pub struct ApiToken {
 pub struct ApiTokenTimes {
     pub created_at: String,
     pub expires_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Session {
+    pub id: String,
+    pub created_at: String,
+    pub last_seen_at: Option<String>,
+    pub expires_at: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct SessionTimes {
+    pub id: String,
+    pub created_at: String,
+    pub last_seen_at: String,
+    pub expires_at: String,
+}
+
+pub(crate) fn session_times() -> SessionTimes {
+    let created_at = now();
+    SessionTimes {
+        id: uuid::Uuid::new_v4().to_string(),
+        created_at: created_at.clone(),
+        last_seen_at: created_at,
+        expires_at: plus_secs(SESSION_LIFETIME_SECS),
+    }
+}
+
+/// True when a request through a session should write `last_seen_at`. A
+/// missing or malformed value is refreshed; a future value waits for the
+/// clock to catch up instead of writing on every request.
+pub(crate) fn session_touch_due(last_seen_at: Option<&str>, now: &str) -> bool {
+    let Some(last_seen_at) = last_seen_at else {
+        return true;
+    };
+    let (Ok(last), Ok(now)) = (
+        chrono::DateTime::parse_from_rfc3339(last_seen_at),
+        chrono::DateTime::parse_from_rfc3339(now),
+    ) else {
+        return true;
+    };
+    now.signed_duration_since(last) >= chrono::Duration::seconds(SESSION_TOUCH_SECS)
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1720,6 +1787,62 @@ mod tests {
     fn the_migrations_end_at_the_supported_version() {
         assert_eq!(SQLITE_MIGRATIONS.last().unwrap().version, SCHEMA_VERSION);
         assert_eq!(POSTGRES_MIGRATIONS.last().unwrap().version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn the_session_touch_is_throttled_to_one_minute() {
+        assert!(session_touch_due(None, "2026-01-01T00:02:00Z"));
+        assert!(!session_touch_due(
+            Some("2026-01-01T00:01:01Z"),
+            "2026-01-01T00:02:00Z"
+        ));
+        assert!(session_touch_due(
+            Some("2026-01-01T00:01:00Z"),
+            "2026-01-01T00:02:00Z"
+        ));
+        assert!(session_touch_due(
+            Some("2026-01-01T00:00:00Z"),
+            "2026-01-01T00:02:00Z"
+        ));
+        assert!(session_touch_due(
+            Some("not-a-time"),
+            "2026-01-01T00:02:00Z"
+        ));
+        assert!(!session_touch_due(
+            Some("2026-01-01T00:03:00Z"),
+            "2026-01-01T00:02:00Z"
+        ));
+    }
+
+    #[test]
+    fn the_session_migration_backfills_identity_and_creation_time() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(META_TABLE).unwrap();
+        apply_sqlite_migrations(&conn, &SQLITE_MIGRATIONS[..6]).unwrap();
+        conn.execute(
+            "INSERT INTO users (id, username, display_name, password_hash, auth_source,
+                is_admin, disabled, created_at)
+             VALUES ('user', 'user', 'User', NULL, 'local', 0, 0, '2020-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions (token, user_id, expires_at)
+             VALUES ('old-session', 'user', '2099-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        apply_sqlite_migrations(&conn, SQLITE_MIGRATIONS).unwrap();
+        let (id, created_at, last_seen_at): (String, String, Option<String>) = conn
+            .query_row(
+                "SELECT id, created_at, last_seen_at FROM sessions WHERE token = 'old-session'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        uuid::Uuid::parse_str(&id).expect("the backfilled id is a UUID");
+        assert!(!created_at.is_empty());
+        assert!(last_seen_at.is_none());
     }
 
     #[test]

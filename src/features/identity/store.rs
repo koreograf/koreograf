@@ -32,11 +32,20 @@ pub(crate) const OTHER_ACTIVE_ADMINS: &str =
     "SELECT COUNT(*) FROM users WHERE is_admin != 0 AND disabled = 0 AND id != ?1";
 
 pub(crate) const CREATE_SESSION: &str =
-    "INSERT INTO sessions (token, user_id, expires_at) VALUES (?1, ?2, ?3)";
+    "INSERT INTO sessions (token, id, user_id, created_at, last_seen_at, expires_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
 pub(crate) const DELETE_SESSION: &str = "DELETE FROM sessions WHERE token = ?1";
+pub(crate) const DELETE_SESSION_FOR_USER: &str =
+    "DELETE FROM sessions WHERE id = ?1 AND user_id = ?2";
 pub(crate) const PURGE_SESSIONS: &str = "DELETE FROM sessions WHERE expires_at < ?1";
+pub(crate) const SESSION_ID: &str = "SELECT id FROM sessions WHERE token = ?1";
+pub(crate) const TOUCH_SESSION: &str = "UPDATE sessions SET last_seen_at = ?2 WHERE id = ?1";
+pub(crate) const LIST_SESSIONS: &str = "SELECT id, created_at, last_seen_at, expires_at
+ FROM sessions WHERE user_id = ?1 AND expires_at > ?2
+ ORDER BY COALESCE(last_seen_at, created_at) DESC, created_at DESC";
 pub(crate) const USER_BY_SESSION: &str = "SELECT u.id, u.username, u.display_name, u.password_hash,
-        u.auth_source, u.is_admin, u.disabled, u.created_at, u.email, s.expires_at
+        u.auth_source, u.is_admin, u.disabled, u.created_at, u.email, s.expires_at,
+        s.id, s.last_seen_at
  FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?1";
 
 pub(crate) const CREATE_API_TOKEN: &str =
@@ -181,9 +190,17 @@ pub(crate) fn other_active_admins(c: &Connection, user_id: &str) -> AppResult<i6
 }
 
 pub(crate) fn create_session(c: &Connection, token: &str, user_id: &str) -> AppResult<()> {
+    let times = db::session_times();
     c.execute(
         CREATE_SESSION,
-        params![token, user_id, db::plus_secs(7 * 24 * 3600)],
+        params![
+            token,
+            times.id,
+            user_id,
+            times.created_at,
+            times.last_seen_at,
+            times.expires_at
+        ],
     )?;
     Ok(())
 }
@@ -193,21 +210,44 @@ pub(crate) fn delete_session(c: &Connection, token: &str) -> AppResult<()> {
     Ok(())
 }
 
+pub(crate) fn revoke_session(c: &Connection, id: &str, user_id: &str) -> AppResult<bool> {
+    Ok(c.execute(DELETE_SESSION_FOR_USER, params![id, user_id])? > 0)
+}
+
 pub(crate) fn purge_sessions(c: &Connection) -> AppResult<()> {
     c.execute(PURGE_SESSIONS, [db::now()])?;
     Ok(())
 }
 
+pub(crate) fn session_id(c: &Connection, token: &str) -> AppResult<Option<String>> {
+    sql::sqlite_opt(c, SESSION_ID, [token], |row| SqlRow::get(row, 0))
+}
+
+pub(crate) fn list_sessions(c: &Connection, user_id: &str) -> AppResult<Vec<db::Session>> {
+    sql::sqlite_all(c, LIST_SESSIONS, params![user_id, db::now()], |row| {
+        row_session(row)
+    })
+}
+
 pub(crate) fn user_by_session(c: &Connection, token: &str) -> AppResult<Option<User>> {
     let found = sql::sqlite_opt(c, USER_BY_SESSION, [token], |row| {
-        Ok((row_user(row)?, SqlRow::get::<String>(row, 9)?))
+        Ok((
+            row_user(row)?,
+            SqlRow::get::<String>(row, 9)?,
+            SqlRow::get::<String>(row, 10)?,
+            SqlRow::get::<Option<String>>(row, 11)?,
+        ))
     })?;
-    let Some((user, expires)) = found else {
+    let Some((user, expires, session_id, last_seen_at)) = found else {
         return Ok(None);
     };
-    if expires < db::now() {
+    let now = db::now();
+    if expires < now {
         delete_session(c, token)?;
         return Ok(None);
+    }
+    if db::session_touch_due(last_seen_at.as_deref(), &now) {
+        c.execute(TOUCH_SESSION, params![session_id, now])?;
     }
     Ok(Some(user))
 }
@@ -273,6 +313,15 @@ pub(crate) fn row_user<R: SqlRow>(row: &R) -> AppResult<User> {
         disabled: row.get(6)?,
         created_at: row.get(7)?,
         email: row.get(8)?,
+    })
+}
+
+pub(crate) fn row_session<R: SqlRow>(row: &R) -> AppResult<db::Session> {
+    Ok(db::Session {
+        id: row.get(0)?,
+        created_at: row.get(1)?,
+        last_seen_at: row.get(2)?,
+        expires_at: row.get(3)?,
     })
 }
 

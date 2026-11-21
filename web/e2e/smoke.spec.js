@@ -1225,6 +1225,36 @@ test("an operator syncs a project and an inventory from their lists", async ({ p
   rmSync(repo, { recursive: true, force: true });
 });
 
+test("the account page lists sessions, marks the current one and ends another", async ({ page }) => {
+  await signInInEnglish(page);
+  const second = await page.request.post("/api/v1/login", {
+    data: { username, password },
+  });
+  expect(second.ok()).toBe(true);
+
+  await page.goto("/#/account");
+  await expect(page.getByRole("heading", { level: 1, name: "My account" })).toBeVisible();
+  const sessions = page.locator("section.card").filter({
+    has: page.getByRole("heading", { name: "Sessions", exact: true }),
+  });
+  const rows = sessions.locator("tbody tr");
+  await expect(rows.first()).toBeVisible();
+  const before = await rows.count();
+  expect(before).toBeGreaterThanOrEqual(2);
+  const current = rows.filter({ hasText: "This session" });
+  await expect(current).toHaveCount(1);
+  await expect(current.locator('td[data-label="Created"]')).toContainText("This session");
+  await expect(current.getByRole("button", { name: "End session", exact: true })).toHaveCount(0);
+  const other = rows.filter({ hasNotText: "This session" }).first();
+  await other.getByRole("button", { name: "End session", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "End session", exact: true })).toBeVisible();
+  await dialog.getByRole("button", { name: "End session", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(rows).toHaveCount(before - 1);
+  await expect(rows.filter({ hasText: "This session" })).toHaveCount(1);
+});
+
 test("the account page creates a token with a lifetime and shows its expiry", async ({ page }) => {
   await signInInEnglish(page);
   await page.goto("/#/account");

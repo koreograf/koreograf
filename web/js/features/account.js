@@ -18,6 +18,21 @@ export function accountPayload(form) {
   return payload;
 }
 
+export function sessionRows(sessions) {
+  return sessions.map((item) => {
+    const marker = item.current ? ` <span class="pill">${h("current_session")}</span>` : "";
+    const action = item.current
+      ? ""
+      : `<button class="btn compact danger" type="button" data-end-session="${esc(item.id)}">${h("end_session")}</button>`;
+    return `<tr>
+      <td>${esc(when(item.created_at))}${marker}</td>
+      <td class="small muted">${item.last_seen_at ? esc(when(item.last_seen_at)) : h("never")}</td>
+      <td class="small muted">${esc(when(item.expires_at))}</td>
+      <td class="actions">${action}</td>
+    </tr>`;
+  });
+}
+
 export function tokenExpiryCell(token, now = Date.now()) {
   if (!token.expires_at) return `<span class="muted">${h("token_never_expires")}</span>`;
   const expired = token.expired === true || Date.parse(token.expires_at) <= now;
@@ -29,6 +44,7 @@ export function tokenExpiryCell(token, now = Date.now()) {
 
 async function pageAccount() {
   appState.setMe(await api("GET", "/api/v1/me"));
+  const sessions = await api("GET", "/api/v1/me/sessions");
   const tokens = await api("GET", "/api/v1/me/tokens");
   const revealed = revealToken;
   revealToken = null;
@@ -72,6 +88,10 @@ async function pageAccount() {
   shell(t("my_account"), `
     <div class="stack">
       ${identity}
+      <section class="card">
+        <h2>${h("sessions")}</h2>
+        ${table([t("created"), t("last_seen"), t("expires"), t("actions")], sessionRows(sessions))}
+      </section>
       <section class="card">
         <h2>${h("memberships")}</h2>
         ${table([t("organization"), t("team"), t("role"), t("source")], rows)}
@@ -129,6 +149,15 @@ async function pageAccount() {
         await navigator.clipboard.writeText(button.dataset.copy);
         button.textContent = t("copied");
       } catch {}
+    });
+  });
+  document.querySelectorAll("[data-end-session]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (!(await confirmDialog({ title: t("end_session"), body: t("end_session_body"), confirmLabel: t("end_session"), danger: true }))) return;
+      try {
+        await api("DELETE", `/api/v1/me/sessions/${encodeURIComponent(button.dataset.endSession)}`);
+        await route();
+      } catch (error) { handle(error); }
     });
   });
   document.querySelectorAll("[data-revoke]").forEach((button) => {

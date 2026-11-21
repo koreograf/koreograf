@@ -225,6 +225,19 @@ pub(super) struct TokenResponse {
 pub(super) struct TokenListResponse(pub(super) Vec<TokenResponse>);
 
 #[derive(Serialize)]
+pub(super) struct SessionResponse {
+    pub(super) id: String,
+    pub(super) created_at: String,
+    pub(super) last_seen_at: Option<String>,
+    pub(super) expires_at: String,
+    pub(super) current: bool,
+}
+
+#[derive(Serialize)]
+#[serde(transparent)]
+pub(super) struct SessionListResponse(pub(super) Vec<SessionResponse>);
+
+#[derive(Serialize)]
 pub(super) struct CreatedTokenResponse {
     pub(super) id: String,
     pub(super) name: String,
@@ -287,6 +300,18 @@ impl AccountDetailResponse {
         Self {
             account: AccountResponse::new(user, team_count),
             memberships: memberships.to_vec(),
+        }
+    }
+}
+
+impl SessionResponse {
+    pub(super) fn new(session: &db::Session, current: bool) -> Self {
+        Self {
+            id: session.id.clone(),
+            created_at: session.created_at.clone(),
+            last_seen_at: session.last_seen_at.clone(),
+            expires_at: session.expires_at.clone(),
+            current,
         }
     }
 }
