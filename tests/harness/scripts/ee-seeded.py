@@ -25,7 +25,7 @@ class Api:
 
     def call(self, method: str, path: str, payload: dict | None = None, ok=(200,)):
         data = None
-        headers = {"Accept": "application/json"}
+        headers = {"Accept": "application/json", "Origin": BASE}
         if self.team:
             headers["x-team-id"] = self.team
         if payload is not None:

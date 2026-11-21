@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const { join } = require("node:path");
 const { expect, test } = require("@playwright/test");
 const { dataDir, password, username } = require("./env");
+const { post } = require("./api");
 
 async function signIn(page) {
   await page.goto("/");
@@ -42,13 +43,13 @@ async function launchBulkJob(page, hosts) {
   for (let index = 1; index <= hosts; index += 1) {
     lines.push(`bulk-${String(index).padStart(4, "0")} ansible_connection=local`);
   }
-  const inventoryResponse = await page.request.post("/api/v1/inventories", {
+  const inventoryResponse = await post(page.request, "/api/v1/inventories", {
     headers,
     data: { name: "Bulk hosts", body: `[all]\n${lines.join("\n")}\n` },
   });
   expect(inventoryResponse.ok()).toBeTruthy();
   const inventory = await inventoryResponse.json();
-  const templateResponse = await page.request.post("/api/v1/templates", {
+  const templateResponse = await post(page.request, "/api/v1/templates", {
     headers,
     data: {
       name: "Bulk hosts",
@@ -61,7 +62,7 @@ async function launchBulkJob(page, hosts) {
   });
   expect(templateResponse.ok()).toBeTruthy();
   const template = await templateResponse.json();
-  const launchResponse = await page.request.post(`/api/v1/templates/${template.id}/launch`, {
+  const launchResponse = await post(page.request, `/api/v1/templates/${template.id}/launch`, {
     headers,
     data: {},
   });

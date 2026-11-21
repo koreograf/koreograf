@@ -2,6 +2,7 @@
 
 const { expect, test } = require("@playwright/test");
 const { password, username } = require("./env");
+const { post } = require("./api");
 
 async function noHorizontalScroll(page) {
   await expect.poll(
@@ -166,7 +167,7 @@ async function teamHeaders(page) {
 }
 
 async function createShellTemplate(page, name, script, prompt = false, description = "") {
-  const created = await page.request.post("/api/v1/templates", {
+  const created = await post(page.request, "/api/v1/templates", {
     headers: await teamHeaders(page),
     data: { name, description, tool: "shell", spec: { script }, prompt_on_launch: prompt },
   });
@@ -179,7 +180,7 @@ async function createSchedule(page, name) {
   const templates = await (await page.request.get("/api/v1/templates", { headers })).json();
   const health = templates.find((item) => item.name === "Healthcheck");
   expect(health).toBeTruthy();
-  const created = await page.request.post(`/api/v1/templates/${health.id}/schedules`, {
+  const created = await post(page.request, `/api/v1/templates/${health.id}/schedules`, {
     headers,
     data: { name, timezone: "UTC", start_date: "2027-06-01", start_time: "06:00", frequency: "daily", end_kind: "never" },
   });
@@ -340,7 +341,7 @@ test("keeps every phone touch target at least 44 px", async ({ page }) => {
   const schedule = await createSchedule(page, `Touch targets ${suffix}`);
   const jobTemplate = await createShellTemplate(page, `Touch log ${suffix}`, "#!/bin/sh\necho \"touch log ok\"\n");
   const headers = await teamHeaders(page);
-  const launched = await page.request.post(`/api/v1/templates/${jobTemplate.id}/launch`, { headers, data: { extra_vars: {} } });
+  const launched = await post(page.request, `/api/v1/templates/${jobTemplate.id}/launch`, { headers, data: { extra_vars: {} } });
   expect(launched.status()).toBe(202);
   const job = await launched.json();
 
@@ -502,7 +503,7 @@ test("shows the dashboard chart counts without a hover", async ({ page }) => {
   const templates = await (await page.request.get("/api/v1/templates", { headers })).json();
   const health = templates.find((item) => item.name === "Healthcheck");
   expect(health).toBeTruthy();
-  const launched = await page.request.post(`/api/v1/templates/${health.id}/launch`, { headers, data: { extra_vars: {} } });
+  const launched = await post(page.request, `/api/v1/templates/${health.id}/launch`, { headers, data: { extra_vars: {} } });
   expect(launched.status()).toBe(202);
   const job = await launched.json();
   await expect.poll(async () => {
@@ -592,7 +593,7 @@ test("lists activity and narrows it to one action", async ({ page }) => {
   await signIn(page);
   const template = await createShellTemplate(page, `Activity mobile ${suffix}`, "#!/bin/sh\ntrue\n");
   const headers = await teamHeaders(page);
-  const launched = await page.request.post(`/api/v1/templates/${template.id}/launch`, { headers, data: { extra_vars: {} } });
+  const launched = await post(page.request, `/api/v1/templates/${template.id}/launch`, { headers, data: { extra_vars: {} } });
   expect(launched.status()).toBe(202);
 
   await goTo(page, "Activity");
@@ -650,7 +651,7 @@ test("keeps the workflow editor view-only on a landscape phone and after rotatio
 
 test("lists sessions on the account page and ends another session", async ({ page }) => {
   await signIn(page);
-  const second = await page.request.post("/api/v1/login", {
+  const second = await post(page.request, "/api/v1/login", {
     data: { username, password },
   });
   expect(second.ok()).toBe(true);
