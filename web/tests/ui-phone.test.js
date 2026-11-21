@@ -145,7 +145,8 @@ test("coarse pointer controls reach 44 px", () => {
 
 test("the narrow key value list stacks its label above the value", () => {
   const block = mediaBlock(stylesheet(), "@media (max-width: 640px)");
-  assert.match(block, /\.kv\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/, "the key value list keeps two columns");
+  assert.match(block, /\.kv[^{}]*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/, "the key value list keeps two columns");
+  assert.match(block, /\.kv\.readonly-kv\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/, "the inspector key value list keeps two columns");
 });
 
 test("a fullscreen overlay keeps the shared chrome and scrolls its body", () => {

@@ -22,17 +22,51 @@ async function signIn(page) {
   await noHorizontalScroll(page);
 }
 
-async function openMenu(page) {
-  const toggle = page.getByRole("button", { name: "Menu", exact: true });
+async function signInGerman(page) {
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "Sprache" })).toBeVisible();
+  await page.getByLabel("Benutzername").fill(username);
+  await page.getByLabel("Passwort").fill(password);
+  await page.getByRole("button", { name: "Anmelden", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Übersicht" })).toBeVisible();
+  await noHorizontalScroll(page);
+}
+
+async function openMenu(page, label = "Menu") {
+  const toggle = page.getByRole("button", { name: label, exact: true });
   if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
 }
 
-async function goTo(page, label) {
-  await openMenu(page);
+async function goTo(page, label, menu = "Menu") {
+  await openMenu(page, menu);
   await page.getByRole("navigation").getByRole("link", { name: label, exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: label })).toBeVisible();
   await noHorizontalScroll(page);
+}
+
+async function readPairLayout(list) {
+  return list.evaluate((element) => [...element.querySelectorAll("dt")].map((term) => {
+    const label = term.getBoundingClientRect();
+    const value = term.nextElementSibling.getBoundingClientRect();
+    return { label: label.toJSON(), value: value.toJSON(), text: term.textContent };
+  }));
+}
+
+async function expectStackedPairs(list, width) {
+  const pairs = await readPairLayout(list);
+  expect(pairs.length).toBeGreaterThanOrEqual(4);
+  for (const pair of pairs) {
+    expect(pair.value.top, `${pair.text} stays below its label at ${width}px`).toBeGreaterThanOrEqual(pair.label.bottom - 1);
+    expect(Math.abs(pair.value.left - pair.label.left), `${pair.text} shares its label column at ${width}px`).toBeLessThanOrEqual(1);
+  }
+  const terms = await list.evaluate((element) => [...element.querySelectorAll("dt")].map((term) => ({
+    text: term.textContent,
+    overflow: term.scrollWidth - term.clientWidth,
+  })));
+  for (const term of terms) {
+    expect(term.overflow, `${term.text} is clipped at ${width}px`).toBeLessThanOrEqual(1);
+  }
 }
 
 async function teamHeaders(page) {
@@ -242,6 +276,49 @@ test("keeps the workflow editor view-only with a desktop note", async ({ page })
   await node.click();
   await expect(page.locator("#inspector")).toContainText("Healthcheck");
   await noHorizontalScroll(page);
+});
+
+test("stacks the workflow inspector key/value rows on narrow phones", async ({ page }) => {
+  await signInGerman(page);
+  await goTo(page, "Workflows", "Menü");
+  await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
+  await expect(page.locator("#wf-desktop-note")).toBeVisible();
+
+  const node = page.locator('.wf-node[data-id="check"]');
+  await node.scrollIntoViewIfNeeded();
+  await node.click();
+  const general = page.locator("#inspector .node-section-body .readonly-kv").first();
+  await expect(general).toContainText("Zusammenführung");
+
+  const viewports = [{ width: 360, height: 732 }, { width: 412, height: 923 }];
+  for (const viewport of viewports) {
+    await page.setViewportSize(viewport);
+    await expect(general).toBeVisible();
+    await expectStackedPairs(general, viewport.width);
+    await noHorizontalScroll(page);
+  }
+
+  await openMenu(page, "Menü");
+  await page.getByRole("button", { name: "Sprache" }).click();
+  await page.getByRole("option", { name: /English/ }).click();
+  await expect(page.locator("#wf-desktop-note")).toContainText("desktop");
+  await node.scrollIntoViewIfNeeded();
+  await node.click();
+  const english = page.locator("#inspector .node-section-body .readonly-kv").first();
+  await expect(english).toContainText("Convergence");
+  for (const viewport of viewports) {
+    await page.setViewportSize(viewport);
+    await expect(english).toBeVisible();
+    await expectStackedPairs(english, viewport.width);
+    await noHorizontalScroll(page);
+  }
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const desktop = await readPairLayout(english);
+  for (const pair of desktop) {
+    expect(pair.value.left, `${pair.text} leaves the two-column layout on a desktop`).toBeGreaterThan(pair.label.left);
+    expect(pair.value.top, `${pair.text} is not on the label row on a desktop`).toBeLessThan(pair.label.bottom);
+  }
 });
 
 test("lists activity and narrows it to one action", async ({ page }) => {

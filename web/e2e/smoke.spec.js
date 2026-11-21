@@ -568,6 +568,28 @@ test("the workflow editor connects, retypes and removes an edge with the keyboar
   await expect(page.locator("#edges path")).toHaveCount(edgeCount);
 });
 
+test("keeps the workflow inspector key/value pairs in two columns on a desktop", async ({ page }) => {
+  await signInInEnglish(page);
+  await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
+  await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
+  await page.locator('.wf-node[data-id="check"]').click();
+  const list = page.locator("#inspector .readonly-kv").first();
+  await expect(list).toContainText("Convergence");
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 1024, height: 700 }]) {
+    await page.setViewportSize(viewport);
+    const pairs = await list.evaluate((element) => [...element.querySelectorAll("dt")].map((term) => {
+      const label = term.getBoundingClientRect();
+      const value = term.nextElementSibling.getBoundingClientRect();
+      return { text: term.textContent, label: label.toJSON(), value: value.toJSON() };
+    }));
+    expect(pairs.length).toBeGreaterThanOrEqual(4);
+    for (const pair of pairs) {
+      expect(pair.value.left, `${pair.text} leaves the two-column layout at ${viewport.width}px`).toBeGreaterThan(pair.label.left);
+      expect(pair.value.top, `${pair.text} is not on the label row at ${viewport.width}px`).toBeLessThan(pair.label.bottom);
+    }
+  }
+});
+
 test("the workflow edge hit area selects a failure edge and names its nodes", async ({ page }) => {
   await signInInEnglish(page);
   await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
