@@ -188,6 +188,8 @@ Use `.overlay` for the backdrop and `.overlay-card` for the panel. `openDialog` 
 
 Use `.log` for job output, `.log-tools` for its search and controls, and `pre.vars` for structured data. `.log.wrap` and `.log-summary` are supported variants. Use `code` or `.mono` for inline identifiers. Keep the log text selectable and never put a catalog key in it.
 
+A job output with structured Ansible events uses `.output-view` with `.tabs` for the Structured and Raw log switch. The plays tree sits in `.structured`; its native collapsible sections use `.st-play`, `.st-task`, and `.st-host`, `.st-badge` carries the status word next to its colour, and `.st-pre` holds message, output, and diff text. The recap table, search, and wrap controls stay the same.
+
 ```html
 <div class="log-tools"><input class="search" type="search" aria-label="Search the log"></div>
 <div class="log wrap"></div>

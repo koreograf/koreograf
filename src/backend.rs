@@ -242,6 +242,13 @@ pub(crate) trait Backend: Send + Sync {
     fn reconcile_interrupted(&self, line: &str) -> AppResult<jobs::store::Interrupted>;
     fn insert_event(&self, job_id: &str, stream: &str, line: &str) -> AppResult<()>;
     fn events_after(&self, job_id: &str, after: i64, limit: i64) -> AppResult<Vec<JobEvent>>;
+    fn events_all_after(&self, job_id: &str, after: i64, limit: i64) -> AppResult<Vec<JobEvent>>;
+    fn ansible_events_after(
+        &self,
+        job_id: &str,
+        after: i64,
+        limit: i64,
+    ) -> AppResult<Vec<JobEvent>>;
     fn events_count_between(&self, job_id: &str, after: i64, before: i64) -> AppResult<i64>;
     fn events_bytes(&self, job_id: &str) -> AppResult<i64>;
     fn events_last(&self, job_id: &str, limit: i64) -> AppResult<Vec<JobEvent>>;
@@ -1104,6 +1111,21 @@ impl Backend for SqliteBackend {
     fn events_after(&self, job_id: &str, after: i64, limit: i64) -> AppResult<Vec<JobEvent>> {
         let conn = lock(&self.conn)?;
         jobs::store::events_after(&conn, job_id, after, limit)
+    }
+
+    fn events_all_after(&self, job_id: &str, after: i64, limit: i64) -> AppResult<Vec<JobEvent>> {
+        let conn = lock(&self.conn)?;
+        jobs::store::events_all_after(&conn, job_id, after, limit)
+    }
+
+    fn ansible_events_after(
+        &self,
+        job_id: &str,
+        after: i64,
+        limit: i64,
+    ) -> AppResult<Vec<JobEvent>> {
+        let conn = lock(&self.conn)?;
+        jobs::store::ansible_events_after(&conn, job_id, after, limit)
     }
 
     fn events_count_between(&self, job_id: &str, after: i64, before: i64) -> AppResult<i64> {
@@ -3620,6 +3642,35 @@ impl Backend for PostgresBackend {
             let rows = client
                 .query(
                     &store::sql::postgres(jobs::store::EVENTS_AFTER),
+                    &[&job_id, &after, &limit],
+                )
+                .await?;
+            rows.iter().map(jobs::store::row_job_event).collect()
+        })
+    }
+
+    fn events_all_after(&self, job_id: &str, after: i64, limit: i64) -> AppResult<Vec<JobEvent>> {
+        self.with_client(|client| async move {
+            let rows = client
+                .query(
+                    &store::sql::postgres(jobs::store::EVENTS_ALL_AFTER),
+                    &[&job_id, &after, &limit],
+                )
+                .await?;
+            rows.iter().map(jobs::store::row_job_event).collect()
+        })
+    }
+
+    fn ansible_events_after(
+        &self,
+        job_id: &str,
+        after: i64,
+        limit: i64,
+    ) -> AppResult<Vec<JobEvent>> {
+        self.with_client(|client| async move {
+            let rows = client
+                .query(
+                    &store::sql::postgres(jobs::store::ANSIBLE_EVENTS_AFTER),
                     &[&job_id, &after, &limit],
                 )
                 .await?;

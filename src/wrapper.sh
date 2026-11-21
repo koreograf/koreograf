@@ -131,6 +131,30 @@ cache_roles() {
   done
 }
 
+# The effective callback plugin path from ansible.cfg, plus the environment and
+# the default user path when ansible-config cannot answer. A project that
+# configures its own callbacks keeps them.
+callback_paths() {
+  configured=""
+  if command -v ansible-config >/dev/null 2>&1; then
+    configured=$(ansible-config dump 2>/dev/null \
+      | sed -n 's/^DEFAULT_CALLBACK_PLUGIN_PATH([^)]*) = \[\(.*\)\]$/\1/p' \
+      | head -n 1 \
+      | sed -e "s/'//g" -e 's/"//g' -e 's/, /:/g')
+  fi
+  if [ -z "$configured" ]; then
+    configured="${ANSIBLE_CALLBACK_PLUGINS:-}"
+  fi
+  if [ -z "$configured" ]; then
+    if [ -n "${HOME:-}" ]; then
+      configured="$KOREOGRAF_PROJECT/callback_plugins:$KOREOGRAF_PROJECT/plugins/callback:$HOME/.ansible/plugins/callback:/usr/share/ansible/plugins/callback"
+    else
+      configured="$KOREOGRAF_PROJECT/callback_plugins:$KOREOGRAF_PROJECT/plugins/callback:/usr/share/ansible/plugins/callback"
+    fi
+  fi
+  printf '%s\n' "$configured"
+}
+
 run_ansible() {
   cd "$KOREOGRAF_PROJECT" || exit 1
   log "Collection cache before the run:"
@@ -178,6 +202,12 @@ run_ansible() {
   export ANSIBLE_HOST_KEY_CHECKING=False
   export ANSIBLE_FORCE_COLOR=0
   export ANSIBLE_RETRY_FILES_ENABLED=0
+  # Structured events stay next to the unchanged stdout log. The callback is a
+  # notification plugin, so the default stdout callback keeps its output. Keep
+  # the project's ansible.cfg callback path and callbacks_enabled value.
+  callback_base=$(callback_paths)
+  export ANSIBLE_CALLBACK_PLUGINS="$KOREOGRAF_WORK/callback_plugins:$callback_base"
+  export ANSIBLE_KOREOGRAF_EVENTS="$KOREOGRAF_WORK/ansible-events.jsonl"
   export ANSIBLE_LOCAL_TEMP="$KOREOGRAF_WORK/tmp"
   export ANSIBLE_SSH_CONTROL_PATH_DIR="$KOREOGRAF_WORK/tmp/cp"
   if [ -n "${KOREOGRAF_PRIVATE_KEY:-}" ]; then

@@ -313,6 +313,7 @@ async fn jobs_return_the_documented_shape() {
         &parameters,
     );
     expected["events"] = json!(job_events(&finished));
+    expected["ansible_events"] = json!([]);
     expected["output_capped"] = json!(false);
     assert_eq!(finished, expected);
 
@@ -339,6 +340,10 @@ async fn jobs_return_the_documented_shape() {
         .as_object_mut()
         .expect("job object")
         .remove("events");
+    canceled_expected
+        .as_object_mut()
+        .expect("job object")
+        .remove("ansible_events");
     canceled_expected
         .as_object_mut()
         .expect("job object")

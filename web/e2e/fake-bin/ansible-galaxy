@@ -1,0 +1,4 @@
+#!/bin/sh
+# Playwright fixture. The wrapper runs a Galaxy step before ansible-playbook;
+# this keeps that step quiet when the CI image has no Ansible at all.
+exit 0

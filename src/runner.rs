@@ -8,6 +8,7 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 use tokio::process::Command;
 
+use crate::ansible_events;
 use crate::cacheinfo::dir_size;
 use crate::config::{LocalJobs, RunnerMode};
 use crate::db::{self, Environment, Project, Template};
@@ -1197,6 +1198,11 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), RunnerError
     let inventory_rel = write_job_inventory(state, &template, &work)?;
     fs::write(work.join("wrapper.sh"), WRAPPER)
         .map_err(|e| RunnerError::filesystem(e.to_string()))?;
+    let structured = ansible_events::captures(&template.tool);
+    if structured {
+        ansible_events::install(&work).map_err(|e| RunnerError::filesystem(e.to_string()))?;
+        let _ = fs::remove_file(work.join(ansible_events::FILE));
+    }
 
     let saved = db::json_object(&job.parameters)
         .get("tool")
@@ -1382,95 +1388,112 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), RunnerError
         ),
     );
 
-    let exit = if let Some((bin, environment)) = container_mode {
-        run_container(
-            state,
-            job_id,
-            ContainerRun {
-                bin: &bin,
-                environment: &environment,
-                work: &work,
-                stage: &stage,
-                cache: &cache,
-                env: &env,
-                timeout_secs: settings.job_timeout_secs,
-                output_lines: settings.job_output_lines,
-                tofu_state: tofu_state.as_deref(),
-                template_id: &template.id,
-            },
+    let tail = structured.then(|| {
+        ansible_events::Tailer::start(
+            (*state).clone(),
+            job_id.to_string(),
+            work.clone(),
+            state.cfg.data_dir.clone(),
         )
-        .await?
-    } else {
-        if state.cfg.local_jobs == LocalJobs::Admins {
-            let allowed = {
-                let db = state.store();
-                let launcher = crate::features::identity::launcher_is_admin(db, &job.launched_by)
+    });
+    let outcome: Result<i32, RunnerError> = async {
+        if let Some((bin, environment)) = container_mode {
+            run_container(
+                state,
+                job_id,
+                ContainerRun {
+                    bin: &bin,
+                    environment: &environment,
+                    work: &work,
+                    stage: &stage,
+                    cache: &cache,
+                    env: &env,
+                    timeout_secs: settings.job_timeout_secs,
+                    output_lines: settings.job_output_lines,
+                    tofu_state: tofu_state.as_deref(),
+                    template_id: &template.id,
+                },
+            )
+            .await
+        } else {
+            if state.cfg.local_jobs == LocalJobs::Admins {
+                let allowed = {
+                    let db = state.store();
+                    let launcher =
+                        crate::features::identity::launcher_is_admin(db, &job.launched_by)
+                            .map_err(|e| RunnerError::internal(e.to_string()))?;
+                    let params = db::json_object(&job.parameters);
+                    let matches =
+                        crate::features::identity::command_matches_template(&original, &params);
+                    let workflow_id =
+                        match job.workflow_job_id.as_deref().filter(|id| !id.is_empty()) {
+                            Some(id) => db
+                                .workflow_job(id)
+                                .map_err(|e| RunnerError::internal(e.to_string()))?
+                                .and_then(|run| run.workflow_id),
+                            None => None,
+                        };
+                    let requires_workflow = job
+                        .workflow_job_id
+                        .as_deref()
+                        .is_some_and(|id| !id.is_empty())
+                        || !matches;
+                    let content = crate::features::identity::content_saved_by_admin(
+                        db,
+                        &template,
+                        workflow_id.as_deref(),
+                        requires_workflow,
+                    )
                     .map_err(|e| RunnerError::internal(e.to_string()))?;
-                let params = db::json_object(&job.parameters);
-                let matches =
-                    crate::features::identity::command_matches_template(&original, &params);
-                let workflow_id = match job.workflow_job_id.as_deref().filter(|id| !id.is_empty()) {
-                    Some(id) => db
-                        .workflow_job(id)
-                        .map_err(|e| RunnerError::internal(e.to_string()))?
-                        .and_then(|run| run.workflow_id),
-                    None => None,
+                    launcher && content
                 };
-                let requires_workflow = job
-                    .workflow_job_id
-                    .as_deref()
-                    .is_some_and(|id| !id.is_empty())
-                    || !matches;
-                let content = crate::features::identity::content_saved_by_admin(
-                    db,
-                    &template,
-                    workflow_id.as_deref(),
-                    requires_workflow,
-                )
-                .map_err(|e| RunnerError::internal(e.to_string()))?;
-                launcher && content
-            };
-            if !allowed {
-                return Err(RunnerError::spec(
-                    "Local runs are limited to administrators.",
-                ));
+                if !allowed {
+                    return Err(RunnerError::spec(
+                        "Local runs are limited to administrators.",
+                    ));
+                }
             }
+            log(state, job_id, "system", "Local run on the controller.");
+            let mut cmd = Command::new("sh");
+            cmd.env_clear()
+                .arg(work.join("wrapper.sh"))
+                .current_dir(&work)
+                .envs(env)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true);
+            #[cfg(unix)]
+            cmd.process_group(0);
+            let child = cmd
+                .spawn()
+                .map_err(|e| RunnerError::runtime(format!("Start failed: {e}")))?;
+            let pid = child.id().unwrap_or(0);
+            let proc = RunningProc {
+                pid,
+                container: None,
+                bin: None,
+            };
+            remember(state, job_id, proc.clone());
+            // The job log keeps this pid. The cancel test reads the group from it.
+            log(state, job_id, "system", &format!("Process group {pid}."));
+            if canceled(state, job_id) {
+                signal_stop(state, job_id, proc);
+            }
+            wait_child(
+                state,
+                job_id,
+                child,
+                settings.job_timeout_secs,
+                settings.job_output_lines,
+            )
+            .await
         }
-        log(state, job_id, "system", "Local run on the controller.");
-        let mut cmd = Command::new("sh");
-        cmd.env_clear()
-            .arg(work.join("wrapper.sh"))
-            .current_dir(&work)
-            .envs(env)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        #[cfg(unix)]
-        cmd.process_group(0);
-        let child = cmd
-            .spawn()
-            .map_err(|e| RunnerError::runtime(format!("Start failed: {e}")))?;
-        let pid = child.id().unwrap_or(0);
-        let proc = RunningProc {
-            pid,
-            container: None,
-            bin: None,
-        };
-        remember(state, job_id, proc.clone());
-        // The job log keeps this pid. The cancel test reads the group from it.
-        log(state, job_id, "system", &format!("Process group {pid}."));
-        if canceled(state, job_id) {
-            signal_stop(state, job_id, proc);
-        }
-        wait_child(
-            state,
-            job_id,
-            child,
-            settings.job_timeout_secs,
-            settings.job_output_lines,
-        )
-        .await?
-    };
+    }
+    .await;
+    if let Some(tail) = tail {
+        tail.finish().await;
+    }
+    let exit = outcome?;
 
     if canceled(state, job_id) {
         return Err(RunnerError::Cancelled);
@@ -5254,6 +5277,58 @@ git clone "$src" "$dest/role"
     }
 
     #[test]
+    fn structured_capture_keeps_the_project_callbacks() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("koreograf-callbacks-{nanos}"));
+        let work = root.join("work");
+        let project = root.join("project");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("ansible.cfg"),
+            "[defaults]\ncallback_plugins = /opt/project/callbacks\ncallbacks_enabled = timer\n",
+        )
+        .unwrap();
+        write_executable(
+            &root.join("bin").join("ansible-config"),
+            r#"#!/bin/sh
+path=$(sed -n 's/^callback_plugins *= *//p' "$KOREOGRAF_PROJECT/ansible.cfg" | head -n 1)
+printf "DEFAULT_CALLBACK_PLUGIN_PATH(ansible.cfg) = ['%s']\n" "$path"
+"#,
+        );
+        write_executable(
+            &root.join("bin").join("ansible-galaxy"),
+            "#!/bin/sh\nexit 0\n",
+        );
+        write_executable(
+            &root.join("bin").join("ansible-playbook"),
+            r#"#!/bin/sh
+printf 'CALLBACK_PLUGINS=%s\n' "$ANSIBLE_CALLBACK_PLUGINS"
+printf 'CALLBACKS_ENABLED=%s\n' "${ANSIBLE_CALLBACKS_ENABLED:-unset}"
+"#,
+        );
+        let env = vec![("ANSIBLE_CALLBACKS_ENABLED".to_string(), "timer".to_string())];
+        let output = test_ansible_wrapper(&root, &work, &project, &env);
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.status.success(), "{text}");
+        assert!(text.contains("CALLBACKS_ENABLED=timer"), "{text}");
+        let expected = format!(
+            "CALLBACK_PLUGINS={}/callback_plugins:/opt/project/callbacks",
+            work.display()
+        );
+        assert!(text.contains(&expected), "{text}");
+        assert!(!text.contains("koreograf_events"), "{text}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn ansible_playbook_does_not_see_the_galaxy_git_credential() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -5956,6 +6031,53 @@ exit 0
         let metrics = state.metrics.render(&[], 0);
         assert!(metrics.contains("role=\"hidden.role\""), "{metrics}");
         assert!(metrics.contains("role=\"kept.role\""), "{metrics}");
+        let _ = std::fs::remove_dir_all(&state.cfg.data_dir);
+    }
+
+    #[tokio::test]
+    async fn structured_ansible_events_stay_on_their_own_stream() {
+        let state = output_state(8_000);
+        insert_output_job(&state, "job-structured");
+        let work = state.cfg.data_dir.join("jobs").join("job-structured");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::write(
+            work.join(crate::ansible_events::FILE),
+            concat!(
+                "{\"type\":\"play_start\",\"play\":\"Site\",\"index\":1}\n",
+                "{\"type\":\"task_start\",\"play\":\"Site\",\"play_index\":1,\"index\":1,\"task\":\"Deploy\"}\n",
+                "{\"type\":\"host_result\",\"play\":\"Site\",\"play_index\":1,\"index\":1,\"task\":\"Deploy\",\"host\":\"web-1\",\"status\":\"failed\",\"duration\":1.5,\"msg\":\"boom\"}\n",
+                "{\"type\":\"playbook_end\"}\n"
+            ),
+        )
+        .unwrap();
+        let tailer = crate::ansible_events::Tailer::start(
+            state.clone(),
+            "job-structured".into(),
+            work,
+            state.cfg.data_dir.clone(),
+        );
+        tailer.finish().await;
+        let db = state.db().unwrap();
+        let structured =
+            crate::features::jobs::store::ansible_events_after(&db, "job-structured", 0, 10)
+                .unwrap();
+        assert_eq!(structured.len(), 4, "events: {structured:?}");
+        assert!(structured
+            .iter()
+            .all(|event| event.stream == crate::ansible_events::STREAM));
+        assert!(structured[2].line.contains("\"status\":\"failed\""));
+        assert!(
+            crate::features::jobs::store::events_after(&db, "job-structured", 0, 10)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            crate::features::jobs::store::events_all_after(&db, "job-structured", 0, 10)
+                .unwrap()
+                .len(),
+            4
+        );
+        drop(db);
         let _ = std::fs::remove_dir_all(&state.cfg.data_dir);
     }
 

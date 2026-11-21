@@ -320,6 +320,238 @@ function logState(log) {
   return log.koreografLog;
 }
 
+export const OUTPUT_VIEW_KEY = "koreograf.job-output-view";
+
+export function structuredEventsAvailable(job) {
+  return Boolean(job && job.tool === "ansible" && Array.isArray(job.ansible_events) && job.ansible_events.length);
+}
+
+export function outputViewPreference() {
+  try {
+    return window.localStorage.getItem(OUTPUT_VIEW_KEY) === "raw" ? "raw" : "structured";
+  } catch {
+    return "structured";
+  }
+}
+
+export function rememberOutputView(view) {
+  try {
+    window.localStorage.setItem(OUTPUT_VIEW_KEY, view === "raw" ? "raw" : "structured");
+  } catch { /* storage is optional */ }
+}
+
+const STATUS_RANK = { unreachable: 5, failed: 4, changed: 3, ok: 2, skipped: 1 };
+
+function statusRank(status) {
+  return STATUS_RANK[status] || 0;
+}
+
+export function worstStatus(hosts) {
+  let worst = "";
+  for (const host of hosts || []) {
+    if (statusRank(host.status) > statusRank(worst)) worst = host.status;
+  }
+  return worst;
+}
+
+function hostKey(playIndex, taskIndex) {
+  return `${playIndex}:${taskIndex}`;
+}
+
+function eventPayload(item) {
+  if (!item || typeof item !== "object") return null;
+  return item.event && typeof item.event === "object" ? item.event : item;
+}
+
+/** Turns the `ansible` event stream into plays, tasks, and host results. */
+export function buildAnsibleTree(events) {
+  const plays = [];
+  const playsByIndex = new Map();
+  const tasksByKey = new Map();
+  let truncated = false;
+  let limit = 0;
+  let nextPlay = 0;
+  let nextTask = 0;
+  const playFor = (index, name) => {
+    const key = Number.isFinite(index) ? index : `n${nextPlay + 1}`;
+    let play = playsByIndex.get(key);
+    if (!play) {
+      play = { index: key, name: name || "", tasks: [], status: "" };
+      playsByIndex.set(key, play);
+      plays.push(play);
+      if (Number.isFinite(index)) nextPlay = Math.max(nextPlay, index);
+    } else if (!play.name && name) {
+      play.name = name;
+    }
+    return play;
+  };
+  const taskFor = (event) => {
+    const playIndex = Number.isFinite(Number(event.play_index)) ? Number(event.play_index) : `n${nextPlay}`;
+    const index = Number.isFinite(Number(event.index)) ? Number(event.index) : `t${nextTask + 1}`;
+    const key = hostKey(playIndex, index);
+    let task = tasksByKey.get(key);
+    if (!task) {
+      task = {
+        index,
+        playIndex,
+        name: event.task || "",
+        role: event.role || "",
+        handler: Boolean(event.handler),
+        hosts: [],
+        status: "",
+        duration: null,
+      };
+      tasksByKey.set(key, task);
+      playFor(playIndex, event.play || "").tasks.push(task);
+      if (Number.isFinite(index)) nextTask = Math.max(nextTask, index);
+    } else {
+      if (!task.name && event.task) task.name = event.task;
+      if (!task.role && event.role) task.role = event.role;
+    }
+    return task;
+  };
+  for (const item of events || []) {
+    const event = eventPayload(item);
+    if (!event || typeof event.type !== "string") continue;
+    if (event.type === "limit") {
+      truncated = true;
+      limit = Number(event.events) || 0;
+      continue;
+    }
+    if (event.type === "play_start") {
+      playFor(Number(event.index), event.play || "");
+      continue;
+    }
+    if (event.type === "task_start") {
+      taskFor(event);
+      continue;
+    }
+    if (event.type !== "host_result") continue;
+    const task = taskFor(event);
+    const duration = Number(event.duration);
+    const censored = event.censored === true;
+    const reported = STATUS_RANK[event.status] ? event.status : "ok";
+    task.hosts.push({
+      host: String(event.host || ""),
+      status: reported === "ok" && event.changed === true ? "changed" : reported,
+      duration: Number.isFinite(duration) && duration >= 0 ? duration : null,
+      msg: !censored && typeof event.msg === "string" ? event.msg : "",
+      stdout: !censored && typeof event.stdout === "string" ? event.stdout : "",
+      stderr: !censored && typeof event.stderr === "string" ? event.stderr : "",
+      diff: !censored && typeof event.diff === "string" ? event.diff : "",
+      rc: !censored && Number.isInteger(event.rc) ? event.rc : null,
+      changed: event.changed === true,
+      ignored: event.ignored === true,
+      censored,
+    });
+  }
+  for (const play of plays) {
+    for (const task of play.tasks) {
+      task.status = worstStatus(task.hosts);
+      const durations = task.hosts.map((host) => host.duration).filter((value) => value !== null);
+      task.duration = durations.length ? Math.max(...durations) : null;
+      task.counts = statusCounts(task.hosts);
+    }
+    play.status = worstStatus(play.tasks.flatMap((task) => task.hosts));
+    play.counts = statusCounts(play.tasks.flatMap((task) => task.hosts));
+    play.duration = play.tasks.reduce((sum, task) => sum + (task.duration || 0), 0);
+  }
+  return { plays, truncated, limit };
+}
+
+export function statusCounts(hosts) {
+  const counts = {};
+  for (const host of hosts || []) {
+    counts[host.status] = (counts[host.status] || 0) + 1;
+  }
+  return counts;
+}
+
+/** The highest id across the raw and structured rows of a job. */
+export function lastJobEventId(job) {
+  let last = 0;
+  for (const item of [...((job && job.events) || []), ...((job && job.ansible_events) || [])]) {
+    const id = Number(item && item.id);
+    if (Number.isFinite(id) && id > last) last = id;
+  }
+  return last;
+}
+
+/** Appends one live event unless its id was already seeded from the job. */
+export function pushStructuredEvent(state, item) {
+  const id = Number(item && item.id);
+  if (Number.isFinite(id) && id > 0) {
+    if (state.seen.has(id)) return false;
+    state.seen.add(id);
+  }
+  state.events.push(item);
+  return true;
+}
+
+export function hostedNames(tree) {
+  const names = new Set();
+  for (const play of (tree && tree.plays) || []) {
+    for (const task of play.tasks) {
+      for (const host of task.hosts) {
+        if (host.host) names.add(host.host);
+      }
+    }
+  }
+  return [...names].sort((left, right) => left.localeCompare(right));
+}
+
+/** Applies the host and status filters and the failed-first order. */
+export function filterAnsibleTree(tree, options = {}) {
+  const hostFilter = options.host || "";
+  const statusFilter = options.status || "";
+  const failedFirst = options.failedFirst === true;
+  const plays = [];
+  for (const play of (tree && tree.plays) || []) {
+    const tasks = [];
+    for (const task of play.tasks) {
+      const hosts = task.hosts.filter((host) =>
+        (!hostFilter || host.host === hostFilter) && (!statusFilter || host.status === statusFilter));
+      if (!hosts.length) continue;
+      const status = worstStatus(hosts);
+      const durations = hosts.map((host) => host.duration).filter((value) => value !== null);
+      tasks.push({
+        ...task,
+        hosts,
+        status,
+        counts: statusCounts(hosts),
+        duration: durations.length ? Math.max(...durations) : null,
+      });
+    }
+    if (!tasks.length) continue;
+    if (failedFirst) {
+      tasks.sort((left, right) => statusRank(right.status) - statusRank(left.status));
+    }
+    const hosts = tasks.flatMap((task) => task.hosts);
+    plays.push({
+      ...play,
+      tasks,
+      status: worstStatus(hosts),
+      counts: statusCounts(hosts),
+      duration: tasks.reduce((sum, task) => sum + (task.duration || 0), 0),
+    });
+  }
+  if (failedFirst) {
+    plays.sort((left, right) => statusRank(right.status) - statusRank(left.status));
+  }
+  return { ...tree, plays };
+}
+
+export function formatDuration(seconds) {
+  if (seconds === null || seconds === undefined || !Number.isFinite(Number(seconds))) return "";
+  const value = Math.max(0, Number(seconds));
+  if (value < 0.1) return "<0.1s";
+  if (value < 10) return `${value.toFixed(1)}s`;
+  if (value < 60) return `${Math.round(value)}s`;
+  const minutes = Math.floor(value / 60);
+  const rest = Math.round(value % 60);
+  return `${minutes}m ${rest}s`;
+}
+
 function paintLogLine(line, query) {
   const marks = [];
   line.replaceChildren();
@@ -362,6 +594,7 @@ function renderRecap(state) {
     }
     [row.host, ...RECAP_FIELDS.map((field) => String(row[field]))].forEach((value, index) => {
       const cell = document.createElement(index === 0 ? "th" : "td");
+      if (index > 0) cell.dataset.label = t(RECAP_FIELDS[index - 1]);
       cell.textContent = value;
       line.appendChild(cell);
     });
@@ -675,6 +908,222 @@ function jobActions(job) {
   return `<button class="btn primary" type="button" data-action="relaunch">${h("relaunch")}</button>${failedHosts}`;
 }
 
+function stNode(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function stBadges(counts, parent) {
+  for (const status of ["failed", "unreachable", "changed", "ok", "skipped"]) {
+    const count = counts && counts[status];
+    if (!count) continue;
+    parent.appendChild(stNode("span", `st-badge ${status}`, `${count} ${t(status)}`));
+  }
+}
+
+function stField(body, label, text) {
+  if (!text) return;
+  const field = stNode("div", "st-field");
+  field.appendChild(stNode("h4", "", label));
+  field.appendChild(stNode("pre", "st-pre", text));
+  body.appendChild(field);
+}
+
+function stHost(host, key, state) {
+  const item = stNode("details", `st-host ${host.status}`);
+  item.dataset.host = host.host;
+  item.dataset.status = host.status;
+  item.open = state.open.has(key) ? state.open.get(key) : false;
+  item.addEventListener("toggle", () => state.open.set(key, item.open));
+  const summary = stNode("summary", "st-host-head");
+  summary.appendChild(stNode("span", `st-badge ${host.status}`, t(host.status)));
+  summary.appendChild(stNode("span", "st-host-name", host.host));
+  if (host.duration !== null) {
+    summary.appendChild(stNode("span", "st-duration", formatDuration(host.duration)));
+  }
+  if (host.ignored) summary.appendChild(stNode("span", "st-note", t("ignored")));
+  item.appendChild(summary);
+  const body = stNode("div", "st-body");
+  if (host.censored) {
+    body.appendChild(stNode("p", "small muted", t("output_hidden_by_no_log")));
+  } else {
+    if (host.rc !== null) body.appendChild(stNode("p", "small muted", `${t("return_code")}: ${host.rc}`));
+    stField(body, t("message"), host.msg);
+    stField(body, t("stdout"), host.stdout);
+    stField(body, t("stderr"), host.stderr);
+    stField(body, t("diff"), host.diff);
+    if (!body.childElementCount) body.appendChild(stNode("p", "small muted", t("no_result_detail")));
+  }
+  item.appendChild(body);
+  return item;
+}
+
+function bindStructuredOutput(job) {
+  const switchBox = document.querySelector("#output-view");
+  const box = document.querySelector("#structured-output");
+  const treeBox = document.querySelector("#st-tree");
+  const log = document.querySelector("#log");
+  const tools = document.querySelector("#output-tools");
+  const hostSelect = document.querySelector("#st-host");
+  const statusSelect = document.querySelector("#st-status");
+  const failedFirst = document.querySelector("#st-failed-first");
+  if (!switchBox || !box || !treeBox || !hostSelect || !statusSelect || !failedFirst) return null;
+  const state = {
+    events: [...(job.ansible_events || [])],
+    seen: new Set((job.ansible_events || []).map((item) => Number(item && item.id)).filter((id) => Number.isFinite(id) && id > 0)),
+    tree: { plays: [], truncated: false, limit: 0 },
+    open: new Map(),
+    explicit: false,
+    view: "raw",
+    frame: 0,
+    tab: true,
+  };
+  state.tree = buildAnsibleTree(state.events);
+  state.view = state.tree.plays.length ? outputViewPreference() : "raw";
+  if (state.view === "structured") state.explicit = true;
+
+  const applyView = () => {
+    const raw = state.view !== "structured";
+    const available = state.tree.plays.length > 0;
+    switchBox.hidden = !available || !state.tab;
+    switchBox.querySelectorAll("[data-output-view]").forEach((button) => {
+      const active = button.dataset.outputView === state.view;
+      button.classList.toggle("primary", active);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+    box.hidden = raw || !state.tab;
+    if (tools) tools.hidden = !raw || !state.tab;
+    if (log) log.hidden = !raw || !state.tab;
+  };
+
+  const setHostOptions = () => {
+    const names = hostedNames(state.tree);
+    const current = hostSelect.value;
+    const wanted = ["", ...names].join("\u0000");
+    if (hostSelect.dataset.options !== wanted) {
+      hostSelect.dataset.options = wanted;
+      const all = stNode("option", "", t("all_hosts"));
+      all.value = "";
+      hostSelect.replaceChildren(
+        all,
+        ...names.map((name) => {
+          const option = stNode("option", "", name);
+          option.value = name;
+          return option;
+        }),
+      );
+      hostSelect.value = names.includes(current) ? current : "";
+    }
+  };
+
+  const isOpen = (key, fallback) => (state.open.has(key) ? state.open.get(key) : fallback);
+  const remember = (key, details) => {
+    state.open.set(key, details.open);
+  };
+
+  const draw = () => {
+    state.frame = 0;
+    setHostOptions();
+    const filtered = filterAnsibleTree(state.tree, {
+      host: hostSelect.value,
+      status: statusSelect.value,
+      failedFirst: failedFirst.checked,
+    });
+    const nodes = [];
+    for (const play of filtered.plays) {
+      const playKey = `p:${play.index}`;
+      const details = stNode("details", `st-play ${play.status || ""}`);
+      details.open = isOpen(playKey, true);
+      details.addEventListener("toggle", () => remember(playKey, details));
+      const summary = stNode("summary", "st-play-head");
+      summary.appendChild(stNode("span", "st-play-name", play.name || t("play")));
+      stBadges(play.counts, summary);
+      if (play.duration) summary.appendChild(stNode("span", "st-duration", formatDuration(play.duration)));
+      details.appendChild(summary);
+      const tasks = stNode("div", "st-tasks");
+      for (const task of play.tasks) {
+        const taskKey = `p:${play.index}:t:${task.index}`;
+        const taskDetails = stNode("details", `st-task ${task.status || ""}`);
+        taskDetails.open = isOpen(taskKey, task.status === "failed" || task.status === "unreachable");
+        taskDetails.addEventListener("toggle", () => remember(taskKey, taskDetails));
+        taskDetails.dataset.task = task.name;
+        taskDetails.dataset.status = task.status || "";
+        const taskHead = stNode("summary", "st-task-head");
+        const name = task.role ? `${task.role} · ${task.name}` : task.name;
+        taskHead.appendChild(stNode("span", "st-task-name", name || t("task")));
+        if (task.handler) taskHead.appendChild(stNode("span", "st-note", t("handler")));
+        stBadges(task.counts, taskHead);
+        if (task.duration !== null) {
+          taskHead.appendChild(stNode("span", "st-duration", formatDuration(task.duration)));
+        }
+        taskDetails.appendChild(taskHead);
+        const hosts = stNode("div", "st-hosts");
+        task.hosts.forEach((host) =>
+          hosts.appendChild(stHost(host, `${taskKey}:h:${host.host}`, state)));
+        taskDetails.appendChild(hosts);
+        tasks.appendChild(taskDetails);
+      }
+      details.appendChild(tasks);
+      nodes.push(details);
+    }
+    if (!filtered.plays.length) {
+      nodes.push(stNode("p", "small muted st-empty", t("no_tasks_match")));
+    }
+    if (filtered.truncated) {
+      nodes.push(
+        stNode("p", "small muted st-limit", t("structured_output_limited", { count: filtered.limit || 2000 })),
+      );
+    }
+    treeBox.replaceChildren(...nodes);
+  };
+
+  const schedule = () => {
+    if (state.frame) return;
+    const run = () => draw();
+    state.frame = window.requestAnimationFrame ? window.requestAnimationFrame(run) : window.setTimeout(run, 16);
+  };
+
+  switchBox.querySelectorAll("[data-output-view]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.view = button.dataset.outputView === "raw" ? "raw" : "structured";
+      state.explicit = true;
+      rememberOutputView(state.view);
+      applyView();
+    });
+  });
+  [hostSelect, statusSelect, failedFirst].forEach((control) => {
+    control.addEventListener("change", () => draw());
+  });
+  const refresh = () => {
+    state.tree = buildAnsibleTree(state.events);
+    const available = state.tree.plays.length > 0;
+    if (available && state.view === "raw" && !state.explicit && outputViewPreference() === "structured") {
+      state.view = "structured";
+    }
+    if (!available) state.view = "raw";
+    applyView();
+    schedule();
+  };
+  applyView();
+  refresh();
+
+  return {
+    append(item) {
+      if (!pushStructuredEvent(state, item)) return;
+      refresh();
+    },
+    reload() {
+      refresh();
+    },
+    tab(show) {
+      state.tab = show;
+      applyView();
+    },
+  };
+}
+
 async function pageJob(id) {
   const live = appState.generation;
   const job = await api("GET", `/api/v1/jobs/${encodeURIComponent(id)}`);
@@ -706,15 +1155,33 @@ async function pageJob(id) {
           <button class="btn" type="button" id="log-jump-end" hidden>${h("jump_to_end")}</button>
         </div>
       </div>
+      <div class="output-view" id="output-view" hidden>
+        <div class="tabs" role="group" aria-label="${h("output_view")}">
+          <button class="btn pill" type="button" data-output-view="structured" aria-pressed="false">${h("structured_output")}</button>
+          <button class="btn pill primary" type="button" data-output-view="raw" aria-pressed="true">${h("raw_output")}</button>
+        </div>
+      </div>
     </div>
     <div id="panel-output">
       <div class="result-summary" id="log-result" tabindex="0" hidden></div>
       <div class="log-summary" id="log-summary" hidden></div>
+      <div class="structured" id="structured-output" hidden>
+        <div class="filter-bar st-filters">
+          <label class="field"><span>${h("host")}</span><select id="st-host" aria-label="${h("host")}"><option value="">${h("all_hosts")}</option></select></label>
+          <label class="field"><span>${h("status")}</span><select id="st-status" aria-label="${h("status")}">
+            <option value="">${h("all_statuses")}</option>
+            ${["failed", "unreachable", "changed", "ok", "skipped"].map((status) => `<option value="${status}">${esc(t(status))}</option>`).join("")}
+          </select></label>
+          <label class="row"><input id="st-failed-first" type="checkbox" checked> ${h("failed_first")}</label>
+        </div>
+        <div class="st-tree" id="st-tree"></div>
+      </div>
       <div class="log" id="log" tabindex="0"></div>
     </div>
     <div id="panel-parameters" hidden>${jobParameters(job)}</div>`);
   const badge = document.querySelector(".pill");
   bindJobLog(document.querySelector("#log"), job);
+  const structured = bindStructuredOutput(job);
   (job.events || []).forEach(appendLog);
   const relaunchButtons = () => document.querySelectorAll("[data-action=relaunch], [data-action=relaunch-failed]");
   const startAgain = async (onlyFailed) => {
@@ -761,6 +1228,8 @@ async function pageJob(id) {
       document.querySelector("#panel-output").hidden = tab !== "output";
       document.querySelector("#panel-parameters").hidden = tab !== "parameters";
       document.querySelector("#output-tools").hidden = tab !== "output";
+      document.querySelector("#output-view").hidden = tab !== "output";
+      if (structured) structured.tab(tab === "output");
     });
   });
   document.querySelector("#download-output").addEventListener("click", async () => {
@@ -812,11 +1281,15 @@ async function pageJob(id) {
     if (duration) duration.textContent = spanText(job.started_at, durationEnd, durationStatus);
   };
   const durationTimer = setInterval(tickDuration, 1000);
-  const last = (job.events || []).reduce((max, event) => Math.max(max, event.id), 0);
+  const last = lastJobEventId(job);
   appState.setSource(new EventSource(`/api/v1/jobs/${encodeURIComponent(id)}/events?after=${last}`));
   appState.source.addEventListener("log", (event) => {
     if (live !== appState.generation) return;
     appendLog(JSON.parse(event.data));
+  });
+  appState.source.addEventListener("ansible", (event) => {
+    if (live !== appState.generation) return;
+    if (structured) structured.append(JSON.parse(event.data));
   });
   appState.source.addEventListener("end", (event) => {
     if (live !== appState.generation) return;

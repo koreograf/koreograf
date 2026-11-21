@@ -9,7 +9,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::db::{self, Job, JobEvent};
 use crate::error::{ApiError, ApiJson, AppResult};
@@ -104,6 +104,24 @@ impl JobEventResponse {
 }
 
 #[derive(Serialize)]
+pub(crate) struct AnsibleEventResponse {
+    id: i64,
+    ts: String,
+    event: Value,
+}
+
+impl AnsibleEventResponse {
+    fn new(event: &JobEvent) -> Option<Self> {
+        let parsed = serde_json::from_str::<Value>(&event.line).ok()?;
+        Some(Self {
+            id: event.id,
+            ts: event.ts.clone(),
+            event: parsed,
+        })
+    }
+}
+
+#[derive(Serialize)]
 pub struct JobResponse {
     id: String,
     team_id: String,
@@ -123,6 +141,8 @@ pub struct JobResponse {
     failed_hosts: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     events: Option<Vec<JobEventResponse>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ansible_events: Option<Vec<AnsibleEventResponse>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     output_capped: Option<bool>,
 }
@@ -147,12 +167,18 @@ impl JobResponse {
             parameters: db::json_object(&job.parameters),
             failed_hosts: runner::failed_host_names(&job.failed_hosts),
             events: events.map(|events| events.iter().map(JobEventResponse::new).collect()),
+            ansible_events: None,
             output_capped: None,
         }
     }
 
     fn with_output_capped(mut self, capped: bool) -> Self {
         self.output_capped = Some(capped);
+        self
+    }
+
+    fn with_ansible_events(mut self, events: Vec<AnsibleEventResponse>) -> Self {
+        self.ansible_events = Some(events);
         self
     }
 }
@@ -207,9 +233,12 @@ pub async fn get_job(
     let job = db.job(&id)?.ok_or(ApiError::NotFound)?;
     crate::features::identity::authorize(db, &user, &job.team_id, Role::Viewer)?;
     let events = events_for_page(db, &id)?;
+    let ansible = ansible_events_for_job(db, &id)?;
     let capped = db.events_bytes(&id)? > OUTPUT_LIMIT as i64;
     Ok(Json(
-        JobResponse::new(&job, Some(&events)).with_output_capped(capped),
+        JobResponse::new(&job, Some(&events))
+            .with_ansible_events(ansible)
+            .with_output_capped(capped),
     ))
 }
 
@@ -257,6 +286,15 @@ pub(crate) fn events_for_page(
 
 const OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
 
+pub(crate) fn ansible_events_for_job(
+    db: &dyn crate::backend::Backend,
+    job_id: &str,
+) -> AppResult<Vec<AnsibleEventResponse>> {
+    let limit = crate::ansible_events::MAX_EVENTS as i64 + 1;
+    let rows = db.ansible_events_after(job_id, 0, limit)?;
+    Ok(rows.iter().filter_map(AnsibleEventResponse::new).collect())
+}
+
 fn output_filename(name: &str, id: &str) -> String {
     let mut slug = String::new();
     for ch in name.chars().take(48) {
@@ -280,7 +318,10 @@ fn output_filename(name: &str, id: &str) -> String {
     }
 }
 
-fn render_job_output(db: &dyn crate::backend::Backend, job_id: &str) -> AppResult<String> {
+pub(crate) fn render_job_output(
+    db: &dyn crate::backend::Backend,
+    job_id: &str,
+) -> AppResult<String> {
     let mut out = String::new();
     let mut after = 0_i64;
     loop {
@@ -400,7 +441,7 @@ pub async fn job_events(
         loop {
             let snapshot = {
                 let db = state.store();
-                let events = db.events_after(&id, last, 200).unwrap_or_default();
+                let events = db.events_all_after(&id, last, 200).unwrap_or_default();
                 let (status, finished_at) = db
                     .job(&id)
                     .ok()
@@ -412,6 +453,14 @@ pub async fn job_events(
             let count = snapshot.0.len();
             for event in snapshot.0 {
                 last = event.id;
+                if event.stream == crate::ansible_events::STREAM {
+                    let Ok(parsed) = serde_json::from_str::<Value>(&event.line) else {
+                        continue;
+                    };
+                    let data = json!({"id": event.id, "ts": event.ts, "event": parsed});
+                    yield Ok(Event::default().event("ansible").id(event.id.to_string()).data(serde_json::to_string(&data).unwrap_or_default()));
+                    continue;
+                }
                 let data = JobEventResponse::new(&event);
                 yield Ok(Event::default().event("log").id(event.id.to_string()).data(serde_json::to_string(&data).unwrap_or_default()));
             }

@@ -1078,6 +1078,59 @@ fn page_state(tag: &str) -> crate::Shared {
 }
 
 #[test]
+fn job_page_and_download_keep_the_raw_log_only() {
+    let state = page_state("structured-raw");
+    {
+        let db = state.db().unwrap();
+        crate::features::jobs::store::insert_event(&db, "job", "stdout", "plain line").unwrap();
+        crate::features::jobs::store::insert_event(
+            &db,
+            "job",
+            crate::ansible_events::STREAM,
+            r#"{"type":"host_result","host":"web-1","status":"failed"}"#,
+        )
+        .unwrap();
+        crate::features::jobs::store::insert_event(&db, "job", "stdout", "after events").unwrap();
+    }
+    let events = events_for_page(state.store(), "job").unwrap();
+    assert!(events
+        .iter()
+        .all(|event| event.stream != crate::ansible_events::STREAM));
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.line.as_str())
+            .collect::<Vec<_>>(),
+        vec!["plain line", "after events"]
+    );
+    let download = crate::features::jobs::routes::render_job_output(state.store(), "job").unwrap();
+    assert!(download.contains("plain line"));
+    assert!(download.contains("after events"));
+    assert!(!download.contains("host_result"));
+    let structured =
+        crate::features::jobs::routes::ansible_events_for_job(state.store(), "job").unwrap();
+    assert_eq!(structured.len(), 1);
+    let _ = std::fs::remove_dir_all(&state.cfg.data_dir);
+}
+
+#[test]
+fn a_job_without_structured_events_keeps_the_raw_log() {
+    let state = page_state("no-structured");
+    {
+        let db = state.db().unwrap();
+        crate::features::jobs::store::insert_event(&db, "job", "stdout", "tests ok").unwrap();
+    }
+    assert!(
+        crate::features::jobs::routes::ansible_events_for_job(state.store(), "job")
+            .unwrap()
+            .is_empty()
+    );
+    let download = crate::features::jobs::routes::render_job_output(state.store(), "job").unwrap();
+    assert_eq!(download, "tests ok\n");
+    let _ = std::fs::remove_dir_all(&state.cfg.data_dir);
+}
+
+#[test]
 fn job_page_keeps_the_start_and_the_end() {
     let state = page_state("head-tail");
     {

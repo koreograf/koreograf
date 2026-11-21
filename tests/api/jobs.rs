@@ -11,6 +11,147 @@ use crate::common::call_cookie as call;
 
 use crate::common::*;
 
+async fn insert_structured_events(harness: &TestApp, job_id: &str, lines: &[&str]) {
+    if let Some(url) = harness.database_url.as_deref() {
+        let client = postgres_client(url).await;
+        for (index, line) in lines.iter().enumerate() {
+            client
+                .execute(
+                    "INSERT INTO job_events (job_id, ts, stream, line)
+                     VALUES ($1, $2, 'ansible', $3)",
+                    &[&job_id, &format!("2026-01-01T00:00:0{index}Z"), line],
+                )
+                .await
+                .expect("postgres structured event");
+        }
+    } else {
+        let db = harness.state.db().expect("sqlite database");
+        for (index, line) in lines.iter().enumerate() {
+            db.execute(
+                "INSERT INTO job_events (job_id, ts, stream, line)
+                 VALUES (?1, ?2, 'ansible', ?3)",
+                rusqlite::params![job_id, format!("2026-01-01T00:00:0{index}Z"), line],
+            )
+            .expect("sqlite structured event");
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn structured_ansible_events_stay_out_of_the_raw_log() {
+    let harness = TestApp::boot("structured", Options::default());
+    let app = harness.app.clone();
+    let (cookie, team) = sign_in(&app).await;
+
+    let (status, templates, _) = call(
+        &app,
+        "GET",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{templates}");
+    let health = templates
+        .as_array()
+        .expect("templates")
+        .iter()
+        .find(|item| item["name"] == "Healthcheck")
+        .expect("healthcheck");
+    let template_id = health["id"].as_str().expect("template id");
+    let (status, launched, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{launched}");
+    let job_id = launched["id"].as_str().expect("job id").to_string();
+
+    let mut job = Value::Null;
+    for _ in 0..80 {
+        let (status, current, _) = call(
+            &app,
+            "GET",
+            &format!("/api/jobs/{job_id}"),
+            Some(&cookie),
+            Some(&team),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{current}");
+        job = current;
+        if matches!(
+            job["status"].as_str(),
+            Some("successful" | "failed" | "canceled")
+        ) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        matches!(
+            job["status"].as_str(),
+            Some("successful" | "failed" | "canceled")
+        ),
+        "{job}"
+    );
+    assert_eq!(job["ansible_events"], json!([]), "{job}");
+    let events = job["events"].as_array().expect("events");
+    assert!(events
+        .iter()
+        .all(|event| event["stream"].as_str() != Some("ansible")));
+
+    insert_structured_events(
+        &harness,
+        &job_id,
+        &[
+            r#"{"type":"play_start","play":"Site","index":1}"#,
+            r#"{"type":"host_result","play":"Site","play_index":1,"index":1,"task":"Deploy","host":"web-1","status":"failed","msg":"boom"}"#,
+        ],
+    )
+    .await;
+
+    let (status, job, _) = call(
+        &app,
+        "GET",
+        &format!("/api/jobs/{job_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{job}");
+    let structured = job["ansible_events"].as_array().expect("ansible_events");
+    assert_eq!(structured.len(), 2, "{job}");
+    assert_eq!(structured[0]["event"]["type"], "play_start");
+    assert_eq!(structured[1]["event"]["status"], "failed");
+    let events = job["events"].as_array().expect("events");
+    assert!(!events.is_empty());
+    assert!(events
+        .iter()
+        .all(|event| event["stream"].as_str() != Some("ansible")));
+
+    let (status, output, _) = call(
+        &app,
+        "GET",
+        &format!("/api/jobs/{job_id}/output"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let output = output.as_str().unwrap_or("");
+    assert!(output.contains("healthcheck ok"), "{output}");
+    assert!(!output.contains("play_start"), "{output}");
+    assert!(!output.contains("host_result"), "{output}");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn the_job_log_marks_a_fatal_line_and_keeps_galaxy_as_a_warning() {
     let harness = TestApp::boot("log-style", Options::default());
