@@ -6,6 +6,8 @@
 //! `stderr`, and `system` streams are untouched, and every bounded field and
 //! the total volume are enforced again here before a row is written.
 
+use std::collections::{HashMap, HashSet};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -41,7 +43,174 @@ const MAX_STATS_BYTES: usize = 3 * 1024 * 1024;
 const MAX_STATS_HOSTS: usize = 256;
 /// A single JSON line above this is dropped instead of buffered forever.
 const MAX_LINE_BYTES: usize = 64 * 1024;
+/// One host detail response carries at most this many events.
+pub(crate) const MAX_HOST_EVENTS: usize = 500;
+/// One host detail response stays under this many bytes.
+pub(crate) const MAX_HOST_BYTES: usize = 1024 * 1024;
+/// A read for one host stops after this much of the sidecar, so a pruned or
+/// oversized file cannot hold the request forever.
+const MAX_HOST_SCAN_BYTES: usize = 64 * 1024 * 1024;
 const POLL: Duration = Duration::from_millis(200);
+
+/// Why a host detail request has no events.
+pub(crate) const UNAVAILABLE: &str = "ansible_events_unavailable";
+/// The sidecar exists but has no result for the requested host.
+pub(crate) const UNKNOWN_HOST: &str = "host_not_in_ansible_events";
+
+/// The bounded sidecar slice for one host.
+pub(crate) struct HostEvents {
+    pub events: Vec<Value>,
+    pub truncated: bool,
+    pub reason: Option<&'static str>,
+}
+
+/// Reads `ansible-events.jsonl` and returns only the results of `host`, each
+/// preceded by its task header once. Every line goes through the same
+/// sanitisation as the live capture, so `no_log` output and the work paths
+/// stay out.
+pub(crate) fn host_events(work: &Path, data_dir: &Path, host: &str) -> HostEvents {
+    let Ok(meta) = std::fs::symlink_metadata(work) else {
+        return unavailable();
+    };
+    if meta.file_type().is_symlink() || !meta.is_dir() {
+        return unavailable();
+    }
+    let path = work.join(FILE);
+    let file = match open_sidecar(&path) {
+        Ok(file) => file,
+        Err(_) => return unavailable(),
+    };
+    read_host_events(file, scrub_paths(work, data_dir), host)
+}
+
+fn unavailable() -> HostEvents {
+    HostEvents {
+        events: Vec::new(),
+        truncated: false,
+        reason: Some(UNAVAILABLE),
+    }
+}
+
+fn read_host_events(file: std::fs::File, scrub: Vec<String>, host: &str) -> HostEvents {
+    let mut reader = BufReader::new(file);
+    let mut line = Vec::new();
+    let mut headers: HashMap<String, Value> = HashMap::new();
+    let mut emitted: HashSet<String> = HashSet::new();
+    let mut events: Vec<Value> = Vec::new();
+    let mut bytes = 0usize;
+    let mut scanned = 0usize;
+    let mut matched = false;
+    let mut truncated = false;
+    loop {
+        line.clear();
+        let read = match reader.read_until(b'\n', &mut line) {
+            Ok(read) => read,
+            Err(_) if matched => {
+                truncated = true;
+                break;
+            }
+            Err(_) => return unavailable(),
+        };
+        if read == 0 {
+            break;
+        }
+        scanned = scanned.saturating_add(read);
+        if scanned > MAX_HOST_SCAN_BYTES {
+            truncated = true;
+            break;
+        }
+        if line.last() == Some(&b'\n') {
+            line.pop();
+        }
+        if line.last() == Some(&b'\r') {
+            line.pop();
+        }
+        if line.len() > MAX_LINE_BYTES {
+            continue;
+        }
+        let Ok(raw) = std::str::from_utf8(&line) else {
+            continue;
+        };
+        let Some((event, stats)) = sanitize(raw, &scrub) else {
+            continue;
+        };
+        if stats {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(&event) else {
+            continue;
+        };
+        match value.get("type").and_then(Value::as_str) {
+            Some("task_start") => {
+                headers.insert(task_key(&value), value);
+            }
+            Some("host_result") => {
+                if value.get("host").and_then(Value::as_str) != Some(host) {
+                    continue;
+                }
+                matched = true;
+                let key = task_key(&value);
+                let mut items = Vec::with_capacity(2);
+                if let Some(header) = headers.get(&key) {
+                    if !emitted.contains(&key) {
+                        items.push(header.clone());
+                    }
+                }
+                items.push(value);
+                let sizes = items
+                    .iter()
+                    .map(|item| {
+                        serde_json::to_string(item)
+                            .map(|text| text.len())
+                            .unwrap_or(0)
+                    })
+                    .collect::<Vec<_>>();
+                let added = sizes
+                    .iter()
+                    .fold(0usize, |sum, size| sum.saturating_add(*size));
+                if events.len().saturating_add(items.len()) > MAX_HOST_EVENTS
+                    || bytes.saturating_add(added) > MAX_HOST_BYTES
+                {
+                    truncated = true;
+                    return HostEvents {
+                        events,
+                        truncated,
+                        reason: None,
+                    };
+                }
+                bytes = bytes.saturating_add(added);
+                events.extend(items);
+                emitted.insert(key);
+            }
+            _ => {}
+        }
+    }
+    if !matched {
+        return HostEvents {
+            events: Vec::new(),
+            truncated,
+            reason: Some(UNKNOWN_HOST),
+        };
+    }
+    HostEvents {
+        events,
+        truncated,
+        reason: None,
+    }
+}
+
+fn task_key(event: &Value) -> String {
+    let play = event.get("play_index").and_then(Value::as_i64);
+    let index = event.get("index").and_then(Value::as_i64);
+    match (play, index) {
+        (Some(play), Some(index)) => format!("{play}:{index}"),
+        _ => format!(
+            "{}:{}",
+            event.get("play").and_then(Value::as_str).unwrap_or(""),
+            event.get("task").and_then(Value::as_str).unwrap_or("")
+        ),
+    }
+}
 
 const TEXT_FIELDS: &[&str] = &["play", "task", "role", "host", "msg", "stdout", "stderr"];
 const NUMBER_FIELDS: &[&str] = &["index", "play_index", "task_index", "rc"];
@@ -165,7 +334,7 @@ fn store(state: &Shared, job_id: &str, event: Option<String>) {
 /// writable by the job, so a job must not be able to point the tailer at a
 /// host file.
 #[cfg(unix)]
-fn open_sidecar(path: &Path) -> std::io::Result<std::fs::File> {
+pub(crate) fn open_sidecar(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::fd::OwnedFd;
 
     use nix::fcntl::{open, OFlag};
@@ -181,7 +350,7 @@ fn open_sidecar(path: &Path) -> std::io::Result<std::fs::File> {
 }
 
 #[cfg(not(unix))]
-fn open_sidecar(path: &Path) -> std::io::Result<std::fs::File> {
+pub(crate) fn open_sidecar(path: &Path) -> std::io::Result<std::fs::File> {
     std::fs::File::open(path)
 }
 

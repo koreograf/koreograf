@@ -1075,6 +1075,7 @@ function stHost(host, key, state) {
 }
 
 const TASK_HOST_PAGE = 50;
+const DETAIL_CACHE = 8;
 
 function bindStructuredOutput(job, startedAt) {
   const switchBox = document.querySelector("#output-view");
@@ -1109,6 +1110,7 @@ function bindStructuredOutput(job, startedAt) {
     stats: { rows: new Map(), total: 0, parts: 0, received: new Set(), complete: true },
     open: new Map(),
     taskHosts: new Map(),
+    details: new Map(),
     explicit: false,
     view: "raw",
     frame: 0,
@@ -1182,6 +1184,42 @@ function bindStructuredOutput(job, startedAt) {
     return [...names].sort((left, right) => left.localeCompare(right));
   };
 
+  const detailEvents = () => {
+    const items = [];
+    for (const entry of state.details.values()) items.push(...entry.events);
+    return items;
+  };
+
+  const trimDetails = () => {
+    if (state.details.size <= DETAIL_CACHE) return;
+    for (const [host, entry] of state.details) {
+      if (state.details.size <= DETAIL_CACHE) break;
+      if (!entry.loading && host !== state.hostQuery) state.details.delete(host);
+    }
+  };
+
+  const ensureHostDetail = (name) => {
+    const host = String(name || "");
+    if (!host || !job || job.tool !== "ansible") return;
+    if (hostedNames(state.tree).includes(host) || state.details.has(host)) return;
+    const entry = { host, loading: true, events: [], truncated: false, reason: "", failed: false };
+    state.details.set(host, entry);
+    trimDetails();
+    api("GET", `/api/v1/jobs/${encodeURIComponent(job.id)}/ansible?host=${encodeURIComponent(host)}`)
+      .then((data) => {
+        entry.events = Array.isArray(data && data.events) ? data.events : [];
+        entry.truncated = Boolean(data && data.truncated);
+        entry.reason = typeof (data && data.reason) === "string" ? data.reason : "";
+      })
+      .catch(() => {
+        entry.failed = true;
+      })
+      .finally(() => {
+        entry.loading = false;
+        refresh();
+      });
+  };
+
   const selectHost = (name) => {
     const host = String(name || "");
     state.hostQuery = host;
@@ -1191,6 +1229,7 @@ function bindStructuredOutput(job, startedAt) {
       hostHints.hidden = true;
       hostHints.replaceChildren();
     }
+    ensureHostDetail(host);
     draw();
   };
 
@@ -1312,6 +1351,26 @@ function bindStructuredOutput(job, startedAt) {
       failedFirst: failedFirst.checked,
       hosts: countHosts,
     });
+    const detailHost = state.hostQuery.trim();
+    const detail = detailHost ? state.details.get(detailHost) : null;
+    const detailNotice = Boolean(detail && (detail.loading || detail.failed || detail.reason));
+    const notes = [];
+    if (detail && detail.loading) {
+      const note = stNode("p", "small muted st-detail-note", t("host_detail_loading", { host: detail.host }));
+      note.setAttribute("role", "status");
+      notes.push(note);
+    } else if (detail && detail.failed) {
+      notes.push(stNode("p", "banner bad st-detail-note", t("host_detail_load_failed", { host: detail.host })));
+    } else if (detail && detail.reason) {
+      const note = stNode("p", "small muted st-detail-note", t(detail.reason));
+      note.setAttribute("role", "status");
+      notes.push(note);
+    } else if (detail && detail.truncated) {
+      notes.push(stNode("p", "small muted st-detail-note", t("host_detail_truncated", {
+        host: detail.host,
+        count: detail.events.length,
+      })));
+    }
     const nodes = [];
     for (const play of filtered.plays) {
       const playKey = `p:${play.index}`;
@@ -1353,7 +1412,7 @@ function bindStructuredOutput(job, startedAt) {
       details.appendChild(tasks);
       nodes.push(details);
     }
-    if (!filtered.plays.length) {
+    if (!filtered.plays.length && !detailNotice) {
       nodes.push(stNode("p", "small muted st-empty", t("no_tasks_match")));
     }
     if (filtered.truncated) {
@@ -1361,7 +1420,7 @@ function bindStructuredOutput(job, startedAt) {
         stNode("p", "small muted st-limit", t("structured_output_limited", { count: filtered.limit || 2000 })),
       );
     }
-    treeBox.replaceChildren(...nodes);
+    treeBox.replaceChildren(...notes, ...nodes);
   };
 
   const draw = () => {
@@ -1465,6 +1524,9 @@ function bindStructuredOutput(job, startedAt) {
     if (hostInput.hostTimer) window.clearTimeout(hostInput.hostTimer);
     hostInput.hostTimer = window.setTimeout(() => {
       state.hostQuery = hostInput.value.trim();
+      if (state.hostQuery && (state.stats.rows.has(state.hostQuery) || hostedNames(state.tree).includes(state.hostQuery))) {
+        ensureHostDetail(state.hostQuery);
+      }
       draw();
     }, 120);
   });
@@ -1490,7 +1552,7 @@ function bindStructuredOutput(job, startedAt) {
     control.addEventListener("change", () => draw());
   });
   const refresh = () => {
-    state.tree = buildAnsibleTree(state.events);
+    state.tree = buildAnsibleTree([...state.events, ...detailEvents()]);
     const available = state.tree.plays.length > 0 || state.stats.total > 0;
     if (available && state.view === "raw" && !state.explicit && outputViewPreference() === "structured") {
       state.view = "structured";

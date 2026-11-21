@@ -37,6 +37,247 @@ async fn insert_structured_events(harness: &TestApp, job_id: &str, lines: &[&str
     }
 }
 
+fn seed_ansible_job_sql(team: &str, id: &str) -> String {
+    format!(
+        "INSERT INTO jobs (
+            id, team_id, name, tool, status, extra_vars, launched_by, trigger,
+            started_at, finished_at, created_at, failed_hosts
+         ) VALUES (
+            '{id}', '{team}', 'Host detail', 'ansible', 'failed', '{{}}', 'admin',
+            'manual', '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z',
+            '2026-01-01T00:00:00Z', '[]'
+         )"
+    )
+}
+
+async fn seed_viewer(app: &axum::Router, admin: &str, team: &str, username: &str) -> String {
+    let (status, created, _) = call(
+        app,
+        "POST",
+        "/api/users",
+        Some(admin),
+        Some(team),
+        Some(json!({
+            "username": username,
+            "display_name": username,
+            "password": format!("{username}-pass"),
+            "is_admin": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let (status, member, _) = call(
+        app,
+        "POST",
+        &format!("/api/teams/{team}/members"),
+        Some(admin),
+        Some(team),
+        Some(json!({"username": username, "role": "viewer"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{member}");
+    let (status, _, cookie) = call(
+        app,
+        "POST",
+        "/api/v1/login",
+        None,
+        None,
+        Some(json!({"username": username, "password": format!("{username}-pass")})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    cookie.expect("viewer cookie")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn host_ansible_detail_is_bounded_censored_and_past_the_cap() {
+    let harness = TestApp::boot("host-detail", Options::default());
+    let app = harness.app.clone();
+    let (cookie, team) = harness.sign_in().await;
+    let id = "host-detail-job";
+    harness.execute_sql(&seed_ansible_job_sql(&team, id)).await;
+    let work = harness.dir.join("jobs").join(id);
+    std::fs::create_dir_all(&work).expect("work dir");
+    let mut sidecar = String::from(
+        r#"{"type":"play_start","play":"Bulk demo","index":1}
+{"type":"task_start","play":"Bulk demo","play_index":1,"index":1,"task":"Ping","role":"bulk"}
+"#,
+    );
+    for index in 1..=2100 {
+        sidecar.push_str(&format!(
+            "{{\"type\":\"host_result\",\"play\":\"Bulk demo\",\"play_index\":1,\"index\":1,\"task\":\"Ping\",\"role\":\"bulk\",\"host\":\"bulk-{index:04}\",\"status\":\"ok\",\"msg\":\"result {index}\"}}\n"
+        ));
+    }
+    for index in 0..600 {
+        sidecar.push_str(&format!(
+            "{{\"type\":\"host_result\",\"play\":\"Bulk demo\",\"play_index\":1,\"index\":1,\"task\":\"Ping\",\"role\":\"bulk\",\"host\":\"busy\",\"status\":\"ok\",\"msg\":\"busy {index}\"}}\n"
+        ));
+    }
+    sidecar.push_str(
+        r#"{"type":"host_result","play":"Bulk demo","play_index":1,"index":1,"task":"Ping","role":"bulk","host":"secret-host","status":"failed","msg":"password=hunter2","stdout":"hunter2","stderr":"hunter2","diff":"hunter2","censored":true}
+"#,
+    );
+    sidecar.push_str(&format!(
+        "{{\"type\":\"host_result\",\"play\":\"Bulk demo\",\"play_index\":1,\"index\":1,\"task\":\"Ping\",\"role\":\"bulk\",\"host\":\"path-host\",\"status\":\"ok\",\"msg\":\"written to {}/project/report\"}}\n",
+        work.display()
+    ));
+    std::fs::write(work.join("ansible-events.jsonl"), sidecar).expect("sidecar");
+
+    let detail = |host: &str| {
+        let app = app.clone();
+        let cookie = cookie.clone();
+        let team = team.clone();
+        let id = id.to_string();
+        let host = host.to_string();
+        async move {
+            call(
+                &app,
+                "GET",
+                &format!("/api/v1/jobs/{id}/ansible?host={host}"),
+                Some(&cookie),
+                Some(&team),
+                None,
+            )
+            .await
+        }
+    };
+
+    let (status, page, _) = detail("bulk-2100").await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["host"], "bulk-2100");
+    assert_eq!(page["truncated"], false, "{page}");
+    assert_eq!(page["reason"], Value::Null, "{page}");
+    let events = page["events"].as_array().expect("events");
+    assert!(!events.is_empty(), "{page}");
+    assert_eq!(events[0]["type"], "task_start", "{page}");
+    assert_eq!(events[0]["task"], "Ping");
+    let results = events
+        .iter()
+        .filter(|event| event["type"] == "host_result")
+        .collect::<Vec<_>>();
+    assert_eq!(results.len(), 1, "{page}");
+    assert_eq!(results[0]["host"], "bulk-2100");
+    assert_eq!(results[0]["msg"], "result 2100");
+    assert!(!page.to_string().contains("bulk-0001"), "{page}");
+
+    let (status, busy, _) = detail("busy").await;
+    assert_eq!(status, StatusCode::OK, "{busy}");
+    assert_eq!(busy["truncated"], true, "{busy}");
+    let events = busy["events"].as_array().expect("events");
+    assert!(events.len() <= 500, "{busy}");
+    assert_eq!(events.len(), 500, "{busy}");
+    assert!(events
+        .iter()
+        .filter(|event| event["type"] == "host_result")
+        .all(|event| event["host"] == "busy"));
+
+    let (status, secret, _) = detail("secret-host").await;
+    assert_eq!(status, StatusCode::OK, "{secret}");
+    assert!(!secret.to_string().contains("hunter2"), "{secret}");
+    let events = secret["events"].as_array().expect("events");
+    let result = events
+        .iter()
+        .find(|event| event["type"] == "host_result")
+        .expect("result");
+    assert_eq!(result["censored"], true);
+    assert!(result.get("msg").is_none(), "{secret}");
+
+    let (status, path, _) = detail("path-host").await;
+    assert_eq!(status, StatusCode::OK, "{path}");
+    assert!(path.to_string().contains("[work]/project/report"), "{path}");
+    assert!(
+        !path.to_string().contains(&work.display().to_string()),
+        "{path}"
+    );
+
+    let (status, unknown, _) = detail("missing-host").await;
+    assert_eq!(status, StatusCode::OK, "{unknown}");
+    assert_eq!(unknown["events"], json!([]));
+    assert_eq!(unknown["reason"], "host_not_in_ansible_events");
+
+    harness
+        .execute_sql(&seed_ansible_job_sql(&team, "no-sidecar"))
+        .await;
+    let (status, missing, _) = call(
+        &app,
+        "GET",
+        "/api/v1/jobs/no-sidecar/ansible?host=web-1",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{missing}");
+    assert_eq!(missing["events"], json!([]));
+    assert_eq!(missing["reason"], "ansible_events_unavailable");
+
+    let (status, missing_host, _) = call(
+        &app,
+        "GET",
+        &format!("/api/v1/jobs/{id}/ansible"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{missing_host}");
+    assert_eq!(missing_host["error"], "invalid_query_parameter");
+
+    let (status, bad_id, _) = call(
+        &app,
+        "GET",
+        "/api/v1/jobs/%2E%2E/ansible?host=web-1",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{bad_id}");
+    assert_eq!(bad_id["error"], "not_found");
+
+    let viewer = seed_viewer(&app, &cookie, &team, "host-viewer").await;
+    let (status, allowed, _) = call(
+        &app,
+        "GET",
+        &format!("/api/v1/jobs/{id}/ansible?host=bulk-2100"),
+        Some(&viewer),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{allowed}");
+    assert_eq!(allowed["events"][1]["host"], "bulk-2100");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        harness
+            .execute_sql(&seed_ansible_job_sql(&team, "symlink-job"))
+            .await;
+        let link_work = harness.dir.join("jobs").join("symlink-job");
+        std::fs::create_dir_all(&link_work).expect("symlink work dir");
+        let outside = harness.dir.join("outside-events.jsonl");
+        std::fs::write(
+            &outside,
+            "{\"type\":\"host_result\",\"play\":\"Site\",\"play_index\":1,\"index\":1,\"task\":\"Ping\",\"host\":\"web-1\",\"status\":\"ok\",\"msg\":\"outside\"}\n",
+        )
+        .expect("outside file");
+        symlink(&outside, link_work.join("ansible-events.jsonl")).expect("sidecar symlink");
+        let (status, linked, _) = call(
+            &app,
+            "GET",
+            "/api/v1/jobs/symlink-job/ansible?host=web-1",
+            Some(&cookie),
+            Some(&team),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{linked}");
+        assert_eq!(linked["events"], json!([]), "{linked}");
+        assert_eq!(linked["reason"], "ansible_events_unavailable", "{linked}");
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn structured_ansible_events_stay_out_of_the_raw_log() {
     let harness = TestApp::boot("structured", Options::default());

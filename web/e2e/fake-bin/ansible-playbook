@@ -30,7 +30,7 @@ if [ "${count:-0}" -ge 100 ]; then
         if (i == n) failed = 1
         else if (i == n - 1) unreachable = 1
         else if (i % 7 == 0) changed = 1
-        printf "{\"type\":\"host_result\",\"play\":\"Bulk demo\",\"play_index\":1,\"index\":1,\"task\":\"Ping\",\"role\":\"bulk\",\"host\":\"%s\",\"status\":\"%s\",\"duration\":0.01,\"changed\":%s}\n", host, (failed ? "failed" : (unreachable ? "unreachable" : (changed ? "changed" : "ok"))), (changed ? "true" : "false") >> file
+        printf "{\"type\":\"host_result\",\"play\":\"Bulk demo\",\"play_index\":1,\"index\":1,\"task\":\"Ping\",\"role\":\"bulk\",\"host\":\"%s\",\"status\":\"%s\",\"duration\":0.01,\"changed\":%s,\"msg\":\"bulk ping %s\"}\n", host, (failed ? "failed" : (unreachable ? "unreachable" : (changed ? "changed" : "ok"))), (changed ? "true" : "false"), host >> file
       }
       chunk = 100
       parts = int((n + chunk - 1) / chunk)
