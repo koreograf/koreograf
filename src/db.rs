@@ -22,7 +22,7 @@ pub fn plus_secs(secs: i64) -> String {
 }
 
 pub fn has_expired(expires_at: Option<&str>) -> bool {
-    expires_at.is_some_and(|value| value < now().as_str())
+    expires_at.is_some_and(|value| value <= now().as_str())
 }
 
 pub(crate) struct Migration {
