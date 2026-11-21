@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -745,6 +747,79 @@ fn capture_parameters(
         "update_on_launch": template.update_on_launch,
     })
     .to_string()
+}
+
+/// Removes the event stream and work directory of finished jobs past
+/// `KOREOGRAF_JOB_LOG_RETENTION_DAYS`. The jobs row stays.
+pub(crate) fn prune_finished_job_logs(state: &crate::AppState) -> AppResult<()> {
+    let days = state.cfg.job_log_retention_days;
+    if days == 0 {
+        return Ok(());
+    }
+    let Some(cutoff) = db::minus_days(days) else {
+        return Ok(());
+    };
+    let pruned = state.store().prune_job_logs(&cutoff)?;
+    let mut directories = 0usize;
+    for id in &pruned.job_ids {
+        if remove_job_work_dir(&state.cfg.data_dir, id) {
+            directories += 1;
+        }
+    }
+    if pruned.events > 0 || directories > 0 {
+        tracing::info!(
+            days,
+            jobs = pruned.job_ids.len(),
+            events = pruned.events,
+            directories,
+            "pruned finished job logs"
+        );
+    }
+    Ok(())
+}
+
+/// Runs the retention prune once a day. The startup prune already ran in
+/// [`crate::boot_with`], so this task waits for the first interval.
+pub(crate) fn spawn_log_retention(state: Shared) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(24 * 60 * 60)).await;
+            if let Err(err) = prune_finished_job_logs(&state) {
+                tracing::error!(error = %err, "job log retention");
+            }
+        }
+    });
+}
+
+fn job_work_dir(data_dir: &Path, id: &str) -> Option<PathBuf> {
+    if id.is_empty()
+        || id == "."
+        || id == ".."
+        || id.contains('/')
+        || id.contains('\\')
+        || id.contains('\0')
+    {
+        return None;
+    }
+    Some(data_dir.join("jobs").join(id))
+}
+
+/// Returns true when a directory was removed. A missing path is already done.
+/// A symlink is removed as a link and its target is never followed.
+fn remove_job_work_dir(data_dir: &Path, id: &str) -> bool {
+    let Some(path) = job_work_dir(data_dir, id) else {
+        return false;
+    };
+    let Ok(metadata) = fs::symlink_metadata(&path) else {
+        return false;
+    };
+    if metadata.file_type().is_symlink() {
+        fs::remove_file(&path).is_ok()
+    } else if metadata.is_dir() {
+        fs::remove_dir_all(&path).is_ok()
+    } else {
+        fs::remove_file(&path).is_ok()
+    }
 }
 
 pub fn discard_project_checkout(state: &Shared, project: &db::Project) {

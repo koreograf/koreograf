@@ -13,6 +13,7 @@ mod hooks;
 mod inventories;
 mod jobs;
 mod projects;
+mod retention;
 mod routes;
 mod schedules;
 mod settings;

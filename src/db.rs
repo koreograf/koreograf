@@ -21,6 +21,14 @@ pub fn plus_secs(secs: i64) -> String {
         .to_string()
 }
 
+/// Timestamp `days` days in the past, in the stored UTC format.
+pub fn minus_days(days: u64) -> Option<String> {
+    let days = i64::try_from(days).ok()?;
+    let duration = chrono::Duration::try_days(days)?;
+    let cutoff = chrono::Utc::now().checked_sub_signed(duration)?;
+    Some(cutoff.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+}
+
 pub fn has_expired(expires_at: Option<&str>) -> bool {
     expires_at.is_some_and(|value| value <= now().as_str())
 }

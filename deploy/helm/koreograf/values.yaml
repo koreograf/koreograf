@@ -55,6 +55,8 @@ runner:
   # Wie viele Jobs gleichzeitig laufen. 1 bis 64; weitere warten als pending.
   # Leer, 0 oder ein ungültiger Wert nutzt die Vorgabe 4.
   maxConcurrentJobs: 4
+  # Tage, die Ausgabe und Arbeitsverzeichnis fertiger Jobs bleiben. 0 behält sie.
+  jobLogRetentionDays: 30
   dockerSocket:
     enabled: false
     hostPath: /var/run/docker.sock

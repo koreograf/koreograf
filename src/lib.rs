@@ -205,6 +205,12 @@ impl AppState {
         Ok(interrupted)
     }
 
+    /// Removes the log events and work directories of finished jobs past
+    /// `KOREOGRAF_JOB_LOG_RETENTION_DAYS`. `0` leaves everything in place.
+    pub fn prune_job_logs(&self) -> Result<(), ApiError> {
+        features::jobs::prune_finished_job_logs(self)
+    }
+
     pub(crate) fn preflight_report(&self) -> Option<preflight::Report> {
         self.preflight.lock().ok().and_then(|report| report.clone())
     }
@@ -287,6 +293,9 @@ pub fn boot_with(mut cfg: Config, database: DatabaseConfig) -> anyhow::Result<Sh
     // No runner exists before the port opens, so anything still pending or
     // running belongs to the previous process.
     state.reconcile_interrupted()?;
+    if let Err(err) = state.prune_job_logs() {
+        tracing::warn!(error = %err, "job log retention");
+    }
     if state.engine() == "sqlite" {
         features::credentials::backfill_netbox_urls(&state)?;
     }
@@ -325,6 +334,7 @@ pub async fn serve(cfg: Config) -> anyhow::Result<()> {
     if state.engine() == "sqlite" {
         features::schedules::spawn(state.clone());
     }
+    features::jobs::spawn_log_retention(state.clone());
     let bind = state.cfg.bind.clone();
     let data_dir = state.cfg.data_dir.display().to_string();
     let app = router(state.clone());

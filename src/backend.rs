@@ -238,6 +238,7 @@ pub(crate) trait Backend: Send + Sync {
     fn set_failed_hosts(&self, id: &str, failed_hosts: &str) -> AppResult<()>;
     fn set_job_parameters(&self, id: &str, parameters: &str) -> AppResult<()>;
     fn finish_job(&self, id: &str, status: &str) -> AppResult<bool>;
+    fn prune_job_logs(&self, cutoff: &str) -> AppResult<jobs::store::PrunedJobLogs>;
     fn reconcile_interrupted(&self, line: &str) -> AppResult<jobs::store::Interrupted>;
     fn insert_event(&self, job_id: &str, stream: &str, line: &str) -> AppResult<()>;
     fn events_after(&self, job_id: &str, after: i64, limit: i64) -> AppResult<Vec<JobEvent>>;
@@ -1083,6 +1084,11 @@ impl Backend for SqliteBackend {
     fn finish_job(&self, id: &str, status: &str) -> AppResult<bool> {
         let conn = lock(&self.conn)?;
         jobs::store::finish_job(&conn, id, status)
+    }
+
+    fn prune_job_logs(&self, cutoff: &str) -> AppResult<jobs::store::PrunedJobLogs> {
+        let mut conn = lock(&self.conn)?;
+        jobs::store::prune_job_logs(&mut conn, cutoff)
     }
 
     fn reconcile_interrupted(&self, line: &str) -> AppResult<jobs::store::Interrupted> {
@@ -3524,6 +3530,27 @@ impl Backend for PostgresBackend {
                 )
                 .await?;
             Ok(changed == 1)
+        })
+    }
+
+    fn prune_job_logs(&self, cutoff: &str) -> AppResult<jobs::store::PrunedJobLogs> {
+        self.with_client(|mut client| async move {
+            let tx = client.transaction().await?;
+            let rows = tx
+                .query(
+                    &store::sql::postgres(jobs::store::FINISHED_JOBS_BEFORE),
+                    &[&cutoff],
+                )
+                .await?;
+            let job_ids: Vec<String> = rows.iter().map(|row| row.get(0)).collect();
+            let delete = store::sql::postgres(jobs::store::DELETE_JOB_EVENTS);
+            let mut events = 0usize;
+            for id in &job_ids {
+                let affected = tx.execute(&delete, &[id]).await?;
+                events = events.saturating_add(usize::try_from(affected).unwrap_or(usize::MAX));
+            }
+            tx.commit().await?;
+            Ok(jobs::store::PrunedJobLogs { job_ids, events })
         })
     }
 
