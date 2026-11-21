@@ -27,6 +27,8 @@ pub struct Options {
     pub ldap: Option<LdapConfig>,
     pub project_roots: Vec<PathBuf>,
     pub admin_user: String,
+    /// `KOREOGRAF_MAX_CONCURRENT_JOBS`. Four unless a test needs a queue.
+    pub max_concurrent_jobs: usize,
 }
 
 impl Default for Options {
@@ -38,6 +40,7 @@ impl Default for Options {
             ldap: None,
             project_roots: vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples")],
             admin_user: "admin".into(),
+            max_concurrent_jobs: 4,
         }
     }
 }
@@ -55,6 +58,7 @@ pub fn config(data_dir: &Path, options: &Options) -> Config {
         container_image: options.container_image,
         job_timeout_secs: 60,
         job_output_lines: 8_000,
+        max_concurrent_jobs: options.max_concurrent_jobs,
         local_jobs: LocalJobs::All,
         project_roots: options.project_roots.clone(),
         ldap: options.ldap.clone(),

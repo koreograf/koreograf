@@ -150,10 +150,30 @@ pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
     drop(cache_guard);
     let shared = state.clone();
     let job_id = id.clone();
-    tokio::spawn(async move {
-        runner::execute(shared, job_id).await;
-    });
+    tokio::spawn(run_queued(shared, job_id));
     Ok(id)
+}
+
+/// Waits for one of the job slots, then hands the job to the runner.
+///
+/// The row stays `pending` while it waits, so the list and the metrics gauge
+/// show the queue. A job that was canceled before it got a slot never starts:
+/// the runner would refuse it anyway, and the permit goes to the next waiter.
+async fn run_queued(state: Shared, job_id: String) {
+    let Ok(_permit) = state.job_slots.acquire().await else {
+        return;
+    };
+    let pending = state
+        .store()
+        .job(&job_id)
+        .ok()
+        .flatten()
+        .is_some_and(|job| job.status == "pending");
+    if pending {
+        runner::execute(state.clone(), job_id).await;
+    } else {
+        runner::forget_queued(&state, &job_id);
+    }
 }
 
 fn refuses_local_launch(local_jobs: LocalJobs, runner: RunnerMode, has_environment: bool) -> bool {

@@ -7,6 +7,7 @@ mod catalog;
 mod catalogs;
 #[path = "../common/mod.rs"]
 mod common;
+mod concurrency;
 mod credentials;
 mod hooks;
 mod inventories;

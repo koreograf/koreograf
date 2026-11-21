@@ -27,6 +27,7 @@ From `0.1.0-beta.1` onward every name below keeps its meaning and its default; t
 | `KOREOGRAF_PROJECT_ROOTS` | empty, plus the examples directory. Comma-separated absolute directories |
 | `KOREOGRAF_JOB_TIMEOUT_SECS` | `1800` (30–86400) |
 | `KOREOGRAF_JOB_OUTPUT_LINES` | `8000` (100 to 100000) |
+| `KOREOGRAF_MAX_CONCURRENT_JOBS` | `4` (1 to 64) |
 | `KOREOGRAF_SEED_ENVIRONMENTS` | on. `0`, `false`, `no`, or `off` skips the curated default environments |
 | `KOREOGRAF_SECRET_KEY` | empty, then `data/secret.key`. When set, must be 64 hex characters or startup fails |
 | `KOREOGRAF_METRICS_TOKEN` | empty. `/metrics` stays open. When set, a scrape needs `Authorization: Bearer <token>` or an administrator session cookie |
@@ -90,6 +91,8 @@ The container image has no local tool set and no local runner. There `auto` uses
 `KOREOGRAF_PROJECT_ROOTS` lists absolute directories separated by commas. The directory in `KOREOGRAF_EXAMPLES` is always an allowed root, so the seeded Demo project runs on a default install. An operator can add a path project or a `file://` Git URL when the directory is under one of these roots. An administrator can save a path outside them. At run time the canonical directory must still be under an allowed root, including a path that was accepted when it was saved, so that saved path does not run until its directory is listed. `/`, `/etc`, `/proc`, `/sys`, `/dev`, `/run`, `/boot`, `/root`, `/var/run`, and the data directory are rejected for everyone. A `file://` URL is accepted for an empty host or `localhost`. Git's file protocol stays off for every other URL.
 
 `KOREOGRAF_JOB_OUTPUT_LINES` is the number of lines kept for each of stdout and stderr. The process clamps a value outside 100 to 100000. The job keeps the first three quarters and the last quarter. Download and the job page are described in the [README](../README.md#job-output).
+
+`KOREOGRAF_MAX_CONCURRENT_JOBS` is how many jobs may run at the same time. Every path that starts a job waits here: a template launch, a relaunch, a hook, a schedule, and a workflow node. Further jobs stay `pending` and start in the order they were queued. The default is 4 and the value is clamped to 1 to 64, so `1` runs one job at a time; an empty value, a value that is not a number, and `0` use the default. The queue shows in the jobs list and in `koreograf_jobs_pending` on `/metrics`. Canceling a waiting job marks it `canceled` and it never starts. See [Jobs](jobs.md#concurrency).
 
 What the database file holds, and which engine serves the backup, is in [Database and backup](backup-restore.md). Log fields are in [Logs and Prometheus](observability.md). Directory, proxy, runner, timeout, and output-line values saved in the UI are in [Organizations, teams, LDAP, and Active Directory](authentication.md#saved-settings).
 
