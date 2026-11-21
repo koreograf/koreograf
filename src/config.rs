@@ -434,6 +434,35 @@ pub const OUTPUT_LINES_MIN: u64 = 100;
 /// Highest accepted output line limit.
 pub const OUTPUT_LINES_MAX: u64 = 100_000;
 
+/// Default number of jobs that run at the same time.
+pub const MAX_CONCURRENT_JOBS_DEFAULT: usize = 4;
+/// Lowest accepted concurrency limit. Anything below waits for a slot.
+pub const MAX_CONCURRENT_JOBS_MIN: usize = 1;
+/// Highest accepted concurrency limit.
+pub const MAX_CONCURRENT_JOBS_MAX: usize = 64;
+
+/// Reads `KOREOGRAF_MAX_CONCURRENT_JOBS`. An empty value, a value that is not
+/// a number, and `0` fall back to the default. Every other value is clamped to
+/// [`MAX_CONCURRENT_JOBS_MIN`]..=[`MAX_CONCURRENT_JOBS_MAX`].
+pub fn parse_max_concurrent_jobs(value: &str) -> usize {
+    effective_max_concurrent_jobs(
+        value
+            .trim()
+            .parse::<usize>()
+            .unwrap_or(MAX_CONCURRENT_JOBS_DEFAULT),
+    )
+}
+
+/// Guards a limit that did not come through [`parse_max_concurrent_jobs`],
+/// such as a directly built [`Config`]. `0` uses the default.
+pub fn effective_max_concurrent_jobs(limit: usize) -> usize {
+    if limit == 0 {
+        MAX_CONCURRENT_JOBS_DEFAULT
+    } else {
+        limit.clamp(MAX_CONCURRENT_JOBS_MIN, MAX_CONCURRENT_JOBS_MAX)
+    }
+}
+
 #[derive(Clone)]
 pub struct Config {
     pub bind: String,
@@ -452,6 +481,8 @@ pub struct Config {
     pub job_timeout_secs: u64,
     /// `KOREOGRAF_JOB_OUTPUT_LINES`. Lines kept for each of stdout and stderr.
     pub job_output_lines: u64,
+    /// `KOREOGRAF_MAX_CONCURRENT_JOBS`. Jobs wait as `pending` for a slot.
+    pub max_concurrent_jobs: usize,
     /// `KOREOGRAF_LOCAL_RUNNER_FOR`. Not a saved setting.
     pub local_jobs: LocalJobs,
     /// Allowed path-project directories. `from_env` always includes `examples_dir`.
@@ -530,6 +561,10 @@ impl Config {
                 .parse()
                 .unwrap_or(OUTPUT_LINES_DEFAULT)
                 .clamp(OUTPUT_LINES_MIN, OUTPUT_LINES_MAX),
+            max_concurrent_jobs: parse_max_concurrent_jobs(&env_or(
+                "KOREOGRAF_MAX_CONCURRENT_JOBS",
+                "4",
+            )),
             local_jobs: LocalJobs::parse(&env_string("KOREOGRAF_LOCAL_RUNNER_FOR")),
             project_roots,
             ldap,
@@ -681,6 +716,20 @@ mod tests {
             effective_project_roots(vec![examples.clone()], &examples),
             vec![examples]
         );
+    }
+
+    #[test]
+    fn the_concurrency_limit_parses_its_default_floor_and_ceiling() {
+        assert_eq!(parse_max_concurrent_jobs(""), MAX_CONCURRENT_JOBS_DEFAULT);
+        assert_eq!(parse_max_concurrent_jobs("0"), MAX_CONCURRENT_JOBS_DEFAULT);
+        assert_eq!(
+            parse_max_concurrent_jobs("nonsense"),
+            MAX_CONCURRENT_JOBS_DEFAULT
+        );
+        assert_eq!(parse_max_concurrent_jobs(" 1 "), MAX_CONCURRENT_JOBS_MIN);
+        assert_eq!(parse_max_concurrent_jobs("2"), 2);
+        assert_eq!(parse_max_concurrent_jobs("64"), MAX_CONCURRENT_JOBS_MAX);
+        assert_eq!(parse_max_concurrent_jobs("65"), MAX_CONCURRENT_JOBS_MAX);
     }
 
     #[test]

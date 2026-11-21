@@ -3906,6 +3906,15 @@ fn canceled(state: &Shared, job_id: &str) -> bool {
         .is_some_and(|ids| ids.contains(job_id))
 }
 
+/// Drops the in-memory cancel marker of a job that was canceled while it
+/// waited for a slot and never started. The cancel path already closed its
+/// observation and the stored row reads `canceled`.
+pub(crate) fn forget_queued(state: &Shared, job_id: &str) {
+    if let Ok(mut canceled) = state.canceled.lock() {
+        canceled.remove(job_id);
+    }
+}
+
 async fn wait_child(
     state: &Shared,
     job_id: &str,
@@ -6097,6 +6106,7 @@ exit 0
             container_image: false,
             job_timeout_secs: 60,
             job_output_lines: lines,
+            max_concurrent_jobs: 4,
             local_jobs: crate::config::LocalJobs::All,
             project_roots: Vec::new(),
             hsts: false,

@@ -68,6 +68,8 @@ spec:
               value: {{ .Values.runner.mode | quote }}
             - name: KOREOGRAF_LOCAL_RUNNER_FOR
               value: {{ .Values.runner.localJobs | default "admins" | quote }}
+            - name: KOREOGRAF_MAX_CONCURRENT_JOBS
+              value: {{ .Values.runner.maxConcurrentJobs | default 4 | quote }}
             - name: KOREOGRAF_COOKIE_SECURE
               value: {{ if kindIs "bool" .Values.cookieSecure }}{{ ternary "true" "false" .Values.cookieSecure | quote }}{{ else if .Values.cookieSecure }}{{ .Values.cookieSecure | quote }}{{ else if .Values.ingress.tls }}"true"{{ else }}"auto"{{ end }}
             - name: KOREOGRAF_TRUSTED_PROXY

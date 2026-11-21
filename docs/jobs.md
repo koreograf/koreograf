@@ -16,6 +16,14 @@ OpenTofu uses `TF_PLUGIN_CACHE_DIR` on that same cache (`data/cache/<team>/tofu`
 
 An owner of the team can clear the disposable part of the cache with **Clear cache** on the dashboard's dependency cache card, or with `DELETE /api/v1/cache`. The route removes `data/cache/<team>/collections`, `data/cache/<team>/roles`, and `data/cache/<team>/tofu`. It keeps `tofu-state`, so OpenTofu resources stay known, and it keeps every entry it does not recognise. It does not follow a symlink, treats a missing directory as already clear, and answers `409 a_job_is_running` while that team has a pending or running job. Maintenance mode blocks it like any other write. A clear appends a `delete` entry on `cache` to the activity log; a refused clear appends nothing.
 
+## Concurrency
+
+Every launch goes through one queue. Template launches, relaunches, hook deliveries, schedules, and workflow node jobs all wait for a slot before the runner marks the job `running`. `KOREOGRAF_MAX_CONCURRENT_JOBS` sets how many slots exist: the default is 4, the value is clamped to 1 to 64, and an empty value, a value that is not a number, and `0` use the default. The value comes from the environment, not from Settings.
+
+A job that waits for a slot stays `pending`. The jobs list and the pending gauge on `/metrics` show it that way, and it keeps its place in the queue. Canceling a waiting job sets `canceled` and it never starts, including when it already had a slot offered: the slot then passes to the next job. Cancel at the workflow run level does the same for each pending node job of that run.
+
+Workflow runs are not jobs themselves. A run whose fan-out is wider than the limit still makes progress: its nodes queue in the same way and the run waits until they finish, so the limit never deadlocks the workflow.
+
 ## Job log
 
 Each of stdout and stderr keeps the first three quarters of the line limit and the last quarter. The tail lines wait in memory and stay within 8 MiB per stream. The default is 8000 lines: the first 6000 and the last 2000. A system line between them records how many lines were left out. `KOREOGRAF_JOB_OUTPUT_LINES` sets the limit, from 100 to 100000. Settings can replace that value for the next job. `GET /api/jobs/{id}/output` downloads the kept log and stops at 8 MiB. The job page shows the start and the end when the stored log is longer than 2000 lines. Play recap lines and `fatal:` lines are read from the whole stream, including lines the log does not keep.

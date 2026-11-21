@@ -71,6 +71,9 @@ pub struct AppState {
     pub(crate) procs: Mutex<HashMap<String, RunningProc>>,
     /// Jobs whose later output is discarded. Set when cancel commits.
     pub(crate) canceled: Mutex<HashSet<String>>,
+    /// One permit per running job. Every launch waits here before the runner
+    /// marks the job running, so the extra jobs stay `pending`.
+    pub(crate) job_slots: tokio::sync::Semaphore,
     pub(crate) preflight: Mutex<Option<preflight::Report>>,
     pub(crate) catalogs: i18n::Catalogs,
 }
@@ -264,6 +267,9 @@ pub fn boot_with(mut cfg: Config, database: DatabaseConfig) -> anyhow::Result<Sh
     let cipher = crypto::load_cipher(&cfg.data_dir)?;
     seed::seed(backend.as_ref(), &cfg)?;
     cfg.admin_password = None;
+    let job_slots = tokio::sync::Semaphore::new(config::effective_max_concurrent_jobs(
+        cfg.max_concurrent_jobs,
+    ));
     let state = Arc::new(AppState {
         backend,
         cfg,
@@ -274,6 +280,7 @@ pub fn boot_with(mut cfg: Config, database: DatabaseConfig) -> anyhow::Result<Sh
         cache: Mutex::new(()),
         procs: Mutex::new(HashMap::new()),
         canceled: Mutex::new(HashSet::new()),
+        job_slots,
         preflight: Mutex::new(None),
         catalogs,
     });
