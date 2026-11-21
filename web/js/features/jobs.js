@@ -430,9 +430,10 @@ export function buildAnsibleTree(events) {
     const task = taskFor(event);
     const duration = Number(event.duration);
     const censored = event.censored === true;
+    const reported = STATUS_RANK[event.status] ? event.status : "ok";
     task.hosts.push({
       host: String(event.host || ""),
-      status: STATUS_RANK[event.status] ? event.status : "ok",
+      status: reported === "ok" && event.changed === true ? "changed" : reported,
       duration: Number.isFinite(duration) && duration >= 0 ? duration : null,
       msg: !censored && typeof event.msg === "string" ? event.msg : "",
       stdout: !censored && typeof event.stdout === "string" ? event.stdout : "",
@@ -464,6 +465,27 @@ export function statusCounts(hosts) {
     counts[host.status] = (counts[host.status] || 0) + 1;
   }
   return counts;
+}
+
+/** The highest id across the raw and structured rows of a job. */
+export function lastJobEventId(job) {
+  let last = 0;
+  for (const item of [...((job && job.events) || []), ...((job && job.ansible_events) || [])]) {
+    const id = Number(item && item.id);
+    if (Number.isFinite(id) && id > last) last = id;
+  }
+  return last;
+}
+
+/** Appends one live event unless its id was already seeded from the job. */
+export function pushStructuredEvent(state, item) {
+  const id = Number(item && item.id);
+  if (Number.isFinite(id) && id > 0) {
+    if (state.seen.has(id)) return false;
+    state.seen.add(id);
+  }
+  state.events.push(item);
+  return true;
 }
 
 export function hostedNames(tree) {
@@ -950,6 +972,7 @@ function bindStructuredOutput(job) {
   if (!switchBox || !box || !treeBox || !hostSelect || !statusSelect || !failedFirst) return null;
   const state = {
     events: [...(job.ansible_events || [])],
+    seen: new Set((job.ansible_events || []).map((item) => Number(item && item.id)).filter((id) => Number.isFinite(id) && id > 0)),
     tree: { plays: [], truncated: false, limit: 0 },
     open: new Map(),
     explicit: false,
@@ -1088,7 +1111,7 @@ function bindStructuredOutput(job) {
 
   return {
     append(item) {
-      state.events.push(item);
+      if (!pushStructuredEvent(state, item)) return;
       refresh();
     },
     reload() {
@@ -1258,7 +1281,7 @@ async function pageJob(id) {
     if (duration) duration.textContent = spanText(job.started_at, durationEnd, durationStatus);
   };
   const durationTimer = setInterval(tickDuration, 1000);
-  const last = (job.events || []).reduce((max, event) => Math.max(max, event.id), 0);
+  const last = lastJobEventId(job);
   appState.setSource(new EventSource(`/api/v1/jobs/${encodeURIComponent(id)}/events?after=${last}`));
   appState.source.addEventListener("log", (event) => {
     if (live !== appState.generation) return;

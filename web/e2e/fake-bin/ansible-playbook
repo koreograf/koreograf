@@ -10,7 +10,7 @@ mkdir -p "${KOREOGRAF_WORK}"
 cat >>"$events" <<'EOF'
 {"type":"play_start","play":"Structured demo","index":1}
 {"type":"task_start","play":"Structured demo","play_index":1,"index":1,"task":"Install packages","role":"web"}
-{"type":"host_result","play":"Structured demo","play_index":1,"index":1,"task":"Install packages","role":"web","host":"localhost","status":"changed","duration":1.2,"msg":"1 package changed","stdout":"installed nginx"}
+{"type":"host_result","play":"Structured demo","play_index":1,"index":1,"task":"Install packages","role":"web","host":"localhost","status":"ok","changed":true,"duration":1.2,"msg":"1 package changed","stdout":"installed nginx"}
 {"type":"task_start","play":"Structured demo","play_index":1,"index":2,"task":"Check service"}
 {"type":"host_result","play":"Structured demo","play_index":1,"index":2,"task":"Check service","host":"localhost","status":"failed","duration":0.4,"msg":"Service is not running","stderr":"nginx: down","rc":1}
 {"type":"task_start","play":"Structured demo","play_index":1,"index":3,"task":"Read a secret"}

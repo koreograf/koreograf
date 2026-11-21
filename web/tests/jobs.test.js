@@ -96,6 +96,26 @@ test("structured output keeps no_log placeholders and durations readable", async
   assert.equal(formatDuration(null), "");
 });
 
+test("an ok result with changed true is shown as changed", async () => {
+  const { buildAnsibleTree } = await load();
+  const tree = buildAnsibleTree([
+    { event: { type: "host_result", host: "web-1", status: "ok", changed: true } },
+  ]);
+  assert.equal(tree.plays[0].tasks[0].hosts[0].status, "changed");
+  assert.deepEqual(tree.plays[0].tasks[0].counts, { changed: 1 });
+});
+
+test("live structured events use every seeded id once", async () => {
+  const { lastJobEventId, pushStructuredEvent } = await load();
+  assert.equal(lastJobEventId({ events: [{ id: 3 }], ansible_events: [{ id: 7 }] }), 7);
+  assert.equal(lastJobEventId({ events: [], ansible_events: [] }), 0);
+  const state = { events: [{ id: 7 }], seen: new Set([7]) };
+  assert.equal(pushStructuredEvent(state, { id: 7, event: { type: "playbook_end" } }), false);
+  assert.equal(state.events.length, 1);
+  assert.equal(pushStructuredEvent(state, { id: 8, event: { type: "playbook_end" } }), true);
+  assert.equal(state.events.length, 2);
+});
+
 test("the output view preference falls back to structured", async () => {
   const { outputViewPreference, rememberOutputView, structuredEventsAvailable } = await load();
   const store = new Map();

@@ -5277,6 +5277,58 @@ git clone "$src" "$dest/role"
     }
 
     #[test]
+    fn structured_capture_keeps_the_project_callbacks() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("koreograf-callbacks-{nanos}"));
+        let work = root.join("work");
+        let project = root.join("project");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("ansible.cfg"),
+            "[defaults]\ncallback_plugins = /opt/project/callbacks\ncallbacks_enabled = timer\n",
+        )
+        .unwrap();
+        write_executable(
+            &root.join("bin").join("ansible-config"),
+            r#"#!/bin/sh
+path=$(sed -n 's/^callback_plugins *= *//p' "$KOREOGRAF_PROJECT/ansible.cfg" | head -n 1)
+printf "DEFAULT_CALLBACK_PLUGIN_PATH(ansible.cfg) = ['%s']\n" "$path"
+"#,
+        );
+        write_executable(
+            &root.join("bin").join("ansible-galaxy"),
+            "#!/bin/sh\nexit 0\n",
+        );
+        write_executable(
+            &root.join("bin").join("ansible-playbook"),
+            r#"#!/bin/sh
+printf 'CALLBACK_PLUGINS=%s\n' "$ANSIBLE_CALLBACK_PLUGINS"
+printf 'CALLBACKS_ENABLED=%s\n' "${ANSIBLE_CALLBACKS_ENABLED:-unset}"
+"#,
+        );
+        let env = vec![("ANSIBLE_CALLBACKS_ENABLED".to_string(), "timer".to_string())];
+        let output = test_ansible_wrapper(&root, &work, &project, &env);
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.status.success(), "{text}");
+        assert!(text.contains("CALLBACKS_ENABLED=timer"), "{text}");
+        let expected = format!(
+            "CALLBACK_PLUGINS={}/callback_plugins:/opt/project/callbacks",
+            work.display()
+        );
+        assert!(text.contains(&expected), "{text}");
+        assert!(!text.contains("koreograf_events"), "{text}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn ansible_playbook_does_not_see_the_galaxy_git_credential() {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

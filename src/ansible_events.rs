@@ -87,7 +87,9 @@ async fn tail_loop(
     let mut dropping = false;
     loop {
         if file.is_none() {
-            file = tokio::fs::File::open(&path).await.ok();
+            if let Ok(handle) = open_sidecar(&path) {
+                file = Some(tokio::fs::File::from_std(handle));
+            }
         }
         if let Some(handle) = file.as_mut() {
             let mut buf = [0_u8; 8 * 1024];
@@ -141,6 +143,30 @@ fn store(state: &Shared, job_id: &str, event: Option<String>) {
     if let Some(line) = event {
         let _ = state.store().insert_event(job_id, STREAM, &line);
     }
+}
+
+/// Opens the sidecar without following a symlink. The work directory is
+/// writable by the job, so a job must not be able to point the tailer at a
+/// host file.
+#[cfg(unix)]
+fn open_sidecar(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::fd::OwnedFd;
+
+    use nix::fcntl::{open, OFlag};
+    use nix::sys::stat::Mode;
+
+    let fd: OwnedFd = open(
+        path,
+        OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(std::io::Error::from)?;
+    Ok(std::fs::File::from(fd))
+}
+
+#[cfg(not(unix))]
+fn open_sidecar(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::File::open(path)
 }
 
 fn scrub_paths(work: &Path, data_dir: &Path) -> Vec<String> {

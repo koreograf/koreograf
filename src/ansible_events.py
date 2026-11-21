@@ -22,7 +22,9 @@ from ansible.plugins.callback import CallbackBase
 CALLBACK_VERSION = 2.0
 CALLBACK_TYPE = "notification"
 CALLBACK_NAME = "koreograf_events"
-CALLBACK_NEEDS_ENABLED = True
+# Load automatically from the callback path. A whitelist entry would override a
+# project's own callbacks_enabled value in ansible.cfg.
+CALLBACK_NEEDS_ENABLED = False
 
 MAX_FIELD = 4000
 _ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -147,6 +149,8 @@ class CallbackModule(CallbackBase):
         data = getattr(result, "_result", None) or {}
         if not isinstance(data, dict):
             data = {}
+        if status == "ok" and data.get("changed") is True:
+            status = "changed"
         started = self._starts.pop((key, host_name), None)
         event = {
             "type": "host_result",
