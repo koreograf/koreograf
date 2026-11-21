@@ -33,6 +33,8 @@ pub(crate) fn count_activity_sql() -> String {
     format!("SELECT COUNT(*) FROM activity WHERE {}", activity_filter())
 }
 
+pub(crate) const COUNT_ACTIVITY: &str = "SELECT COUNT(*) FROM activity WHERE team_id = ?1";
+
 /// Keeps the newest `keep` rows of one team and drops the rest. The bound is a
 /// row count per team; there is no time-based retention.
 pub(crate) const PRUNE_ACTIVITY: &str = "DELETE FROM activity
@@ -98,7 +100,12 @@ pub(crate) fn list_activity(
 }
 
 pub(crate) fn prune_activity(c: &Connection, team_id: &str, keep: i64) -> AppResult<()> {
-    c.execute(PRUNE_ACTIVITY, params![team_id, keep.max(0)])?;
+    let keep = keep.max(0);
+    let count: i64 = c.query_row(COUNT_ACTIVITY, [team_id], |row| row.get(0))?;
+    if count <= keep {
+        return Ok(());
+    }
+    c.execute(PRUNE_ACTIVITY, params![team_id, keep])?;
     Ok(())
 }
 

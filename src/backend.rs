@@ -3333,11 +3333,22 @@ impl Backend for PostgresBackend {
     }
 
     fn prune_activity(&self, team_id: &str, keep: i64) -> AppResult<()> {
+        let keep = keep.max(0);
         self.with_client(|client| async move {
+            let count: i64 = client
+                .query_one(
+                    &store::sql::postgres(activity::store::COUNT_ACTIVITY),
+                    &[&team_id],
+                )
+                .await?
+                .get(0);
+            if count <= keep {
+                return Ok(());
+            }
             client
                 .execute(
                     &store::sql::postgres(activity::store::PRUNE_ACTIVITY),
-                    &[&team_id, &keep.max(0)],
+                    &[&team_id, &keep],
                 )
                 .await?;
             Ok(())
