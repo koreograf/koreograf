@@ -56,6 +56,8 @@ const POLL: Duration = Duration::from_millis(200);
 pub(crate) const UNAVAILABLE: &str = "ansible_events_unavailable";
 /// The sidecar exists but has no result for the requested host.
 pub(crate) const UNKNOWN_HOST: &str = "host_not_in_ansible_events";
+/// The host was not found before the bounded scan stopped.
+pub(crate) const SCAN_LIMITED: &str = "ansible_events_scan_limited";
 
 /// The bounded sidecar slice for one host.
 pub(crate) struct HostEvents {
@@ -92,7 +94,15 @@ fn unavailable() -> HostEvents {
 }
 
 fn read_host_events(file: std::fs::File, scrub: Vec<String>, host: &str) -> HostEvents {
-    let mut reader = BufReader::new(file);
+    read_host_events_with_limit(BufReader::new(file), scrub, host, MAX_HOST_SCAN_BYTES)
+}
+
+fn read_host_events_with_limit(
+    mut reader: impl BufRead,
+    scrub: Vec<String>,
+    host: &str,
+    scan_limit: usize,
+) -> HostEvents {
     let mut line = Vec::new();
     let mut headers: HashMap<String, Value> = HashMap::new();
     let mut emitted: HashSet<String> = HashSet::new();
@@ -101,6 +111,7 @@ fn read_host_events(file: std::fs::File, scrub: Vec<String>, host: &str) -> Host
     let mut scanned = 0usize;
     let mut matched = false;
     let mut truncated = false;
+    let mut scan_limited = false;
     loop {
         line.clear();
         let read = match reader.read_until(b'\n', &mut line) {
@@ -115,8 +126,9 @@ fn read_host_events(file: std::fs::File, scrub: Vec<String>, host: &str) -> Host
             break;
         }
         scanned = scanned.saturating_add(read);
-        if scanned > MAX_HOST_SCAN_BYTES {
+        if scanned > scan_limit {
             truncated = true;
+            scan_limited = true;
             break;
         }
         if line.last() == Some(&b'\n') {
@@ -189,7 +201,11 @@ fn read_host_events(file: std::fs::File, scrub: Vec<String>, host: &str) -> Host
         return HostEvents {
             events: Vec::new(),
             truncated,
-            reason: Some(UNKNOWN_HOST),
+            reason: Some(if scan_limited {
+                SCAN_LIMITED
+            } else {
+                UNKNOWN_HOST
+            }),
         };
     }
     HostEvents {
@@ -595,7 +611,27 @@ fn clip(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
     use super::*;
+
+    #[test]
+    fn a_scan_limit_before_a_match_keeps_its_own_reason() {
+        let raw = r#"{"type":"host_result","host":"other","status":"ok","msg":"x"}"#;
+        let page = read_host_events_with_limit(Cursor::new(raw), Vec::new(), "late", 8);
+        assert_eq!(page.reason, Some(SCAN_LIMITED));
+        assert!(page.truncated);
+        assert!(page.events.is_empty());
+    }
+
+    #[test]
+    fn a_complete_scan_without_the_host_reports_an_unknown_host() {
+        let raw = r#"{"type":"host_result","host":"other","status":"ok","msg":"x"}"#;
+        let page = read_host_events_with_limit(Cursor::new(raw), Vec::new(), "late", 4096);
+        assert_eq!(page.reason, Some(UNKNOWN_HOST));
+        assert!(!page.truncated);
+        assert!(page.events.is_empty());
+    }
 
     fn capture() -> Capture {
         Capture::new(vec!["/srv/koreograf/jobs/job-1".to_string()])

@@ -399,6 +399,11 @@ fn valid_host(host: &str) -> bool {
     !host.is_empty() && host.chars().count() <= 255 && !host.chars().any(char::is_control)
 }
 
+/// One sidecar read can scan up to 64 MiB on the blocking pool, so a queue of
+/// Viewer requests has a small ceiling.
+static HOST_DETAIL_READS: std::sync::LazyLock<tokio::sync::Semaphore> =
+    std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(4));
+
 /// One host's task detail from the callback sidecar. A host past the stored
 /// event cap has no rows in `job_events`, so the page asks for that one host
 /// and the response stays bounded.
@@ -421,6 +426,10 @@ pub async fn job_host_ansible(
         crate::features::identity::authorize(db, &user, &job.team_id, Role::Viewer)?;
     }
     let work = job_work_dir(&state.cfg.data_dir, &id).ok_or(ApiError::NotFound)?;
+    let _permit = HOST_DETAIL_READS
+        .acquire()
+        .await
+        .map_err(|_| ApiError::Internal("host detail limiter is closed".into()))?;
     let data_dir = state.cfg.data_dir.clone();
     let lookup = host.clone();
     let page = tokio::task::spawn_blocking(move || {

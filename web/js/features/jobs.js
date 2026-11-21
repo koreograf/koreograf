@@ -1201,7 +1201,10 @@ function bindStructuredOutput(job, startedAt) {
   const ensureHostDetail = (name) => {
     const host = String(name || "");
     if (!host || !job || job.tool !== "ansible") return;
-    if (hostedNames(state.tree).includes(host) || state.details.has(host)) return;
+    if (hostedNames(state.tree).includes(host)) return;
+    const previous = state.details.get(host);
+    if (previous && !previous.failed) return;
+    if (previous) state.details.delete(host);
     const entry = { host, loading: true, events: [], truncated: false, reason: "", failed: false };
     state.details.set(host, entry);
     trimDetails();

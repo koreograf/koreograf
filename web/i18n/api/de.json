@@ -8,6 +8,7 @@
   "alert_name_is_missing": "Alertname fehlt.",
   "an_edge_cannot_point_at_the_same_node": "Eine Kante darf nicht auf denselben Knoten zeigen.",
   "an_edge_points_at_an_unknown_node": "Eine Kante verweist auf einen unbekannten Knoten.",
+  "ansible_events_scan_limited": "Die Ereignisdatei ist zu groß, um vollständig durchsucht zu werden; für diesen Host wurden keine Details gefunden.",
   "ansible_events_unavailable": "Die strukturierte Ereignisdatei für diesen Auftrag ist nicht mehr verfügbar.",
   "ansible_needs_a_playbook_as_the_entry": "Ansible braucht ein Playbook als Einstieg.",
   "ansible_playbook_collections_and_roles_stay_in_the": "ansible-playbook. Collections und Rollen bleiben im Team-Cache.",
