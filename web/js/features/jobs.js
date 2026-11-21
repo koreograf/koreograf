@@ -467,10 +467,14 @@ export function statusCounts(hosts) {
   return counts;
 }
 
-/** The highest id across the raw and structured rows of a job. */
-export function lastJobEventId(job) {
+/**
+ * The highest raw event id, which is the cursor for the live stream. The
+ * structured rows replay from the same cursor and are ignored by id, so a raw
+ * line that lands between the page's raw and structured reads is not skipped.
+ */
+export function lastRawEventId(job) {
   let last = 0;
-  for (const item of [...((job && job.events) || []), ...((job && job.ansible_events) || [])]) {
+  for (const item of (job && job.events) || []) {
     const id = Number(item && item.id);
     if (Number.isFinite(id) && id > last) last = id;
   }
@@ -1281,7 +1285,7 @@ async function pageJob(id) {
     if (duration) duration.textContent = spanText(job.started_at, durationEnd, durationStatus);
   };
   const durationTimer = setInterval(tickDuration, 1000);
-  const last = lastJobEventId(job);
+  const last = lastRawEventId(job);
   appState.setSource(new EventSource(`/api/v1/jobs/${encodeURIComponent(id)}/events?after=${last}`));
   appState.source.addEventListener("log", (event) => {
     if (live !== appState.generation) return;
