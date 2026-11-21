@@ -6,6 +6,7 @@ const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const { password, username } = require("./env");
+const { post } = require("./api");
 
 const catalog = {
   de: {
@@ -268,12 +269,12 @@ test("an owner clears the dashboard cache and a viewer has no button", async ({ 
   const suffix = Date.now();
   const username = `cache-viewer-${suffix}`;
   const headers = { "X-Team-Id": team };
-  const created = await page.request.post("/api/v1/users", {
+  const created = await post(page.request, "/api/v1/users", {
     headers,
     data: { username, display_name: "Cache Viewer", password: "cache-viewer-pass" },
   });
   expect(created.status()).toBe(201);
-  const member = await page.request.post(`/api/v1/teams/${team}/members`, {
+  const member = await post(page.request, `/api/v1/teams/${team}/members`, {
     headers,
     data: { username, role: "viewer" },
   });
@@ -297,7 +298,7 @@ test("a long template entry stays on one line at 1440 px and hides at 375 px", a
     return profile.teams[0].id;
   });
   const entrypoint = "playbooks/production/webservers/health_check.yml";
-  const created = await page.request.post("/api/v1/templates", {
+  const created = await post(page.request, "/api/v1/templates", {
     headers: { "X-Team-Id": teamId },
     data: { name: "Long entry", tool: "ansible", entrypoint },
   });
@@ -337,7 +338,7 @@ test("a long workflow description stays complete in the editor header at 1440 px
     return profile.teams[0].id;
   });
   const description = "Health check, deploy the web stack and verify the database replica before the traffic switch";
-  const created = await page.request.post("/api/v1/workflows", {
+  const created = await post(page.request, "/api/v1/workflows", {
     headers: { "X-Team-Id": teamId },
     data: { name: "Long description", description, graph: { nodes: [], edges: [] } },
   });
@@ -374,26 +375,26 @@ test("the launch dialog keeps tags and limit visible at 1440 px", async ({ page 
   });
   const headers = { "X-Team-Id": teamId };
   const suffix = Date.now();
-  const ssh = await page.request.post("/api/v1/credentials", {
+  const ssh = await post(page.request, "/api/v1/credentials", {
     headers,
     data: { name: `Deploy SSH ${suffix}`, kind: "ssh", secret: { username: "deploy", password: "probe-pass" } },
   });
   expect(ssh.status()).toBe(201);
   const vaults = [];
   for (const vaultId of ["production", "staging", "development", "sandbox"]) {
-    const vault = await page.request.post("/api/v1/credentials", {
+    const vault = await post(page.request, "/api/v1/credentials", {
       headers,
       data: { name: `Vault ${vaultId} ${suffix}`, kind: "vault", secret: { password: "vault-pass", vault_id: vaultId } },
     });
     expect(vault.status()).toBe(201);
     vaults.push((await vault.json()).id);
   }
-  const inventory = await page.request.post("/api/v1/inventories", {
+  const inventory = await post(page.request, "/api/v1/inventories", {
     headers,
     data: { name: `Production hosts ${suffix}`, body: "[web]\nweb01 ansible_host=10.0.0.1\n" },
   });
   expect(inventory.status()).toBe(201);
-  const created = await page.request.post("/api/v1/templates", {
+  const created = await post(page.request, "/api/v1/templates", {
     headers,
     data: {
       name: `Layout probe ${suffix}`,
@@ -856,12 +857,12 @@ test("a viewer inspects a workflow node without edit controls", async ({ page })
   const team = teams.find((item) => item.name === "Plattform") || teams[0];
   const users = await (await page.request.get("/api/v1/users")).json();
   if (!users.some((user) => user.username === "carol")) {
-    const created = await page.request.post("/api/v1/users", {
+    const created = await post(page.request, "/api/v1/users", {
       data: { username: "carol", password: "carol-viewer-pass", display_name: "Carol Viewer" },
     });
     expect(created.status()).toBe(201);
   }
-  const member = await page.request.post(`/api/v1/teams/${team.id}/members`, {
+  const member = await post(page.request, `/api/v1/teams/${team.id}/members`, {
     data: { username: "carol", role: "viewer" },
   });
   expect(member.status()).toBe(201);
@@ -996,15 +997,15 @@ test("the activity page lists a sync and a launch and the filters narrow it", as
   const headers = { "X-Team-Id": teamId };
   const suffix = Date.now();
   const projects = await (await page.request.get("/api/v1/projects", { headers })).json();
-  const synced = await page.request.post(`/api/v1/projects/${projects[0].id}/sync`, { headers, data: {} });
+  const synced = await post(page.request, `/api/v1/projects/${projects[0].id}/sync`, { headers, data: {} });
   expect(synced.status()).toBe(200);
-  const created = await page.request.post("/api/v1/templates", {
+  const created = await post(page.request, "/api/v1/templates", {
     headers,
     data: { name: `Activity probe ${suffix}`, tool: "shell", spec: { script: "#!/bin/sh\ntrue\n" } },
   });
   expect(created.status()).toBe(201);
   const template = await created.json();
-  const launched = await page.request.post(`/api/v1/templates/${template.id}/launch`, { headers, data: { extra_vars: {} } });
+  const launched = await post(page.request, `/api/v1/templates/${template.id}/launch`, { headers, data: { extra_vars: {} } });
   expect(launched.status()).toBe(202);
 
   const nav = page.getByRole("navigation");
@@ -1127,13 +1128,13 @@ test("an operator syncs a project and an inventory from their lists", async ({ p
   ]) {
     const users = await (await page.request.get("/api/v1/users")).json();
     if (!users.some((user) => user.username === username)) {
-      const created = await page.request.post("/api/v1/users", {
+      const created = await post(page.request, "/api/v1/users", {
         data: { username, display_name: displayName, password },
       });
       expect(created.status()).toBe(201);
     }
     if (!members.some((member) => member.username === username)) {
-      const member = await page.request.post(`/api/v1/teams/${team.id}/members`, {
+      const member = await post(page.request, `/api/v1/teams/${team.id}/members`, {
         data: { username, role },
       });
       expect(member.status()).toBe(201);
@@ -1154,18 +1155,18 @@ test("an operator syncs a project and an inventory from their lists", async ({ p
   execFileSync("git", ["-C", repo, "add", "inventory/hosts.ini", "site.yml"]);
   execFileSync("git", ["-C", repo, "commit", "-m", "main"]);
   const demo = `file://${repo}`;
-  const createdProject = await page.request.post("/api/v1/projects", {
+  const createdProject = await post(page.request, "/api/v1/projects", {
     headers: { "X-Team-Id": team.id },
     data: { name: projectName, source_type: "git", source: demo, revision: "main" },
   });
   expect(createdProject.status()).toBe(201);
   const project = await createdProject.json();
-  const synced = await page.request.post(`/api/v1/projects/${project.id}/sync`, {
+  const synced = await post(page.request, `/api/v1/projects/${project.id}/sync`, {
     headers: { "X-Team-Id": team.id },
     data: {},
   });
   expect(synced.status()).toBe(200);
-  const createdInventory = await page.request.post("/api/v1/inventories", {
+  const createdInventory = await post(page.request, "/api/v1/inventories", {
     headers: { "X-Team-Id": team.id },
     data: {
       name: inventoryName,
@@ -1227,7 +1228,7 @@ test("an operator syncs a project and an inventory from their lists", async ({ p
 
 test("the account page lists sessions, marks the current one and ends another", async ({ page }) => {
   await signInInEnglish(page);
-  const second = await page.request.post("/api/v1/login", {
+  const second = await post(page.request, "/api/v1/login", {
     data: { username, password },
   });
   expect(second.ok()).toBe(true);

@@ -45,7 +45,7 @@ class Api:
 
     def call(self, method: str, path: str, payload: dict | None = None, ok=(200,)):
         data = None
-        headers = {"Accept": "application/json"}
+        headers = {"Accept": "application/json", "Origin": self.base}
         if payload is not None:
             data = json.dumps(payload).encode("utf-8")
             headers["Content-Type"] = "application/json"

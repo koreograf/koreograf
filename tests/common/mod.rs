@@ -354,7 +354,11 @@ pub async fn call_full(
 ) -> Reply {
     let mut builder = Request::builder().method(method).uri(uri);
     if let Some(cookie) = cookie {
-        builder = builder.header("cookie", cookie);
+        // The origin guard needs same-origin headers on every cookie write.
+        builder = builder
+            .header("cookie", cookie)
+            .header("host", "example.test")
+            .header("origin", "http://example.test");
     }
     if let Some(team) = team {
         builder = builder.header("x-team-id", team);
@@ -495,6 +499,17 @@ pub async fn call_raw_headers(
     let mut builder = Request::builder().method(method).uri(uri);
     if let Some(cookie) = cookie {
         builder = builder.header("cookie", cookie);
+        if !extra
+            .iter()
+            .any(|(key, _)| key.eq_ignore_ascii_case("host"))
+        {
+            builder = builder.header("host", "example.test");
+        }
+        if !extra.iter().any(|(key, _)| {
+            key.eq_ignore_ascii_case("origin") || key.eq_ignore_ascii_case("referer")
+        }) {
+            builder = builder.header("origin", "http://example.test");
+        }
     }
     for (key, value) in extra {
         builder = builder.header(*key, *value);

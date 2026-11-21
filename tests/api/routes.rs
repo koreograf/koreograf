@@ -1,7 +1,9 @@
-use axum::http::StatusCode;
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
 use serde_json::json;
+use tower::ServiceExt;
 
-use crate::common::{call_bearer, call_cookie, call_raw_headers, request, Options, TestApp};
+use crate::common::{call_bearer, call_cookie, request, Options, TestApp};
 
 const API_PREFIXES: [&str; 2] = ["/api", "/api/v1"];
 
@@ -12,22 +14,21 @@ async fn write_team(
     name: &str,
     origin: Option<&str>,
 ) -> StatusCode {
-    let mut headers = vec![("content-type", "application/json")];
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri(format!("{prefix}/teams"))
+        .header("cookie", cookie)
+        .header("content-type", "application/json")
+        .header("host", "example.test");
     if let Some(origin) = origin {
-        headers.push(("host", "example.test"));
-        headers.push(("origin", origin));
+        builder = builder.header("origin", origin);
     }
-    let body = json!({ "name": name }).to_string().into_bytes();
-    let (status, _, _) = call_raw_headers(
-        app,
-        "POST",
-        &format!("{prefix}/teams"),
-        Some(cookie),
-        &headers,
-        Some(body),
-    )
-    .await;
-    status
+    let body = json!({ "name": name }).to_string();
+    app.clone()
+        .oneshot(builder.body(Body::from(body)).unwrap())
+        .await
+        .unwrap()
+        .status()
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -99,8 +100,8 @@ async fn both_api_prefixes_share_login_reads_writes_bearer_tokens_and_404() {
 
         assert_eq!(
             write_team(&app, prefix, &cookie, &format!("{prefix} no origin"), None).await,
-            StatusCode::CREATED,
-            "{prefix}: write without Origin"
+            StatusCode::FORBIDDEN,
+            "{prefix}: cookie write without Origin"
         );
         assert_eq!(
             write_team(

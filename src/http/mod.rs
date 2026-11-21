@@ -80,65 +80,87 @@ async fn maintenance_guard(State(state): State<Shared>, req: Request, next: Next
     ApiError::unavailable("maintenance_mode_is_active").into_response()
 }
 
+fn allowed_origin(state: &Shared, headers: &HeaderMap, source: &HeaderValue) -> bool {
+    let Some(actual) = source.to_str().ok().and_then(parse_origin) else {
+        return false;
+    };
+    let allowed = state
+        .cfg
+        .public_url
+        .iter()
+        .filter_map(|item| parse_origin(item))
+        .collect::<Vec<_>>();
+    if !allowed.is_empty() {
+        return allowed.iter().any(|item| same_origin(item, &actual));
+    }
+    let host = if state.cfg.trusted_proxy {
+        headers
+            .get("x-forwarded-host")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(',').next())
+    } else {
+        None
+    }
+    .or_else(|| {
+        headers
+            .get(header::HOST)
+            .and_then(|value| value.to_str().ok())
+    });
+    let scheme = if state.cfg.trusted_proxy {
+        headers
+            .get("x-forwarded-proto")
+            .and_then(|value| value.to_str().ok())
+    } else {
+        None
+    };
+    host.and_then(|item| authority_origin(item, scheme))
+        .is_some_and(|expected| same_origin(&expected, &actual))
+}
+
+/// A live session cookie identifies a browser client. The bearer token is
+/// resolved first on every route, so it wins over the cookie here too.
+fn session_authenticated(state: &Shared, headers: &HeaderMap) -> bool {
+    let Some(token) = auth::read_cookie(headers, "koreograf_session") else {
+        return false;
+    };
+    matches!(
+        state.store().user_by_session(&token),
+        Ok(Some(user)) if !user.disabled
+    )
+}
+
 async fn origin_guard(State(state): State<Shared>, req: Request, next: Next) -> Response {
-    let method = req.method();
-    if matches!(
-        *method,
+    if !matches!(
+        *req.method(),
         Method::POST | Method::PUT | Method::PATCH | Method::DELETE
     ) {
-        let source = req
-            .headers()
-            .get(header::ORIGIN)
-            .or_else(|| req.headers().get(header::REFERER));
-        if let Some(source) = source {
-            let actual = source.to_str().ok().and_then(parse_origin);
-            let allowed = state
-                .cfg
-                .public_url
-                .iter()
-                .filter_map(|item| parse_origin(item))
-                .collect::<Vec<_>>();
-            let ok = match actual {
-                None => false,
-                Some(actual) => {
-                    if !allowed.is_empty() {
-                        allowed.iter().any(|item| same_origin(item, &actual))
-                    } else {
-                        let host = if state.cfg.trusted_proxy {
-                            req.headers()
-                                .get("x-forwarded-host")
-                                .and_then(|value| value.to_str().ok())
-                                .and_then(|value| value.split(',').next())
-                        } else {
-                            None
-                        }
-                        .or_else(|| {
-                            req.headers()
-                                .get(header::HOST)
-                                .and_then(|value| value.to_str().ok())
-                        });
-                        let scheme = if state.cfg.trusted_proxy {
-                            req.headers()
-                                .get("x-forwarded-proto")
-                                .and_then(|value| value.to_str().ok())
-                        } else {
-                            None
-                        };
-                        host.and_then(|item| authority_origin(item, scheme))
-                            .is_some_and(|expected| same_origin(&expected, &actual))
-                    }
-                }
-            };
-            if !ok {
-                return (
-                    StatusCode::FORBIDDEN,
-                    Json(serde_json::json!({"error": "cross_origin_request_is_not_allowed"})),
-                )
-                    .into_response();
-            }
-        }
+        return next.run(req).await;
     }
-    next.run(req).await
+    let source = req
+        .headers()
+        .get(header::ORIGIN)
+        .or_else(|| req.headers().get(header::REFERER));
+    if let Some(source) = source {
+        // A header that is present must always match, even without a session.
+        if allowed_origin(&state, req.headers(), source) {
+            return next.run(req).await;
+        }
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "cross_origin_request_is_not_allowed"})),
+        )
+            .into_response();
+    }
+    // Only a browser client must prove its origin when both headers are absent.
+    if auth::bearer_token(req.headers()).is_some() || !session_authenticated(&state, req.headers())
+    {
+        return next.run(req).await;
+    }
+    (
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({"error": "cross_origin_request_is_not_allowed"})),
+    )
+        .into_response()
 }
 
 fn api_routes() -> Router<Shared> {

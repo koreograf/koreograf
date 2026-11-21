@@ -24,6 +24,8 @@ class Api:
     def call(self, method, path, payload=None, headers=None, raw=False, data=None):
         body = data
         request_headers = dict(headers or {})
+        # The origin guard expects the same origin browsers send on writes.
+        request_headers.setdefault("origin", BASE)
         if payload is not None:
             body = json.dumps(payload).encode()
             request_headers["content-type"] = "application/json"

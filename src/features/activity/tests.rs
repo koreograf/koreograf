@@ -84,7 +84,9 @@ async fn call(
     let mut request = Request::builder()
         .method(method)
         .uri(uri)
-        .header(header::COOKIE, format!("koreograf_session={token}"));
+        .header(header::COOKIE, format!("koreograf_session={token}"))
+        .header(header::HOST, "example.test")
+        .header(header::ORIGIN, "http://example.test");
     if let Some(team) = team {
         request = request.header("x-team-id", team);
     }
