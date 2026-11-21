@@ -199,17 +199,27 @@ pub async fn create_token(
     ApiJson(body): ApiJson<TokenBody>,
 ) -> Result<(StatusCode, Json<CreatedTokenResponse>), ApiError> {
     let name = require_name(&body.name)?;
+    let expires_at = match body.expires_in_days {
+        None => Some(db::plus_secs(90 * 24 * 3600)),
+        Some(None) | Some(Some(0)) => None,
+        Some(Some(days)) if (1..=3650).contains(&days) => Some(db::plus_secs(days * 24 * 3600)),
+        Some(Some(_)) => return Err(ApiError::bad("token_lifetime_out_of_range")),
+    };
     let secret = crypto::api_token();
     let prefix = crypto::token_prefix(&secret);
     let created_at = db::now();
     let id = Uuid::new_v4().to_string();
+    let times = db::ApiTokenTimes {
+        created_at,
+        expires_at,
+    };
     state.store().create_api_token(
         &id,
         &user.id,
         &name,
         &prefix,
         &crypto::hash_api_token(&secret),
-        &created_at,
+        &times,
     )?;
     Ok((
         StatusCode::CREATED,
@@ -218,8 +228,9 @@ pub async fn create_token(
             name,
             prefix,
             secret,
-            created_at,
+            created_at: times.created_at,
             last_used_at: None,
+            expires_at: times.expires_at,
         }),
     ))
 }

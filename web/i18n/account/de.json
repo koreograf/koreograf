@@ -5,9 +5,17 @@
   "copy": "Kopieren",
   "create_token": "Token anlegen",
   "delete_this_token": "Token \"{name}\" widerrufen?",
+  "expires": "Läuft ab",
   "last_used": "Zuletzt verwendet",
   "my_account": "Mein Konto",
   "name_and_email_come_from_the_directory": "Name und E-Mail kommen aus dem Verzeichnis.",
   "prefix": "Präfix",
-  "revoke": "Widerrufen"
+  "revoke": "Widerrufen",
+  "token_is_expired": "Abgelaufen",
+  "token_lifetime": "Laufzeit",
+  "token_lifetime_30_days": "30 Tage",
+  "token_lifetime_365_days": "365 Tage",
+  "token_lifetime_90_days": "90 Tage",
+  "token_lifetime_never": "Unbegrenzt",
+  "token_never_expires": "Läuft nie ab"
 }

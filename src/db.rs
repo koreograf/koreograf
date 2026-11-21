@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::error::{ApiError, AppResult};
 
-pub(crate) const SCHEMA_VERSION: u32 = 5;
+pub(crate) const SCHEMA_VERSION: u32 = 6;
 const BASELINE_VERSION: u32 = 1;
 
 pub fn now() -> String {
@@ -19,6 +19,10 @@ pub fn plus_secs(secs: i64) -> String {
     (chrono::Utc::now() + chrono::Duration::seconds(secs))
         .format("%Y-%m-%dT%H:%M:%SZ")
         .to_string()
+}
+
+pub fn has_expired(expires_at: Option<&str>) -> bool {
+    expires_at.is_some_and(|value| value < now().as_str())
 }
 
 pub(crate) struct Migration {
@@ -66,6 +70,12 @@ pub(crate) const SQLITE_MIGRATIONS: &[Migration] = &[
         sql: include_str!("../migrations/sqlite/0005_activity.sql"),
         legacy_columns: &[],
     },
+    Migration {
+        version: 6,
+        name: "0006_api_token_expiry",
+        sql: include_str!("../migrations/sqlite/0006_api_token_expiry.sql"),
+        legacy_columns: &[("api_tokens", "expires_at")],
+    },
 ];
 
 pub(crate) const POSTGRES_MIGRATIONS: &[Migration] = &[
@@ -98,6 +108,12 @@ pub(crate) const POSTGRES_MIGRATIONS: &[Migration] = &[
         name: "0005_activity",
         sql: include_str!("../migrations/postgres/0005_activity.sql"),
         legacy_columns: &[],
+    },
+    Migration {
+        version: 6,
+        name: "0006_api_token_expiry",
+        sql: include_str!("../migrations/postgres/0006_api_token_expiry.sql"),
+        legacy_columns: &[("api_tokens", "expires_at")],
     },
 ];
 
@@ -662,6 +678,13 @@ pub struct ApiToken {
     pub prefix: String,
     pub created_at: String,
     pub last_used_at: Option<String>,
+    pub expires_at: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ApiTokenTimes {
+    pub created_at: String,
+    pub expires_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1712,6 +1735,38 @@ mod tests {
             )
             .unwrap();
         assert_eq!(tables, 0);
+    }
+
+    #[test]
+    fn the_expiry_migration_keeps_existing_tokens_valid() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        conn.execute("ALTER TABLE api_tokens DROP COLUMN expires_at", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO users (id, username, display_name, password_hash, auth_source,
+                is_admin, disabled, created_at)
+             VALUES ('user', 'user', 'User', NULL, 'local', 0, 0, '2020-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO api_tokens (id, user_id, name, prefix, token_hash, created_at)
+             VALUES ('token', 'user', 'Old token', 'koro_old', 'hash', '2020-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 5).unwrap();
+        ensure_schema(&conn).unwrap();
+        let expires: Option<String> = conn
+            .query_row(
+                "SELECT expires_at FROM api_tokens WHERE id = 'token'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(expires.is_none(), "an existing token was locked out");
+        assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
     }
 
     #[test]

@@ -140,6 +140,16 @@ pub(super) struct MeUpdate {
 #[serde(deny_unknown_fields)]
 pub(super) struct TokenBody {
     pub(super) name: String,
+    /// Omitted means the default lifetime; JSON `null` means no expiry.
+    #[serde(default, deserialize_with = "deserialize_token_lifetime")]
+    pub(super) expires_in_days: Option<Option<i64>>,
+}
+
+fn deserialize_token_lifetime<'de, D>(deserializer: D) -> Result<Option<Option<i64>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<i64>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Deserialize)]
@@ -206,6 +216,8 @@ pub(super) struct TokenResponse {
     pub(super) prefix: String,
     pub(super) created_at: String,
     pub(super) last_used_at: Option<String>,
+    pub(super) expires_at: Option<String>,
+    pub(super) expired: bool,
 }
 
 #[derive(Serialize)]
@@ -220,6 +232,7 @@ pub(super) struct CreatedTokenResponse {
     pub(super) secret: String,
     pub(super) created_at: String,
     pub(super) last_used_at: Option<String>,
+    pub(super) expires_at: Option<String>,
 }
 
 impl ProfileResponse {
@@ -286,6 +299,8 @@ impl TokenResponse {
             prefix: token.prefix.clone(),
             created_at: token.created_at.clone(),
             last_used_at: token.last_used_at.clone(),
+            expires_at: token.expires_at.clone(),
+            expired: db::has_expired(token.expires_at.as_deref()),
         }
     }
 }

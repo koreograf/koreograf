@@ -10,9 +10,9 @@ use tokio_postgres::Client;
 
 use crate::config::{DatabaseConfig, PostgresConfig, SslMode};
 use crate::db::{
-    self, ApiToken, Credential, CredentialUsage, Delivery, Environment, Hook, Inventory,
-    InventorySource, Job, JobActivity, JobEvent, JobQuery, Member, NewDelivery, Organization,
-    Project, Schedule, Team, Template, User, UserMembership, Workflow, WorkflowJob,
+    self, ApiToken, ApiTokenTimes, Credential, CredentialUsage, Delivery, Environment, Hook,
+    Inventory, InventorySource, Job, JobActivity, JobEvent, JobQuery, Member, NewDelivery,
+    Organization, Project, Schedule, Team, Template, User, UserMembership, Workflow, WorkflowJob,
     WorkflowNodeRow,
 };
 use crate::error::{ApiError, AppResult};
@@ -83,7 +83,7 @@ pub(crate) trait Backend: Send + Sync {
         name: &str,
         prefix: &str,
         token_hash: &str,
-        created_at: &str,
+        times: &ApiTokenTimes,
     ) -> AppResult<()>;
     fn list_api_tokens(&self, user_id: &str) -> AppResult<Vec<ApiToken>>;
     fn delete_api_token(&self, id: &str, user_id: &str) -> AppResult<bool>;
@@ -522,10 +522,10 @@ impl Backend for SqliteBackend {
         name: &str,
         prefix: &str,
         token_hash: &str,
-        created_at: &str,
+        times: &ApiTokenTimes,
     ) -> AppResult<()> {
         let conn = lock(&self.conn)?;
-        identity_store::create_api_token(&conn, id, user_id, name, prefix, token_hash, created_at)
+        identity_store::create_api_token(&conn, id, user_id, name, prefix, token_hash, times)
     }
 
     fn list_api_tokens(&self, user_id: &str) -> AppResult<Vec<ApiToken>> {
@@ -1692,6 +1692,10 @@ impl Backend for PostgresBackend {
             return Ok(None);
         };
         let token_id: String = row.try_get(9)?;
+        let expires_at: Option<String> = row.try_get(10)?;
+        if db::has_expired(expires_at.as_deref()) {
+            return Err(ApiError::TokenExpired);
+        }
         self.with_client(|client| async move {
             client
                 .execute(
@@ -1902,13 +1906,21 @@ impl Backend for PostgresBackend {
         name: &str,
         prefix: &str,
         token_hash: &str,
-        created_at: &str,
+        times: &ApiTokenTimes,
     ) -> AppResult<()> {
         self.with_client(|client| async move {
             client
                 .execute(
                     &store::sql::postgres(identity_store::CREATE_API_TOKEN),
-                    &[&id, &user_id, &name, &prefix, &token_hash, &created_at],
+                    &[
+                        &id,
+                        &user_id,
+                        &name,
+                        &prefix,
+                        &token_hash,
+                        &times.created_at,
+                        &times.expires_at,
+                    ],
                 )
                 .await?;
             Ok(())

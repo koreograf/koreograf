@@ -43,6 +43,9 @@ impl std::fmt::Display for UserMessage {
 pub enum ApiError {
     #[error("unauthorized")]
     Unauthorized,
+    /// A personal API token whose stored expiry is in the past.
+    #[error("the token has expired")]
+    TokenExpired,
     /// A rejected sign-in. The key stays the same for every cause.
     #[error("sign-in failed")]
     SignInFailed,
@@ -187,6 +190,11 @@ impl IntoResponse for ApiError {
             Self::Unauthorized => (
                 StatusCode::UNAUTHORIZED,
                 "sign_in_is_required".to_string(),
+                BTreeMap::new(),
+            ),
+            Self::TokenExpired => (
+                StatusCode::UNAUTHORIZED,
+                "token_expired".to_string(),
                 BTreeMap::new(),
             ),
             Self::SignInFailed => (
