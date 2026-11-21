@@ -9,6 +9,7 @@
   "jobs_range": "{from}–{to} von {total}",
   "jump_to_end": "Zum Ende springen",
   "jump_to_first_failure": "Zum ersten Fehler springen",
+  "launched_by": "Gestartet von",
   "log_gap": "{count} Zeilen in der Mitte werden nicht angezeigt. Lade die Ausgabe herunter für das vollständige Protokoll.",
   "log_search_count": "{current} von {total}",
   "no_jobs_match": "Keine Aufträge passen zu den Filtern.",

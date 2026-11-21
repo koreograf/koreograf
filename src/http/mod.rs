@@ -144,6 +144,7 @@ async fn origin_guard(State(state): State<Shared>, req: Request, next: Next) -> 
 fn api_routes() -> Router<Shared> {
     Router::new()
         .route("/version", get(version))
+        .merge(crate::features::activity::routes())
         .merge(crate::features::assistant::routes())
         .merge(crate::features::credentials::routes())
         .merge(crate::features::identity::routes())

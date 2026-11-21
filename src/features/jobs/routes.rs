@@ -13,6 +13,7 @@ use serde_json::Value;
 
 use crate::db::{self, Job, JobEvent};
 use crate::error::{ApiError, ApiJson, AppResult};
+use crate::features::activity;
 use crate::features::identity::{AuthUser, Role};
 use crate::http::{gate, team_header};
 use crate::runner;
@@ -340,14 +341,25 @@ pub async fn cancel_job(
     user: AuthUser,
     Path(id): Path<String>,
 ) -> AppResult<Json<JobResponse>> {
-    let team = {
+    let job = {
         let db = state.store();
         let job = db.job(&id)?.ok_or(ApiError::NotFound)?;
         crate::features::identity::authorize(db, &user, &job.team_id, Role::Operator)?;
-        job.team_id
+        job
     };
     cancel(&state, &id)?;
-    let _ = team;
+    if !matches!(job.status.as_str(), "successful" | "failed" | "canceled") {
+        activity::note(
+            &state,
+            &job.team_id,
+            &user.username,
+            "cancel",
+            "job",
+            &job.id,
+            &job.name,
+            "success",
+        );
+    }
     let db = state.store();
     let job = db.job(&id)?.ok_or(ApiError::NotFound)?;
     Ok(Json(JobResponse::new(&job, None)))

@@ -244,6 +244,28 @@ test("keeps the workflow editor view-only with a desktop note", async ({ page })
   await noHorizontalScroll(page);
 });
 
+test("lists activity and narrows it to one action", async ({ page }) => {
+  const suffix = `${test.info().project.name}-${Date.now()}`.replace(/\s+/g, "-");
+  await signIn(page);
+  const template = await createShellTemplate(page, `Activity mobile ${suffix}`, "#!/bin/sh\ntrue\n");
+  const headers = await teamHeaders(page);
+  const launched = await page.request.post(`/api/v1/templates/${template.id}/launch`, { headers, data: { extra_vars: {} } });
+  expect(launched.status()).toBe(202);
+
+  await goTo(page, "Activity");
+  const rows = page.locator("#activity-table tbody tr");
+  const probe = rows.filter({ hasText: template.name });
+  await expect(probe).toHaveCount(2);
+  await expect(probe.filter({ hasText: "Created" })).toHaveCount(1);
+  await expect(probe.filter({ hasText: "Launched" })).toHaveCount(1);
+  await expect(rows.first().locator('td[data-label="Object"]')).toBeVisible();
+
+  await page.locator("#activity-action").selectOption("launch");
+  await expect(probe).toHaveCount(1);
+  await expect(probe.first()).toContainText("Launched");
+  await noHorizontalScroll(page);
+});
+
 test("keeps the workflow editor view-only in landscape and after rotation", async ({ page }) => {
   await signIn(page);
   await goTo(page, "Workflows");

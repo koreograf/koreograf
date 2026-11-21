@@ -16,6 +16,7 @@ use crate::db::{
     WorkflowNodeRow,
 };
 use crate::error::{ApiError, AppResult};
+use crate::features::activity::{self as activity, Activity, ActivityQuery};
 use crate::features::credentials;
 use crate::features::identity::store as identity_store;
 use crate::features::inventories;
@@ -222,6 +223,13 @@ pub(crate) trait Backend: Send + Sync {
     fn delete_hook(&self, id: &str, team_id: &str) -> AppResult<()>;
     fn list_deliveries(&self, team_id: &str, limit: i64) -> AppResult<Vec<Delivery>>;
     fn insert_delivery(&self, item: &NewDelivery<'_>) -> AppResult<()>;
+    fn insert_activity(&self, item: &Activity) -> AppResult<()>;
+    fn list_activity(
+        &self,
+        team_id: &str,
+        query: &ActivityQuery,
+    ) -> AppResult<(Vec<Activity>, i64)>;
+    fn prune_activity(&self, team_id: &str, keep: i64) -> AppResult<()>;
     fn job(&self, id: &str) -> AppResult<Option<Job>>;
     fn list_jobs(&self, team_id: &str, query: &JobQuery) -> AppResult<(Vec<Job>, i64)>;
     fn insert_job(&self, item: &Job) -> AppResult<()>;
@@ -1014,6 +1022,25 @@ impl Backend for SqliteBackend {
     fn insert_delivery(&self, item: &NewDelivery<'_>) -> AppResult<()> {
         let conn = lock(&self.conn)?;
         store::deliveries::insert_delivery(&conn, *item)
+    }
+
+    fn insert_activity(&self, item: &Activity) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        activity::store::insert_activity(&conn, item)
+    }
+
+    fn list_activity(
+        &self,
+        team_id: &str,
+        query: &ActivityQuery,
+    ) -> AppResult<(Vec<Activity>, i64)> {
+        let conn = lock(&self.conn)?;
+        activity::store::list_activity(&conn, team_id, query)
+    }
+
+    fn prune_activity(&self, team_id: &str, keep: i64) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        activity::store::prune_activity(&conn, team_id, keep)
     }
 
     fn job(&self, id: &str) -> AppResult<Option<Job>> {
@@ -3232,6 +3259,96 @@ impl Backend for PostgresBackend {
                         &item.workflow_job_id,
                         &db::now(),
                     ],
+                )
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn insert_activity(&self, item: &Activity) -> AppResult<()> {
+        self.with_client(|client| async move {
+            client
+                .execute(
+                    &store::sql::postgres(activity::store::INSERT_ACTIVITY),
+                    &[
+                        &item.id,
+                        &item.team_id,
+                        &item.actor,
+                        &item.action,
+                        &item.object_type,
+                        &item.object_id,
+                        &item.object_name,
+                        &item.result,
+                        &item.created_at,
+                    ],
+                )
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn list_activity(
+        &self,
+        team_id: &str,
+        query: &ActivityQuery,
+    ) -> AppResult<(Vec<Activity>, i64)> {
+        let limit = query.limit.clamp(1, 100);
+        let offset = query.offset.max(0);
+        self.with_client(|client| async move {
+            let rows = client
+                .query(
+                    &store::sql::postgres(&activity::store::list_activity_sql()),
+                    &[
+                        &team_id,
+                        &query.actor,
+                        &query.action,
+                        &query.object_type,
+                        &query.since,
+                        &query.until,
+                        &limit,
+                        &offset,
+                    ],
+                )
+                .await?;
+            let items = rows
+                .iter()
+                .map(activity::store::row_activity)
+                .collect::<AppResult<Vec<_>>>()?;
+            let total = client
+                .query_one(
+                    &store::sql::postgres(&activity::store::count_activity_sql()),
+                    &[
+                        &team_id,
+                        &query.actor,
+                        &query.action,
+                        &query.object_type,
+                        &query.since,
+                        &query.until,
+                    ],
+                )
+                .await?
+                .get(0);
+            Ok((items, total))
+        })
+    }
+
+    fn prune_activity(&self, team_id: &str, keep: i64) -> AppResult<()> {
+        let keep = keep.max(0);
+        self.with_client(|client| async move {
+            let count: i64 = client
+                .query_one(
+                    &store::sql::postgres(activity::store::COUNT_ACTIVITY),
+                    &[&team_id],
+                )
+                .await?
+                .get(0);
+            if count <= keep {
+                return Ok(());
+            }
+            client
+                .execute(
+                    &store::sql::postgres(activity::store::PRUNE_ACTIVITY),
+                    &[&team_id, &keep],
                 )
                 .await?;
             Ok(())

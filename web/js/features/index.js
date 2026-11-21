@@ -1,4 +1,5 @@
 import "./account.js";
+import "./activity.js";
 import "./assistant.js";
 import "./backup.js";
 import "./credentials.js";

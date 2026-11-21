@@ -1,6 +1,6 @@
 mod model;
 mod routes;
-mod service;
+pub(crate) mod service;
 pub(crate) mod store;
 
 pub(crate) use routes::routes;

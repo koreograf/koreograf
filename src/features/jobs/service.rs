@@ -7,6 +7,7 @@ use uuid::Uuid;
 use crate::config::{LocalJobs, RunnerMode};
 use crate::db::{self, Hook, Job, WorkflowJob};
 use crate::error::{ApiError, AppResult};
+use crate::features::activity;
 use crate::features::workflows::{self as workflow, NodePhase};
 use crate::hooks::{self, AlertEvent};
 use crate::runner;
@@ -122,6 +123,25 @@ pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
             failed_hosts: "[]".into(),
         };
         db.insert_job(&job)?;
+        // Workflow node jobs are covered by the workflow run entry, not one
+        // launch entry per node.
+        if job.trigger != "workflow" {
+            let action = if job.trigger == "relaunch" {
+                "relaunch"
+            } else {
+                "launch"
+            };
+            activity::note(
+                state,
+                &job.team_id,
+                &job.launched_by,
+                action,
+                "job",
+                &job.id,
+                &job.name,
+                "success",
+            );
+        }
     }
     let shared = state.clone();
     let job_id = id.clone();
@@ -709,6 +729,16 @@ pub fn discard_project_checkout(state: &Shared, project: &db::Project) {
 
 pub async fn sync_project(state: &Shared, project: &db::Project, by: &str) -> AppResult<String> {
     if project.source_type != "git" {
+        activity::note(
+            state,
+            &project.team_id,
+            by,
+            "sync",
+            "project",
+            &project.id,
+            &project.name,
+            "success",
+        );
         return Ok(project.source.clone());
     }
     let proxy = crate::features::operations::load(state)?.proxy;
@@ -732,10 +762,30 @@ pub async fn sync_project(state: &Shared, project: &db::Project, by: &str) -> Ap
                 commit.as_deref().unwrap_or(""),
                 by,
             )?;
+            activity::note(
+                state,
+                &project.team_id,
+                by,
+                "sync",
+                "project",
+                &project.id,
+                &project.name,
+                "success",
+            );
             Ok(path.display().to_string())
         }
         Err(err) => {
             state.store().set_project_sync_failed(&project.id, by)?;
+            activity::note(
+                state,
+                &project.team_id,
+                by,
+                "sync",
+                "project",
+                &project.id,
+                &project.name,
+                "failed",
+            );
             Err(ApiError::from(err))
         }
     }
@@ -870,6 +920,7 @@ pub fn launch_workflow(
                 ));
             }
         }
+        let workflow_name = item.name.clone();
         let run = WorkflowJob {
             id: id.clone(),
             workflow_id: Some(item.id),
@@ -886,6 +937,21 @@ pub fn launch_workflow(
         for node in &graph.nodes {
             db.insert_workflow_node(&id, &node.id)?;
         }
+        let action = if trigger == "relaunch" {
+            "relaunch"
+        } else {
+            "launch"
+        };
+        activity::note(
+            state,
+            team_id,
+            launched_by,
+            action,
+            "workflow_run",
+            &id,
+            &workflow_name,
+            "success",
+        );
     }
     let shared = state.clone();
     let run_id = id.clone();
