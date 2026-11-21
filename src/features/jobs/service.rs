@@ -749,8 +749,16 @@ fn capture_parameters(
     .to_string()
 }
 
+/// Jobs per database batch. The lock is released between batches so a long
+/// history does not stall another request.
+const PRUNE_BATCH: i64 = 500;
+
 /// Removes the event stream and work directory of finished jobs past
 /// `KOREOGRAF_JOB_LOG_RETENTION_DAYS`. The jobs row stays.
+///
+/// The event delete visits only jobs that still have events, in bounded
+/// batches. The work directories come from a separate sweep, so a later run
+/// does no per-job event delete for output it already removed.
 pub(crate) fn prune_finished_job_logs(state: &crate::AppState) -> AppResult<()> {
     let days = state.cfg.job_log_retention_days;
     if days == 0 {
@@ -759,34 +767,53 @@ pub(crate) fn prune_finished_job_logs(state: &crate::AppState) -> AppResult<()> 
     let Some(cutoff) = db::minus_days(days) else {
         return Ok(());
     };
-    let pruned = state.store().prune_job_logs(&cutoff)?;
+    let mut jobs = 0usize;
+    let mut events = 0usize;
+    loop {
+        let batch = state.store().prune_job_logs(&cutoff, PRUNE_BATCH)?;
+        if batch.job_ids.is_empty() {
+            break;
+        }
+        jobs = jobs.saturating_add(batch.job_ids.len());
+        events = events.saturating_add(batch.events);
+        if batch.job_ids.len() < usize::try_from(PRUNE_BATCH).unwrap_or(usize::MAX) {
+            break;
+        }
+        // Leave a gap for another request before taking the lock again.
+        std::thread::yield_now();
+    }
     let mut directories = 0usize;
-    for id in &pruned.job_ids {
-        if remove_job_work_dir(&state.cfg.data_dir, id) {
-            directories += 1;
+    for id in state.store().finished_jobs_before(&cutoff)? {
+        if remove_job_work_dir(&state.cfg.data_dir, &id) {
+            directories = directories.saturating_add(1);
         }
     }
-    if pruned.events > 0 || directories > 0 {
+    if events > 0 || directories > 0 {
         tracing::info!(
             days,
-            jobs = pruned.job_ids.len(),
-            events = pruned.events,
+            jobs,
+            events,
             directories,
-            "pruned finished job logs"
+            "pruned finished job logs; KOREOGRAF_JOB_LOG_RETENTION_DAYS sets the cutoff"
         );
     }
     Ok(())
 }
 
-/// Runs the retention prune once a day. The startup prune already ran in
-/// [`crate::boot_with`], so this task waits for the first interval.
+/// Runs the retention prune once when the task starts and then once a day.
+/// The server calls this after the port is bound, so a large first prune does
+/// not delay the first start. Each prune runs on the blocking pool and takes
+/// the database lock one batch at a time.
 pub(crate) fn spawn_log_retention(state: Shared) {
     tokio::spawn(async move {
         loop {
-            tokio::time::sleep(Duration::from_secs(24 * 60 * 60)).await;
-            if let Err(err) = prune_finished_job_logs(&state) {
-                tracing::error!(error = %err, "job log retention");
+            let task_state = state.clone();
+            match tokio::task::spawn_blocking(move || prune_finished_job_logs(&task_state)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => tracing::error!(error = %err, "job log retention"),
+                Err(err) => tracing::error!(error = %err, "job log retention task stopped"),
             }
+            tokio::time::sleep(Duration::from_secs(24 * 60 * 60)).await;
         }
     });
 }

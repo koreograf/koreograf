@@ -298,7 +298,7 @@ async fn zero_disables_retention() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn startup_prunes_finished_jobs_past_the_cutoff() {
+async fn the_startup_prune_runs_in_the_background_task_after_boot() {
     let mut harness = TestApp::boot("retention-startup", options(5));
     let team = harness
         .sql_text("SELECT id FROM teams ORDER BY id LIMIT 1")
@@ -320,11 +320,146 @@ async fn startup_prunes_finished_jobs_past_the_cutoff() {
 
     harness.reboot();
 
+    // Boot leaves the history alone; the first prune is a background task.
+    assert_eq!(event_count(&harness, "retention-boot").await, 1);
+    assert!(work_dir(&harness, "retention-boot").exists());
+
+    harness.state.spawn_log_retention();
+    wait_for_prune(&harness, "retention-boot").await;
+
     assert_eq!(event_count(&harness, "retention-boot").await, 0);
     assert!(!work_dir(&harness, "retention-boot").exists());
     assert_eq!(
         harness
             .sql_i64("SELECT COUNT(*) FROM jobs WHERE id = 'retention-boot'")
+            .await,
+        1
+    );
+}
+
+async fn wait_for_prune(harness: &TestApp, id: &str) {
+    for _ in 0..300 {
+        if event_count(harness, id).await == 0 && !work_dir(harness, id).exists() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("the background retention task did not prune {id}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn many_old_jobs_lose_only_the_output_and_dirs_they_still_have() {
+    let harness = TestApp::boot("retention-bulk", options(5));
+    let team = harness
+        .sql_text("SELECT id FROM teams ORDER BY id LIMIT 1")
+        .await
+        .remove(0);
+    let old = stamp(10);
+    let recent = stamp(0);
+    let mut jobs = String::new();
+    let mut events = String::new();
+    let mut with_events = Vec::new();
+    let mut with_dirs = Vec::new();
+    let mut kept = Vec::new();
+    for index in 0..24 {
+        let id = format!("retention-bulk-{index:02}");
+        let running = index % 6 == 5;
+        let status = if running { "running" } else { "successful" };
+        let finished = if running {
+            "NULL".to_string()
+        } else {
+            format!("'{old}'")
+        };
+        jobs.push_str(&format!(
+            "INSERT INTO jobs (
+                id, team_id, name, tool, status, extra_vars, launched_by, trigger,
+                started_at, finished_at, created_at
+             ) VALUES ('{id}', '{team}', 'Bulk {index}', 'shell', '{status}',
+                '{{}}', 'admin', 'manual', '{old}', {finished}, '{old}');\n"
+        ));
+        let has_events = running || index % 2 == 0;
+        if has_events {
+            events.push_str(&format!(
+                "INSERT INTO job_events (job_id, ts, stream, line)
+                 VALUES ('{id}', '{old}', 'stdout', 'line one'),
+                        ('{id}', '{old}', 'stdout', 'line two');\n"
+            ));
+        }
+        let has_dir = running || index % 3 == 0;
+        if has_dir {
+            seed_work_dir(&harness, &id);
+        }
+        if running {
+            kept.push(id);
+        } else {
+            if has_events {
+                with_events.push(id.clone());
+            }
+            if has_dir {
+                with_dirs.push(id);
+            }
+        }
+    }
+    // A recent finished job keeps both, even though it also has events.
+    let recent_id = "retention-bulk-recent";
+    jobs.push_str(&format!(
+        "INSERT INTO jobs (
+            id, team_id, name, tool, status, extra_vars, launched_by, trigger,
+            started_at, finished_at, created_at
+         ) VALUES ('{recent_id}', '{team}', 'Recent', 'shell', 'failed',
+            '{{}}', 'admin', 'manual', '{recent}', '{recent}', '{recent}');\n"
+    ));
+    events.push_str(&format!(
+        "INSERT INTO job_events (job_id, ts, stream, line)
+         VALUES ('{recent_id}', '{recent}', 'stdout', 'keep me');\n"
+    ));
+    seed_work_dir(&harness, recent_id);
+    harness.execute_sql(&format!("{jobs}{events}")).await;
+
+    harness.state.prune_job_logs().expect("first prune");
+
+    for id in &with_events {
+        assert_eq!(event_count(&harness, id).await, 0, "{id} kept events");
+    }
+    for id in &with_dirs {
+        assert!(!work_dir(&harness, id).exists(), "{id} kept its work dir");
+    }
+    for id in &kept {
+        assert_eq!(event_count(&harness, id).await, 2, "{id} lost events");
+        assert!(work_dir(&harness, id).exists(), "{id} lost its work dir");
+    }
+    assert_eq!(event_count(&harness, recent_id).await, 1);
+    assert!(work_dir(&harness, recent_id).exists());
+    assert_eq!(
+        harness
+            .sql_i64("SELECT COUNT(*) FROM jobs WHERE id LIKE 'retention-bulk-%'")
+            .await,
+        25
+    );
+
+    // The second pass has no events to delete. A new old directory still goes.
+    let late = "retention-bulk-late";
+    harness
+        .execute_sql(&format!(
+            "INSERT INTO jobs (
+                id, team_id, name, tool, status, extra_vars, launched_by, trigger,
+                started_at, finished_at, created_at
+             ) VALUES ('{late}', '{team}', 'Late', 'shell', 'failed',
+                '{{}}', 'admin', 'manual', '{old}', '{old}', '{old}');"
+        ))
+        .await;
+    seed_work_dir(&harness, late);
+    harness.state.prune_job_logs().expect("second prune");
+
+    for id in &with_events {
+        assert_eq!(event_count(&harness, id).await, 0, "{id} came back");
+    }
+    assert!(!work_dir(&harness, late).exists());
+    assert_eq!(
+        harness
+            .sql_i64(&format!(
+                "SELECT COUNT(*) FROM job_events WHERE job_id = '{recent_id}'"
+            ))
             .await,
         1
     );
