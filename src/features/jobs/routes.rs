@@ -1,4 +1,5 @@
 use std::convert::Infallible;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::{Path, Query, State};
@@ -401,8 +402,8 @@ fn valid_host(host: &str) -> bool {
 
 /// One sidecar read can scan up to 64 MiB on the blocking pool, so a queue of
 /// Viewer requests has a small ceiling.
-static HOST_DETAIL_READS: std::sync::LazyLock<tokio::sync::Semaphore> =
-    std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(4));
+static HOST_DETAIL_READS: std::sync::LazyLock<Arc<tokio::sync::Semaphore>> =
+    std::sync::LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(4)));
 
 /// One host's task detail from the callback sidecar. A host past the stored
 /// event cap has no rows in `job_events`, so the page asks for that one host
@@ -426,13 +427,15 @@ pub async fn job_host_ansible(
         crate::features::identity::authorize(db, &user, &job.team_id, Role::Viewer)?;
     }
     let work = job_work_dir(&state.cfg.data_dir, &id).ok_or(ApiError::NotFound)?;
-    let _permit = HOST_DETAIL_READS
-        .acquire()
+    let permit = HOST_DETAIL_READS
+        .clone()
+        .acquire_owned()
         .await
         .map_err(|_| ApiError::Internal("host detail limiter is closed".into()))?;
     let data_dir = state.cfg.data_dir.clone();
     let lookup = host.clone();
     let page = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
         crate::ansible_events::host_events(&work, &data_dir, &lookup)
     })
     .await
