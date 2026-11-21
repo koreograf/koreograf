@@ -100,7 +100,7 @@ test("the structured job page reflows at phone and desktop widths", async ({ pag
   await launchStructuredJob(page);
   await expect(page.locator(".st-play-name")).toHaveText("Structured demo");
 
-  for (const [width, height] of [[1440, 900], [1024, 700], [412, 923], [360, 732]]) {
+  for (const [width, height] of [[1440, 900], [1280, 900], [1024, 700]]) {
     await page.setViewportSize({ width, height });
     await page.reload();
     await expect(page.locator("#structured-output")).toBeVisible();
@@ -113,7 +113,33 @@ test("the structured job page reflows at phone and desktop widths", async ({ pag
     await noHorizontalScroll(page);
   }
 
+  // The maintainer asked to verify the layout through assertions instead of
+  // screenshots: every phone width in both languages and both themes.
+  for (const [width, height] of [[1280, 900], [412, 923], [360, 732]]) {
+    await page.setViewportSize({ width, height });
+    for (const lang of ["de", "en"]) {
+      for (const theme of ["light", "dark"]) {
+        await page.evaluate(([language, mode]) => {
+          localStorage.setItem("koreograf.lang", language);
+          localStorage.setItem("koreograf.theme", mode);
+          localStorage.setItem("koreograf.job-output-view", "structured");
+        }, [lang, theme]);
+        await page.reload();
+        await expect(page.locator("#structured-output")).toBeVisible();
+        await expect(page.locator(".st-play-name")).toHaveText("Structured demo");
+        await expect(page.locator("#log-result")).toBeVisible();
+        await expect(page.locator("#output-view [data-output-view=structured]")).toHaveClass(/primary/);
+        await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe(lang);
+        await expect.poll(() => page.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
+        await noHorizontalScroll(page);
+      }
+    }
+  }
+
+  await page.evaluate(() => localStorage.setItem("koreograf.lang", "en"));
   await page.setViewportSize({ width: 360, height: 732 });
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Raw log", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Raw log", exact: true }).click();
   await expect(page.locator("#log")).toBeVisible();
   await expect(page.locator("#log")).toContainText("RAW LOG MARKER");
