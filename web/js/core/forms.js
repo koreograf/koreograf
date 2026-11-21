@@ -150,6 +150,10 @@ export function jsonObject(text, label) {
   return value;
 }
 
+export function descriptionField(value) {
+  return `<label class="field description-field"><span>${h("description")}</span><textarea name="description" maxlength="1000">${esc(value)}</textarea></label>`;
+}
+
 export function secretControl(name, label, widget, stored) {
   const clear = stored
     ? `<label class="field check"><input type="checkbox" data-clear="${esc(name)}"><span>${h("remove")}</span></label>`

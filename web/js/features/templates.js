@@ -8,7 +8,7 @@ import { bindChips, flushChips } from "../core/chips.js";
 import { credentialKindLabel } from "../core/credentials.js";
 import { clearEditHash, editQuery, openEditDialog, rememberEditHash } from "../core/edit.js";
 import { environmentToolLabel, scopeLabel, verbosityLabel } from "../core/format.js";
-import { jsonObject, showFieldError } from "../core/forms.js";
+import { descriptionField, jsonObject, showFieldError } from "../core/forms.js";
 import {
   ansibleFields,
   bindLegacyCredentials,
@@ -347,7 +347,7 @@ async function openTemplateDialog(existing, initialTab = "") {
   const verbosity = Number(spec.verbosity) || 0;
   const general = `
     <label class="field required"><span>${h("name")}</span><input name="name" required value="${esc(item.name)}"></label>
-    <label class="field"><span>${h("description")}</span><input name="description" maxlength="1000" value="${esc(item.description)}"></label>
+    ${descriptionField(item.description)}
     <label class="field check"><span>${h("prompt_on_launch")}</span><input name="prompt_on_launch" type="checkbox"${item.prompt_on_launch ? " checked" : ""}></label>
     <p class="small muted">${h("the_launch_dialog_starts_from_the_template")}</p>
     <div class="field-row">

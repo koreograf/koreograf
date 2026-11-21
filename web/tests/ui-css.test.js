@@ -69,3 +69,10 @@ test("short selects keep the fit width and the schedule uses it", () => {
     assert.match(schedule, new RegExp(`<select class="fit" name="${name}">`), `${name} lost the fit class`);
   }
 });
+
+test("the shared description field grows with its text", () => {
+  const rule = /\.description-field textarea\s*\{([^}]*)\}/.exec(withoutComments(stylesheet()));
+  assert.ok(rule, ".description-field textarea is missing");
+  assert.match(rule[1], /field-sizing:\s*content/, "the description does not grow with its text");
+  assert.match(rule[1], /max-height:/, "a very long description has no height limit");
+});
