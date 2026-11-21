@@ -7,7 +7,7 @@ import { handle, needTeam, shell } from "../core/app.js";
 import { pill, relativeTime, when } from "../core/format.js";
 
 const ACTIONS = ["sync", "create", "update", "delete", "launch", "cancel", "relaunch"];
-const OBJECT_TYPES = ["project", "inventory", "template", "credential", "schedule", "workflow", "job", "workflow_run"];
+const OBJECT_TYPES = ["project", "inventory", "inventory_source", "template", "credential", "environment", "schedule", "workflow", "job", "workflow_run"];
 
 const ACTION_KEYS = {
   sync: "action_sync",
@@ -22,8 +22,10 @@ const ACTION_KEYS = {
 const OBJECT_KEYS = {
   project: "object_project",
   inventory: "object_inventory",
+  inventory_source: "object_inventory_source",
   template: "object_template",
   credential: "object_credential",
+  environment: "object_environment",
   schedule: "object_schedule",
   workflow: "object_workflow",
   job: "object_job",
@@ -94,6 +96,7 @@ export function objectHref(item) {
     case "inventory": return `#/inventories/${id}`;
     case "template": return `#/templates?edit=${id}`;
     case "credential": return `#/credentials?edit=${id}`;
+    case "environment": return `#/runtime?edit=${id}`;
     case "workflow": return `#/workflows/${id}`;
     case "job": return `#/jobs/${id}`;
     case "workflow_run": return `#/runs/${id}`;

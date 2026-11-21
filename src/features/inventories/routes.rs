@@ -895,7 +895,18 @@ pub async fn add_source(
     let db = state.store();
     db.add_inventory_source(&id, &source, user.is_admin)?;
     let item = db.inventory(&id)?.ok_or(ApiError::NotFound)?;
-    Ok(Json(inventory_detail(db, &item)?))
+    let response = inventory_detail(db, &item)?;
+    activity::note(
+        &state,
+        &team,
+        &user.username,
+        "create",
+        "inventory_source",
+        &source.id,
+        &source.name,
+        "success",
+    );
+    Ok(Json(response))
 }
 
 pub async fn get_source(
@@ -971,6 +982,16 @@ pub async fn update_source(
         response.collisions = Some(resolved.collisions);
         response.dropped_vars = Some(resolved.dropped_vars);
     }
+    activity::note(
+        &state,
+        &team,
+        &user.username,
+        "update",
+        "inventory_source",
+        &updated.id,
+        &updated.name,
+        "success",
+    );
     Ok(Json(response))
 }
 
@@ -983,10 +1004,21 @@ pub async fn delete_source(
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
     let db = state.store();
-    owned_source(db, &inventory_id, &source_id, &team)?;
+    let source = owned_source(db, &inventory_id, &source_id, &team)?;
     db.delete_inventory_source(&source_id, &inventory_id, user.is_admin)?;
     let item = db.inventory(&inventory_id)?.ok_or(ApiError::NotFound)?;
-    Ok(Json(inventory_detail(db, &item)?))
+    let response = inventory_detail(db, &item)?;
+    activity::note(
+        &state,
+        &team,
+        &user.username,
+        "delete",
+        "inventory_source",
+        &source.id,
+        &source.name,
+        "success",
+    );
+    Ok(Json(response))
 }
 
 pub async fn sync_source(
@@ -2323,6 +2355,16 @@ pub async fn create_environment(
     apply_environment_scope(&mut item, &scope, &team)?;
     db.insert_environment(&item)?;
     let stored = db.environment(&item.id)?.ok_or(ApiError::NotFound)?;
+    activity::note(
+        &state,
+        &team_id,
+        &user.username,
+        "create",
+        "environment",
+        &stored.id,
+        &stored.name,
+        "success",
+    );
     Ok((StatusCode::CREATED, Json(stored)))
 }
 
@@ -2367,6 +2409,16 @@ pub async fn update_environment(
     apply_environment_scope(&mut item, &scope, &team)?;
     db.update_environment(&item)?;
     let stored = db.environment(&item.id)?.ok_or(ApiError::NotFound)?;
+    activity::note(
+        &state,
+        &team_id,
+        &user.username,
+        "update",
+        "environment",
+        &stored.id,
+        &stored.name,
+        "success",
+    );
     Ok(Json(stored))
 }
 
@@ -2385,5 +2437,15 @@ pub async fn delete_environment(
         return Err(ApiError::Forbidden);
     }
     db.delete_environment(&id)?;
+    activity::note(
+        &state,
+        &team_id,
+        &user.username,
+        "delete",
+        "environment",
+        &item.id,
+        &item.name,
+        "success",
+    );
     Ok(no_content())
 }

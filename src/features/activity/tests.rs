@@ -487,6 +487,141 @@ async fn schedule_and_hook_launches_keep_the_launch_principal() {
 }
 
 #[tokio::test]
+async fn source_and_environment_writes_are_recorded() {
+    let (dir, state, app) = boot("children");
+    let (_, team) = session(&state, "admin-session", "admin");
+
+    let (status, inventory) = call(
+        &app,
+        "POST",
+        "/api/v1/inventories",
+        "admin-session",
+        Some(&team),
+        Some(json!({"name": "Activity inventory", "body": "[all]\nlocalhost\n"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{inventory}");
+    let inventory_id = inventory["id"].as_str().expect("inventory id");
+
+    let (status, added) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/inventories/{inventory_id}/sources"),
+        "admin-session",
+        Some(&team),
+        Some(json!({"kind": "ini", "name": "Extra source", "body": "[all]\nlocalhost\n"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    let source_id = added["sources"]
+        .as_array()
+        .expect("sources")
+        .iter()
+        .find(|source| source["name"] == "Extra source")
+        .expect("source")["id"]
+        .as_str()
+        .expect("source id")
+        .to_string();
+
+    let (status, renamed) = call(
+        &app,
+        "PUT",
+        &format!("/api/v1/inventories/{inventory_id}/sources/{source_id}"),
+        "admin-session",
+        Some(&team),
+        Some(json!({
+            "name": "Extra source renamed",
+            "body": "[all]\nlocalhost\n"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{renamed}");
+    let (status, removed) = call(
+        &app,
+        "DELETE",
+        &format!("/api/v1/inventories/{inventory_id}/sources/{source_id}"),
+        "admin-session",
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+
+    let (status, environment) = call(
+        &app,
+        "POST",
+        "/api/v1/environments",
+        "admin-session",
+        Some(&team),
+        Some(json!({"name": "Activity environment", "image": "alpine:3", "tool": "shell"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{environment}");
+    let environment_id = environment["id"].as_str().expect("environment id");
+    let (status, updated) = call(
+        &app,
+        "PUT",
+        &format!("/api/v1/environments/{environment_id}"),
+        "admin-session",
+        Some(&team),
+        Some(json!({"name": "Activity environment renamed", "image": "alpine:3", "tool": "shell"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    let (status, removed) = call(
+        &app,
+        "DELETE",
+        &format!("/api/v1/environments/{environment_id}"),
+        "admin-session",
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{removed}");
+
+    let (status, log) = call(
+        &app,
+        "GET",
+        "/api/v1/activity?limit=100",
+        "admin-session",
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{log}");
+    let items = log["items"].as_array().expect("items");
+    let has = |action: &str, object_type: &str, name: &str| {
+        items.iter().any(|item| {
+            item["action"] == action
+                && item["object_type"] == object_type
+                && item["object_name"] == name
+        })
+    };
+    assert!(has("create", "inventory_source", "Extra source"), "{log}");
+    assert!(
+        has("update", "inventory_source", "Extra source renamed"),
+        "{log}"
+    );
+    assert!(
+        has("delete", "inventory_source", "Extra source renamed"),
+        "{log}"
+    );
+    assert!(
+        has("create", "environment", "Activity environment"),
+        "{log}"
+    );
+    assert!(
+        has("update", "environment", "Activity environment renamed"),
+        "{log}"
+    );
+    assert!(
+        has("delete", "environment", "Activity environment renamed"),
+        "{log}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
 async fn secrets_and_extra_vars_never_reach_the_activity_log() {
     let (dir, state, app) = boot("secrets");
     let (_, team) = session(&state, "admin-session", "admin");
