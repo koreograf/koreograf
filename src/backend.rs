@@ -228,6 +228,7 @@ pub(crate) trait Backend: Send + Sync {
     fn delete_hook(&self, id: &str, team_id: &str) -> AppResult<()>;
     fn list_deliveries(&self, team_id: &str, limit: i64) -> AppResult<Vec<Delivery>>;
     fn insert_delivery(&self, item: &NewDelivery<'_>) -> AppResult<()>;
+    fn prune_hook_deliveries(&self, cutoff: &str, keep: i64, limit: i64) -> AppResult<usize>;
     fn insert_activity(&self, item: &Activity) -> AppResult<()>;
     fn list_activity(
         &self,
@@ -1054,8 +1055,8 @@ impl Backend for SqliteBackend {
     }
 
     fn delete_hook(&self, id: &str, team_id: &str) -> AppResult<()> {
-        let conn = lock(&self.conn)?;
-        store::hooks::delete_hook(&conn, id, team_id)
+        let mut conn = lock(&self.conn)?;
+        store::hooks::delete_hook(&mut conn, id, team_id)
     }
 
     fn list_deliveries(&self, team_id: &str, limit: i64) -> AppResult<Vec<Delivery>> {
@@ -1066,6 +1067,11 @@ impl Backend for SqliteBackend {
     fn insert_delivery(&self, item: &NewDelivery<'_>) -> AppResult<()> {
         let conn = lock(&self.conn)?;
         store::deliveries::insert_delivery(&conn, *item)
+    }
+
+    fn prune_hook_deliveries(&self, cutoff: &str, keep: i64, limit: i64) -> AppResult<usize> {
+        let mut conn = lock(&self.conn)?;
+        store::deliveries::prune_hook_deliveries(&mut conn, cutoff, keep, limit)
     }
 
     fn insert_activity(&self, item: &Activity) -> AppResult<()> {
@@ -3398,8 +3404,9 @@ impl Backend for PostgresBackend {
     }
 
     fn delete_hook(&self, id: &str, team_id: &str) -> AppResult<()> {
-        self.with_client(|client| async move {
-            let changed = client
+        self.with_client(|mut client| async move {
+            let tx = client.transaction().await?;
+            let changed = tx
                 .execute(
                     &store::sql::postgres(store::hooks::DELETE_HOOK),
                     &[&id, &team_id],
@@ -3408,6 +3415,12 @@ impl Backend for PostgresBackend {
             if changed == 0 {
                 return Err(ApiError::NotFound);
             }
+            tx.execute(
+                &store::sql::postgres(store::deliveries::DELETE_DELIVERIES_FOR_HOOK),
+                &[&id],
+            )
+            .await?;
+            tx.commit().await?;
             Ok(())
         })
     }
@@ -3442,6 +3455,31 @@ impl Backend for PostgresBackend {
                 )
                 .await?;
             Ok(())
+        })
+    }
+
+    fn prune_hook_deliveries(&self, cutoff: &str, keep: i64, limit: i64) -> AppResult<usize> {
+        self.with_client(|mut client| async move {
+            let tx = client.transaction().await?;
+            let expired = tx
+                .execute(
+                    &store::sql::postgres(store::deliveries::PRUNE_EXPIRED_DELIVERIES),
+                    &[&cutoff, &limit],
+                )
+                .await?;
+            let mut removed = usize::try_from(expired).unwrap_or(usize::MAX);
+            let remaining = limit.saturating_sub(i64::try_from(removed).unwrap_or(limit));
+            if remaining > 0 {
+                let over_limit = tx
+                    .execute(
+                        &store::sql::postgres(store::deliveries::PRUNE_OVER_LIMIT_DELIVERIES),
+                        &[&keep, &remaining],
+                    )
+                    .await?;
+                removed = removed.saturating_add(usize::try_from(over_limit).unwrap_or(usize::MAX));
+            }
+            tx.commit().await?;
+            Ok(removed)
         })
     }
 

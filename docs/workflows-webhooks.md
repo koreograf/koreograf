@@ -20,6 +20,10 @@ Deleting a workflow removes its runs and nodes in the same transaction as the wo
 
 Installations that predate this bound kept every finished run. The default of 90 days applies on the first start after the upgrade: runs older than 90 days and their nodes are removed shortly after the port opens. To keep more, set `KOREOGRAF_WORKFLOW_RUN_RETENTION_DAYS` before that first start. `0` keeps everything.
 
+`KOREOGRAF_HOOK_DELIVERY_RETENTION_DAYS` bounds the inbound webhook deliveries. The default is 30 days; `0` disables pruning and keeps every delivery. Independently of that cutoff, each team keeps at most the newest 1000 deliveries, so the smaller bound wins. A prune runs once shortly after startup and then at most once every 24 hours, in bounded batches that release the database lock between batches. It removes old rows and rows beyond the newest 1000 of each team without reading or logging a payload.
+
+Each pass writes one log line with the removed count and names `KOREOGRAF_HOOK_DELIVERY_RETENTION_DAYS`; a second pass removes nothing. The hook page still lists the newest deliveries and says that retention removes older ones. A pruned delivery is a normal absence: nothing links to it. Deleting a hook removes its deliveries in the same transaction as the hook, so a deleted webhook leaves no history behind.
+
 ## Webhooks
 
 `POST /hooks/{id}/{token}` is public. The token is the authentication. Alertmanager reads `alerts[].labels.alertname` and `status`. Grafana reads the older format with `state` and `ruleName`. Otherwise an `alertname` field is enough. `alerting` becomes `firing`, and `ok` becomes `resolved`.

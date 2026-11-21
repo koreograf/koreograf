@@ -76,6 +76,8 @@ spec:
               value: {{ if hasKey .Values.runner "jobLogRetentionDays" }}{{ .Values.runner.jobLogRetentionDays | quote }}{{ else }}"30"{{ end }}
             - name: KOREOGRAF_WORKFLOW_RUN_RETENTION_DAYS
               value: {{ if hasKey .Values.runner "workflowRunRetentionDays" }}{{ .Values.runner.workflowRunRetentionDays | quote }}{{ else }}"90"{{ end }}
+            - name: KOREOGRAF_HOOK_DELIVERY_RETENTION_DAYS
+              value: {{ if hasKey .Values.runner "hookDeliveryRetentionDays" }}{{ .Values.runner.hookDeliveryRetentionDays | quote }}{{ else }}"30"{{ end }}
             - name: KOREOGRAF_COOKIE_SECURE
               value: {{ if kindIs "bool" .Values.cookieSecure }}{{ ternary "true" "false" .Values.cookieSecure | quote }}{{ else if .Values.cookieSecure }}{{ .Values.cookieSecure | quote }}{{ else if .Values.ingress.tls }}"true"{{ else }}"auto"{{ end }}
             - name: KOREOGRAF_TRUSTED_PROXY

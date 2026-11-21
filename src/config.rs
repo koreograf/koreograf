@@ -440,6 +440,9 @@ pub const JOB_LOG_RETENTION_DAYS_DEFAULT: u64 = 30;
 /// Default days that finished workflow runs and their nodes are kept.
 pub const WORKFLOW_RUN_RETENTION_DAYS_DEFAULT: u64 = 90;
 
+/// Default days that inbound webhook deliveries are kept.
+pub const HOOK_DELIVERY_RETENTION_DAYS_DEFAULT: u64 = 30;
+
 /// Default number of jobs that run at the same time.
 pub const MAX_CONCURRENT_JOBS_DEFAULT: usize = 4;
 /// Lowest accepted concurrency limit. Anything below waits for a slot.
@@ -470,6 +473,15 @@ pub fn parse_workflow_run_retention_days(value: &str) -> u64 {
         .trim()
         .parse()
         .unwrap_or(WORKFLOW_RUN_RETENTION_DAYS_DEFAULT)
+}
+
+/// Reads `KOREOGRAF_HOOK_DELIVERY_RETENTION_DAYS`. `0` disables pruning; an
+/// empty value and a value that is not a number fall back to the default.
+pub fn parse_hook_delivery_retention_days(value: &str) -> u64 {
+    value
+        .trim()
+        .parse()
+        .unwrap_or(HOOK_DELIVERY_RETENTION_DAYS_DEFAULT)
 }
 
 /// Reads `KOREOGRAF_MAX_CONCURRENT_JOBS`. An empty value, a value that is not
@@ -561,6 +573,8 @@ pub struct Config {
     /// `KOREOGRAF_WORKFLOW_RUN_RETENTION_DAYS`. `0` keeps finished runs
     /// forever.
     pub workflow_run_retention_days: u64,
+    /// `KOREOGRAF_HOOK_DELIVERY_RETENTION_DAYS`. `0` keeps deliveries forever.
+    pub hook_delivery_retention_days: u64,
     /// `KOREOGRAF_MAX_CONCURRENT_JOBS`. Jobs wait as `pending` for a slot.
     pub max_concurrent_jobs: usize,
     /// `KOREOGRAF_MAX_CONCURRENT_JOBS_PER_TEAM`. One team holds at most this
@@ -651,6 +665,10 @@ impl Config {
             workflow_run_retention_days: parse_workflow_run_retention_days(&env_or(
                 "KOREOGRAF_WORKFLOW_RUN_RETENTION_DAYS",
                 "90",
+            )),
+            hook_delivery_retention_days: parse_hook_delivery_retention_days(&env_or(
+                "KOREOGRAF_HOOK_DELIVERY_RETENTION_DAYS",
+                "30",
             )),
             max_concurrent_jobs: parse_max_concurrent_jobs(&env_or(
                 "KOREOGRAF_MAX_CONCURRENT_JOBS",
@@ -826,6 +844,21 @@ mod tests {
         assert_eq!(parse_job_log_retention_days("0"), 0);
         assert_eq!(parse_job_log_retention_days(" 7 "), 7);
         assert_eq!(parse_job_log_retention_days("3650"), 3650);
+    }
+
+    #[test]
+    fn the_hook_delivery_retention_parses_its_default_and_off_switch() {
+        assert_eq!(
+            parse_hook_delivery_retention_days(""),
+            HOOK_DELIVERY_RETENTION_DAYS_DEFAULT
+        );
+        assert_eq!(
+            parse_hook_delivery_retention_days("nonsense"),
+            HOOK_DELIVERY_RETENTION_DAYS_DEFAULT
+        );
+        assert_eq!(parse_hook_delivery_retention_days("0"), 0);
+        assert_eq!(parse_hook_delivery_retention_days(" 7 "), 7);
+        assert_eq!(parse_hook_delivery_retention_days("365"), 365);
     }
 
     #[test]
