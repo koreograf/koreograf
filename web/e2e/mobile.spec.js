@@ -69,6 +69,46 @@ async function expectStackedPairs(list, width) {
   }
 }
 
+async function launchGeometry(page) {
+  return page.evaluate(() => {
+    const dialog = document.querySelector("#launch-prompt");
+    const body = dialog.querySelector(".dialog-body");
+    const actions = dialog.querySelector(".dialog-actions");
+    const limit = dialog.querySelector('input[name="limit"]');
+    const cancel = dialog.querySelector("[data-dialog-cancel]");
+    const submit = dialog.querySelector('button[type="submit"]');
+    const box = (node) => {
+      const rect = node.getBoundingClientRect();
+      return { top: rect.top, bottom: rect.bottom };
+    };
+    return {
+      viewport: { height: window.innerHeight, width: window.innerWidth },
+      body: { ...box(body), scrollTop: body.scrollTop, scrollWidth: body.scrollWidth, clientWidth: body.clientWidth },
+      actions: box(actions),
+      limit: box(limit),
+      cancel: box(cancel),
+      submit: box(submit),
+    };
+  });
+}
+
+async function expectLimitAboveActions(page, where) {
+  await expect.poll(
+    async () => {
+      const geometry = await launchGeometry(page);
+      return Math.round(geometry.actions.top - geometry.limit.bottom);
+    },
+    { message: `the launch dialog action bar covers the limit field at ${where}` },
+  ).toBeGreaterThanOrEqual(1);
+  const geometry = await launchGeometry(page);
+  expect(geometry.limit.bottom, `the limit field sits inside the scrolling body at ${where}`).toBeLessThanOrEqual(geometry.body.bottom + 1);
+  expect(geometry.cancel.top, `Cancel stays below the scrolling body at ${where}`).toBeGreaterThanOrEqual(geometry.body.bottom - 1);
+  expect(geometry.cancel.bottom, `Cancel stays inside the viewport at ${where}`).toBeLessThanOrEqual(geometry.viewport.height + 1);
+  expect(geometry.submit.bottom, `Launch stays inside the viewport at ${where}`).toBeLessThanOrEqual(geometry.viewport.height + 1);
+  expect(geometry.body.scrollWidth, `the launch dialog body does not scroll sideways at ${where}`).toBeLessThanOrEqual(geometry.body.clientWidth + 1);
+  await noHorizontalScroll(page);
+}
+
 async function teamHeaders(page) {
   const profile = await page.evaluate(async () => (await fetch("/api/v1/me")).json());
   return { "X-Team-Id": profile.teams[0].id };
@@ -122,6 +162,42 @@ test("signs in, opens a labelled template list and launches from a fullscreen di
   await expect(page).toHaveURL(/#\/jobs\/[0-9a-f-]+$/);
   await expect(page.getByText("mobile prompt ok", { exact: true })).toBeVisible({ timeout: 30000 });
   await noHorizontalScroll(page);
+});
+
+test("keeps the launch dialog limit field clear of the action bar", async ({ page }) => {
+  const viewports = [{ width: 360, height: 732 }, { width: 412, height: 923 }];
+  await signInGerman(page);
+  await goTo(page, "Vorlagen", "Menü");
+
+  const openLaunchDialog = async (language) => {
+    const row = page.locator("#template-table tbody tr").filter({ hasText: "Self-Heal" }).first();
+    await expect(row).toBeVisible();
+    await row.getByRole("button", { name: language === "de" ? "Mit Optionen starten" : "Launch with options", exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByRole("heading", { name: language === "de" ? "Starten" : "Launch", exact: true })).toBeVisible();
+    await dialog.locator('input[name="limit"]').focus();
+  };
+
+  const check = async (language) => {
+    for (const viewport of viewports) {
+      await page.setViewportSize(viewport);
+      await openLaunchDialog(language);
+      await expectLimitAboveActions(page, `${language} ${viewport.width}x${viewport.height}`);
+      // The virtual keyboard shrinks the viewport while Limit keeps focus.
+      await page.setViewportSize({ width: viewport.width, height: Math.round(viewport.height * 0.6) });
+      await expectLimitAboveActions(page, `${language} ${viewport.width}x${viewport.height} with keyboard`);
+      await page.getByRole("dialog").getByRole("button", { name: language === "de" ? "Abbrechen" : "Cancel", exact: true }).click();
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      await page.setViewportSize(viewport);
+    }
+  };
+
+  await check("de");
+  await openMenu(page, "Menü");
+  await page.getByRole("button", { name: "Sprache" }).click();
+  await page.getByRole("option", { name: /English/ }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Templates" })).toBeVisible();
+  await check("en");
 });
 
 test("keeps schedules readable and its touch targets at least 44 px", async ({ page }) => {
