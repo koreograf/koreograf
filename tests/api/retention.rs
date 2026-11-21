@@ -819,6 +819,12 @@ async fn hook_delivery_retention_keeps_the_newest_rows_per_team() {
     seed.push_str(&hook_row("hook-other", other_team, "Other", "token-other"));
     seed.push_str(&delivery_row("delivery-many-old", "hook-many", &old));
     seed.push_str(&delivery_row("delivery-other-old", "hook-other", &old));
+    seed.push_str(&delivery_row("delivery-orphan-old", "hook-gone", &old));
+    seed.push_str(&delivery_row(
+        "delivery-orphan-recent",
+        "hook-gone",
+        &recent,
+    ));
     seed.push_str(&delivery_row(
         "delivery-other-recent",
         "hook-other",
@@ -849,7 +855,8 @@ async fn hook_delivery_retention_keeps_the_newest_rows_per_team() {
                  WHERE id IN ('delivery-many-0000', 'delivery-many-0001',
                               'delivery-many-0002', 'delivery-many-0003',
                               'delivery-many-0004', 'delivery-many-old',
-                              'delivery-other-old')"
+                              'delivery-other-old', 'delivery-orphan-old',
+                              'delivery-orphan-recent')"
             )
             .await,
         0

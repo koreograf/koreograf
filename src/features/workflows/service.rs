@@ -290,7 +290,7 @@ pub(crate) fn prune_hook_deliveries(state: &crate::AppState) -> AppResult<()> {
             break;
         }
         // Leave a gap for another request before taking the lock again.
-        std::thread::yield_now();
+        std::thread::sleep(Duration::from_millis(1));
     }
     tracing::info!(
         days,

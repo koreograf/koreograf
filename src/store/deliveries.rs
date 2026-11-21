@@ -16,10 +16,14 @@ pub(crate) const LIST_DELIVERIES: &str =
 pub(crate) const DELETE_DELIVERIES_FOR_HOOK: &str =
     "DELETE FROM hook_deliveries WHERE hook_id = ?1";
 
+/// Old rows plus rows whose hook no longer exists. The second condition
+/// clears deliveries left behind by a hook that was deleted before this
+/// build started removing them with the hook.
 pub(crate) const PRUNE_EXPIRED_DELIVERIES: &str = "DELETE FROM hook_deliveries
      WHERE id IN (
-        SELECT d.id FROM hook_deliveries d JOIN hooks h ON h.id = d.hook_id
+        SELECT d.id FROM hook_deliveries d
         WHERE d.created_at < ?1
+           OR NOT EXISTS (SELECT 1 FROM hooks h WHERE h.id = d.hook_id)
         ORDER BY d.created_at, d.id
         LIMIT ?2
      )";
