@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.0-alpha.15](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.14...v0.1.0-alpha.15) (2026-11-22)
+
+
+### Bug Fixes
+
+* load group_vars and host_vars next to project inventories ([#620](https://github.com/koreograf/koreograf/issues/620)) ([4108a33](https://github.com/koreograf/koreograf/commit/4108a33103d7ef383fed40910c85d297afe94a24))
+
 ## [0.1.0-alpha.14](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.13...v0.1.0-alpha.14) (2026-11-22)
 
 
