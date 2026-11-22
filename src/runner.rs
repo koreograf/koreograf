@@ -1979,7 +1979,7 @@ fn write_job_inventory(
             .map(|source| source.vars_json.as_str())
             .filter(|vars| !vars.trim().is_empty() && *vars != "[]")
             .unwrap_or(inventory.vars_json.as_str());
-        write_inventory_vars(work, vars_json)?;
+        write_inventory_vars(work, vars_json, None)?;
         return Ok("inventory".into());
     }
     let dir = work.join("inventory.d");
@@ -1998,8 +1998,8 @@ fn write_job_inventory(
         fs::write(dir.join("00.ini"), DEFAULT_INVENTORY)
             .map_err(|err| RunnerError::filesystem(err.to_string()))?;
     }
-    for source in &sources {
-        write_inventory_vars(&dir, &source.vars_json)?;
+    for (position, source) in sources.iter().enumerate() {
+        write_inventory_vars(&dir, &source.vars_json, Some(position))?;
     }
     Ok("inventory.d".into())
 }
@@ -2008,23 +2008,55 @@ fn write_job_inventory(
 ///
 /// A single inventory file loads `<work>/group_vars` and `<work>/host_vars`.
 /// An inventory directory loads `inventory.d/group_vars` and
-/// `inventory.d/host_vars`. Vaulted files are written verbatim, so an attached
-/// vault credential can decrypt them for Ansible.
-fn write_inventory_vars(base: &Path, vars_json: &str) -> Result<(), RunnerError> {
+/// `inventory.d/host_vars`. With several sources, every file moves into the
+/// group or host directory with the source position as a prefix, so Ansible
+/// merges the sources per key instead of letting a later file replace every
+/// key from an earlier file. Vaulted files are written verbatim, so an
+/// attached vault credential can decrypt them for Ansible.
+fn write_inventory_vars(
+    base: &Path,
+    vars_json: &str,
+    source_position: Option<usize>,
+) -> Result<(), RunnerError> {
     let files = crate::features::inventories::decode_inventory_vars(vars_json);
     for file in files {
-        let path = &file.path;
+        let path = match source_position {
+            Some(position) => match prefixed_var_path(&file.path, position) {
+                Some(path) => path,
+                None => continue,
+            },
+            None => file.path.clone(),
+        };
         if !(path.starts_with("group_vars/") || path.starts_with("host_vars/")) {
             continue;
         }
-        check_relative(path)?;
-        let target = base.join(path);
+        check_relative(&path)?;
+        let target = base.join(&path);
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent).map_err(|err| RunnerError::filesystem(err.to_string()))?;
         }
         fs::write(&target, &file.body).map_err(|err| RunnerError::filesystem(err.to_string()))?;
     }
     Ok(())
+}
+
+/// Move `group_vars/web.yml` to `group_vars/web/00-web.yml` and keep the
+/// filename of an existing directory file, such as `group_vars/web/10.yml`
+/// to `group_vars/web/00-10.yml`. Sorting by the prefix lets the later source
+/// override a conflicting key while keys only an earlier source defines stay.
+fn prefixed_var_path(path: &str, position: usize) -> Option<String> {
+    let (scope, rest) = path.split_once('/')?;
+    if scope != "group_vars" && scope != "host_vars" {
+        return None;
+    }
+    let (entity, file) = match rest.split_once('/') {
+        Some((entity, file)) => (entity, file),
+        None => (rest.rsplit_once('.')?.0, rest),
+    };
+    if entity.is_empty() || file.is_empty() {
+        return None;
+    }
+    Some(format!("{scope}/{entity}/{position:02}-{file}"))
 }
 
 fn inventory_extension(body: &str) -> &'static str {
@@ -7006,7 +7038,10 @@ exit 0
             "web_only: yes\n"
         );
 
-        let first = vars_json(&[("group_vars/web.yml", "from_first: yes\n")]);
+        let first = vars_json(&[
+            ("group_vars/web.yml", "from_first: yes\n"),
+            ("group_vars/all/10-base.yml", "from_all: yes\n"),
+        ]);
         let second = vars_json(&[("group_vars/web.yml", "from_second: yes\n")]);
         insert_vars_inventory(
             &state,
@@ -7025,9 +7060,18 @@ exit 0
             "inventory.d"
         );
         assert_eq!(
-            fs::read_to_string(work.join("inventory.d/group_vars/web.yml")).unwrap(),
+            fs::read_to_string(work.join("inventory.d/group_vars/web/00-web.yml")).unwrap(),
+            "from_first: yes\n"
+        );
+        assert_eq!(
+            fs::read_to_string(work.join("inventory.d/group_vars/web/01-web.yml")).unwrap(),
             "from_second: yes\n"
         );
+        assert_eq!(
+            fs::read_to_string(work.join("inventory.d/group_vars/all/00-10-base.yml")).unwrap(),
+            "from_all: yes\n"
+        );
+        assert!(!work.join("inventory.d/group_vars/web.yml").exists());
         assert!(work.join("inventory.d/00.ini").is_file());
         assert!(work.join("inventory.d/01.ini").is_file());
 
@@ -7119,8 +7163,8 @@ $ANSIBLE_VAULT;1.1;AES256
             return;
         }
         let (state, team_id) = vars_state();
-        let first = vars_json(&[("group_vars/web.yml", "from_first: yes\n")]);
-        let second = vars_json(&[("group_vars/web.yml", "from_second: yes\n")]);
+        let first = vars_json(&[("group_vars/web.yml", "from_first: yes\nshared: first\n")]);
+        let second = vars_json(&[("group_vars/web.yml", "from_second: yes\nshared: second\n")]);
         insert_vars_inventory(
             &state,
             &team_id,
@@ -7153,8 +7197,16 @@ $ANSIBLE_VAULT;1.1;AES256
             .and_then(|hosts| hosts.get("web-1"))
             .expect("host variables");
         assert_eq!(
+            hostvars.get("from_first").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
             hostvars.get("from_second").and_then(Value::as_bool),
             Some(true)
+        );
+        assert_eq!(
+            hostvars.get("shared").and_then(Value::as_str),
+            Some("second")
         );
 
         let _ = std::fs::remove_dir_all(&state.cfg.data_dir);
