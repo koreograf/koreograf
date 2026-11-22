@@ -2665,6 +2665,7 @@ impl Backend for PostgresBackend {
                         &item.source_json,
                         &item.credential_id,
                         &(item.admin_saved as i32),
+                        &item.vars_json,
                     ],
                 )
                 .await?;
