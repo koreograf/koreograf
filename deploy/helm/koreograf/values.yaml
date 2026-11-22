@@ -22,7 +22,9 @@ admin:
 # Ein ungültiger, nicht leerer Wert beendet den Start, auch wenn data/secret.key existiert.
 secretKey: ""
 
-# Bearer-Token fuer GET /metrics. Leer: der Endpunkt bleibt offen.
+# Bearer-Token fuer GET /metrics. Leer: nur Loopback-Clients
+# (localhost oder ein Sidecar in derselben Netzwerk-Namespace) duerfen scrapen.
+# Fuer einen Prometheus auf einem anderen Host den Token setzen.
 # Der Wert liegt im Chart-Secret unter existingSecretKeys.metricsToken.
 metrics:
   token: ""

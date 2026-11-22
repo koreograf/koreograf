@@ -724,7 +724,7 @@ fn env_string(key: &str) -> String {
     std::env::var(key).unwrap_or_default().trim().to_string()
 }
 
-/// `KOREOGRAF_METRICS_TOKEN`. Empty keeps `/metrics` open.
+/// `KOREOGRAF_METRICS_TOKEN`. Empty allows a loopback scrape only.
 pub(crate) fn metrics_token() -> Option<String> {
     let token = env_string("KOREOGRAF_METRICS_TOKEN");
     (!token.is_empty()).then_some(token)

@@ -8,7 +8,10 @@ use axum::http::StatusCode;
 use koreograf::LocalJobs;
 use serde_json::{json, Value};
 
-use super::{call_cookie as call, call_raw_headers as call_raw, config, Options, TestApp};
+use super::{
+    call_cookie as call, call_raw_headers as call_raw, call_raw_peer, config, loopback_peer,
+    Options, TestApp,
+};
 
 pub async fn launch_demo_workflow() -> (StatusCode, Value, StatusCode) {
     let harness = TestApp::boot("wf", Options::default());
@@ -469,9 +472,10 @@ pub fn finished_total(metrics: &str, status: &str) -> u64 {
 }
 
 pub async fn metrics_text(app: &axum::Router) -> String {
-    let (status, body, _) = call(app, "GET", "/metrics", None, None, None).await;
+    let (status, body, _) =
+        call_raw_peer(app, "GET", "/metrics", loopback_peer(), None, &[], None).await;
     assert_eq!(status, StatusCode::OK);
-    body.as_str().unwrap_or("").to_string()
+    String::from_utf8_lossy(&body).to_string()
 }
 
 pub fn template_write_body(item: &Value) -> Value {
