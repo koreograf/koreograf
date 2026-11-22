@@ -111,6 +111,7 @@
   "netbox_credential_has_the_wrong_kind": "The selected credential is not a NetBox credential.",
   "netbox_credential_is_disabled": "This NetBox credential is disabled. Add an address to the credential.",
   "netbox_credential_is_required": "Choose a NetBox credential, or create one first.",
+  "netbox_endpoint_is_blocked": "The NetBox address points at loopback, a link-local address, or a metadata address and is not allowed.",
   "netbox_endpoint_must_match_credential": "The NetBox address must match the address of the selected credential.",
   "netbox_host_limit_is_out_of_range": "The NetBox host limit must be between 1 and {max}.",
   "netbox_is_not_reachable_err": "NetBox is not reachable: {err}",

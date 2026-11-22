@@ -1,10 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::Path;
 use std::time::Duration;
 
 use serde_json::{json, Value};
+use url::{Host, Url};
 
 use super::model::{
     EffectiveVar, FoundInventory, InventoryData, InventoryGroup, InventoryHost, NetboxPreview,
@@ -557,11 +558,179 @@ struct NbHost {
     dropped_vars: Vec<String>,
 }
 
-pub fn valid_endpoint(url: &str) -> bool {
-    (url.starts_with("https://") || url.starts_with("http://"))
-        && url.len() < 300
-        && !url.contains("..")
-        && !url.chars().any(|ch| ch.is_whitespace() || ch.is_control())
+/// A URL that is not a usable NetBox address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EndpointError {
+    /// Not an `http` or `https` URL, or one of the old size or character rules
+    /// failed.
+    Invalid,
+    /// The literal address, or a resolved address, is a loopback, link-local,
+    /// metadata, unspecified, multicast, or broadcast target.
+    Blocked,
+}
+
+const ENDPOINT_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// AWS exposes its IPv6 instance metadata service on this unique-local
+/// address. The rest of `fc00::/7` stays available for an internal NetBox.
+const AWS_IPV6_METADATA: Ipv6Addr = Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254);
+const NAT64_PREFIX: [u8; 12] = [0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0];
+
+/// True when the URL passes the strict address policy. DNS names are resolved
+/// with a bounded lookup; a name that does not resolve now is left to the
+/// request so an offline setup can still save its credential.
+#[cfg(test)]
+pub async fn valid_endpoint(url: &str) -> bool {
+    endpoint_error_with(url, false).await.is_ok()
+}
+
+/// The synchronous part of the check. Credential validation keeps this in its
+/// sync secret check and runs the address check separately.
+pub fn valid_endpoint_syntax(url: &str) -> bool {
+    parse_endpoint(url).is_some()
+}
+
+/// The HTTP request policy. The `test-helpers` feature allows a literal
+/// loopback address so the integration tests can reach their in-process mock
+/// server. It never allows a hostname such as `localhost`, a resolved
+/// loopback address, or a link-local target, and it is absent from release
+/// builds.
+pub(crate) async fn request_endpoint_error(url: &str) -> Result<(), EndpointError> {
+    endpoint_error_with(url, cfg!(any(test, feature = "test-helpers"))).await
+}
+
+/// The request policy with the keyed message the API returns.
+pub(crate) async fn check_request_endpoint(url: &str) -> Result<(), String> {
+    match request_endpoint_error(url).await {
+        Ok(()) => Ok(()),
+        Err(EndpointError::Blocked) => Err("netbox_endpoint_is_blocked".into()),
+        Err(EndpointError::Invalid) => Err("the_netbox_address_must_be_http_or_https".into()),
+    }
+}
+
+async fn endpoint_error_with(url: &str, allow_loopback_literal: bool) -> Result<(), EndpointError> {
+    let parsed = parse_endpoint(url).ok_or(EndpointError::Invalid)?;
+    match parsed.host().ok_or(EndpointError::Invalid)? {
+        Host::Ipv4(ip) => {
+            if allow_loopback_literal && ip.is_loopback() {
+                return Ok(());
+            }
+            if blocked_ip(IpAddr::V4(ip)) {
+                Err(EndpointError::Blocked)
+            } else {
+                Ok(())
+            }
+        }
+        Host::Ipv6(ip) => {
+            if allow_loopback_literal && ip.is_loopback() {
+                return Ok(());
+            }
+            if blocked_ip(IpAddr::V6(ip)) {
+                Err(EndpointError::Blocked)
+            } else {
+                Ok(())
+            }
+        }
+        Host::Domain(domain) => {
+            let port = parsed
+                .port_or_known_default()
+                .ok_or(EndpointError::Invalid)?;
+            check_domain(domain, port).await
+        }
+    }
+}
+
+fn parse_endpoint(url: &str) -> Option<Url> {
+    if url.len() >= 300
+        || url.contains("..")
+        || url.chars().any(|ch| ch.is_whitespace() || ch.is_control())
+    {
+        return None;
+    }
+    let parsed = Url::parse(url).ok()?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return None;
+    }
+    parsed.host()?;
+    Some(parsed)
+}
+
+fn pinned_host(url: &str) -> Option<(String, u16)> {
+    let parsed = Url::parse(url).ok()?;
+    let port = parsed.port_or_known_default()?;
+    match parsed.host()? {
+        Host::Domain(domain) => Some((domain.to_string(), port)),
+        Host::Ipv4(_) | Host::Ipv6(_) => None,
+    }
+}
+
+async fn check_domain(domain: &str, port: u16) -> Result<(), EndpointError> {
+    let name = domain.trim_end_matches('.').to_ascii_lowercase();
+    // RFC 6761 reserves `localhost` and its subdomains for loopback.
+    if name == "localhost" || name.ends_with(".localhost") {
+        return Err(EndpointError::Blocked);
+    }
+    let lookup = tokio::time::timeout(
+        ENDPOINT_LOOKUP_TIMEOUT,
+        tokio::net::lookup_host((name.as_str(), port)),
+    )
+    .await;
+    let Ok(Ok(addresses)) = lookup else {
+        return Ok(());
+    };
+    for address in addresses {
+        if blocked_ip(address.ip()) {
+            return Err(EndpointError::Blocked);
+        }
+    }
+    Ok(())
+}
+
+fn blocked_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => blocked_ipv4(ip),
+        IpAddr::V6(ip) => blocked_ipv6(ip),
+    }
+}
+
+fn blocked_ipv4(ip: Ipv4Addr) -> bool {
+    ip.is_loopback()
+        || ip.is_link_local()
+        || ip.is_unspecified()
+        || ip.is_broadcast()
+        || ip.is_multicast()
+        // `0.0.0.0/8` is this network and never a public target.
+        || ip.octets()[0] == 0
+        // Shared address space, including the metadata service on 100.100.100.200.
+        || (ip.octets()[0] == 100 && (64..=127).contains(&ip.octets()[1]))
+}
+
+fn blocked_ipv6(ip: Ipv6Addr) -> bool {
+    if ip.is_loopback()
+        || ip.is_unicast_link_local()
+        || ip.is_unspecified()
+        || ip.is_multicast()
+        || ip == AWS_IPV6_METADATA
+    {
+        return true;
+    }
+    // IPv4-mapped (`::ffff:127.0.0.1`), IPv4-compatible (`::127.0.0.1`),
+    // NAT64 (`64:ff9b::/96`), and 6to4 (`2002::/16`) forms carry an IPv4
+    // address that must pass the same check.
+    ip.to_ipv4().is_some_and(blocked_ipv4) || embedded_ipv4(ip).is_some_and(blocked_ipv4)
+}
+
+fn embedded_ipv4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
+    let octets = ip.octets();
+    if octets[..12] == NAT64_PREFIX {
+        return Some(Ipv4Addr::new(
+            octets[12], octets[13], octets[14], octets[15],
+        ));
+    }
+    if octets[0] == 0x20 && octets[1] == 0x02 {
+        return Some(Ipv4Addr::new(octets[2], octets[3], octets[4], octets[5]));
+    }
+    None
 }
 
 pub fn source_json(source: &NetboxSource) -> Value {
@@ -648,9 +817,7 @@ pub async fn fetch(
     token: &str,
     proxy: &crate::features::operations::ProxySettings,
 ) -> Result<NetboxResult, String> {
-    if !valid_endpoint(&source.api_endpoint) {
-        return Err("the_netbox_address_must_be_http_or_https".into());
-    }
+    check_request_endpoint(&source.api_endpoint).await?;
     if !valid_token(token) {
         return Err("the_netbox_token_is_invalid".into());
     }
@@ -669,7 +836,7 @@ pub async fn fetch(
             ));
         }
     }
-    let client = client(source, proxy)?;
+    let client = client(source, proxy).await?;
     let mut hosts = Vec::new();
     let devices = PageQuery {
         client: &client,
@@ -746,14 +913,12 @@ pub async fn test_connection(
     token: &str,
     proxy: &crate::features::operations::ProxySettings,
 ) -> Result<String, String> {
-    if !valid_endpoint(&source.api_endpoint) {
-        return Err("the_netbox_address_must_be_http_or_https".into());
-    }
+    check_request_endpoint(&source.api_endpoint).await?;
     if !valid_token(token) {
         return Err("the_netbox_token_is_invalid".into());
     }
     crate::tls::warn_netbox(&source.api_endpoint, !source.validate_certs);
-    let client = client(source, proxy)?;
+    let client = client(source, proxy).await?;
     let url = format!("{}/api/status/", source.api_endpoint.trim_end_matches('/'));
     let body = get_json(&client, &url, token).await?;
     Ok(body
@@ -763,7 +928,7 @@ pub async fn test_connection(
         .to_string())
 }
 
-fn client(
+async fn client(
     source: &NetboxSource,
     proxy: &crate::features::operations::ProxySettings,
 ) -> Result<reqwest::Client, String> {
@@ -771,6 +936,48 @@ fn client(
         .connect_timeout(Duration::from_secs(8))
         .timeout(Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::none());
+    // Pin a DNS name to the addresses that passed the policy, so a second
+    // lookup cannot swap in a loopback or link-local target between the check
+    // and the request. A proxy still makes its own connection.
+    if let Some((host, port)) = pinned_host(&source.api_endpoint) {
+        // With a proxy the proxy resolves the name itself, so only a lookup
+        // that succeeds is useful here. Without a proxy, fail closed: a name
+        // that does not resolve cannot have passed the policy safely.
+        let proxied = proxy.is_set() && proxy.no_proxy.is_empty();
+        let lookup = tokio::time::timeout(
+            ENDPOINT_LOOKUP_TIMEOUT,
+            tokio::net::lookup_host((host.as_str(), port)),
+        )
+        .await;
+        let addresses: Vec<SocketAddr> = match lookup {
+            Ok(Ok(addresses)) => addresses.collect(),
+            Ok(Err(_)) | Err(_) if proxied => Vec::new(),
+            Ok(Err(_)) => {
+                return Err(crate::error::message(
+                    "netbox_is_not_reachable_err",
+                    &[("err", "the NetBox address could not be resolved")],
+                ));
+            }
+            Err(_) => {
+                return Err(crate::error::message(
+                    "netbox_is_not_reachable_err",
+                    &[("err", "the NetBox address lookup timed out")],
+                ));
+            }
+        };
+        if addresses.is_empty() && !proxied {
+            return Err(crate::error::message(
+                "netbox_is_not_reachable_err",
+                &[("err", "the NetBox address could not be resolved")],
+            ));
+        }
+        if addresses.iter().any(|address| blocked_ip(address.ip())) {
+            return Err("netbox_endpoint_is_blocked".into());
+        }
+        if !addresses.is_empty() {
+            builder = builder.resolve_to_addrs(&host, &addresses);
+        }
+    }
     if source.validate_certs {
         match crate::tls::reqwest_roots() {
             Ok(certs) => {

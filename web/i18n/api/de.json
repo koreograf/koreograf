@@ -111,6 +111,7 @@
   "netbox_credential_has_the_wrong_kind": "Der gewählte Zugang ist kein NetBox-Zugang.",
   "netbox_credential_is_disabled": "Dieser NetBox-Zugang ist deaktiviert. Trag im Zugang eine Adresse ein.",
   "netbox_credential_is_required": "Wähl einen NetBox-Zugang oder erstelle zuerst einen.",
+  "netbox_endpoint_is_blocked": "Die NetBox-Adresse verweist auf Loopback, eine Link-Local- oder eine Metadaten-Adresse und ist nicht erlaubt.",
   "netbox_endpoint_must_match_credential": "Die NetBox-Adresse muss zur Adresse des gewählten Zugangs passen.",
   "netbox_host_limit_is_out_of_range": "Die NetBox-Host-Grenze muss zwischen 1 und {max} liegen.",
   "netbox_is_not_reachable_err": "NetBox ist nicht erreichbar: {err}",

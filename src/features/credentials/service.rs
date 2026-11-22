@@ -561,10 +561,20 @@ fn check_netbox(secret: &Value) -> Result<(), String> {
     one_line(token, "token")?;
     let url = text(secret, "url");
     require(url, "netbox_needs_an_address")?;
-    if !crate::features::inventories::valid_endpoint(url) {
+    if !crate::features::inventories::valid_endpoint_syntax(url) {
         return Err("the_netbox_address_must_be_http_or_https".into());
     }
     Ok(())
+}
+
+/// The address policy needs a DNS lookup, so credential create and update call
+/// this after the synchronous [`check`].
+pub(crate) async fn check_netbox_endpoint(secret: &Value) -> Result<(), String> {
+    let url = text(secret, "url");
+    if url.is_empty() {
+        return Ok(());
+    }
+    crate::features::inventories::check_request_endpoint(url).await
 }
 
 pub(crate) fn backfill_netbox_urls(state: &crate::Shared) -> Result<(), crate::error::ApiError> {
