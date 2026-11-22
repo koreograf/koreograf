@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::error::{ApiError, AppResult};
 
-pub(crate) const SCHEMA_VERSION: u32 = 9;
+pub(crate) const SCHEMA_VERSION: u32 = 10;
 const BASELINE_VERSION: u32 = 1;
 
 /// A session row moves its last-seen time at most once per interval, so a
@@ -111,6 +111,15 @@ pub(crate) const SQLITE_MIGRATIONS: &[Migration] = &[
         sql: include_str!("../migrations/sqlite/0009_hook_delivery_indexes.sql"),
         legacy_columns: &[],
     },
+    Migration {
+        version: 10,
+        name: "0010_inventory_vars",
+        sql: include_str!("../migrations/sqlite/0010_inventory_vars.sql"),
+        legacy_columns: &[
+            ("inventories", "vars_json"),
+            ("inventory_sources", "vars_json"),
+        ],
+    },
 ];
 
 pub(crate) const POSTGRES_MIGRATIONS: &[Migration] = &[
@@ -171,6 +180,15 @@ pub(crate) const POSTGRES_MIGRATIONS: &[Migration] = &[
         name: "0009_hook_delivery_indexes",
         sql: include_str!("../migrations/postgres/0009_hook_delivery_indexes.sql"),
         legacy_columns: &[],
+    },
+    Migration {
+        version: 10,
+        name: "0010_inventory_vars",
+        sql: include_str!("../migrations/postgres/0010_inventory_vars.sql"),
+        legacy_columns: &[
+            ("inventories", "vars_json"),
+            ("inventory_sources", "vars_json"),
+        ],
     },
 ];
 
@@ -861,6 +879,8 @@ pub struct Inventory {
     pub last_sync_at: String,
     pub last_sync_status: String,
     pub last_sync_by: String,
+    /// Inventory-adjacent `group_vars` and `host_vars` files as a JSON array.
+    pub vars_json: String,
     /// True when an administrator last saved this inventory.
     #[serde(skip)]
     pub admin_saved: bool,
@@ -877,6 +897,8 @@ pub struct InventorySource {
     pub body: String,
     pub position: i64,
     pub created_at: String,
+    /// Inventory-adjacent `group_vars` and `host_vars` files as a JSON array.
+    pub vars_json: String,
 }
 
 #[derive(Clone, Debug)]

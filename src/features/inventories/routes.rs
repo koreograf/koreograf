@@ -269,6 +269,7 @@ pub async fn import_inventory(
     if found.format == "plugin" {
         return Err(ApiError::bad("plugin_files_are_not_copied_as_text_add_2"));
     }
+    let vars_json = inventory::encode_inventory_vars(&inventory::read_inventory_vars(&root, path));
     let name = match blank(body.name) {
         Some(name) => require_name(&name)?,
         None => require_name(&file_stem(path))?,
@@ -285,6 +286,7 @@ pub async fn import_inventory(
         last_sync_at: String::new(),
         last_sync_status: String::new(),
         last_sync_by: String::new(),
+        vars_json,
         admin_saved: user.is_admin,
     };
     let source_row = db::InventorySource {
@@ -297,6 +299,7 @@ pub async fn import_inventory(
         body: item.body.clone(),
         position: 0,
         created_at: item.created_at.clone(),
+        vars_json: item.vars_json.clone(),
     };
     let db = state.store();
     db.insert_inventory(&item, std::slice::from_ref(&source_row), false)?;
@@ -346,6 +349,7 @@ pub async fn create_netbox(
         last_sync_at: String::new(),
         last_sync_status: String::new(),
         last_sync_by: String::new(),
+        vars_json: "[]".into(),
         admin_saved: user.is_admin,
     };
     let source_row = db::InventorySource {
@@ -358,6 +362,7 @@ pub async fn create_netbox(
         body: item.body.clone(),
         position: 0,
         created_at: item.created_at.clone(),
+        vars_json: "[]".into(),
     };
     let db = state.store();
     db.insert_inventory(&item, std::slice::from_ref(&source_row), true)?;
@@ -457,10 +462,13 @@ pub async fn sync_inventory(
     for source in &sources {
         let fetched = match source.kind.as_str() {
             "project" => {
-                refresh_project(&state, &team, &source.source_json).map(|body| NetboxResult {
-                    body,
-                    collisions: Vec::new(),
-                    dropped_vars: Vec::new(),
+                refresh_project(&state, &team, &source.source_json).map(|(body, vars_json)| {
+                    NetboxResult {
+                        body,
+                        vars_json,
+                        collisions: Vec::new(),
+                        dropped_vars: Vec::new(),
+                    }
                 })
             }
             "netbox" => {
@@ -499,9 +507,15 @@ pub async fn sync_inventory(
         .iter()
         .flat_map(|(_, fetched)| fetched.dropped_vars.clone())
         .collect();
-    let bodies: Vec<(String, String)> = fresh
+    let bodies: Vec<(String, String, String)> = fresh
         .iter()
-        .map(|(source_id, fetched)| (source_id.clone(), fetched.body.clone()))
+        .map(|(source_id, fetched)| {
+            (
+                source_id.clone(),
+                fetched.body.clone(),
+                fetched.vars_json.clone(),
+            )
+        })
         .collect();
     let db = state.store();
     db.sync_inventory_sources(&id, &bodies, user.is_admin, &db::now(), &user.username)?;
@@ -549,11 +563,13 @@ fn project_source_paths(source_json: &str) -> AppResult<(String, String)> {
     Ok((project_id.to_string(), path.to_string()))
 }
 
-fn refresh_project(state: &Shared, team: &str, source_json: &str) -> AppResult<String> {
+fn refresh_project(state: &Shared, team: &str, source_json: &str) -> AppResult<(String, String)> {
     let (project_id, path) = project_source_paths(source_json)?;
     let project = visible_project(state, &project_id, team)?;
     let root = project_dir(state, &project)?;
-    read_project_file(&root, &path)
+    let body = read_project_file(&root, &path)?;
+    let vars = inventory::read_inventory_vars(&root, &path);
+    Ok((body, inventory::encode_inventory_vars(&vars)))
 }
 
 fn stored_netbox(source_json: &str) -> AppResult<StoredNetbox> {
@@ -799,6 +815,7 @@ struct ResolvedSource {
     source_json: String,
     body: String,
     credential_id: Option<String>,
+    vars_json: String,
 }
 
 pub(crate) async fn create_with_sources(
@@ -830,6 +847,7 @@ pub(crate) async fn create_with_sources(
         last_sync_at: String::new(),
         last_sync_status: String::new(),
         last_sync_by: String::new(),
+        vars_json: "[]".into(),
         admin_saved,
     };
     let sources: Vec<db::InventorySource> = resolved
@@ -845,6 +863,7 @@ pub(crate) async fn create_with_sources(
             body: source.body.clone(),
             position: position as i64,
             created_at: created_at.clone(),
+            vars_json: source.vars_json.clone(),
         })
         .collect();
     let db = state.store();
@@ -896,6 +915,7 @@ pub async fn add_source(
         body: resolved.body,
         position,
         created_at: db::now(),
+        vars_json: resolved.vars_json,
     };
     let db = state.store();
     db.add_inventory_source(&id, &source, user.is_admin)?;
@@ -973,6 +993,7 @@ pub async fn update_source(
         .clone()
         .or_else(|| source.credential_id.clone());
     updated.body = resolved.body;
+    updated.vars_json = resolved.vars_json;
     let db = state.store();
     db.update_inventory_source(&updated, user.is_admin)?;
     let item = db.inventory(&inventory_id)?.ok_or(ApiError::NotFound)?;
@@ -1044,11 +1065,16 @@ pub async fn sync_source(
         (name, source)
     };
     let fetched = match source.kind.as_str() {
-        "project" => refresh_project(&state, &team, &source.source_json).map(|body| NetboxResult {
-            body,
-            collisions: Vec::new(),
-            dropped_vars: Vec::new(),
-        }),
+        "project" => {
+            refresh_project(&state, &team, &source.source_json).map(|(body, vars_json)| {
+                NetboxResult {
+                    body,
+                    vars_json,
+                    collisions: Vec::new(),
+                    dropped_vars: Vec::new(),
+                }
+            })
+        }
         "netbox" => refresh_netbox(&state, &source.credential_id, &team, &source.source_json).await,
         _ => return Err(ApiError::bad("this_inventory_has_no_external_source")),
     };
@@ -1077,7 +1103,7 @@ pub async fn sync_source(
     let db = state.store();
     db.sync_inventory_sources(
         &inventory_id,
-        &[(source_id.clone(), fetched.body)],
+        &[(source_id.clone(), fetched.body, fetched.vars_json)],
         user.is_admin,
         &db::now(),
         &user.username,
@@ -1140,6 +1166,7 @@ struct ResolvedUpdate {
     source_json: String,
     body: String,
     credential_id: Option<String>,
+    vars_json: String,
     collisions: Vec<String>,
     dropped_vars: Vec<String>,
 }
@@ -1218,6 +1245,7 @@ fn resolve_ini_update(
         source_json: source.source_json.clone(),
         body: text,
         credential_id: None,
+        vars_json: source.vars_json.clone(),
         collisions: Vec::new(),
         dropped_vars: Vec::new(),
     })
@@ -1249,11 +1277,13 @@ fn resolve_project_update(
         return Err(ApiError::bad("plugin_files_are_not_copied_as_text_add"));
     }
     let name = updated_name(body.name.clone(), &source.name, &file_stem(path))?;
+    let vars_json = inventory::encode_inventory_vars(&inventory::read_inventory_vars(&root, path));
     Ok(ResolvedUpdate {
         name,
         source_json: project_source_json(&project.id, path),
         body: text,
         credential_id: None,
+        vars_json,
         collisions: Vec::new(),
         dropped_vars: Vec::new(),
     })
@@ -1311,6 +1341,7 @@ async fn resolve_netbox_update(
         name,
         source_json: source_json_with_collisions(&parsed, &fetched.collisions).to_string(),
         body: fetched.body,
+        vars_json: "[]".into(),
         collisions: fetched.collisions,
         dropped_vars: fetched.dropped_vars,
     })
@@ -1351,6 +1382,7 @@ async fn resolve_source(
                 source_json: "{}".into(),
                 body: input.body.clone(),
                 credential_id: None,
+                vars_json: "[]".into(),
             })
         }
         "project" => {
@@ -1377,12 +1409,15 @@ async fn resolve_source(
             } else {
                 require_name(&input.name)?
             };
+            let vars_json =
+                inventory::encode_inventory_vars(&inventory::read_inventory_vars(&root, path));
             Ok(ResolvedSource {
                 name,
                 kind: "project".into(),
                 source_json: project_source_json(&project.id, path),
                 body: text,
                 credential_id: None,
+                vars_json,
             })
         }
         "netbox" => {
@@ -1414,6 +1449,7 @@ async fn resolve_source(
                 kind: "netbox".into(),
                 source_json: source_json_with_collisions(&parsed, &fetched.collisions).to_string(),
                 body: fetched.body,
+                vars_json: "[]".into(),
             })
         }
         _ => Err(ApiError::bad("a_source_is_manual_project_or_netbox")),
@@ -1627,6 +1663,7 @@ pub(super) struct InventoryGroupResponse {
     children: Vec<String>,
     parents: Vec<String>,
     vars: BTreeMap<String, String>,
+    effective_vars: Vec<EffectiveVar>,
     host_count: usize,
     total: usize,
     page: usize,
@@ -1897,6 +1934,7 @@ pub async fn get_inventory_group(
         name: group.name,
         children: group.children,
         parents,
+        effective_vars: inventory::effective_group_vars(&data, &name),
         vars: group.vars,
         host_count: page.total,
         total: page.total,
@@ -1916,10 +1954,15 @@ fn visible_inventory(db: &dyn Backend, id: &str, team: &str) -> AppResult<Invent
 
 fn inventory_data(item: &Inventory, sources: &[InventorySource]) -> InventoryData {
     if sources.is_empty() {
-        inventory::parse_inventory(&item.body)
+        let vars = inventory::decode_inventory_vars(&item.vars_json);
+        inventory::merge_inventory_with_vars(&[item.body.as_str()], &vars)
     } else {
         let bodies: Vec<&str> = sources.iter().map(|source| source.body.as_str()).collect();
-        inventory::merge_inventory(&bodies)
+        let vars: Vec<_> = sources
+            .iter()
+            .flat_map(|source| inventory::decode_inventory_vars(&source.vars_json))
+            .collect();
+        inventory::merge_inventory_with_vars(&bodies, &vars)
     }
 }
 
@@ -2106,6 +2149,7 @@ pub async fn create_inventory(
         last_sync_at: String::new(),
         last_sync_status: String::new(),
         last_sync_by: String::new(),
+        vars_json: "[]".into(),
         admin_saved: user.is_admin,
     };
     let source = if body.body.trim().is_empty() {
@@ -2121,6 +2165,7 @@ pub async fn create_inventory(
             body: body.body,
             position: 0,
             created_at: item.created_at.clone(),
+            vars_json: "[]".into(),
         })
     };
     let sources: Vec<db::InventorySource> = source.into_iter().collect();
