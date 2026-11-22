@@ -5,12 +5,14 @@ mod helpers;
 #[allow(unused_imports)]
 pub use helpers::*;
 
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
+use axum::extract::ConnectInfo;
 use axum::http::{HeaderMap, Request, StatusCode};
 use http_body_util::BodyExt;
 use koreograf::{Config, CookieSecure, LdapConfig, LocalJobs, RunnerMode, Shared};
@@ -18,6 +20,12 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 pub const ADMIN_PASSWORD: &str = "test-admin-pass";
+
+/// A loopback peer for the in-process router, which otherwise has no
+/// `ConnectInfo` like a real `axum::serve` listener.
+pub fn loopback_peer() -> SocketAddr {
+    "127.0.0.1:49152".parse().expect("loopback peer")
+}
 
 #[derive(Clone)]
 pub struct Options {
@@ -324,13 +332,30 @@ pub async fn request(
     headers: &[(&str, &str)],
     body: Option<&[u8]>,
 ) -> (StatusCode, HeaderMap, Vec<u8>) {
+    request_inner(app, method, uri, None, headers, body).await
+}
+
+/// An explicit peer goes into `ConnectInfo`, like `axum::serve` with
+/// `into_make_service_with_connect_info` does in production. The in-process
+/// test router has no `ConnectInfo` otherwise.
+async fn request_inner(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    peer: Option<SocketAddr>,
+    headers: &[(&str, &str)],
+    body: Option<&[u8]>,
+) -> (StatusCode, HeaderMap, Vec<u8>) {
     let mut builder = Request::builder().method(method).uri(uri);
     for (name, value) in headers {
         builder = builder.header(*name, *value);
     }
-    let request = builder
+    let mut request = builder
         .body(Body::from(body.unwrap_or_default().to_vec()))
         .expect("request");
+    if let Some(peer) = peer {
+        request.extensions_mut().insert(ConnectInfo(peer));
+    }
     let response = app.clone().oneshot(request).await.expect("response");
     let status = response.status();
     let headers = response.headers().clone();
@@ -538,13 +563,38 @@ pub async fn call_raw(
     headers: &[(&str, &str)],
     body: Option<Vec<u8>>,
 ) -> (StatusCode, Vec<u8>, Option<String>) {
+    call_raw_with_peer(app, method, uri, None, cookie, headers, body).await
+}
+
+/// Like `call_raw`, with an explicit TCP peer for routes that read it.
+pub async fn call_raw_peer(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    peer: SocketAddr,
+    cookie: Option<&str>,
+    headers: &[(&str, &str)],
+    body: Option<Vec<u8>>,
+) -> (StatusCode, Vec<u8>, Option<String>) {
+    call_raw_with_peer(app, method, uri, Some(peer), cookie, headers, body).await
+}
+
+async fn call_raw_with_peer(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    peer: Option<SocketAddr>,
+    cookie: Option<&str>,
+    headers: &[(&str, &str)],
+    body: Option<Vec<u8>>,
+) -> (StatusCode, Vec<u8>, Option<String>) {
     let mut request_headers = Vec::new();
     if let Some(cookie) = cookie {
         request_headers.push(("cookie", cookie));
     }
     request_headers.extend_from_slice(headers);
     let (status, headers, bytes) =
-        request(app, method, uri, &request_headers, body.as_deref()).await;
+        request_inner(app, method, uri, peer, &request_headers, body.as_deref()).await;
     let cookie = headers
         .get("set-cookie")
         .and_then(|value| value.to_str().ok())

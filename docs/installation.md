@@ -324,7 +324,7 @@ Set `existingSecret` to a Secret managed outside this chart. The chart then skip
 
 `replicaCount` is 1 and stays 1 under the [beta contract](beta.md). A second pod on the same SQLite file loses writes. The other values in `values.yaml` keep their meaning under that contract too; a renamed or removed value is listed as breaking. The Docker socket is off by default (`runner.dockerSocket.enabled`).
 
-Probes run `koreograf healthcheck`, which calls `/healthz`. Prometheus can scrape `GET /metrics` on the same port. Set `metrics.token` to require `Authorization: Bearer <token>`; the chart stores the value in its Secret. Compose forwards `KOREOGRAF_METRICS_TOKEN` from `.env` the same way. Without a token the endpoint stays open, so an internal-only bind behind a reverse proxy is the alternative on a wider network. For example:
+Probes run `koreograf healthcheck`, which calls `/healthz`. Prometheus can scrape `GET /metrics` on the same port. Without a token only a loopback client, such as a sidecar in the pod's network namespace, may scrape; a Prometheus server on another host or another container gets `401`. That includes a scraper on the Docker host that reaches a published Compose port, because the request arrives from the bridge gateway rather than from loopback. Set `metrics.token` to allow that scrape with `Authorization: Bearer <token>`; the chart stores the value in its Secret. Compose forwards `KOREOGRAF_METRICS_TOKEN` from `.env` the same way. An internal-only bind behind a reverse proxy also narrows who can reach the endpoint, but a remote scrape through that proxy still needs the token. For example:
 
 ```yaml
 metrics:

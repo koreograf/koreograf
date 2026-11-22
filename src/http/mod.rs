@@ -1,3 +1,4 @@
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Component, Path, PathBuf};
 
 use axum::extract::{Path as UrlPath, Request, State};
@@ -333,8 +334,15 @@ async fn health(State(state): State<Shared>) -> Response {
     }
 }
 
-async fn metrics(State(state): State<Shared>, headers: HeaderMap) -> Response {
-    if !metrics_allowed(&state, &headers) {
+async fn metrics(State(state): State<Shared>, req: Request) -> Response {
+    // The peer comes from the TCP connection. Forwarded headers must not grant
+    // the loopback exception, so a proxy in front of Koreograf still needs the
+    // token for a remote scrape.
+    let peer = req
+        .extensions()
+        .get::<axum::extract::ConnectInfo<SocketAddr>>()
+        .map(|info| info.0);
+    if !metrics_allowed(&state, peer, req.headers()) {
         return ApiError::Unauthorized.into_response();
     }
     (
@@ -350,9 +358,23 @@ async fn metrics(State(state): State<Shared>, headers: HeaderMap) -> Response {
         .into_response()
 }
 
-fn metrics_allowed(state: &Shared, headers: &HeaderMap) -> bool {
+fn is_loopback_peer(address: SocketAddr) -> bool {
+    match address.ip() {
+        IpAddr::V4(ip) => ip.is_loopback(),
+        IpAddr::V6(ip) => {
+            ip.is_loopback()
+                || ip
+                    .to_ipv4_mapped()
+                    .is_some_and(|mapped| mapped.is_loopback())
+        }
+    }
+}
+
+fn metrics_allowed(state: &Shared, peer: Option<SocketAddr>, headers: &HeaderMap) -> bool {
     let Some(expected) = crate::config::metrics_token() else {
-        return true;
+        // Without a token, only an in-process or sidecar scrape on loopback
+        // works. An unknown peer fails closed.
+        return peer.is_some_and(is_loopback_peer);
     };
     if auth::bearer_token(headers)
         .is_some_and(|token| crate::crypto::tokens_equal(&token, &expected))
@@ -617,7 +639,31 @@ pub fn no_content() -> Response {
 mod tests {
     use axum::http::Method;
 
-    use super::{maintenance_allowed, require_description, require_name};
+    use super::{is_loopback_peer, maintenance_allowed, require_description, require_name};
+    use std::net::SocketAddr;
+
+    #[test]
+    fn only_loopback_peers_pass_the_default_metrics_check() {
+        for allowed in [
+            "127.0.0.1:49152",
+            "127.10.20.30:49152",
+            "[::1]:49152",
+            "[::ffff:127.0.0.1]:49152",
+        ] {
+            let address: SocketAddr = allowed.parse().expect("peer");
+            assert!(is_loopback_peer(address), "{allowed}");
+        }
+        for denied in [
+            "10.0.0.1:49152",
+            "192.0.2.10:49152",
+            "203.0.113.7:49152",
+            "[2001:db8::1]:49152",
+            "[::ffff:10.0.0.1]:49152",
+        ] {
+            let address: SocketAddr = denied.parse().expect("peer");
+            assert!(!is_loopback_peer(address), "{denied}");
+        }
+    }
 
     #[test]
     fn maintenance_keeps_both_sign_in_paths_open() {

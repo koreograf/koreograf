@@ -421,9 +421,10 @@ async fn login_shell_job_and_webhook() {
     let (status, icon, _) = call(&app, "GET", "/favicon.svg", None, None, None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(icon.as_str().unwrap_or("").contains("<svg"));
-    let (status, metrics, _) = call(&app, "GET", "/metrics", None, None, None).await;
+    let (status, metrics, _) =
+        call_raw_peer(&app, "GET", "/metrics", loopback_peer(), None, &[], None).await;
     assert_eq!(status, StatusCode::OK);
-    let metrics = metrics.as_str().unwrap_or("");
+    let metrics = String::from_utf8_lossy(&metrics);
     assert!(
         metrics.contains("# TYPE koreograf_jobs_started_total counter"),
         "{metrics}"
@@ -506,9 +507,10 @@ async fn login_shell_job_and_webhook() {
 
     let mut metrics = String::new();
     for _ in 0..20 {
-        let (status, body, _) = call(&app, "GET", "/metrics", None, None, None).await;
+        let (status, body, _) =
+            call_raw_peer(&app, "GET", "/metrics", loopback_peer(), None, &[], None).await;
         assert_eq!(status, StatusCode::OK);
-        metrics = body.as_str().unwrap_or("").to_string();
+        metrics = String::from_utf8_lossy(&body).to_string();
         if metrics.contains(
             "koreograf_jobs_finished_total{tool=\"shell\",playbook=\"health.sh\",status=\"successful\"} 1",
         ) {

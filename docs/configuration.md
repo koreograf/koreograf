@@ -34,7 +34,7 @@ From `0.1.0-beta.1` onward every name below keeps its meaning and its default; t
 | `KOREOGRAF_MAX_CONCURRENT_JOBS_PER_TEAM` | `2` (1 to 64, never above the global limit) |
 | `KOREOGRAF_SEED_ENVIRONMENTS` | on. `0`, `false`, `no`, or `off` skips the curated default environments |
 | `KOREOGRAF_SECRET_KEY` | empty, then `data/secret.key`. When set, must be 64 hex characters or startup fails |
-| `KOREOGRAF_METRICS_TOKEN` | empty. `/metrics` stays open. When set, a scrape needs `Authorization: Bearer <token>` or an administrator session cookie |
+| `KOREOGRAF_METRICS_TOKEN` | empty. Only loopback clients may scrape `/metrics`; set the token for a scrape from another host or container. When set, a scrape needs `Authorization: Bearer <token>` or an administrator session cookie |
 | `KOREOGRAF_LOG_FORMAT` | empty, text on stdout. `json` for Promtail |
 | `KOREOGRAF_HSTS` | false. `true` sends `Strict-Transport-Security` |
 | `KOREOGRAF_COOKIE_SECURE` | `auto`. `true` sets `Secure` on the session cookie |

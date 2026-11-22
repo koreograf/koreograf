@@ -175,12 +175,20 @@ async fn retention_removes_old_finished_events_and_work_dirs_only() {
     assert_eq!(status, StatusCode::OK, "{output}");
     assert_eq!(output, Value::Null);
 
-    let (status, metrics) = harness.call("GET", "/metrics", None, None, None).await;
+    let (status, metrics, _) = call_raw_peer(
+        &harness.app,
+        "GET",
+        "/metrics",
+        loopback_peer(),
+        None,
+        &[],
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(metrics
-        .as_str()
-        .unwrap_or("")
-        .contains("# TYPE koreograf_jobs_started_total counter"));
+    assert!(
+        String::from_utf8_lossy(&metrics).contains("# TYPE koreograf_jobs_started_total counter")
+    );
 
     let (status, history) = harness
         .call(

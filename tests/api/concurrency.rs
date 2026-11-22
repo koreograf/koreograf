@@ -197,9 +197,18 @@ async fn the_limit_keeps_the_third_launch_pending_until_a_slot_frees() {
         ],
         "the third job must wait for a slot"
     );
-    let (status, metrics, _) = call_cookie(&harness.app, "GET", "/metrics", None, None, None).await;
+    let (status, metrics, _) = call_raw_peer(
+        &harness.app,
+        "GET",
+        "/metrics",
+        loopback_peer(),
+        None,
+        &[],
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
-    let metrics = metrics.as_str().unwrap_or_default();
+    let metrics = String::from_utf8_lossy(&metrics);
     assert!(
         metrics.contains("koreograf_jobs_pending 1"),
         "the waiting job must show in the pending gauge: {metrics}"
