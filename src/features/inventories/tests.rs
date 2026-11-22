@@ -1221,6 +1221,29 @@ async fn a_client_leaves_resolution_to_a_configured_proxy() {
 }
 
 #[tokio::test]
+async fn a_client_still_fails_closed_when_no_proxy_matches() {
+    let source = NetboxSource {
+        api_endpoint: "http://does-not-exist.invalid/".into(),
+        validate_certs: true,
+        group_by: Vec::new(),
+        group_names_raw: false,
+        load_config_context: false,
+        max_hosts: DEFAULT_MAX_HOSTS,
+        query: Vec::new(),
+        virtual_machines: false,
+    };
+    let proxy = crate::features::operations::ProxySettings {
+        url: "http://proxy.invalid:3128".into(),
+        username: String::new(),
+        password: String::new(),
+        no_proxy: "does-not-exist.invalid".into(),
+        explicit: true,
+    };
+    let error = client(&source, &proxy).await.unwrap_err();
+    assert!(error.contains("netbox_is_not_reachable"), "{error}");
+}
+
+#[tokio::test]
 async fn an_unreachable_netbox_gives_up_before_the_total_timeout() {
     let source = NetboxSource {
         api_endpoint: "http://192.0.2.1:8080".into(),

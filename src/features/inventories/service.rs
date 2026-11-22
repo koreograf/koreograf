@@ -943,7 +943,7 @@ async fn client(
         // With a proxy the proxy resolves the name itself, so only a lookup
         // that succeeds is useful here. Without a proxy, fail closed: a name
         // that does not resolve cannot have passed the policy safely.
-        let proxied = proxy.is_set();
+        let proxied = proxy.is_set() && proxy.no_proxy.is_empty();
         let lookup = tokio::time::timeout(
             ENDPOINT_LOOKUP_TIMEOUT,
             tokio::net::lookup_host((host.as_str(), port)),
