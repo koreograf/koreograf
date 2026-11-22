@@ -24,7 +24,8 @@ secretKey: ""
 
 # Bearer-Token fuer GET /metrics. Leer: nur Loopback-Clients
 # (localhost oder ein Sidecar in derselben Netzwerk-Namespace) duerfen scrapen.
-# Fuer einen Prometheus auf einem anderen Host den Token setzen.
+# Fuer einen Prometheus auf einem anderen Host oder Container, auch auf dem
+# Docker-Host ueber einen veroeffentlichten Port, den Token setzen.
 # Der Wert liegt im Chart-Secret unter existingSecretKeys.metricsToken.
 metrics:
   token: ""
