@@ -175,6 +175,20 @@ fn collect_var_scope(
     };
     let mut entries: Vec<_> = entries.filter_map(Result::ok).collect();
     entries.sort_by_key(|entry| entry.file_name());
+    let dir_names: Vec<String> = entries
+        .iter()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if ignored_var_name(&name) {
+                return None;
+            }
+            entry
+                .file_type()
+                .ok()
+                .filter(|kind| kind.is_dir())
+                .map(|_| name)
+        })
+        .collect();
     for entry in entries {
         if files.len() >= MAX_VAR_FILES {
             return;
@@ -192,6 +206,10 @@ fn collect_var_scope(
         if kind.is_dir() {
             collect_var_entity_dir(&entry.path(), scope, &name, files, bytes);
         } else if kind.is_file() && var_extension(&name).is_some() {
+            let stem = name.rsplit_once('.').map(|(stem, _)| stem).unwrap_or(&name);
+            if dir_names.iter().any(|dir| dir == stem) {
+                continue;
+            }
             let path = format!("{scope}/{name}");
             collect_var_file(&entry.path(), &path, files, bytes);
         }
@@ -274,7 +292,44 @@ pub fn encode_inventory_vars(files: &[InventoryVarFile]) -> String {
 
 /// Decode the stored JSON array. A malformed value is treated as no files.
 pub fn decode_inventory_vars(raw: &str) -> Vec<InventoryVarFile> {
-    serde_json::from_str(raw).unwrap_or_default()
+    let files: Vec<InventoryVarFile> = serde_json::from_str(raw).unwrap_or_default();
+    without_shadowed_var_files(files)
+}
+
+/// Ansible uses `group_vars/<name>/` and ignores `group_vars/<name>.yml` when
+/// both exist. Drop the file form so the stored data matches that lookup.
+fn without_shadowed_var_files(files: Vec<InventoryVarFile>) -> Vec<InventoryVarFile> {
+    let mut directories: Vec<(String, String)> = Vec::new();
+    for file in &files {
+        let mut parts = file.path.split('/');
+        let (Some(scope), Some(entity)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        if !matches!(scope, "group_vars" | "host_vars") || entity.is_empty() {
+            continue;
+        }
+        if parts.next().is_some() {
+            directories.push((scope.to_string(), entity.to_string()));
+        }
+    }
+    files
+        .into_iter()
+        .filter(|file| {
+            let mut parts = file.path.split('/');
+            let (Some(scope), Some(rest)) = (parts.next(), parts.next()) else {
+                return true;
+            };
+            if !matches!(scope, "group_vars" | "host_vars") || parts.next().is_some() {
+                return true;
+            }
+            let Some((entity, _)) = rest.rsplit_once('.') else {
+                return true;
+            };
+            !directories
+                .iter()
+                .any(|(dir_scope, dir_entity)| dir_scope == scope && dir_entity == entity)
+        })
+        .collect()
 }
 
 /// Read host names, groups and variables from an INI inventory or a simple YAML inventory.

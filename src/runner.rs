@@ -7213,6 +7213,37 @@ $ANSIBLE_VAULT;1.1;AES256
     }
 
     #[test]
+    fn a_vars_directory_shadows_a_sibling_file_in_a_multi_source_job() {
+        let (state, team_id) = vars_state();
+        let first = vars_json(&[
+            ("group_vars/web.yml", "from_file: yes\n"),
+            ("group_vars/web/10.yml", "from_dir: yes\n"),
+        ]);
+        let second = vars_json(&[("group_vars/web.yml", "from_second: yes\n")]);
+        insert_vars_inventory(
+            &state,
+            &team_id,
+            "vars-shadowed",
+            &[
+                ("project", "[web]\nweb-1\n", &first),
+                ("manual", "[web]\nweb-2\n", &second),
+            ],
+        );
+        let work = state.cfg.data_dir.join("jobs").join("vars-shadowed");
+        fs::create_dir_all(&work).unwrap();
+        let template = vars_template(&team_id, "vars-shadowed");
+        write_job_inventory(&state, &template, &work).unwrap();
+        let vars = work.join("inventory.d/group_vars/web");
+        assert!(vars.join("00-10.yml").exists());
+        assert!(vars.join("01-web.yml").exists());
+        assert!(
+            !vars.join("00-web.yml").exists(),
+            "the directory must shadow the sibling file"
+        );
+        let _ = std::fs::remove_dir_all(&state.cfg.data_dir);
+    }
+
+    #[test]
     fn inspect_errors_are_not_a_stopped_container() {
         assert!(matches!(
             classify_inspect(true, "true\n", ""),

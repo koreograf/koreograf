@@ -1319,6 +1319,30 @@ async fn vms(headers: HeaderMap) -> axum::response::Response {
 }
 
 #[test]
+fn a_vars_directory_shadows_the_sibling_file() {
+    let raw = encode_inventory_vars(&[
+        InventoryVarFile {
+            path: "group_vars/web.yml".into(),
+            body: "from_file: yes\n".into(),
+        },
+        InventoryVarFile {
+            path: "group_vars/web/10.yml".into(),
+            body: "from_dir: yes\n".into(),
+        },
+        InventoryVarFile {
+            path: "group_vars/all.yml".into(),
+            body: "all: yes\n".into(),
+        },
+    ]);
+    let files = decode_inventory_vars(&raw);
+    assert!(files
+        .iter()
+        .any(|file| file.path == "group_vars/web/10.yml"));
+    assert!(files.iter().any(|file| file.path == "group_vars/all.yml"));
+    assert!(!files.iter().any(|file| file.path == "group_vars/web.yml"));
+}
+
+#[test]
 fn inventory_adjacent_vars_follow_ansible_precedence_and_mask_vaults() {
     use crate::features::inventories::service::{
         effective_group_vars, effective_vars, merge_inventory_with_vars, read_inventory_vars,
