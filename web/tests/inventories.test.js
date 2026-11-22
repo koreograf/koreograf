@@ -70,6 +70,20 @@ test("the host history table links the job and shows the role result", async () 
   assert.equal(hostHistoryTable([]), `<p class="small muted">no_run_history</p>`);
 });
 
+test("a masked vaulted file never shows its value in the variable view", async () => {
+  const { effectiveVariablesYaml, effectiveVariablesJson } = await load();
+  const vars = [
+    { name: "accounts_users", value: "ada", origin: "all" },
+    { name: "group_vars/all/vault.yml", value: "••••••", origin: "all", masked: true },
+  ];
+  const yaml = effectiveVariablesYaml(vars);
+  assert.match(yaml, /accounts_users/);
+  assert.match(yaml, /group_vars\/all\/vault\.yml/);
+  assert.match(yaml, /••••••/);
+  assert.doesNotMatch(yaml, /ANSIBLE_VAULT/);
+  assert.doesNotMatch(effectiveVariablesJson(vars), /ANSIBLE_VAULT/);
+});
+
 test("the inventory list filter matches names and source details", async () => {
   const { inventoryMatches } = await load();
   const item = {

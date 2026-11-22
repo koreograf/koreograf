@@ -1974,6 +1974,12 @@ fn write_job_inventory(
         };
         fs::write(work.join("inventory"), body)
             .map_err(|err| RunnerError::filesystem(err.to_string()))?;
+        let vars_json = sources
+            .first()
+            .map(|source| source.vars_json.as_str())
+            .filter(|vars| !vars.trim().is_empty() && *vars != "[]")
+            .unwrap_or(inventory.vars_json.as_str());
+        write_inventory_vars(work, vars_json, None)?;
         return Ok("inventory".into());
     }
     let dir = work.join("inventory.d");
@@ -1992,7 +1998,65 @@ fn write_job_inventory(
         fs::write(dir.join("00.ini"), DEFAULT_INVENTORY)
             .map_err(|err| RunnerError::filesystem(err.to_string()))?;
     }
+    for (position, source) in sources.iter().enumerate() {
+        write_inventory_vars(&dir, &source.vars_json, Some(position))?;
+    }
     Ok("inventory.d".into())
+}
+
+/// Write inventory-adjacent variable files where Ansible looks for them.
+///
+/// A single inventory file loads `<work>/group_vars` and `<work>/host_vars`.
+/// An inventory directory loads `inventory.d/group_vars` and
+/// `inventory.d/host_vars`. With several sources, every file moves into the
+/// group or host directory with the source position as a prefix, so Ansible
+/// merges the sources per key instead of letting a later file replace every
+/// key from an earlier file. Vaulted files are written verbatim, so an
+/// attached vault credential can decrypt them for Ansible.
+fn write_inventory_vars(
+    base: &Path,
+    vars_json: &str,
+    source_position: Option<usize>,
+) -> Result<(), RunnerError> {
+    let files = crate::features::inventories::decode_inventory_vars(vars_json);
+    for file in files {
+        let path = match source_position {
+            Some(position) => match prefixed_var_path(&file.path, position) {
+                Some(path) => path,
+                None => continue,
+            },
+            None => file.path.clone(),
+        };
+        if !(path.starts_with("group_vars/") || path.starts_with("host_vars/")) {
+            continue;
+        }
+        check_relative(&path)?;
+        let target = base.join(&path);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(|err| RunnerError::filesystem(err.to_string()))?;
+        }
+        fs::write(&target, &file.body).map_err(|err| RunnerError::filesystem(err.to_string()))?;
+    }
+    Ok(())
+}
+
+/// Move `group_vars/web.yml` to `group_vars/web/00-web.yml` and keep the
+/// filename of an existing directory file, such as `group_vars/web/10.yml`
+/// to `group_vars/web/00-10.yml`. Sorting by the prefix lets the later source
+/// override a conflicting key while keys only an earlier source defines stay.
+fn prefixed_var_path(path: &str, position: usize) -> Option<String> {
+    let (scope, rest) = path.split_once('/')?;
+    if scope != "group_vars" && scope != "host_vars" {
+        return None;
+    }
+    let (entity, file) = match rest.split_once('/') {
+        Some((entity, file)) => (entity, file),
+        None => (rest.rsplit_once('.')?.0, rest),
+    };
+    if entity.is_empty() || file.is_empty() {
+        return None;
+    }
+    Some(format!("{scope}/{entity}/{position:02}-{file}"))
 }
 
 fn inventory_extension(body: &str) -> &'static str {
@@ -6859,6 +6923,324 @@ exit 0
             "detached child {grandchild} survived SIGKILL; cmdline={after:?}"
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn vars_json(files: &[(&str, &str)]) -> String {
+        let rows: Vec<Value> = files
+            .iter()
+            .map(|(path, body)| serde_json::json!({"path": path, "body": body}))
+            .collect();
+        serde_json::to_string(&rows).unwrap()
+    }
+
+    fn vars_state() -> (Shared, String) {
+        let state = output_state(1_000);
+        let team_id = {
+            let db = state.db().unwrap();
+            db.query_row("SELECT id FROM teams LIMIT 1", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap()
+        };
+        (state, team_id)
+    }
+
+    fn insert_vars_inventory(
+        state: &Shared,
+        team_id: &str,
+        id: &str,
+        sources: &[(&str, &str, &str)],
+    ) {
+        let created_at = db::now();
+        let item = db::Inventory {
+            id: id.into(),
+            team_id: team_id.into(),
+            name: id.into(),
+            body: sources
+                .first()
+                .map(|(_, body, _)| *body)
+                .unwrap_or("")
+                .into(),
+            created_at: created_at.clone(),
+            source_kind: "ini".into(),
+            source_json: "{}".into(),
+            credential_id: None,
+            last_sync_at: String::new(),
+            last_sync_status: String::new(),
+            last_sync_by: String::new(),
+            vars_json: sources
+                .first()
+                .map(|(_, _, vars)| (*vars).to_string())
+                .unwrap_or_else(|| "[]".into()),
+            admin_saved: true,
+        };
+        let rows: Vec<db::InventorySource> = sources
+            .iter()
+            .enumerate()
+            .map(|(position, (name, body, vars))| db::InventorySource {
+                id: format!("{id}-source-{position}"),
+                inventory_id: id.into(),
+                name: (*name).into(),
+                kind: if position == 0 { "project" } else { "ini" }.into(),
+                source_json: "{}".into(),
+                credential_id: None,
+                body: (*body).into(),
+                position: position as i64,
+                created_at: created_at.clone(),
+                vars_json: (*vars).into(),
+            })
+            .collect();
+        state.store().insert_inventory(&item, &rows, true).unwrap();
+    }
+
+    fn vars_template(team_id: &str, inventory_id: &str) -> Template {
+        let mut template = environment_template(None, false);
+        template.team_id = team_id.into();
+        template.tool = "ansible".into();
+        template.inventory_id = Some(inventory_id.into());
+        template
+    }
+
+    fn ansible_available(binary: &str) -> bool {
+        std::process::Command::new(binary)
+            .arg("--version")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn job_inventory_writes_adjacent_vars_for_one_source_and_a_directory() {
+        let (state, team_id) = vars_state();
+        let single = vars_json(&[
+            ("group_vars/all/accounts.yml", "accounts_users: [ada]\n"),
+            ("host_vars/web-1.yml", "web_only: yes\n"),
+        ]);
+        insert_vars_inventory(
+            &state,
+            &team_id,
+            "vars-single",
+            &[("project", "[web]\nweb-1\n", &single)],
+        );
+        let work = state.cfg.data_dir.join("jobs").join("vars-single");
+        fs::create_dir_all(&work).unwrap();
+        let template = vars_template(&team_id, "vars-single");
+        assert_eq!(
+            write_job_inventory(&state, &template, &work).unwrap(),
+            "inventory"
+        );
+        assert_eq!(
+            fs::read_to_string(work.join("group_vars/all/accounts.yml")).unwrap(),
+            "accounts_users: [ada]\n"
+        );
+        assert_eq!(
+            fs::read_to_string(work.join("host_vars/web-1.yml")).unwrap(),
+            "web_only: yes\n"
+        );
+
+        let first = vars_json(&[
+            ("group_vars/web.yml", "from_first: yes\n"),
+            ("group_vars/all/10-base.yml", "from_all: yes\n"),
+        ]);
+        let second = vars_json(&[("group_vars/web.yml", "from_second: yes\n")]);
+        insert_vars_inventory(
+            &state,
+            &team_id,
+            "vars-many",
+            &[
+                ("project", "[web]\nweb-1\n", &first),
+                ("manual", "[web]\nweb-2\n", &second),
+            ],
+        );
+        let work = state.cfg.data_dir.join("jobs").join("vars-many");
+        fs::create_dir_all(&work).unwrap();
+        let template = vars_template(&team_id, "vars-many");
+        assert_eq!(
+            write_job_inventory(&state, &template, &work).unwrap(),
+            "inventory.d"
+        );
+        assert_eq!(
+            fs::read_to_string(work.join("inventory.d/group_vars/web/00-web.yml")).unwrap(),
+            "from_first: yes\n"
+        );
+        assert_eq!(
+            fs::read_to_string(work.join("inventory.d/group_vars/web/01-web.yml")).unwrap(),
+            "from_second: yes\n"
+        );
+        assert_eq!(
+            fs::read_to_string(work.join("inventory.d/group_vars/all/00-10-base.yml")).unwrap(),
+            "from_all: yes\n"
+        );
+        assert!(!work.join("inventory.d/group_vars/web.yml").exists());
+        assert!(work.join("inventory.d/00.ini").is_file());
+        assert!(work.join("inventory.d/01.ini").is_file());
+
+        let _ = std::fs::remove_dir_all(&state.cfg.data_dir);
+    }
+
+    #[test]
+    fn ansible_loads_the_written_vars_and_decrypts_a_vault_file() {
+        if !ansible_available("ansible-playbook") {
+            return;
+        }
+        let (state, team_id) = vars_state();
+        let vault = "\
+$ANSIBLE_VAULT;1.1;AES256
+34666261373263613565633732633131363864373533313736366664343238306234633230353135
+3835366361373161306139653436353163623536663435330a346131303630393263616437663032
+31666635313766376337656135663234323362613830383161373039326432633032386265353735
+3038316435346337630a636433383337313066383330353334393363636639323962353639336536
+64393965303365306537303733623362356331363966623637356436316664323837386631653266
+6130666235376463623264633566663766646531316466666465
+";
+        let vars = vars_json(&[
+            ("group_vars/all/00-base.yml", "level: all\n"),
+            ("group_vars/child/10-child.yml", "level: child\n"),
+            ("host_vars/host1.yml", "level: host\n"),
+            ("group_vars/all/vault.yml", vault),
+        ]);
+        insert_vars_inventory(
+            &state,
+            &team_id,
+            "vars-ansible",
+            &[("project", "[child]\nhost1\n", &vars)],
+        );
+        let work = state.cfg.data_dir.join("jobs").join("vars-ansible");
+        fs::create_dir_all(&work).unwrap();
+        let template = vars_template(&team_id, "vars-ansible");
+        write_job_inventory(&state, &template, &work).unwrap();
+        fs::write(
+            work.join("playbook.yml"),
+            "\
+- hosts: all
+  gather_facts: false
+  tasks:
+    - debug: var=level
+    - debug: var=vaulted_secret
+",
+        )
+        .unwrap();
+        fs::write(work.join("vault.pass"), "koreograf-test\n").unwrap();
+
+        let with_vault = std::process::Command::new("ansible-playbook")
+            .current_dir(&work)
+            .args([
+                "-i",
+                "inventory",
+                "playbook.yml",
+                "--vault-password-file",
+                "vault.pass",
+            ])
+            .env("ANSIBLE_DEPRECATION_WARNINGS", "false")
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&with_vault.stdout);
+        assert!(
+            with_vault.status.success(),
+            "stdout:\n{text}\nstderr:\n{}",
+            String::from_utf8_lossy(&with_vault.stderr)
+        );
+        assert!(text.contains("\"level\": \"host\""), "{text}");
+        assert!(text.contains("s3cr3t-from-vault"), "{text}");
+
+        let without_vault = std::process::Command::new("ansible-playbook")
+            .current_dir(&work)
+            .args(["-i", "inventory", "playbook.yml"])
+            .env("ANSIBLE_DEPRECATION_WARNINGS", "false")
+            .output()
+            .unwrap();
+        assert!(
+            !without_vault.status.success(),
+            "Ansible must not decrypt a vault file without a credential"
+        );
+
+        let _ = std::fs::remove_dir_all(&state.cfg.data_dir);
+    }
+
+    #[test]
+    fn ansible_loads_vars_inside_an_inventory_directory() {
+        if !ansible_available("ansible-inventory") {
+            return;
+        }
+        let (state, team_id) = vars_state();
+        let first = vars_json(&[("group_vars/web.yml", "from_first: yes\nshared: first\n")]);
+        let second = vars_json(&[("group_vars/web.yml", "from_second: yes\nshared: second\n")]);
+        insert_vars_inventory(
+            &state,
+            &team_id,
+            "vars-directory",
+            &[
+                ("project", "[web]\nweb-1\n", &first),
+                ("manual", "[web]\nweb-2\n", &second),
+            ],
+        );
+        let work = state.cfg.data_dir.join("jobs").join("vars-directory");
+        fs::create_dir_all(&work).unwrap();
+        let template = vars_template(&team_id, "vars-directory");
+        write_job_inventory(&state, &template, &work).unwrap();
+
+        let output = std::process::Command::new("ansible-inventory")
+            .current_dir(&work)
+            .args(["-i", "inventory.d", "--list"])
+            .env("ANSIBLE_DEPRECATION_WARNINGS", "false")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let parsed: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let hostvars = parsed
+            .get("_meta")
+            .and_then(|meta| meta.get("hostvars"))
+            .and_then(|hosts| hosts.get("web-1"))
+            .expect("host variables");
+        assert_eq!(
+            hostvars.get("from_first").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            hostvars.get("from_second").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            hostvars.get("shared").and_then(Value::as_str),
+            Some("second")
+        );
+
+        let _ = std::fs::remove_dir_all(&state.cfg.data_dir);
+    }
+
+    #[test]
+    fn a_vars_directory_shadows_a_sibling_file_in_a_multi_source_job() {
+        let (state, team_id) = vars_state();
+        let first = vars_json(&[
+            ("group_vars/web.yml", "from_file: yes\n"),
+            ("group_vars/web/10.yml", "from_dir: yes\n"),
+        ]);
+        let second = vars_json(&[("group_vars/web.yml", "from_second: yes\n")]);
+        insert_vars_inventory(
+            &state,
+            &team_id,
+            "vars-shadowed",
+            &[
+                ("project", "[web]\nweb-1\n", &first),
+                ("manual", "[web]\nweb-2\n", &second),
+            ],
+        );
+        let work = state.cfg.data_dir.join("jobs").join("vars-shadowed");
+        fs::create_dir_all(&work).unwrap();
+        let template = vars_template(&team_id, "vars-shadowed");
+        write_job_inventory(&state, &template, &work).unwrap();
+        let vars = work.join("inventory.d/group_vars/web");
+        assert!(vars.join("00-10.yml").exists());
+        assert!(vars.join("01-web.yml").exists());
+        assert!(
+            !vars.join("00-web.yml").exists(),
+            "the directory must shadow the sibling file"
+        );
+        let _ = std::fs::remove_dir_all(&state.cfg.data_dir);
     }
 
     #[test]

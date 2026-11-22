@@ -1319,6 +1319,181 @@ async fn vms(headers: HeaderMap) -> axum::response::Response {
 }
 
 #[test]
+fn a_vars_directory_shadows_the_sibling_file() {
+    let raw = encode_inventory_vars(&[
+        InventoryVarFile {
+            path: "group_vars/web.yml".into(),
+            body: "from_file: yes\n".into(),
+        },
+        InventoryVarFile {
+            path: "group_vars/web/10.yml".into(),
+            body: "from_dir: yes\n".into(),
+        },
+        InventoryVarFile {
+            path: "group_vars/all.yml".into(),
+            body: "all: yes\n".into(),
+        },
+    ]);
+    let files = decode_inventory_vars(&raw);
+    assert!(files
+        .iter()
+        .any(|file| file.path == "group_vars/web/10.yml"));
+    assert!(files.iter().any(|file| file.path == "group_vars/all.yml"));
+    assert!(!files.iter().any(|file| file.path == "group_vars/web.yml"));
+}
+
+#[test]
+fn inventory_adjacent_vars_follow_ansible_precedence_and_mask_vaults() {
+    use crate::features::inventories::service::{
+        effective_group_vars, effective_vars, merge_inventory_with_vars, read_inventory_vars,
+    };
+
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("koreograf-inventory-vars-{nanos}"));
+    let inventory = root.join("inventory");
+    fs::create_dir_all(inventory.join("group_vars/all")).unwrap();
+    fs::create_dir_all(inventory.join("group_vars/child")).unwrap();
+    fs::create_dir_all(inventory.join("host_vars/unicon.fritz.box")).unwrap();
+    fs::write(
+        inventory.join("hosts.yml"),
+        "\
+all:
+  vars:
+    level: all-inline
+  children:
+    parent:
+      vars:
+        level: parent-inline
+      children:
+        child:
+          hosts:
+            unicon.fritz.box:
+              inline_host: from-inline
+            other.example:
+              inline_host: from-inline
+",
+    )
+    .unwrap();
+    fs::write(
+        inventory.join("group_vars/all/00-base.yml"),
+        "level: all-directory\nall_only: yes\naccounts_users:\n  - name: ada\n    sudo: true\n",
+    )
+    .unwrap();
+    fs::write(
+        inventory.join("group_vars/all/10-second.yml"),
+        "merged: second\n",
+    )
+    .unwrap();
+    fs::write(
+        inventory.join("group_vars/all/20-last.yml"),
+        "merged: last\n",
+    )
+    .unwrap();
+    fs::write(
+        inventory.join("group_vars/all/vault.yml"),
+        "$ANSIBLE_VAULT;1.1;AES256\n633638343936333336353534\n",
+    )
+    .unwrap();
+    fs::write(
+        inventory.join("group_vars/parent.yml"),
+        "level: parent-directory\nparent_only: yes\n",
+    )
+    .unwrap();
+    fs::write(
+        inventory.join("group_vars/child/10-child.yml"),
+        "level: child-directory\n",
+    )
+    .unwrap();
+    fs::write(
+        inventory.join("host_vars/unicon.fritz.box/10-host.yml"),
+        "level: host-directory\nhost_only: yes\n",
+    )
+    .unwrap();
+    fs::write(
+        inventory.join("group_vars/all/ignored.txt"),
+        "level: ignored\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(
+        inventory.join("group_vars/all/00-base.yml"),
+        inventory.join("group_vars/all/link.yml"),
+    )
+    .unwrap();
+
+    let body = fs::read_to_string(inventory.join("hosts.yml")).unwrap();
+    let files = read_inventory_vars(&root, "inventory/hosts.yml");
+    assert!(
+        files.iter().all(|file| !file.path.contains("ignored.txt")),
+        "{files:?}"
+    );
+    assert!(
+        files.iter().all(|file| !file.path.contains("link.yml")),
+        "{files:?}"
+    );
+    let data = merge_inventory_with_vars(&[body.as_str()], &files);
+
+    let vars = effective_vars(&data, "unicon.fritz.box");
+    let find = |name: &str| vars.iter().find(|item| item.name == name);
+    assert_eq!(
+        find("all_only").map(|item| item.value.as_str()),
+        Some("yes")
+    );
+    assert_eq!(find("merged").map(|item| item.value.as_str()), Some("last"));
+    assert_eq!(
+        find("level").map(|item| item.value.as_str()),
+        Some("host-directory")
+    );
+    assert_eq!(
+        find("inline_host").map(|item| item.value.as_str()),
+        Some("from-inline")
+    );
+    assert_eq!(
+        find("host_only").map(|item| item.value.as_str()),
+        Some("yes")
+    );
+    assert_eq!(
+        find("parent_only").map(|item| item.value.as_str()),
+        Some("yes")
+    );
+    let accounts = find("accounts_users").expect("cleartext directory variable");
+    assert!(accounts.value.contains("ada"), "{}", accounts.value);
+    let vault = vars
+        .iter()
+        .find(|item| item.name.ends_with("group_vars/all/vault.yml"))
+        .expect("masked vault placeholder");
+    assert!(vault.masked);
+    assert_eq!(vault.value, super::MASKED_VALUE);
+    assert!(!vault.value.contains("ANSIBLE_VAULT"));
+
+    let other = effective_vars(&data, "other.example");
+    assert_eq!(
+        other
+            .iter()
+            .find(|item| item.name == "level")
+            .map(|item| item.value.as_str()),
+        Some("child-directory")
+    );
+
+    let group = effective_group_vars(&data, "child");
+    assert_eq!(
+        group
+            .iter()
+            .find(|item| item.name == "level")
+            .map(|item| item.value.as_str()),
+        Some("child-directory")
+    );
+    assert!(group.iter().any(|item| item.name == "all_only"));
+    assert!(group.iter().any(|item| item.name == "parent_only"));
+    assert!(!group.iter().any(|item| item.name == "host_only"));
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn demo_project_lists_the_playbook_and_the_inventory() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/demo");
     let found = scan_project(&root).unwrap();

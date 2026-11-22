@@ -472,6 +472,7 @@ fn seed_demo<S: SeedStore + ?Sized>(store: &S, cfg: &Config) -> AppResult<()> {
         body: "[all]\nlocalhost ansible_connection=local\n".into(),
         position: 0,
         created_at: db::now(),
+        vars_json: "[]".into(),
     };
     store.insert_inventory(
         &Inventory {
@@ -486,6 +487,7 @@ fn seed_demo<S: SeedStore + ?Sized>(store: &S, cfg: &Config) -> AppResult<()> {
             last_sync_at: String::new(),
             last_sync_status: String::new(),
             last_sync_by: String::new(),
+            vars_json: "[]".into(),
             admin_saved: true,
         },
         std::slice::from_ref(&inventory_source),

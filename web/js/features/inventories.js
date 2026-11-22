@@ -948,8 +948,12 @@ function looksSecretVar(name) {
   return /(pass(word|phrase)?|secret|token|api[-_]?key|private[-_]?key|access[-_]?key|auth[-_]?key|credential|vault)/i.test(name);
 }
 
+function hiddenVar(item) {
+  return item.masked === true || looksSecretVar(item.name);
+}
+
 function variableText(item) {
-  return looksSecretVar(item.name) ? "••••••" : String(item.value ?? "");
+  return hiddenVar(item) ? "••••••" : String(item.value ?? "");
 }
 
 function variableOrigin(item) {
@@ -998,7 +1002,7 @@ function jsonVariableMarkup(text) {
 export function effectiveVariablesJson(vars) {
   const rows = vars.map((item) => ({
     name: String(item.name ?? ""),
-    value: looksSecretVar(item.name) ? "••••••" : (item.value ?? ""),
+    value: hiddenVar(item) ? "••••••" : (item.value ?? ""),
     origin: variableOrigin(item),
   }));
   return jsonVariableMarkup(JSON.stringify(rows, null, 2));
@@ -1148,7 +1152,9 @@ async function pageInventoryGroup(id, name) {
   const link = (groupName) => `<a href="#/inventories/${encodeURIComponent(id)}/groups/${encodeURIComponent(groupName)}">${esc(groupName)}</a>`;
   const children = (group.children || []).map(link).join(", ") || `<span class="small muted">${h("no_child_groups")}</span>`;
   const parents = (group.parents || []).map(link).join(", ") || `<span class="small muted">${h("no_parent_groups")}</span>`;
-  const vars = Object.entries(group.vars || {}).map(([key, value]) => ({ name: key, value, origin: group.name }));
+  const vars = Array.isArray(group.effective_vars)
+    ? group.effective_vars
+    : Object.entries(group.vars || {}).map(([key, value]) => ({ name: key, value, origin: group.name }));
   const totalPages = Math.max(1, Math.ceil(Number(group.total) / size));
   const base = `#/inventories/${encodeURIComponent(id)}/groups/${encodeURIComponent(name)}`;
   const pager = totalPages > 1

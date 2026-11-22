@@ -2891,6 +2891,167 @@ async fn inventory_sources_and_ansible_check_options() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn inventory_import_loads_adjacent_group_and_host_vars() {
+    let project_root = temp_dir("inventory-vars-project");
+    let inventory = project_root.join("inventory");
+    std::fs::create_dir_all(inventory.join("group_vars/all")).unwrap();
+    std::fs::create_dir_all(inventory.join("host_vars")).unwrap();
+    std::fs::write(
+        inventory.join("hosts.yml"),
+        "\
+all:
+  children:
+    web:
+      hosts:
+        web-1:
+          inline_var: from-inline
+",
+    )
+    .unwrap();
+    std::fs::write(
+        inventory.join("group_vars/all/00-base.yml"),
+        "level: all\naccounts_users:\n  - ada\nchanged_in_all: before\n",
+    )
+    .unwrap();
+    std::fs::write(
+        inventory.join("group_vars/all/vault.yml"),
+        "$ANSIBLE_VAULT;1.1;AES256\n633638343936333336353534\n",
+    )
+    .unwrap();
+    std::fs::write(
+        inventory.join("host_vars/web-1.yml"),
+        "level: host\nhost_only: yes\n",
+    )
+    .unwrap();
+
+    let mut options = Options::default();
+    options.project_roots.push(project_root.clone());
+    let harness = TestApp::boot("inventory-vars-api", options);
+    let app = harness.app.clone();
+    let dir = harness.dir.clone();
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, project, _) = call(
+        &app,
+        "POST",
+        "/api/v1/projects",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Inventory vars",
+            "source_type": "path",
+            "source": project_root.display().to_string()
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{project}");
+    let project_id = project["id"].as_str().unwrap();
+
+    let (status, imported, _) = call(
+        &app,
+        "POST",
+        "/api/v1/inventories/import",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"project_id": project_id, "path": "inventory/hosts.yml"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{imported}");
+    let inventory_id = imported["id"].as_str().unwrap();
+
+    let (status, host, _) = call(
+        &app,
+        "GET",
+        &format!("/api/v1/inventories/{inventory_id}/hosts/web-1"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{host}");
+    let vars = host["vars"].as_array().unwrap();
+    let find = |name: &str| vars.iter().find(|item| item["name"] == name);
+    assert_eq!(find("level").unwrap()["value"], "host");
+    assert_eq!(find("inline_var").unwrap()["value"], "from-inline");
+    assert_eq!(find("host_only").unwrap()["value"], "yes");
+    assert!(find("accounts_users").unwrap()["value"]
+        .as_str()
+        .unwrap()
+        .contains("ada"));
+    let vault = vars
+        .iter()
+        .find(|item| item["name"] == "group_vars/all/vault.yml")
+        .expect("masked vault placeholder");
+    assert_eq!(vault["masked"], true);
+    assert_eq!(vault["value"], "••••••");
+    assert!(!vault.to_string().contains("ANSIBLE_VAULT"));
+
+    let (status, group, _) = call(
+        &app,
+        "GET",
+        &format!("/api/v1/inventories/{inventory_id}/groups/all"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{group}");
+    let group_vars = group["effective_vars"].as_array().unwrap();
+    assert!(group_vars
+        .iter()
+        .any(|item| item["name"] == "changed_in_all" && item["value"] == "before"));
+    assert!(group_vars
+        .iter()
+        .any(|item| item["name"] == "group_vars/all/vault.yml" && item["masked"] == true));
+
+    std::fs::write(
+        inventory.join("group_vars/all/00-base.yml"),
+        "level: all\naccounts_users:\n  - ada\nchanged_in_all: after\n",
+    )
+    .unwrap();
+    let (status, synced, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/inventories/{inventory_id}/sync"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{synced}");
+    let (status, host, _) = call(
+        &app,
+        "GET",
+        &format!("/api/v1/inventories/{inventory_id}/hosts/web-1"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{host}");
+    assert!(host["vars"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["name"] == "changed_in_all" && item["value"] == "after"));
+
+    let _ = std::fs::remove_dir_all(project_root);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn inventory_syncs_roll_up_the_operator_and_the_result() {
     let harness = TestApp::boot("inventory-sync-rollup", Options::default());
     let app = harness.app.clone();

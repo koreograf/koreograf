@@ -8,11 +8,18 @@ use serde_json::{json, Value};
 use url::{Host, Url};
 
 use super::model::{
-    EffectiveVar, FoundInventory, InventoryData, InventoryGroup, InventoryHost, NetboxPreview,
-    NetboxResult, NetboxSource, ProjectContents, DEFAULT_MAX_HOSTS, MAX_HOSTS_LIMIT,
+    EffectiveVar, FoundInventory, InventoryData, InventoryGroup, InventoryHost, InventoryVarFile,
+    NetboxPreview, NetboxResult, NetboxSource, ProjectContents, DEFAULT_MAX_HOSTS, MASKED_VALUE,
+    MAX_HOSTS_LIMIT,
 };
 
 const PAGE_SIZE: usize = 100;
+
+/// At most this many `group_vars` and `host_vars` files are read per inventory.
+pub const MAX_VAR_FILES: usize = 200;
+/// At most this many bytes of `group_vars` and `host_vars` text are stored.
+pub const MAX_VAR_BYTES: usize = 1_000_000;
+const MAX_VAR_FILE_BYTES: u64 = 256 * 1024;
 
 /// Combine hosts and groups from several inventory texts. The same host keeps
 /// every group. Variables from a later text replace earlier ones.
@@ -46,6 +53,283 @@ pub fn merge_inventory(bodies: &[&str]) -> InventoryData {
         }
     }
     data
+}
+
+/// Merge inventory texts and apply the adjacent `group_vars` and `host_vars`
+/// files in source order. Directory variables override inline inventory
+/// variables of the same name, and a later source overrides an earlier one.
+pub fn merge_inventory_with_vars(bodies: &[&str], var_files: &[InventoryVarFile]) -> InventoryData {
+    let mut data = merge_inventory(bodies);
+    apply_inventory_vars(&mut data, var_files);
+    data
+}
+
+/// Apply parsed `group_vars` and `host_vars` files to one parsed inventory.
+///
+/// A file applies only to a group or host that the inventory already defines,
+/// except that `group_vars/all` creates the implicit `all` group. A vaulted
+/// file contributes a masked placeholder instead of variables; its text is
+/// never decrypted here.
+pub fn apply_inventory_vars(data: &mut InventoryData, var_files: &[InventoryVarFile]) {
+    for file in var_files {
+        let Some((scope, rest)) = file.path.split_once('/') else {
+            continue;
+        };
+        let Some(entity) = vars_entity(rest) else {
+            continue;
+        };
+        let vaulted = file.body.trim_start().starts_with("$ANSIBLE_VAULT;");
+        match scope {
+            "group_vars" => {
+                if entity == "all" {
+                    ensure_group(&mut data.groups, "all");
+                }
+                let Some(group) = data.groups.iter_mut().find(|group| group.name == entity) else {
+                    continue;
+                };
+                if vaulted {
+                    push_unique(&mut group.masked, &file.path);
+                } else {
+                    group.vars.extend(parse_vars_document(&file.body));
+                }
+            }
+            "host_vars" => {
+                let Some(host) = data.hosts.iter_mut().find(|host| host.name == entity) else {
+                    continue;
+                };
+                if vaulted {
+                    push_unique(&mut host.masked, &file.path);
+                } else {
+                    host.vars.extend(parse_vars_document(&file.body));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn push_unique(items: &mut Vec<String>, value: &str) {
+    if !items.iter().any(|item| item == value) {
+        items.push(value.to_string());
+    }
+}
+
+/// The group or host name in `all/accounts.yml` or `all.yml`.
+fn vars_entity(rest: &str) -> Option<&str> {
+    let mut parts = rest.split('/');
+    let first = parts.next()?;
+    if first.is_empty() || first.starts_with('.') {
+        return None;
+    }
+    if parts.next().is_some() {
+        return Some(first);
+    }
+    first
+        .rsplit_once('.')
+        .map(|(name, _)| name)
+        .filter(|name| !name.is_empty())
+}
+
+/// Read `group_vars/` and `host_vars/` next to a project inventory file.
+///
+/// The result is bounded by file count and bytes. Symlinks, hidden files,
+/// backup files, directories below a group or host directory, and files with
+/// another extension are skipped. Ordering is deterministic by path.
+pub fn read_inventory_vars(root: &Path, inventory_path: &str) -> Vec<InventoryVarFile> {
+    let Ok(root) = root.canonicalize() else {
+        return Vec::new();
+    };
+    let base = match inventory_path.rsplit_once('/') {
+        Some((dir, _)) => root.join(dir),
+        None => root.clone(),
+    };
+    let Ok(base) = base.canonicalize() else {
+        return Vec::new();
+    };
+    if !base.starts_with(&root) {
+        return Vec::new();
+    }
+    let mut files = Vec::new();
+    let mut bytes = 0usize;
+    for scope in ["group_vars", "host_vars"] {
+        collect_var_scope(&base, scope, &mut files, &mut bytes);
+    }
+    files
+}
+
+fn collect_var_scope(
+    base: &Path,
+    scope: &str,
+    files: &mut Vec<InventoryVarFile>,
+    bytes: &mut usize,
+) {
+    let dir = base.join(scope);
+    let Ok(meta) = fs::symlink_metadata(&dir) else {
+        return;
+    };
+    if !meta.file_type().is_dir() {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return;
+    };
+    let mut entries: Vec<_> = entries.filter_map(Result::ok).collect();
+    entries.sort_by_key(|entry| entry.file_name());
+    let dir_names: Vec<String> = entries
+        .iter()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if ignored_var_name(&name) {
+                return None;
+            }
+            entry
+                .file_type()
+                .ok()
+                .filter(|kind| kind.is_dir())
+                .map(|_| name)
+        })
+        .collect();
+    for entry in entries {
+        if files.len() >= MAX_VAR_FILES {
+            return;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if ignored_var_name(&name) {
+            continue;
+        }
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_symlink() {
+            continue;
+        }
+        if kind.is_dir() {
+            collect_var_entity_dir(&entry.path(), scope, &name, files, bytes);
+        } else if kind.is_file() && var_extension(&name).is_some() {
+            let stem = name.rsplit_once('.').map(|(stem, _)| stem).unwrap_or(&name);
+            if dir_names.iter().any(|dir| dir == stem) {
+                continue;
+            }
+            let path = format!("{scope}/{name}");
+            collect_var_file(&entry.path(), &path, files, bytes);
+        }
+    }
+}
+
+fn collect_var_entity_dir(
+    dir: &Path,
+    scope: &str,
+    entity: &str,
+    files: &mut Vec<InventoryVarFile>,
+    bytes: &mut usize,
+) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<_> = entries.filter_map(Result::ok).collect();
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        if files.len() >= MAX_VAR_FILES {
+            return;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if ignored_var_name(&name) || var_extension(&name).is_none() {
+            continue;
+        }
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if !kind.is_file() {
+            continue;
+        }
+        let path = format!("{scope}/{entity}/{name}");
+        collect_var_file(&entry.path(), &path, files, bytes);
+    }
+}
+
+fn collect_var_file(
+    path: &Path,
+    stored: &str,
+    files: &mut Vec<InventoryVarFile>,
+    bytes: &mut usize,
+) {
+    let Ok(meta) = fs::symlink_metadata(path) else {
+        return;
+    };
+    if !meta.file_type().is_file() || meta.len() > MAX_VAR_FILE_BYTES {
+        return;
+    }
+    let Ok(body) = fs::read_to_string(path) else {
+        return;
+    };
+    let size = body.len();
+    if bytes.saturating_add(size) > MAX_VAR_BYTES {
+        return;
+    }
+    *bytes += size;
+    files.push(InventoryVarFile {
+        path: stored.to_string(),
+        body,
+    });
+}
+
+fn ignored_var_name(name: &str) -> bool {
+    name.starts_with('.') || name.ends_with('~')
+}
+
+fn var_extension(name: &str) -> Option<&str> {
+    let (_, ext) = name.rsplit_once('.')?;
+    match ext {
+        "yml" | "yaml" | "json" => Some(ext),
+        _ => None,
+    }
+}
+
+/// JSON encoded `group_vars` and `host_vars` files stored with a source.
+pub fn encode_inventory_vars(files: &[InventoryVarFile]) -> String {
+    serde_json::to_string(files).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// Decode the stored JSON array. A malformed value is treated as no files.
+pub fn decode_inventory_vars(raw: &str) -> Vec<InventoryVarFile> {
+    let files: Vec<InventoryVarFile> = serde_json::from_str(raw).unwrap_or_default();
+    without_shadowed_var_files(files)
+}
+
+/// Ansible uses `group_vars/<name>/` and ignores `group_vars/<name>.yml` when
+/// both exist. Drop the file form so the stored data matches that lookup.
+fn without_shadowed_var_files(files: Vec<InventoryVarFile>) -> Vec<InventoryVarFile> {
+    let mut directories: Vec<(String, String)> = Vec::new();
+    for file in &files {
+        let mut parts = file.path.split('/');
+        let (Some(scope), Some(entity)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        if !matches!(scope, "group_vars" | "host_vars") || entity.is_empty() {
+            continue;
+        }
+        if parts.next().is_some() {
+            directories.push((scope.to_string(), entity.to_string()));
+        }
+    }
+    files
+        .into_iter()
+        .filter(|file| {
+            let mut parts = file.path.split('/');
+            let (Some(scope), Some(rest)) = (parts.next(), parts.next()) else {
+                return true;
+            };
+            if !matches!(scope, "group_vars" | "host_vars") || parts.next().is_some() {
+                return true;
+            }
+            let Some((entity, _)) = rest.rsplit_once('.') else {
+                return true;
+            };
+            !directories
+                .iter()
+                .any(|(dir_scope, dir_entity)| dir_scope == scope && dir_entity == entity)
+        })
+        .collect()
 }
 
 /// Read host names, groups and variables from an INI inventory or a simple YAML inventory.
@@ -104,34 +388,88 @@ pub fn effective_vars(data: &InventoryData, host_name: &str) -> Vec<EffectiveVar
     let Some(host) = data.hosts.iter().find(|host| host.name == host_name) else {
         return Vec::new();
     };
-    let groups = host_groups(data, host_name);
+    let mut vars = BTreeMap::new();
+    for (_, group) in ordered_groups(data, &host_groups(data, host_name)) {
+        if let Some(item) = data.groups.iter().find(|item| item.name == group) {
+            for (key, value) in &item.vars {
+                vars.insert(key.clone(), (value.clone(), group.clone(), false));
+            }
+            for path in &item.masked {
+                vars.insert(
+                    path.clone(),
+                    (MASKED_VALUE.to_string(), group.clone(), true),
+                );
+            }
+        }
+    }
+    for (key, value) in &host.vars {
+        vars.insert(key.clone(), (value.clone(), "host".into(), false));
+    }
+    for path in &host.masked {
+        vars.insert(
+            path.clone(),
+            (MASKED_VALUE.to_string(), "host".to_string(), true),
+        );
+    }
+    vars.into_iter()
+        .map(|(name, (value, origin, masked))| EffectiveVar {
+            name,
+            value,
+            origin,
+            masked,
+        })
+        .collect()
+}
+
+/// Effective variables of a group in Ansible precedence order.
+///
+/// The group's own directory variables override its parents and `all`, just as
+/// they do for a host. A group page shows this inherited view.
+pub fn effective_group_vars(data: &InventoryData, group_name: &str) -> Vec<EffectiveVar> {
+    if !data.groups.iter().any(|group| group.name == group_name) {
+        return Vec::new();
+    }
+    let parents = parent_map(data);
+    let mut names = BTreeSet::new();
+    collect_ancestors(group_name, &parents, &mut names);
+    if data.groups.iter().any(|group| group.name == "all") {
+        names.insert("all".to_string());
+    }
+    let mut vars = BTreeMap::new();
+    for (_, group) in ordered_groups(data, &names.into_iter().collect::<Vec<_>>()) {
+        if let Some(item) = data.groups.iter().find(|item| item.name == group) {
+            for (key, value) in &item.vars {
+                vars.insert(key.clone(), (value.clone(), group.clone(), false));
+            }
+            for path in &item.masked {
+                vars.insert(
+                    path.clone(),
+                    (MASKED_VALUE.to_string(), group.clone(), true),
+                );
+            }
+        }
+    }
+    vars.into_iter()
+        .map(|(name, (value, origin, masked))| EffectiveVar {
+            name,
+            value,
+            origin,
+            masked,
+        })
+        .collect()
+}
+
+fn ordered_groups(data: &InventoryData, groups: &[String]) -> Vec<(usize, String)> {
     let mut ordered: Vec<(usize, String)> = groups
-        .into_iter()
-        .map(|name| (group_depth(&name, data), name))
+        .iter()
+        .map(|name| (group_depth(name, data), name.clone()))
         .collect();
     ordered.sort_by(|left, right| {
         let left_all = left.1 == "all";
         let right_all = right.1 == "all";
         (!left_all, left.0, &left.1).cmp(&(!right_all, right.0, &right.1))
     });
-    let mut vars = BTreeMap::new();
-    for (_, group) in ordered {
-        if let Some(item) = data.groups.iter().find(|item| item.name == group) {
-            for (key, value) in &item.vars {
-                vars.insert(key.clone(), (value.clone(), group.clone()));
-            }
-        }
-    }
-    for (key, value) in &host.vars {
-        vars.insert(key.clone(), (value.clone(), "host".into()));
-    }
-    vars.into_iter()
-        .map(|(name, (value, origin))| EffectiveVar {
-            name,
-            value,
-            origin,
-        })
-        .collect()
+    ordered
 }
 
 fn parent_map(data: &InventoryData) -> BTreeMap<String, Vec<String>> {
@@ -335,6 +673,7 @@ fn parse_ini(body: &str) -> InventoryData {
                         name: name.to_string(),
                         groups: vec![group.clone()],
                         vars,
+                        masked: Vec::new(),
                     });
                 }
             }
@@ -527,6 +866,232 @@ fn yaml_text(value: &str) -> &str {
     value.trim_matches('"').trim_matches('\'')
 }
 
+/// Read a `group_vars` or `host_vars` YAML or JSON document.
+///
+/// Top-level names stay top-level; a nested mapping or sequence is rendered as
+/// compact JSON so Ansible's replace-by-key precedence survives in the UI.
+/// JSON files are read as JSON and YAML files through the small block parser
+/// below.
+pub fn parse_vars_document(body: &str) -> BTreeMap<String, String> {
+    let trimmed = body.trim_start();
+    let value = if trimmed.starts_with('{') {
+        match serde_json::from_str::<Value>(body) {
+            Ok(value) => value,
+            Err(_) => {
+                let lines = var_lines(body);
+                parse_var_block(&lines, 0, 0).0
+            }
+        }
+    } else {
+        let lines = var_lines(body);
+        let (value, _) = parse_var_block(&lines, 0, 0);
+        value
+    };
+    let mut vars = BTreeMap::new();
+    if let Value::Object(map) = value {
+        for (name, value) in map {
+            vars.insert(name, render_var_value(&value));
+        }
+    }
+    vars
+}
+
+fn render_var_value(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::String(text) => text.clone(),
+        Value::Bool(flag) => flag.to_string(),
+        Value::Number(number) => number.to_string(),
+        Value::Array(_) | Value::Object(_) => serde_json::to_string(value).unwrap_or_default(),
+    }
+}
+
+#[derive(Clone, Copy)]
+struct VarLine<'a> {
+    indent: usize,
+    text: &'a str,
+}
+
+fn var_lines(body: &str) -> Vec<VarLine<'_>> {
+    body.lines()
+        .filter_map(|raw| {
+            let code = strip_yaml_comment(raw);
+            let text = code.trim();
+            if text.is_empty() || text == "---" || text == "..." || text.starts_with('%') {
+                return None;
+            }
+            let indent = code.chars().take_while(|ch| *ch == ' ').count();
+            Some(VarLine { indent, text })
+        })
+        .collect()
+}
+
+/// Remove a `#` comment that is not inside single or double quotes.
+fn strip_yaml_comment(line: &str) -> &str {
+    let mut quote = None;
+    let mut escaped = false;
+    for (index, ch) in line.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match quote {
+            Some('"') if ch == '\\' => escaped = true,
+            Some(active) if ch == active => quote = None,
+            Some(_) => {}
+            None if ch == '"' || ch == '\'' => quote = Some(ch),
+            None if ch == '#' && (index == 0 || line[..index].ends_with([' ', '\t'])) => {
+                return &line[..index];
+            }
+            None => {}
+        }
+    }
+    line
+}
+
+fn parse_var_block(lines: &[VarLine<'_>], start: usize, indent: usize) -> (Value, usize) {
+    if start < lines.len() && lines[start].indent == indent && is_var_item(lines[start].text) {
+        return parse_var_sequence(lines, start, indent);
+    }
+    parse_var_map(lines, start, indent)
+}
+
+fn is_var_item(text: &str) -> bool {
+    text == "-" || text.starts_with("- ")
+}
+
+fn parse_var_map(lines: &[VarLine<'_>], mut index: usize, indent: usize) -> (Value, usize) {
+    let mut map = serde_json::Map::new();
+    while index < lines.len() {
+        let line = lines[index];
+        if line.indent != indent || is_var_item(line.text) {
+            break;
+        }
+        let Some((key, rest)) = split_var_key(line.text) else {
+            index += 1;
+            continue;
+        };
+        let (value, next) = parse_var_value(lines, index + 1, indent, rest);
+        map.insert(key, value);
+        index = next;
+    }
+    (Value::Object(map), index)
+}
+
+fn parse_var_sequence(lines: &[VarLine<'_>], mut index: usize, indent: usize) -> (Value, usize) {
+    let mut items = Vec::new();
+    while index < lines.len() {
+        let line = lines[index];
+        if line.indent != indent || !is_var_item(line.text) {
+            break;
+        }
+        let rest = line.text[1..].trim_start();
+        if rest.is_empty() {
+            let next = index + 1;
+            if next < lines.len() && lines[next].indent > indent {
+                let (value, after) = parse_var_block(lines, next, lines[next].indent);
+                items.push(value);
+                index = after;
+            } else {
+                items.push(Value::Null);
+                index = next;
+            }
+            continue;
+        }
+        if split_var_key(rest).is_some() {
+            // A mapping item starts on the dash line. Rebuild it as a block at
+            // the item's continuation indentation.
+            let child_indent = indent + 2;
+            let mut sub = vec![VarLine {
+                indent: child_indent,
+                text: rest,
+            }];
+            let mut after = index + 1;
+            while after < lines.len() && lines[after].indent > indent {
+                sub.push(lines[after]);
+                after += 1;
+            }
+            let (value, _) = parse_var_map(&sub, 0, child_indent);
+            items.push(value);
+            index = after;
+        } else {
+            items.push(Value::String(parse_var_scalar(rest)));
+            index += 1;
+        }
+    }
+    (Value::Array(items), index)
+}
+
+fn parse_var_value(
+    lines: &[VarLine<'_>],
+    index: usize,
+    indent: usize,
+    rest: &str,
+) -> (Value, usize) {
+    if rest.is_empty() {
+        if index < lines.len() && lines[index].indent > indent {
+            return parse_var_block(lines, index, lines[index].indent);
+        }
+        return (Value::Null, index);
+    }
+    if rest == "|" || rest == ">" || rest.starts_with("|-") || rest.starts_with(">-") {
+        let folded = rest.starts_with('>');
+        let mut parts = Vec::new();
+        let mut after = index;
+        while after < lines.len() && lines[after].indent > indent {
+            parts.push(lines[after].text);
+            after += 1;
+        }
+        let text = if folded {
+            parts.join(" ")
+        } else {
+            parts.join("\n")
+        };
+        return (Value::String(text), after);
+    }
+    (Value::String(parse_var_scalar(rest)), index)
+}
+
+fn split_var_key(text: &str) -> Option<(String, &str)> {
+    let mut quote = None;
+    let mut escaped = false;
+    for (index, ch) in text.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match quote {
+            Some('"') if ch == '\\' => escaped = true,
+            Some(active) if ch == active => quote = None,
+            Some(_) => {}
+            None if ch == '"' || ch == '\'' => quote = Some(ch),
+            None if ch == ':'
+                && (index + 1 == text.len() || text[index + 1..].starts_with(' ')) =>
+            {
+                let key = parse_var_scalar(text[..index].trim());
+                if key.is_empty() {
+                    return None;
+                }
+                return Some((key, text[index + 1..].trim()));
+            }
+            None => {}
+        }
+    }
+    None
+}
+
+fn parse_var_scalar(text: &str) -> String {
+    let value = text.trim();
+    if value.len() >= 2 {
+        let first = value.as_bytes()[0];
+        let last = value.as_bytes()[value.len() - 1];
+        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+            return value[1..value.len() - 1].to_string();
+        }
+    }
+    value.to_string()
+}
+
 fn remember_host(data: &mut InventoryData, name: &str, group: &str) {
     ensure_group(&mut data.groups, group);
     if let Some(existing) = data.hosts.iter_mut().find(|host| host.name == name) {
@@ -538,6 +1103,7 @@ fn remember_host(data: &mut InventoryData, name: &str, group: &str) {
             name: name.to_string(),
             groups: vec![group.to_string()],
             vars: BTreeMap::new(),
+            masked: Vec::new(),
         });
     }
 }
@@ -873,6 +1439,7 @@ pub async fn fetch(
     };
     Ok(NetboxResult {
         body,
+        vars_json: "[]".to_string(),
         collisions,
         dropped_vars,
     })

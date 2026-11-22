@@ -506,6 +506,7 @@ fn insert_inventory(db: &rusqlite::Connection, team_id: &str, admin_saved: bool)
             last_sync_at: String::new(),
             last_sync_status: String::new(),
             last_sync_by: String::new(),
+            vars_json: "[]".into(),
             admin_saved,
         },
     )

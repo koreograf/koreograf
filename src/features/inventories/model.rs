@@ -1,6 +1,17 @@
 use std::collections::BTreeMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+/// One inventory-adjacent `group_vars` or `host_vars` file.
+///
+/// The path is relative to the inventory directory, for example
+/// `group_vars/all/accounts.yml`. The body is kept verbatim so a vaulted file
+/// reaches Ansible unchanged.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InventoryVarFile {
+    pub path: String,
+    pub body: String,
+}
 
 /// One host parsed from an Ansible INI inventory.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -8,6 +19,10 @@ pub struct InventoryHost {
     pub name: String,
     pub groups: Vec<String>,
     pub vars: BTreeMap<String, String>,
+    /// Vaulted `host_vars` files that apply to this host. They are shown as
+    /// masked placeholders and never decrypted.
+    #[serde(skip)]
+    pub masked: Vec<String>,
 }
 
 /// One group parsed from an Ansible INI or YAML inventory.
@@ -16,6 +31,10 @@ pub struct InventoryGroup {
     pub name: String,
     pub children: Vec<String>,
     pub vars: BTreeMap<String, String>,
+    /// Vaulted `group_vars` files that apply to this group. They are shown as
+    /// masked placeholders and never decrypted.
+    #[serde(skip)]
+    pub masked: Vec<String>,
 }
 
 /// Hosts and groups of one or more inventory texts.
@@ -31,7 +50,14 @@ pub struct EffectiveVar {
     pub name: String,
     pub value: String,
     pub origin: String,
+    /// True for the placeholder of a vaulted file. The UI never shows the
+    /// stored ciphertext or a decrypted value.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub masked: bool,
 }
+
+/// The masked value shown for a vaulted `group_vars` or `host_vars` file.
+pub const MASKED_VALUE: &str = "••••••";
 
 pub const DEFAULT_MAX_HOSTS: usize = 2_000;
 pub const MAX_HOSTS_LIMIT: usize = 10_000;
@@ -51,6 +77,8 @@ pub struct NetboxSource {
 #[derive(Clone, Debug)]
 pub struct NetboxResult {
     pub body: String,
+    /// JSON array of inventory-adjacent variables files. A NetBox source has none.
+    pub vars_json: String,
     pub collisions: Vec<String>,
     pub dropped_vars: Vec<String>,
 }

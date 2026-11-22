@@ -183,7 +183,7 @@ pub(crate) trait Backend: Send + Sync {
     fn sync_inventory_sources(
         &self,
         inventory_id: &str,
-        bodies: &[(String, String)],
+        bodies: &[(String, String, String)],
         admin_saved: bool,
         at: &str,
         by: &str,
@@ -861,6 +861,7 @@ impl Backend for SqliteBackend {
             &source.source_json,
             source.credential_id.as_deref(),
             &source.body,
+            &source.vars_json,
         )?;
         inventories::store::refresh_inventory_summary(&tx, &source.inventory_id)?;
         inventories::store::set_inventory_admin_saved(&tx, &source.inventory_id, admin_saved)?;
@@ -891,15 +892,16 @@ impl Backend for SqliteBackend {
     fn sync_inventory_sources(
         &self,
         inventory_id: &str,
-        bodies: &[(String, String)],
+        bodies: &[(String, String, String)],
         admin_saved: bool,
         at: &str,
         by: &str,
     ) -> AppResult<()> {
         let mut conn = lock(&self.conn)?;
         let tx = conn.transaction()?;
-        for (source_id, body) in bodies {
+        for (source_id, body, vars_json) in bodies {
             inventories::store::set_inventory_source_body(&tx, source_id, body)?;
+            inventories::store::set_inventory_source_vars(&tx, source_id, vars_json)?;
         }
         inventories::store::refresh_inventory_summary(&tx, inventory_id)?;
         inventories::store::set_inventory_admin_saved(&tx, inventory_id, admin_saved)?;
@@ -2663,6 +2665,7 @@ impl Backend for PostgresBackend {
                         &item.source_json,
                         &item.credential_id,
                         &(item.admin_saved as i32),
+                        &item.vars_json,
                     ],
                 )
                 .await?;
@@ -2796,6 +2799,7 @@ impl Backend for PostgresBackend {
                         &source.source_json,
                         &source.credential_id,
                         &source.body,
+                        &source.vars_json,
                     ],
                 )
                 .await?;
@@ -2853,18 +2857,24 @@ impl Backend for PostgresBackend {
     fn sync_inventory_sources(
         &self,
         inventory_id: &str,
-        bodies: &[(String, String)],
+        bodies: &[(String, String, String)],
         admin_saved: bool,
         at: &str,
         by: &str,
     ) -> AppResult<()> {
         self.with_client(|mut client| async move {
             let transaction = client.transaction().await?;
-            for (source_id, body) in bodies {
+            for (source_id, body, vars_json) in bodies {
                 transaction
                     .execute(
                         &store::sql::postgres(inventories::store::SET_SOURCE_BODY),
                         &[source_id, body],
+                    )
+                    .await?;
+                transaction
+                    .execute(
+                        &store::sql::postgres(inventories::store::SET_SOURCE_VARS),
+                        &[source_id, vars_json],
                     )
                     .await?;
             }

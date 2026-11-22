@@ -705,6 +705,7 @@ async fn catalog_data_endpoints_return_the_documented_shape() {
         group,
         json!({
             "children": [],
+            "effective_vars": [],
             "host_count": 1,
             "hosts": [{
                 "groups": ["web"],

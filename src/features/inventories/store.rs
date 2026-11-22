@@ -6,24 +6,26 @@ use crate::error::{ApiError, AppResult};
 use crate::store::sql::{self, SqlRow};
 
 pub(crate) const INSERT_INVENTORY: &str = "INSERT INTO inventories (
-        id, team_id, name, body, created_at, source_kind, source_json, credential_id, admin_saved
-     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
+        id, team_id, name, body, created_at, source_kind, source_json, credential_id, admin_saved,
+        vars_json
+     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
 pub(crate) const UPDATE_INVENTORY: &str =
     "UPDATE inventories SET name = ?3, body = ?4 WHERE id = ?1 AND team_id = ?2";
 pub(crate) const LIST_INVENTORIES: &str =
     "SELECT id, team_id, name, body, created_at, source_kind, source_json, credential_id, admin_saved,
-     last_sync_at, last_sync_status, last_sync_by
+     last_sync_at, last_sync_status, last_sync_by, vars_json
      FROM inventories WHERE team_id = ?1 ORDER BY name";
 pub(crate) const INVENTORY_BY_ID: &str =
     "SELECT id, team_id, name, body, created_at, source_kind, source_json, credential_id, admin_saved,
-     last_sync_at, last_sync_status, last_sync_by
+     last_sync_at, last_sync_status, last_sync_by, vars_json
      FROM inventories WHERE id = ?1";
 pub(crate) const SET_INVENTORY_ADMIN_SAVED: &str =
     "UPDATE inventories SET admin_saved = ?2 WHERE id = ?1";
 pub(crate) const SET_INVENTORY_BODY: &str =
     "UPDATE inventories SET body = ?3 WHERE id = ?1 AND team_id = ?2";
 pub(crate) const UPDATE_INVENTORY_SUMMARY: &str = "UPDATE inventories
-     SET body = ?2, source_kind = ?3, source_json = ?4, credential_id = ?5
+     SET body = ?2, source_kind = ?3, source_json = ?4, credential_id = ?5,
+         vars_json = ?6
      WHERE id = ?1";
 pub(crate) const SET_INVENTORY_SYNC_SUCCESS: &str = "UPDATE inventories
      SET last_sync_at = ?2, last_sync_status = 'success', last_sync_by = ?3
@@ -33,17 +35,22 @@ pub(crate) const SET_INVENTORY_SYNC_FAILED: &str = "UPDATE inventories
      WHERE id = ?1";
 
 pub(crate) const INSERT_SOURCE: &str = "INSERT INTO inventory_sources (
-        id, inventory_id, name, kind, source_json, credential_id, body, position, created_at
-     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
+        id, inventory_id, name, kind, source_json, credential_id, body, position, created_at,
+        vars_json
+     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
 pub(crate) const LIST_SOURCES: &str =
-    "SELECT id, inventory_id, name, kind, source_json, credential_id, body, position, created_at
+    "SELECT id, inventory_id, name, kind, source_json, credential_id, body, position, created_at,
+     vars_json
      FROM inventory_sources WHERE inventory_id = ?1 ORDER BY position, created_at";
 pub(crate) const SOURCE_BY_ID: &str =
-    "SELECT id, inventory_id, name, kind, source_json, credential_id, body, position, created_at
+    "SELECT id, inventory_id, name, kind, source_json, credential_id, body, position, created_at,
+     vars_json
      FROM inventory_sources WHERE id = ?1";
 pub(crate) const SET_SOURCE_BODY: &str = "UPDATE inventory_sources SET body = ?2 WHERE id = ?1";
+pub(crate) const SET_SOURCE_VARS: &str =
+    "UPDATE inventory_sources SET vars_json = ?2 WHERE id = ?1";
 pub(crate) const UPDATE_SOURCE: &str = "UPDATE inventory_sources
-     SET name = ?2, source_json = ?3, credential_id = ?4, body = ?5
+     SET name = ?2, source_json = ?3, credential_id = ?4, body = ?5, vars_json = ?6
      WHERE id = ?1";
 pub(crate) const DELETE_SOURCE: &str =
     "DELETE FROM inventory_sources WHERE id = ?1 AND inventory_id = ?2";
@@ -75,7 +82,8 @@ pub(crate) fn insert_inventory(c: &Connection, item: &Inventory) -> AppResult<()
             item.source_kind,
             item.source_json,
             item.credential_id,
-            item.admin_saved as i64
+            item.admin_saved as i64,
+            item.vars_json
         ],
     )?;
     Ok(())
@@ -137,7 +145,8 @@ pub(crate) fn insert_inventory_source(c: &Connection, item: &InventorySource) ->
             item.credential_id,
             item.body,
             item.position,
-            item.created_at
+            item.created_at,
+            item.vars_json
         ],
     )?;
     Ok(())
@@ -161,6 +170,15 @@ pub(crate) fn set_inventory_source_body(c: &Connection, id: &str, body: &str) ->
     Ok(())
 }
 
+pub(crate) fn set_inventory_source_vars(
+    c: &Connection,
+    id: &str,
+    vars_json: &str,
+) -> AppResult<()> {
+    c.execute(SET_SOURCE_VARS, params![id, vars_json])?;
+    Ok(())
+}
+
 pub(crate) fn update_inventory_source(
     c: &Connection,
     id: &str,
@@ -168,10 +186,11 @@ pub(crate) fn update_inventory_source(
     source_json: &str,
     credential_id: Option<&str>,
     body: &str,
+    vars_json: &str,
 ) -> AppResult<()> {
     let changed = c.execute(
         UPDATE_SOURCE,
-        params![id, name, source_json, credential_id, body],
+        params![id, name, source_json, credential_id, body, vars_json],
     )?;
     if changed == 0 {
         return Err(ApiError::NotFound);
@@ -214,22 +233,38 @@ pub(crate) fn set_inventory_sync_failed(c: &Connection, id: &str, by: &str) -> A
 
 pub(crate) fn refresh_inventory_summary(c: &Connection, inventory_id: &str) -> AppResult<()> {
     let sources = list_inventory_sources(c, inventory_id)?;
-    let (kind, source_json, credential_id, body) = summary(&sources);
+    let (kind, source_json, credential_id, body, vars_json) = summary(&sources);
     c.execute(
         UPDATE_INVENTORY_SUMMARY,
-        params![inventory_id, body, kind, source_json, credential_id],
+        params![
+            inventory_id,
+            body,
+            kind,
+            source_json,
+            credential_id,
+            vars_json
+        ],
     )?;
     Ok(())
 }
 
-pub(crate) fn summary(sources: &[InventorySource]) -> (String, String, Option<String>, String) {
+pub(crate) fn summary(
+    sources: &[InventorySource],
+) -> (String, String, Option<String>, String, String) {
     match sources {
-        [] => ("ini".to_string(), "{}".to_string(), None, String::new()),
+        [] => (
+            "ini".to_string(),
+            "{}".to_string(),
+            None,
+            String::new(),
+            "[]".to_string(),
+        ),
         [one] => (
             one.kind.clone(),
             one.source_json.clone(),
             one.credential_id.clone(),
             one.body.clone(),
+            one.vars_json.clone(),
         ),
         many => {
             let body = many
@@ -238,7 +273,13 @@ pub(crate) fn summary(sources: &[InventorySource]) -> (String, String, Option<St
                 .filter(|text| !text.is_empty())
                 .collect::<Vec<_>>()
                 .join("\n");
-            ("mixed".to_string(), "{}".to_string(), None, body)
+            (
+                "mixed".to_string(),
+                "{}".to_string(),
+                None,
+                body,
+                "[]".to_string(),
+            )
         }
     }
 }
@@ -342,6 +383,7 @@ pub(crate) fn row_inventory<R: SqlRow>(row: &R) -> AppResult<Inventory> {
         last_sync_at: row.get(9)?,
         last_sync_status: row.get(10)?,
         last_sync_by: row.get(11)?,
+        vars_json: row.get(12)?,
     })
 }
 
@@ -356,6 +398,7 @@ pub(crate) fn row_inventory_source<R: SqlRow>(row: &R) -> AppResult<InventorySou
         body: row.get(6)?,
         position: i64::from(row.get::<i32>(7)?),
         created_at: row.get(8)?,
+        vars_json: row.get(9)?,
     })
 }
 
@@ -376,6 +419,7 @@ where
                 &source.body,
                 &(source.position as i32),
                 &source.created_at,
+                &source.vars_json,
             ],
         )
         .await?;
@@ -393,11 +437,18 @@ where
         .iter()
         .map(row_inventory_source)
         .collect::<AppResult<Vec<_>>>()?;
-    let (kind, source_json, credential_id, body) = summary(&sources);
+    let (kind, source_json, credential_id, body, vars_json) = summary(&sources);
     client
         .execute(
             &sql::postgres(UPDATE_INVENTORY_SUMMARY),
-            &[&inventory_id, &body, &kind, &source_json, &credential_id],
+            &[
+                &inventory_id,
+                &body,
+                &kind,
+                &source_json,
+                &credential_id,
+                &vars_json,
+            ],
         )
         .await?;
     Ok(())
