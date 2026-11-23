@@ -18,6 +18,7 @@
   "no_playbooks_found_sync_the_git_project_first": "No playbooks found. Sync the Git project first. You can type the path below.",
   "no_vault_credentials_in_this_team": "No vault credentials in this team.",
   "off_uses_the_checkout_from_the_last_sync": "Off uses the checkout from the last sync.",
+  "one_credential_of_each_kind": "One credential of each kind.",
   "one_credential_of_each_kind_choose_vault_credentials": "One credential of each kind. Search a vault credential; it appears here as a pill.",
   "options": "Options",
   "other_credentials": "Other credentials",

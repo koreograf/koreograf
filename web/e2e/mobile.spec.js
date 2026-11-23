@@ -2,7 +2,7 @@
 
 const { expect, test } = require("@playwright/test");
 const { password, username } = require("./env");
-const { post } = require("./api");
+const { post, storeAssistantKey } = require("./api");
 
 async function noHorizontalScroll(page) {
   await expect.poll(
@@ -721,4 +721,56 @@ test("keeps the landscape workflow inspector clear of the canvas toolbar", async
     await expect.poll(() => page.locator("#canvas").getAttribute("data-zoom"), { message: `${where} cannot zoom the canvas` }).not.toBe(zoom);
     await noHorizontalScroll(page);
   }
+});
+
+test("keeps the remove checkbox beside its label and hides the vault hint off Ansible", async ({ page }) => {
+  test.setTimeout(60000);
+  const vaultHint = "One credential of each kind. Search a vault credential; it appears here as a pill.";
+  await signIn(page);
+
+  const saved = await storeAssistantKey(page);
+  expect(saved.status()).toBe(200);
+  await goTo(page, "Settings");
+  await page.getByRole("tab", { name: "Assistant", exact: true }).click();
+  const remove = page.getByRole("checkbox", { name: "Remove", exact: true });
+  await expect(remove).toBeVisible();
+  const row = page.locator("label.field.check").filter({ hasText: "Remove" });
+  await expectTouchTarget(row, "remove secret row");
+  const layout = await remove.evaluate((input) => {
+    const label = input.closest("label.field.check");
+    const text = label.querySelector("span");
+    const box = (node) => {
+      const rect = node.getBoundingClientRect();
+      return { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right };
+    };
+    return {
+      display: getComputedStyle(label).display,
+      input: box(input),
+      text: box(text),
+    };
+  });
+  expect(layout.display).toBe("flex");
+  expect(Math.abs((layout.input.top + layout.input.bottom) / 2 - (layout.text.top + layout.text.bottom) / 2)).toBeLessThanOrEqual(1);
+  expect(layout.text.left).toBeGreaterThanOrEqual(layout.input.right - 1);
+  await noHorizontalScroll(page);
+
+  await goTo(page, "Templates");
+  const openTarget = async (name) => {
+    await page.locator("#template-search").fill(name);
+    await page.getByRole("link", { name, exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByRole("heading", { name: "Edit template" })).toBeVisible();
+    await dialog.getByRole("tab", { name: "Target", exact: true }).click();
+    return dialog;
+  };
+
+  const shell = await openTarget("Healthcheck");
+  await expect(shell.getByText(vaultHint, { exact: true })).toHaveCount(0);
+  await noHorizontalScroll(page);
+  await shell.getByRole("button", { name: "Close" }).click();
+  await expect(shell).toHaveCount(0);
+
+  const ansible = await openTarget("Self-Heal");
+  await expect(ansible.getByText(vaultHint, { exact: true })).toBeVisible();
+  await noHorizontalScroll(page);
 });

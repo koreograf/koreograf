@@ -6,7 +6,7 @@ const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const { password, username } = require("./env");
-const { post } = require("./api");
+const { post, storeAssistantKey } = require("./api");
 
 const catalog = {
   de: {
@@ -1354,4 +1354,88 @@ test("the account page creates a token with a lifetime and shows its expiry", as
   expect(created.scope).toBe("read");
   expect(created.expired).toBe(false);
   expect(typeof created.expires_at).toBe("string");
+});
+
+test("the target hint follows the tool and a stored secret keeps its remove row", async ({ page }) => {
+  const vaultHint = "One credential of each kind. Search a vault credential; it appears here as a pill.";
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await signInInEnglish(page);
+
+  const saved = await storeAssistantKey(page);
+  expect(saved.status()).toBe(200);
+  const teamId = await page.evaluate(async () => (await (await fetch("/api/v1/me")).json()).teams[0].id);
+  const vault = await post(page.request, "/api/v1/credentials", {
+    headers: { "X-Team-Id": teamId },
+    data: {
+      name: `Vault hint ${Date.now()}`,
+      kind: "vault",
+      secret: { password: "vault-pass", vault_id: "hint" },
+    },
+  });
+  expect(vault.status()).toBe(201);
+  await page.getByRole("navigation").getByRole("link", { name: "Settings", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Settings" })).toBeVisible();
+  await page.getByRole("tab", { name: "Assistant", exact: true }).click();
+  const remove = page.getByRole("checkbox", { name: "Remove", exact: true });
+  await expect(remove).toBeVisible();
+  const layout = await remove.evaluate((input) => {
+    const label = input.closest("label.field.check");
+    const text = label.querySelector("span");
+    const box = (node) => {
+      const rect = node.getBoundingClientRect();
+      return { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right };
+    };
+    return {
+      display: getComputedStyle(label).display,
+      align: getComputedStyle(label).alignItems,
+      input: box(input),
+      text: box(text),
+    };
+  });
+  expect(layout.display).toBe("flex");
+  expect(layout.align).toBe("center");
+  expect(Math.abs((layout.input.top + layout.input.bottom) / 2 - (layout.text.top + layout.text.bottom) / 2)).toBeLessThanOrEqual(1);
+  expect(layout.text.left).toBeGreaterThanOrEqual(layout.input.right - 1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1280);
+
+  const openTarget = async (name) => {
+    await page.getByRole("navigation").getByRole("link", { name: "Templates", exact: true }).click();
+    await page.getByRole("link", { name, exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByRole("heading", { name: "Edit template" })).toBeVisible();
+    await dialog.getByRole("tab", { name: "Target", exact: true }).click();
+    return dialog;
+  };
+
+  for (const name of ["Healthcheck", "Infrastruktur-Plan"]) {
+    const dialog = await openTarget(name);
+    await expect(dialog.getByText(vaultHint, { exact: true })).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1280);
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await expect(dialog).toHaveCount(0);
+  }
+
+  const ansible = await openTarget("Self-Heal");
+  await expect(ansible.getByText(vaultHint, { exact: true })).toBeVisible();
+  await expect(ansible.locator("#vault-search")).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1280);
+  await ansible.getByRole("button", { name: "Close" }).click();
+  await expect(ansible).toHaveCount(0);
+
+  const switched = await openTarget("Healthcheck");
+  await switched.getByRole("tab", { name: "General", exact: true }).click();
+  const tool = switched.locator('select[name="tool"]');
+  await tool.selectOption("ansible");
+  await switched.getByRole("tab", { name: "Target", exact: true }).click();
+  await expect(switched.getByText(vaultHint, { exact: true })).toBeVisible();
+  await expect(switched.locator("#vault-search")).toBeVisible();
+  await switched.getByRole("tab", { name: "General", exact: true }).click();
+  await tool.selectOption("shell");
+  await switched.getByRole("tab", { name: "Target", exact: true }).click();
+  await expect(switched.getByText(vaultHint, { exact: true })).toHaveCount(0);
+  await switched.getByRole("button", { name: "Close" }).click();
+  const discard = page.getByRole("dialog").filter({ has: page.getByRole("heading", { name: "Discard unsaved changes?" }) });
+  await expect(discard).toBeVisible();
+  await discard.getByRole("button", { name: "OK", exact: true }).click();
+  await expect(switched).toHaveCount(0);
 });

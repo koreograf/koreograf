@@ -1,6 +1,7 @@
 import { chipBox } from "./chips.js";
 import { CREDENTIAL_KINDS, credentialKindLabel } from "./credentials.js";
 import { esc, h, selectOptions } from "./dom.js";
+import { t } from "./i18n.js";
 import { verbosityLabel } from "./format.js";
 
 export const TOOL_CREDENTIAL_KINDS = {
@@ -21,6 +22,23 @@ export function credentialRows(credentials, tool, selectedIds = []) {
   const offered = toolCredentialKinds(tool);
   const selected = new Set(selectedIds || []);
   return credentials.filter((row) => offered.has(row.kind) || selected.has(row.id));
+}
+
+export function credentialHintKey(tool, shownKinds = []) {
+  const offered = tool ? toolCredentialKinds(tool) : null;
+  if (!offered || offered.has("vault")) return "one_credential_of_each_kind_choose_vault_credentials";
+  return shownKinds.length ? "one_credential_of_each_kind" : "";
+}
+
+export function refreshCredentialHint(form, tool) {
+  const hint = form.querySelector("#template-credential-hint");
+  if (!hint) return;
+  const shownKinds = [...form.querySelectorAll("[data-credential-field]")]
+    .filter((field) => !field.hidden)
+    .map((field) => field.dataset.credentialField);
+  const key = credentialHintKey(tool, shownKinds);
+  hint.hidden = !key;
+  hint.textContent = key ? t(key) : "";
 }
 
 function credentialLabel(row) { return `${row.name} (${credentialKindLabel(row.kind)})`; }
@@ -70,10 +88,12 @@ export function credentialFields(credentials, selectedIds, tool = "", options = 
   const present = new Set(credentials.map((row) => row.kind));
   const offered = tool ? toolCredentialKinds(tool) : null;
   const toolKinds = new Set(Object.values(TOOL_CREDENTIAL_KINDS).flat());
-  const selects = CREDENTIAL_KINDS
+  const selectKinds = CREDENTIAL_KINDS
     .map((row) => row[0])
     .filter((kind) => kind !== "vault" && present.has(kind))
-    .filter((kind) => !offered || toolKinds.has(kind))
+    .filter((kind) => !offered || toolKinds.has(kind));
+  const shownKinds = selectKinds.filter((kind) => !offered || offered.has(kind));
+  const selects = selectKinds
     .map((kind) => {
       const rows = credentials.filter((row) => row.kind === kind);
       const current = rows.find((row) => selected.has(row.id));
@@ -103,7 +123,9 @@ export function credentialFields(credentials, selectedIds, tool = "", options = 
   const legacy = tool
     ? `<div class="field" id="template-legacy-credentials" hidden><span>${h("other_credentials")}</span><div class="chips" id="legacy-pills"></div></div>`
     : "";
-  return `${empty}<p class="small muted">${h("one_credential_of_each_kind_choose_vault_credentials")}</p>${grid}${vault}${legacy}`;
+  const hintKey = credentialHintKey(tool, shownKinds);
+  const hint = `<p class="small muted" id="template-credential-hint"${hintKey ? "" : " hidden"}>${hintKey ? h(hintKey) : ""}</p>`;
+  return `${empty}${hint}${grid}${vault}${legacy}`;
 }
 
 export function readCredentialIds(form, tool) {

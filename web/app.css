@@ -528,8 +528,8 @@ select.fit { width: max-content; min-width: 8rem; max-width: 100%; field-sizing:
 .chip-error:empty,
 .field-error:empty { display: none; }
 textarea.secret-mask { -webkit-text-security: disc; }
-.field.check { justify-items: start; }
-.field.check input { width: 1.15rem; height: 1.15rem; }
+.field.check { display: flex; align-items: center; gap: 8px; }
+.field.check input { width: 1.15rem; height: 1.15rem; margin: 0; }
 .check-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));

@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const { join } = require("node:path");
 const { pathToFileURL } = require("node:url");
 const test = require("node:test");
+const { catalog } = require("./catalog.js");
 
 const load = (path) => import(pathToFileURL(join(__dirname, "..", "js", path)).href);
 
@@ -56,6 +57,40 @@ test("the template credential kinds follow the tool", async () => {
   assert.deepEqual(TOOL_CREDENTIAL_KINDS.ansible, ["ssh", "vault"]);
   assert.deepEqual(TOOL_CREDENTIAL_KINDS.opentofu, ["aws", "azure", "gce", "vmware", "openstack", "kubernetes", "env"]);
   assert.deepEqual(TOOL_CREDENTIAL_KINDS.shell, ["ssh", "env"]);
+});
+
+test("the credential hint mentions vault only when the tool offers it", async () => {
+  const i18n = await load("core/i18n.js");
+  i18n.setCatalog("en", catalog("en"));
+  await i18n.setLang("en");
+  const { credentialFields, credentialHintKey } = await load("core/template-fields.js");
+  const en = catalog("en");
+  const vaultHint = en.one_credential_of_each_kind_choose_vault_credentials;
+  const plainHint = en.one_credential_of_each_kind;
+  const credentials = [
+    { id: "ssh-1", kind: "ssh", name: "Machine" },
+    { id: "aws-1", kind: "aws", name: "Cloud" },
+    { id: "vault-1", kind: "vault", name: "Secrets" },
+  ];
+
+  const ansible = credentialFields(credentials, [], "ansible");
+  assert.ok(ansible.includes(vaultHint), "ansible lost the vault hint");
+  assert.match(ansible, /id="template-credential-hint"/, "the hint has no id for the tool switch");
+  assert.ok(credentialFields(credentials, [], "").includes(vaultHint), "the tool-less form lost the vault hint");
+  for (const tool of ["opentofu", "shell"]) {
+    const html = credentialFields(credentials, [], tool);
+    assert.ok(!html.includes(vaultHint), `${tool} still mentions vault search`);
+    assert.ok(html.includes(plainHint), `${tool} lost its short hint`);
+  }
+
+  const nothingToChoose = credentialFields([{ id: "vault-1", kind: "vault", name: "Secrets" }], [], "opentofu");
+  assert.ok(!nothingToChoose.includes(vaultHint), "opentofu with nothing to choose mentions vault");
+  assert.ok(!nothingToChoose.includes(plainHint), "opentofu with nothing to choose still shows a hint");
+  assert.equal(credentialHintKey("ansible", []), "one_credential_of_each_kind_choose_vault_credentials");
+  assert.equal(credentialHintKey("", []), "one_credential_of_each_kind_choose_vault_credentials");
+  assert.equal(credentialHintKey("opentofu", ["aws"]), "one_credential_of_each_kind");
+  assert.equal(credentialHintKey("shell", ["ssh"]), "one_credential_of_each_kind");
+  assert.equal(credentialHintKey("opentofu", []), "");
 });
 
 test("the shared ansible fields keep the template control layout", async () => {
