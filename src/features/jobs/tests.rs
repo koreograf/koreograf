@@ -1195,6 +1195,31 @@ fn tofu_events_stay_out_of_the_raw_log_and_keep_their_own_stream() {
 }
 
 #[test]
+fn structured_events_do_not_count_toward_the_output_cap() {
+    let state = page_state("tofu-bytes");
+    {
+        let db = state.db().unwrap();
+        crate::features::jobs::store::insert_event(&db, "job", "stdout", "plain").unwrap();
+        crate::features::jobs::store::insert_event(
+            &db,
+            "job",
+            crate::ansible_events::STREAM,
+            r#"{"type":"playbook_end"}"#,
+        )
+        .unwrap();
+        crate::features::jobs::store::insert_event(
+            &db,
+            "job",
+            crate::tofu_events::STREAM,
+            r#"{"type":"planned_change","action":"create","addr":"terraform_data.web"}"#,
+        )
+        .unwrap();
+    }
+    assert_eq!(state.store().events_bytes("job").unwrap(), 6);
+    let _ = std::fs::remove_dir_all(&state.cfg.data_dir);
+}
+
+#[test]
 fn shell_jobs_invent_no_structured_events() {
     let state = page_state("shell-raw");
     {

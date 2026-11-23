@@ -331,8 +331,10 @@ pub(crate) fn tofu_events_for_job(
     db: &dyn crate::backend::Backend,
     job_id: &str,
 ) -> AppResult<Vec<StructuredEventResponse>> {
-    // The final row may be one `limit` marker beyond the event budget.
-    let limit = (crate::tofu_events::MAX_EVENTS + 2) as i64;
+    // A late summary chunk and the final `limit` marker sit beyond the
+    // per-event budget.
+    let limit =
+        (crate::tofu_events::MAX_EVENTS + crate::tofu_events::MAX_SUMMARY_EVENTS + 2) as i64;
     let rows = db.tofu_events_after(job_id, 0, limit)?;
     Ok(rows
         .iter()

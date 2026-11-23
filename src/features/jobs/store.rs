@@ -273,11 +273,11 @@ pub(crate) fn events_bytes_sql(dialect: Dialect) -> &'static str {
     match dialect {
         Dialect::Sqlite => {
             "SELECT COALESCE(SUM(LENGTH(CAST(line AS BLOB)) + 1), 0) FROM job_events
-             WHERE job_id = ?1 AND stream <> 'ansible'"
+             WHERE job_id = ?1 AND stream NOT IN ('ansible', 'tofu')"
         }
         Dialect::Postgres => {
             "SELECT COALESCE(SUM(octet_length(line) + 1), 0) FROM job_events
-             WHERE job_id = ?1 AND stream <> 'ansible'"
+             WHERE job_id = ?1 AND stream NOT IN ('ansible', 'tofu')"
         }
     }
 }

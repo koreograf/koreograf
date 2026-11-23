@@ -18,6 +18,10 @@ pub(crate) const MAX_FIELD_CHARS: usize = 4_000;
 pub(crate) const MAX_EVENTS: usize = 2_000;
 /// The whole structured stream stays under this many bytes.
 pub(crate) const MAX_BYTES: usize = 4 * 1024 * 1024;
+/// Late `change_summary` events keep their own small budget, so a very large
+/// apply still ends with a complete add / change / destroy summary.
+pub(crate) const MAX_SUMMARY_EVENTS: usize = 16;
+const MAX_SUMMARY_BYTES: usize = 64 * 1024;
 /// A single JSON line above this is dropped instead of parsed.
 pub(crate) const MAX_LINE_BYTES: usize = 64 * 1024;
 
@@ -47,6 +51,8 @@ pub(crate) struct Capture {
     scrub: Vec<String>,
     count: usize,
     bytes: usize,
+    summary_count: usize,
+    summary_bytes: usize,
     limited: bool,
 }
 
@@ -56,6 +62,8 @@ impl Capture {
             scrub,
             count: 0,
             bytes: 0,
+            summary_count: 0,
+            summary_bytes: 0,
             limited: false,
         }
     }
@@ -195,15 +203,26 @@ impl Capture {
         }
         let line = serde_json::to_string(&Value::Object(out)).ok()?;
         Some(Parsed {
-            structured: self.reserve(line),
+            structured: self.reserve(line, kind),
             human,
         })
     }
 
-    /// Stores one bounded event or one final limit marker.
-    fn reserve(&mut self, line: String) -> Option<String> {
+    /// Stores one bounded event or one final limit marker. A late
+    /// `change_summary` uses its own budget so the summary survives the cap.
+    fn reserve(&mut self, line: String, kind: &str) -> Option<String> {
         if self.limited {
-            return None;
+            if kind != "change_summary" {
+                return None;
+            }
+            if self.summary_count >= MAX_SUMMARY_EVENTS
+                || self.summary_bytes.saturating_add(line.len()) > MAX_SUMMARY_BYTES
+            {
+                return None;
+            }
+            self.summary_count += 1;
+            self.summary_bytes = self.summary_bytes.saturating_add(line.len());
+            return Some(line);
         }
         if self.count >= MAX_EVENTS || self.bytes.saturating_add(line.len()) > MAX_BYTES {
             self.limited = true;
@@ -473,6 +492,27 @@ mod tests {
             r#"{"type":"planned_change","change":{"resource":{"addr":"terraform_data.later"},"action":"create"}}"#,
         );
         assert!(later.expect("later").structured.is_none());
+        let summary = capture
+            .accept(
+                r#"{"type":"change_summary","changes":{"add":7,"change":0,"remove":0,"operation":"apply"}}"#,
+            )
+            .expect("summary after limit");
+        assert!(summary
+            .structured
+            .as_deref()
+            .is_some_and(|line| line.contains("\"add\":7")));
+        for _ in 0..MAX_SUMMARY_EVENTS {
+            let _ = capture.accept(
+                r#"{"type":"change_summary","changes":{"add":1,"change":0,"remove":0,"operation":"apply"}}"#,
+            );
+        }
+        assert!(capture
+            .accept(
+                r#"{"type":"change_summary","changes":{"add":1,"change":0,"remove":0,"operation":"apply"}}"#,
+            )
+            .expect("summary")
+            .structured
+            .is_none());
     }
 
     #[test]
