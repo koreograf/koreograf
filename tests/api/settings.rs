@@ -3727,6 +3727,18 @@ fn seed_glance_rows(
         &finished,
         Some(&finished),
     );
+    // More than a hundred newer successful runs must not hide the one failed
+    // run from the count or the short list.
+    for index in 0..105 {
+        insert_run(
+            &format!("glance-run-recent-a-{index}"),
+            "glance-workflow-a",
+            team,
+            "successful",
+            &finished,
+            Some(&finished),
+        );
+    }
 
     (oldest, future, missed)
 }

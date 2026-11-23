@@ -292,6 +292,12 @@ pub(crate) trait Backend: Send + Sync {
         workflow_id: &str,
         limit: i64,
     ) -> AppResult<Vec<WorkflowJob>>;
+    fn glance_workflow_runs(
+        &self,
+        team_id: &str,
+        cutoff: &str,
+        limit: i64,
+    ) -> AppResult<workflows::store::GlanceWorkflowRuns>;
     fn insert_workflow_job(&self, item: &WorkflowJob) -> AppResult<()>;
     fn set_workflow_status(&self, id: &str, status: &str, finish: bool) -> AppResult<()>;
     fn insert_workflow_node(&self, workflow_job_id: &str, node_id: &str) -> AppResult<()>;
@@ -1248,6 +1254,16 @@ impl Backend for SqliteBackend {
     ) -> AppResult<Vec<WorkflowJob>> {
         let conn = lock(&self.conn)?;
         workflows::store::list_workflow_jobs(&conn, team_id, workflow_id, limit)
+    }
+
+    fn glance_workflow_runs(
+        &self,
+        team_id: &str,
+        cutoff: &str,
+        limit: i64,
+    ) -> AppResult<workflows::store::GlanceWorkflowRuns> {
+        let conn = lock(&self.conn)?;
+        workflows::store::glance_workflow_runs(&conn, team_id, cutoff, limit)
     }
 
     fn insert_workflow_job(&self, item: &WorkflowJob) -> AppResult<()> {
@@ -4116,6 +4132,40 @@ impl Backend for PostgresBackend {
             rows.iter()
                 .map(workflows::store::row_workflow_job)
                 .collect()
+        })
+    }
+
+    fn glance_workflow_runs(
+        &self,
+        team_id: &str,
+        cutoff: &str,
+        limit: i64,
+    ) -> AppResult<workflows::store::GlanceWorkflowRuns> {
+        let limit = limit.clamp(1, 100);
+        self.with_client(|client| async move {
+            let row = client
+                .query_one(
+                    &store::sql::postgres(workflows::store::WORKFLOW_GLANCE_COUNTS),
+                    &[&team_id, &cutoff],
+                )
+                .await?;
+            let running: i64 = row.get(0);
+            let failed: i64 = row.get(1);
+            let rows = client
+                .query(
+                    &store::sql::postgres(&workflows::store::workflow_glance_items_sql()),
+                    &[&team_id, &cutoff, &limit],
+                )
+                .await?;
+            let items = rows
+                .iter()
+                .map(workflows::store::row_workflow_job)
+                .collect::<AppResult<Vec<_>>>()?;
+            Ok(workflows::store::GlanceWorkflowRuns {
+                running,
+                failed,
+                items,
+            })
         })
     }
 

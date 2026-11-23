@@ -632,11 +632,15 @@ fn overview_glance(state: &Shared, team: &str) -> AppResult<OverviewGlance> {
     } = state.store().glance_jobs(team, 8)?;
     let cutoff = (Utc::now() - ChronoDuration::days(HOST_STALE_AFTER_DAYS))
         .to_rfc3339_opts(SecondsFormat::Secs, true);
+    let failed_cutoff = (Utc::now() - ChronoDuration::hours(WORKFLOW_FAILED_WINDOW_HOURS))
+        .to_rfc3339_opts(SecondsFormat::Secs, true);
     let hosts = state.store().glance_hosts(team, &cutoff, 8)?;
     let schedules = state.store().list_team_schedules(team)?;
     let projects = state.store().list_projects(team)?;
     let inventories = state.store().list_inventories(team)?;
-    let workflow_runs = state.store().list_workflow_jobs(team, "", 100)?;
+    let workflows = state
+        .store()
+        .glance_workflow_runs(team, &failed_cutoff, 8)?;
 
     let global_limit = crate::config::effective_max_concurrent_jobs(state.cfg.max_concurrent_jobs);
     let team_limit = crate::config::effective_max_concurrent_jobs_per_team(
@@ -691,27 +695,9 @@ fn overview_glance(state: &Shared, team: &str) -> AppResult<OverviewGlance> {
         })
         .collect();
 
-    let mut running_runs: Vec<&db::WorkflowJob> = workflow_runs
+    let workflow_items = workflows
+        .items
         .iter()
-        .filter(|run| run.status == "running")
-        .collect();
-    running_runs.sort_by(|a, b| a.created_at.cmp(&b.created_at));
-    let failed_cutoff = (Utc::now() - ChronoDuration::hours(WORKFLOW_FAILED_WINDOW_HOURS))
-        .to_rfc3339_opts(SecondsFormat::Secs, true);
-    let failed_runs: Vec<&db::WorkflowJob> = workflow_runs
-        .iter()
-        .filter(|run| {
-            run.status == "failed"
-                && run.finished_at.as_deref().unwrap_or(&run.created_at) >= failed_cutoff.as_str()
-        })
-        .collect();
-    let running_count = rows(i64::try_from(running_runs.len()).unwrap_or(i64::MAX));
-    let failed_count = rows(i64::try_from(failed_runs.len()).unwrap_or(i64::MAX));
-    let workflow_items = running_runs
-        .iter()
-        .take(5)
-        .chain(failed_runs.iter().take(5))
-        .take(8)
         .map(|run| GlanceWorkflowRun {
             id: run.id.clone(),
             workflow_id: run.workflow_id.clone(),
@@ -770,8 +756,8 @@ fn overview_glance(state: &Shared, team: &str) -> AppResult<OverviewGlance> {
             inventories: inventory_items,
         },
         workflows: GlanceWorkflowSummary {
-            running: running_count,
-            failed: failed_count,
+            running: rows(workflows.running),
+            failed: rows(workflows.failed),
             failed_window_hours: rows(WORKFLOW_FAILED_WINDOW_HOURS),
             items: workflow_items,
         },

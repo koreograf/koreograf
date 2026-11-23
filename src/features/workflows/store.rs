@@ -100,6 +100,58 @@ pub(crate) const WORKFLOW_NODES: &str =
 pub(crate) const WORKFLOW_JOBS_BUSY: &str =
     "SELECT COUNT(*) FROM workflow_jobs WHERE status IN ('pending', 'running')";
 
+/// Running runs plus failed runs that finished inside the window. The
+/// dashboard counts the same rows without the list limit, so a busy team does
+/// not undercount or lose a run behind older history.
+pub(crate) const WORKFLOW_GLANCE_COUNTS: &str = "SELECT
+        COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0),
+        COALESCE(SUM(CASE WHEN status = 'failed'
+            AND COALESCE(finished_at, created_at) >= ?2 THEN 1 ELSE 0 END), 0)
+     FROM workflow_jobs WHERE team_id = ?1";
+
+pub(crate) fn workflow_glance_items_sql() -> String {
+    format!(
+        "SELECT {WORKFLOW_JOB_COLUMNS} FROM workflow_jobs
+         WHERE team_id = ?1
+           AND (status = 'running'
+             OR (status = 'failed' AND COALESCE(finished_at, created_at) >= ?2))
+         ORDER BY CASE WHEN status = 'running' THEN 0 ELSE 1 END,
+                  CASE WHEN status = 'running' THEN created_at END ASC,
+                  CASE WHEN status = 'failed' THEN created_at END DESC,
+                  id
+         LIMIT ?3"
+    )
+}
+
+pub(crate) struct GlanceWorkflowRuns {
+    pub(crate) running: i64,
+    pub(crate) failed: i64,
+    pub(crate) items: Vec<WorkflowJob>,
+}
+
+pub(crate) fn glance_workflow_runs(
+    c: &Connection,
+    team_id: &str,
+    cutoff: &str,
+    limit: i64,
+) -> AppResult<GlanceWorkflowRuns> {
+    let counts = sql::sqlite_opt(c, WORKFLOW_GLANCE_COUNTS, params![team_id, cutoff], |row| {
+        Ok((SqlRow::get::<i64>(row, 0)?, SqlRow::get::<i64>(row, 1)?))
+    })?;
+    let (running, failed) = counts.unwrap_or((0, 0));
+    let items = sql::sqlite_all(
+        c,
+        &workflow_glance_items_sql(),
+        params![team_id, cutoff, limit.clamp(1, 100)],
+        sqlite_row_workflow_job,
+    )?;
+    Ok(GlanceWorkflowRuns {
+        running,
+        failed,
+        items,
+    })
+}
+
 pub(crate) fn insert_workflow(c: &Connection, item: &Workflow) -> AppResult<()> {
     c.execute(
         INSERT_WORKFLOW,
