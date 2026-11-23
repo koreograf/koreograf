@@ -238,6 +238,13 @@ pub(crate) trait Backend: Send + Sync {
     fn prune_activity(&self, team_id: &str, keep: i64) -> AppResult<()>;
     fn job(&self, id: &str) -> AppResult<Option<Job>>;
     fn list_jobs(&self, team_id: &str, query: &JobQuery) -> AppResult<(Vec<Job>, i64)>;
+    fn glance_jobs(&self, team_id: &str, limit: i64) -> AppResult<jobs::store::GlanceJobs>;
+    fn glance_hosts(
+        &self,
+        team_id: &str,
+        cutoff: &str,
+        limit: i64,
+    ) -> AppResult<jobs::store::GlanceHosts>;
     fn insert_job(&self, item: &Job) -> AppResult<()>;
     fn mark_running(&self, id: &str) -> AppResult<bool>;
     fn set_failed_hosts(&self, id: &str, failed_hosts: &str) -> AppResult<()>;
@@ -1103,6 +1110,21 @@ impl Backend for SqliteBackend {
     fn list_jobs(&self, team_id: &str, query: &JobQuery) -> AppResult<(Vec<Job>, i64)> {
         let conn = lock(&self.conn)?;
         jobs::store::list_jobs(&conn, team_id, query)
+    }
+
+    fn glance_jobs(&self, team_id: &str, limit: i64) -> AppResult<jobs::store::GlanceJobs> {
+        let conn = lock(&self.conn)?;
+        jobs::store::glance_jobs(&conn, team_id, limit)
+    }
+
+    fn glance_hosts(
+        &self,
+        team_id: &str,
+        cutoff: &str,
+        limit: i64,
+    ) -> AppResult<jobs::store::GlanceHosts> {
+        let conn = lock(&self.conn)?;
+        jobs::store::glance_hosts(&conn, team_id, cutoff, limit)
     }
 
     fn insert_job(&self, item: &Job) -> AppResult<()> {
@@ -3638,6 +3660,91 @@ impl Backend for PostgresBackend {
                 .await?
                 .get(0);
             Ok((items, total))
+        })
+    }
+
+    fn glance_jobs(&self, team_id: &str, limit: i64) -> AppResult<jobs::store::GlanceJobs> {
+        let limit = limit.clamp(1, 100);
+        self.with_client(|client| async move {
+            let counts = client
+                .query(
+                    &store::sql::postgres(jobs::store::BUSY_JOB_COUNTS),
+                    &[&team_id],
+                )
+                .await?;
+            let mut running = 0;
+            let mut pending = 0;
+            for row in &counts {
+                let status: String = row.get(0);
+                let count: i64 = row.get(1);
+                match status.as_str() {
+                    "running" => running = count,
+                    "pending" => pending = count,
+                    _ => {}
+                }
+            }
+            let oldest_pending_at: Option<String> = client
+                .query_opt(
+                    &store::sql::postgres(jobs::store::OLDEST_PENDING_JOB),
+                    &[&team_id],
+                )
+                .await?
+                .map(|row| row.get(0));
+            let global_running: i64 = client
+                .query_one(&store::sql::postgres(jobs::store::GLOBAL_RUNNING_JOBS), &[])
+                .await?
+                .get(0);
+            let rows = client
+                .query(
+                    &store::sql::postgres(&jobs::store::busy_jobs_sql()),
+                    &[&team_id, &limit],
+                )
+                .await?;
+            let items = rows
+                .iter()
+                .map(jobs::store::row_job)
+                .collect::<AppResult<Vec<_>>>()?;
+            Ok(jobs::store::GlanceJobs {
+                running,
+                pending,
+                global_running,
+                oldest_pending_at,
+                items,
+            })
+        })
+    }
+
+    fn glance_hosts(
+        &self,
+        team_id: &str,
+        cutoff: &str,
+        limit: i64,
+    ) -> AppResult<jobs::store::GlanceHosts> {
+        let limit = limit.clamp(1, 100);
+        self.with_client(|client| async move {
+            let row = client
+                .query_one(
+                    &store::sql::postgres(jobs::store::HOST_GLANCE_COUNTS),
+                    &[&team_id, &cutoff],
+                )
+                .await?;
+            let failed: i64 = row.get(0);
+            let stale: i64 = row.get(1);
+            let rows = client
+                .query(
+                    &store::sql::postgres(&jobs::store::host_glance_sql()),
+                    &[&team_id, &cutoff, &limit],
+                )
+                .await?;
+            let items = rows
+                .iter()
+                .map(jobs::store::row_glance_host)
+                .collect::<AppResult<Vec<_>>>()?;
+            Ok(jobs::store::GlanceHosts {
+                failed,
+                stale,
+                items,
+            })
         })
     }
 

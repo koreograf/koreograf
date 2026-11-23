@@ -70,6 +70,145 @@ export function cacheClearButton(owner) {
   return owner ? `<button class="btn danger" type="button" data-cache-clear>${h("clear_cache")}</button>` : "";
 }
 
+export function waitedText(value) {
+  if (!value) return "";
+  const from = Date.parse(value);
+  if (Number.isNaN(from)) return "";
+  const secs = Math.max(0, Math.round((Date.now() - from) / 1000));
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return mins % 60 ? `${hours}h ${String(mins % 60).padStart(2, "0")}m` : `${hours}h`;
+  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+}
+
+function glanceStat(value, label, id) {
+  return `<div class="stat"${id ? ` data-glance="${esc(id)}"` : ""}><strong>${esc(value)}</strong><span class="small muted">${h(label)}</span></div>`;
+}
+
+function glanceCard(id, title, { links = [], body = "" } = {}) {
+  const actions = links
+    .map((link) => `<a class="btn compact" href="${esc(link.href)}">${h(link.label)}</a>`)
+    .join("");
+  return `<section class="card" data-glance-card="${esc(id)}">
+    <div class="spread"><h2>${h(title)}</h2>${actions ? `<div class="row">${actions}</div>` : ""}</div>
+    ${body}
+  </section>`;
+}
+
+function queueCard(item) {
+  const jobs = item || {};
+  const rows = (jobs.items || []).map((job) => `<tr>
+    <td><a href="#/jobs/${encodeURIComponent(job.id)}">${esc(job.name)}</a></td>
+    <td>${pill(job.status)}</td>
+    <td class="small muted">${esc(when(job.created_at))}</td>
+  </tr>`);
+  const oldest = jobs.oldest_pending_at
+    ? `<p class="small muted">${h("oldest_pending_waited", { duration: waitedText(jobs.oldest_pending_at) })}</p>`
+    : `<p class="small muted">${h("no_pending_job")}</p>`;
+  return glanceCard("queue", "queue", {
+    links: [
+      { href: "#/jobs?status=pending", label: "pending" },
+      { href: "#/jobs?status=running", label: "running" },
+    ],
+    body: `<div class="row">${glanceStat(Number(jobs.running) || 0, "running", "queue-running")}${glanceStat(Number(jobs.pending) || 0, "pending", "queue-pending")}</div>
+      ${oldest}
+      ${rows.length ? table([t("name"), t("status"), t("created")], rows) : `<p class="small muted">${h("no_open_jobs")}</p>`}`,
+  });
+}
+
+function concurrencyCard(item) {
+  const use = item || {};
+  return glanceCard("concurrency", "concurrency", {
+    body: `<div class="row">${glanceStat(`${Number(use.team_running) || 0} / ${Number(use.team_limit) || 0}`, "team_slots", "team-slots")}${glanceStat(`${Number(use.global_running) || 0} / ${Number(use.global_limit) || 0}`, "global_slots", "global-slots")}</div>
+      <p class="small muted">${h("concurrency_help")}</p>`,
+  });
+}
+
+function schedulesCard(item) {
+  const schedules = item || {};
+  const rows = (schedules.items || []).map((entry) => `<tr>
+    <td><a href="#/schedules">${esc(entry.name)}</a></td>
+    <td>${esc(entry.target_name || "—")}</td>
+    <td class="small muted">${entry.next_run_at ? esc(when(entry.next_run_at)) : "—"}</td>
+    <td>${entry.missed_at ? `<span class="pill warn">${h("schedule_missed_state")}</span>` : ""}</td>
+  </tr>`);
+  const next = schedules.next_run_at ? esc(when(schedules.next_run_at)) : h("schedule_no_upcoming");
+  return glanceCard("schedules", "upcoming_schedules", {
+    links: [{ href: "#/schedules", label: "schedules" }],
+    body: `<div class="row">${glanceStat(Number(schedules.missed_count) || 0, "schedule_missed_state", "missed-schedules")}</div>
+      <p class="small muted">${h("next_run")}: ${next}</p>
+      ${rows.length ? table([t("name"), t("target"), t("next_run"), t("status")], rows) : `<p class="small muted">${h("no_upcoming_schedules")}</p>`}`,
+  });
+}
+
+function hostsCard(item) {
+  const hosts = item || {};
+  const rows = (hosts.items || []).map((entry) => `<tr>
+    <td><a class="mono" href="#/inventories/${encodeURIComponent(entry.inventory_id)}/hosts/${encodeURIComponent(entry.host)}">${esc(entry.host)}</a></td>
+    <td>${esc(entry.inventory_name || "—")}</td>
+    <td>${pill(entry.result)}</td>
+    <td class="small muted">${esc(when(entry.ts))}</td>
+  </tr>`);
+  return glanceCard("hosts", "problem_hosts", {
+    links: [{ href: "#/inventories", label: "inventories" }],
+    body: `<div class="row">${glanceStat(Number(hosts.failed) || 0, "failed_hosts", "failed-hosts")}${glanceStat(Number(hosts.stale) || 0, "stale_hosts", "stale-hosts")}</div>
+      <p class="small muted">${h("hosts_stale_after_days", { days: Number(hosts.stale_after_days) || 7 })}</p>
+      ${rows.length ? table([t("host"), t("inventory"), t("run_result"), t("last_run")], rows) : `<p class="small muted">${h("no_problem_hosts")}</p>`}`,
+  });
+}
+
+function syncsCard(item) {
+  const syncs = item || {};
+  const projects = syncs.projects || [];
+  const inventories = syncs.inventories || [];
+  const row = (entry, kind, href) => `<tr>
+    <td><a href="${href}">${esc(entry.name)}</a></td>
+    <td>${h(kind)}</td>
+    <td class="small muted">${entry.last_sync_at ? esc(when(entry.last_sync_at)) : h("never")}</td>
+  </tr>`;
+  const rows = [
+    ...projects.slice(0, 5).map((entry) => row(entry, "project", `#/projects/${encodeURIComponent(entry.id)}`)),
+    ...inventories.slice(0, 5).map((entry) => row(entry, "inventory", `#/inventories/${encodeURIComponent(entry.id)}`)),
+  ];
+  return glanceCard("syncs", "failed_syncs", {
+    links: [
+      { href: "#/projects", label: "projects" },
+      { href: "#/inventories", label: "inventories" },
+    ],
+    body: `<div class="row">${glanceStat(projects.length, "projects", "failed-projects")}${glanceStat(inventories.length, "inventories", "failed-inventories")}</div>
+      <p class="small muted">${h("last_successful_sync_hint")}</p>
+      ${rows.length ? table([t("name"), t("type"), t("last_sync")], rows) : `<p class="small muted">${h("no_failed_syncs")}</p>`}`,
+  });
+}
+
+function workflowsCard(item) {
+  const workflows = item || {};
+  const rows = (workflows.items || []).map((entry) => `<tr>
+    <td><a href="#/runs/${encodeURIComponent(entry.id)}">${esc(entry.name)}</a></td>
+    <td>${entry.workflow_id ? `<a href="#/workflows/${encodeURIComponent(entry.workflow_id)}">${h("workflow")}</a>` : "—"}</td>
+    <td>${pill(entry.status)}</td>
+    <td class="small muted">${esc(when(entry.created_at))}</td>
+  </tr>`);
+  return glanceCard("workflows", "workflow_runs", {
+    links: [{ href: "#/workflows", label: "workflows" }],
+    body: `<div class="row">${glanceStat(Number(workflows.running) || 0, "running", "running-runs")}${glanceStat(Number(workflows.failed) || 0, "failed", "failed-runs")}</div>
+      ${rows.length ? table([t("run"), t("workflow"), t("status"), t("created")], rows) : `<p class="small muted">${h("no_active_workflow_runs")}</p>`}`,
+  });
+}
+
+function cacheCard(data) {
+  return `<article class="card stat" data-glance-card="cache"><span class="small muted">${h("dependency_cache")}</span><strong>${esc(bytes(data.cache_bytes))}</strong><p class="small muted">${h("collections_roles_and_opentofu_providers_stay_between_runs")}</p></article>`;
+}
+
+export function overviewGlanceHtml(data) {
+  const glance = (data && data.glance) || {};
+  return `<div class="grid-3">${cacheCard(data || {})}${queueCard(glance.jobs)}${concurrencyCard(glance.concurrency)}</div>
+    <div class="grid-3">${schedulesCard(glance.schedules)}${hostsCard(glance.hosts)}${syncsCard(glance.syncs)}</div>
+    ${workflowsCard(glance.workflows)}`;
+}
+
 let chartSerial = 0;
 
 function dashboardChart(series, values, heading, legend) {
@@ -222,12 +361,8 @@ async function pageDashboard() {
       ${data.preflight ? preflightNoticeHtml(data.preflight) : ""}
       ${appState.me.is_admin && data.import ? importNoticeHtml(data.import) : ""}
       ${jobs.length ? "" : onboardingCard()}
-      <div class="grid-3" style="margin-top:${jobs.length ? "0" : "14px"}">
-        <article class="card stat"><span class="small muted">${h("dependency_cache")}</span><strong>${esc(bytes(data.cache_bytes))}</strong><p class="small muted">${h("collections_roles_and_opentofu_providers_stay_between_runs")}</p></article>
-        <article class="card stat"><span class="small muted">${h("workflow")}</span><strong>${data.workflow_id ? `<a href="#/workflows/${esc(data.workflow_id)}">${esc(data.workflow_name)}</a>` : "—"}</strong><p class="small muted">${h("success_edges_and_failure_edges_start_the_next")}</p></article>
-        <article class="card stat"><span class="small muted">${h("webhook")}</span><strong>${data.hook_id ? esc(data.hook_name) : "—"}</strong><p class="small muted">${data.ldap ? h("ldap_is_configured") : h("local_accounts")} ${h("runner")}: ${esc(data.runner_mode)}, ${data.runtime ? esc(data.runtime) : h("no_container_runtime")}.</p></article>
-      </div>
-      <div class="stack" style="margin-top:14px">
+      <div class="stack">
+        ${overviewGlanceHtml(data)}
         <section class="card">
           <div class="spread"><h2>${h("recent_jobs")}</h2><a href="#/jobs">${h("all")}</a></div>
           ${table([t("name"), t("tool"), t("status"), t("created"), t("duration")], jobs)}

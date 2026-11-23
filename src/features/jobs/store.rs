@@ -121,6 +121,84 @@ pub(crate) const TEAM_JOBS_BUSY: &str =
 
 pub(crate) const JOBS_BY_STATUS: &str = "SELECT COUNT(*) FROM jobs WHERE status = ?1";
 
+pub(crate) const BUSY_JOB_COUNTS: &str = "SELECT status, COUNT(*) FROM jobs
+     WHERE team_id = ?1 AND status IN ('pending', 'running') GROUP BY status";
+
+pub(crate) const OLDEST_PENDING_JOB: &str = "SELECT created_at FROM jobs
+     WHERE team_id = ?1 AND status = 'pending'
+     ORDER BY created_at ASC, id ASC LIMIT 1";
+
+pub(crate) const GLOBAL_RUNNING_JOBS: &str = "SELECT COUNT(*) FROM jobs WHERE status = 'running'";
+
+/// The hosts whose latest result failed, was unreachable, or is older than the
+/// stale cutoff. The window keeps one row per inventory and host; the count
+/// and the limited list share the same latest-row definition.
+const LATEST_TEAM_HOSTS: &str = "SELECT inventory_id, host, result, ts FROM (
+        SELECT inventory_id, host, result, ts,
+               ROW_NUMBER() OVER (
+                   PARTITION BY inventory_id, host ORDER BY ts DESC, id DESC
+               ) AS latest
+        FROM host_results
+        WHERE team_id = ?1 AND inventory_id IS NOT NULL AND inventory_id <> ''
+     ) ranked WHERE ranked.latest = 1";
+
+pub(crate) const HOST_GLANCE_COUNTS: &str = "SELECT
+        COALESCE(SUM(CASE WHEN latest.result IN ('failed', 'unreachable') THEN 1 ELSE 0 END), 0),
+        COALESCE(SUM(CASE WHEN latest.ts < ?2 THEN 1 ELSE 0 END), 0)
+     FROM (
+        SELECT result, ts,
+               ROW_NUMBER() OVER (
+                   PARTITION BY inventory_id, host ORDER BY ts DESC, id DESC
+               ) AS latest
+        FROM host_results
+        WHERE team_id = ?1 AND inventory_id IS NOT NULL AND inventory_id <> ''
+     ) latest WHERE latest.latest = 1";
+
+/// The list joins the inventory name for the dashboard link. `LATEST_TEAM_HOSTS`
+/// stays the only place that decides which host row is the latest one.
+pub(crate) fn host_glance_sql() -> String {
+    format!(
+        "SELECT hosts.inventory_id, COALESCE(i.name, ''), hosts.host, hosts.result, hosts.ts
+         FROM ({LATEST_TEAM_HOSTS}) hosts
+         LEFT JOIN inventories i ON i.id = hosts.inventory_id AND i.team_id = ?1
+         WHERE hosts.result IN ('failed', 'unreachable') OR hosts.ts < ?2
+         ORDER BY CASE WHEN hosts.result IN ('failed', 'unreachable') THEN 0 ELSE 1 END,
+                  hosts.ts DESC, hosts.host
+         LIMIT ?3"
+    )
+}
+
+pub(crate) fn busy_jobs_sql() -> String {
+    format!(
+        "SELECT {JOB_COLUMNS} FROM jobs
+         WHERE team_id = ?1 AND status IN ('pending', 'running')
+         ORDER BY CASE WHEN status = 'pending' THEN 0 ELSE 1 END,
+                  created_at ASC, id ASC LIMIT ?2"
+    )
+}
+
+pub(crate) struct GlanceJobs {
+    pub(crate) running: i64,
+    pub(crate) pending: i64,
+    pub(crate) global_running: i64,
+    pub(crate) oldest_pending_at: Option<String>,
+    pub(crate) items: Vec<Job>,
+}
+
+pub(crate) struct GlanceHost {
+    pub(crate) inventory_id: String,
+    pub(crate) inventory_name: String,
+    pub(crate) host: String,
+    pub(crate) result: String,
+    pub(crate) ts: String,
+}
+
+pub(crate) struct GlanceHosts {
+    pub(crate) failed: i64,
+    pub(crate) stale: i64,
+    pub(crate) items: Vec<GlanceHost>,
+}
+
 pub(crate) const PENDING: &str = "pending";
 
 fn job_filter(dialect: Dialect) -> &'static str {
@@ -269,6 +347,80 @@ pub(crate) fn recent_jobs(c: &Connection, team_id: &str, limit: i64) -> AppResul
         params![team_id, limit.clamp(1, 100)],
         sqlite_row_job,
     )
+}
+
+pub(crate) fn glance_jobs(c: &Connection, team_id: &str, limit: i64) -> AppResult<GlanceJobs> {
+    let counts: Vec<(String, i64)> = sql::sqlite_all(c, BUSY_JOB_COUNTS, [team_id], |row| {
+        Ok((SqlRow::get(row, 0)?, SqlRow::get(row, 1)?))
+    })?;
+    let mut running = 0;
+    let mut pending = 0;
+    for (status, count) in counts {
+        match status.as_str() {
+            "running" => running = count,
+            "pending" => pending = count,
+            _ => {}
+        }
+    }
+    let oldest_pending_at =
+        sql::sqlite_opt(c, OLDEST_PENDING_JOB, [team_id], |row| SqlRow::get(row, 0))?;
+    let global_running =
+        sql::sqlite_opt(c, GLOBAL_RUNNING_JOBS, [], |row| SqlRow::get(row, 0))?.unwrap_or(0);
+    let items = sql::sqlite_all(
+        c,
+        &busy_jobs_sql(),
+        params![team_id, limit.clamp(1, 100)],
+        sqlite_row_job,
+    )?;
+    Ok(GlanceJobs {
+        running,
+        pending,
+        global_running,
+        oldest_pending_at,
+        items,
+    })
+}
+
+pub(crate) fn glance_hosts(
+    c: &Connection,
+    team_id: &str,
+    cutoff: &str,
+    limit: i64,
+) -> AppResult<GlanceHosts> {
+    let counts = sql::sqlite_opt(c, HOST_GLANCE_COUNTS, params![team_id, cutoff], |row| {
+        Ok((SqlRow::get::<i64>(row, 0)?, SqlRow::get::<i64>(row, 1)?))
+    })?;
+    let mut failed = 0;
+    let mut stale = 0;
+    if let Some((bad, old)) = counts {
+        failed = bad;
+        stale = old;
+    }
+    let items = sql::sqlite_all(
+        c,
+        &host_glance_sql(),
+        params![team_id, cutoff, limit.clamp(1, 100)],
+        sqlite_row_glance_host,
+    )?;
+    Ok(GlanceHosts {
+        failed,
+        stale,
+        items,
+    })
+}
+
+pub(crate) fn row_glance_host<R: SqlRow>(row: &R) -> AppResult<GlanceHost> {
+    Ok(GlanceHost {
+        inventory_id: row.get(0)?,
+        inventory_name: row.get(1)?,
+        host: row.get(2)?,
+        result: row.get(3)?,
+        ts: row.get(4)?,
+    })
+}
+
+fn sqlite_row_glance_host(row: &rusqlite::Row<'_>) -> AppResult<GlanceHost> {
+    row_glance_host(row)
 }
 
 pub(crate) fn job_activity(

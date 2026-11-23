@@ -774,3 +774,38 @@ test("keeps the remove checkbox beside its label and hides the vault hint off An
   await expect(ansible.getByText(vaultHint, { exact: true })).toBeVisible();
   await noHorizontalScroll(page);
 });
+
+test("the overview shows the queue, schedules, hosts, syncs and workflow cards on a phone", async ({ page }) => {
+  test.setTimeout(60000);
+  const suffix = `${test.info().project.name}-${Date.now()}`.replace(/\s+/g, "-");
+  await signIn(page);
+  const schedule = await createSchedule(page, `Glance schedule ${suffix}`);
+  await page.goto("/#/");
+  await page.reload();
+  await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
+
+  const queue = page.locator('[data-glance-card="queue"]');
+  const concurrency = page.locator('[data-glance-card="concurrency"]');
+  const schedules = page.locator('[data-glance-card="schedules"]');
+  await expect(queue).toBeVisible();
+  await expect(queue.locator('[data-glance="queue-running"]')).toBeVisible();
+  await expect(queue.locator('[data-glance="queue-pending"]')).toBeVisible();
+  await expect(concurrency).toContainText("Team slots");
+  await expect(concurrency).toContainText("Global slots");
+  await expect(schedules).toContainText(schedule.name);
+  await expect(page.locator('[data-glance-card="hosts"]')).toContainText("Failed and unreachable");
+  await expect(page.locator('[data-glance-card="syncs"]')).toContainText("Failed syncs");
+  await expect(page.locator('[data-glance-card="workflows"]')).toContainText("Workflow runs");
+  await expect(page.locator('[data-glance-card="cache"]')).toBeVisible();
+
+  const pending = queue.getByRole("link", { name: "Pending", exact: true });
+  await expect(pending).toHaveAttribute("href", "#/jobs?status=pending");
+  await expectTouchTarget(pending, "the pending jobs link");
+  const columns = await queue.evaluate((card) => getComputedStyle(card.parentElement).gridTemplateColumns);
+  expect(columns.trim().split(/\s+/), "the glance cards keep a desktop grid on a phone").toHaveLength(1);
+  await noHorizontalScroll(page);
+
+  await schedules.getByRole("link", { name: "Schedules", exact: true }).first().click();
+  await expect(page.getByRole("heading", { level: 1, name: "Schedules" })).toBeVisible();
+  await noHorizontalScroll(page);
+});

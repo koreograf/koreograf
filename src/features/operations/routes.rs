@@ -364,6 +364,108 @@ pub(super) struct OverviewResponse {
     workflow_name: Option<String>,
     hook_id: Option<String>,
     hook_name: Option<String>,
+    glance: OverviewGlance,
+}
+
+/// Rows the dashboard reads from the database. `jobs`, `glance-*` and
+/// `host_results` stay scoped by the request team; the global running count is
+/// the one instance-wide number and it is documented as such in the UI.
+#[derive(Serialize)]
+struct OverviewGlance {
+    jobs: GlanceJobSummary,
+    concurrency: GlanceConcurrency,
+    schedules: GlanceScheduleSummary,
+    hosts: GlanceHostSummary,
+    syncs: GlanceSyncSummary,
+    workflows: GlanceWorkflowSummary,
+}
+
+#[derive(Serialize)]
+struct GlanceJobSummary {
+    running: u64,
+    pending: u64,
+    oldest_pending_at: Option<String>,
+    items: Vec<GlanceJob>,
+}
+
+#[derive(Serialize)]
+struct GlanceJob {
+    id: String,
+    name: String,
+    status: String,
+    tool: String,
+    created_at: String,
+}
+
+#[derive(Serialize)]
+struct GlanceConcurrency {
+    team_running: u64,
+    team_limit: u64,
+    global_running: u64,
+    global_limit: u64,
+}
+
+#[derive(Serialize)]
+struct GlanceScheduleSummary {
+    next_run_at: Option<String>,
+    missed_count: u64,
+    items: Vec<GlanceSchedule>,
+}
+
+#[derive(Serialize)]
+struct GlanceSchedule {
+    id: String,
+    name: String,
+    target_name: String,
+    next_run_at: Option<String>,
+    missed_at: Option<String>,
+}
+
+#[derive(Serialize)]
+struct GlanceHostSummary {
+    failed: u64,
+    stale: u64,
+    stale_after_days: u64,
+    items: Vec<GlanceHost>,
+}
+
+#[derive(Serialize)]
+struct GlanceHost {
+    inventory_id: String,
+    inventory_name: String,
+    host: String,
+    result: String,
+    ts: String,
+}
+
+#[derive(Serialize)]
+struct GlanceSyncSummary {
+    projects: Vec<GlanceSync>,
+    inventories: Vec<GlanceSync>,
+}
+
+#[derive(Serialize)]
+struct GlanceSync {
+    id: String,
+    name: String,
+    last_sync_at: String,
+}
+
+#[derive(Serialize)]
+struct GlanceWorkflowSummary {
+    running: u64,
+    failed: u64,
+    items: Vec<GlanceWorkflowRun>,
+}
+
+#[derive(Serialize)]
+struct GlanceWorkflowRun {
+    id: String,
+    workflow_id: Option<String>,
+    name: String,
+    status: String,
+    created_at: String,
+    finished_at: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -485,6 +587,7 @@ pub async fn overview(
     } else {
         None
     };
+    let glance = overview_glance(&state, &team)?;
     Ok(Json(OverviewResponse {
         runner_mode: effective.runner.as_str(),
         runtime,
@@ -501,7 +604,166 @@ pub async fn overview(
         workflow_name: workflow.as_ref().map(|item| item.name.clone()),
         hook_id: hook.as_ref().map(|item| item.id.clone()),
         hook_name: hook.as_ref().map(|item| item.name.clone()),
+        glance,
     }))
+}
+
+/// The stale-host threshold. A host is stale when its latest `host_results`
+/// row is older than this many days; the dashboard spells the number out.
+const HOST_STALE_AFTER_DAYS: i64 = 7;
+
+fn rows(value: i64) -> u64 {
+    u64::try_from(value).unwrap_or(0)
+}
+
+fn overview_glance(state: &Shared, team: &str) -> AppResult<OverviewGlance> {
+    let crate::features::jobs::store::GlanceJobs {
+        running,
+        pending,
+        global_running,
+        oldest_pending_at,
+        items: busy_jobs,
+    } = state.store().glance_jobs(team, 8)?;
+    let cutoff = (Utc::now() - ChronoDuration::days(HOST_STALE_AFTER_DAYS))
+        .to_rfc3339_opts(SecondsFormat::Secs, true);
+    let hosts = state.store().glance_hosts(team, &cutoff, 8)?;
+    let schedules = state.store().list_team_schedules(team)?;
+    let projects = state.store().list_projects(team)?;
+    let inventories = state.store().list_inventories(team)?;
+    let workflow_runs = state.store().list_workflow_jobs(team, "", 100)?;
+
+    let global_limit = crate::config::effective_max_concurrent_jobs(state.cfg.max_concurrent_jobs);
+    let team_limit = crate::config::effective_max_concurrent_jobs_per_team(
+        state.cfg.max_concurrent_jobs_per_team,
+    )
+    .min(global_limit);
+
+    let mut missed: Vec<&(db::Schedule, String)> = schedules
+        .iter()
+        .filter(|(item, _)| item.missed_at.is_some())
+        .collect();
+    missed.sort_by(|a, b| b.0.missed_at.cmp(&a.0.missed_at));
+    let mut upcoming: Vec<&(db::Schedule, String)> = schedules
+        .iter()
+        .filter(|(item, _)| item.enabled && item.next_run_at.is_some())
+        .collect();
+    upcoming.sort_by(|a, b| a.0.next_run_at.cmp(&b.0.next_run_at));
+    let next_run_at = upcoming
+        .first()
+        .and_then(|(item, _)| item.next_run_at.clone());
+    let missed_count = rows(i64::try_from(missed.len()).unwrap_or(i64::MAX));
+    let mut schedule_items: Vec<GlanceSchedule> = Vec::new();
+    for (item, target_name) in missed.iter().take(5).chain(upcoming.iter().take(5)) {
+        if schedule_items.len() >= 8 || schedule_items.iter().any(|entry| entry.id == item.id) {
+            continue;
+        }
+        schedule_items.push(GlanceSchedule {
+            id: item.id.clone(),
+            name: item.name.clone(),
+            target_name: target_name.clone(),
+            next_run_at: item.next_run_at.clone(),
+            missed_at: item.missed_at.clone(),
+        });
+    }
+
+    let project_items = projects
+        .into_iter()
+        .filter(|item| item.last_sync_status == "failed")
+        .map(|item| GlanceSync {
+            id: item.id,
+            name: item.name,
+            last_sync_at: item.last_sync_at,
+        })
+        .collect();
+    let inventory_items = inventories
+        .into_iter()
+        .filter(|item| item.last_sync_status == "failed")
+        .map(|item| GlanceSync {
+            id: item.id,
+            name: item.name,
+            last_sync_at: item.last_sync_at,
+        })
+        .collect();
+
+    let mut running_runs: Vec<&db::WorkflowJob> = workflow_runs
+        .iter()
+        .filter(|run| run.status == "running")
+        .collect();
+    running_runs.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    let failed_runs: Vec<&db::WorkflowJob> = workflow_runs
+        .iter()
+        .filter(|run| run.status == "failed")
+        .collect();
+    let running_count = rows(i64::try_from(running_runs.len()).unwrap_or(i64::MAX));
+    let failed_count = rows(i64::try_from(failed_runs.len()).unwrap_or(i64::MAX));
+    let workflow_items = running_runs
+        .iter()
+        .take(5)
+        .chain(failed_runs.iter().take(5))
+        .take(8)
+        .map(|run| GlanceWorkflowRun {
+            id: run.id.clone(),
+            workflow_id: run.workflow_id.clone(),
+            name: run.name.clone(),
+            status: run.status.clone(),
+            created_at: run.created_at.clone(),
+            finished_at: run.finished_at.clone(),
+        })
+        .collect();
+
+    Ok(OverviewGlance {
+        jobs: GlanceJobSummary {
+            running: rows(running),
+            pending: rows(pending),
+            oldest_pending_at,
+            items: busy_jobs
+                .into_iter()
+                .map(|job| GlanceJob {
+                    id: job.id,
+                    name: job.name,
+                    status: job.status,
+                    tool: job.tool,
+                    created_at: job.created_at,
+                })
+                .collect(),
+        },
+        concurrency: GlanceConcurrency {
+            team_running: rows(running),
+            team_limit: rows(i64::try_from(team_limit).unwrap_or(i64::MAX)),
+            global_running: rows(global_running),
+            global_limit: rows(i64::try_from(global_limit).unwrap_or(i64::MAX)),
+        },
+        schedules: GlanceScheduleSummary {
+            next_run_at,
+            missed_count,
+            items: schedule_items,
+        },
+        hosts: GlanceHostSummary {
+            failed: rows(hosts.failed),
+            stale: rows(hosts.stale),
+            stale_after_days: rows(HOST_STALE_AFTER_DAYS),
+            items: hosts
+                .items
+                .into_iter()
+                .map(|host| GlanceHost {
+                    inventory_id: host.inventory_id,
+                    inventory_name: host.inventory_name,
+                    host: host.host,
+                    result: host.result,
+                    ts: host.ts,
+                })
+                .collect(),
+        },
+        syncs: GlanceSyncSummary {
+            projects: project_items,
+            inventories: inventory_items,
+        },
+        workflows: GlanceWorkflowSummary {
+            running: running_count,
+            failed: failed_count,
+            items: workflow_items,
+        },
+    })
 }
 
 #[derive(Clone, Default)]

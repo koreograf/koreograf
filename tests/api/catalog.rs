@@ -1132,6 +1132,40 @@ async fn system_catalog_endpoints_return_the_documented_shape() {
         json!({
             "cache_bytes": 0,
             "deliveries": [],
+            "glance": {
+                "concurrency": {
+                    "global_limit": 4,
+                    "global_running": 0,
+                    "team_limit": 2,
+                    "team_running": 0
+                },
+                "hosts": {
+                    "failed": 0,
+                    "items": [],
+                    "stale": 0,
+                    "stale_after_days": 7
+                },
+                "jobs": {
+                    "items": [],
+                    "oldest_pending_at": null,
+                    "pending": 0,
+                    "running": 0
+                },
+                "schedules": {
+                    "items": [],
+                    "missed_count": 0,
+                    "next_run_at": null
+                },
+                "syncs": {
+                    "inventories": [],
+                    "projects": []
+                },
+                "workflows": {
+                    "failed": 0,
+                    "items": [],
+                    "running": 0
+                }
+            },
             "hook_id": overview["hook_id"].clone(),
             "hook_name": overview["hook_name"].clone(),
             "import": null,

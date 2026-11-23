@@ -90,6 +90,85 @@ test("the seven and fourteen day series keep every day and the empty ones", asyn
   }
 });
 
+test("the overview glance links every queue, schedule, host, sync and run", async () => {
+  const { overviewGlanceHtml, waitedText } = await load("features/dashboard.js");
+  const oldest = new Date(Date.now() - 2 * 60 * 60 * 1000 - 5 * 60 * 1000).toISOString();
+  assert.match(waitedText(oldest), /^2h 0[45]m$/);
+  const html = overviewGlanceHtml({
+    cache_bytes: 2048,
+    glance: {
+      jobs: {
+        running: 1,
+        pending: 2,
+        oldest_pending_at: oldest,
+        items: [
+          { id: "job-1", name: "Waiting job", status: "pending", created_at: oldest },
+          { id: "job-2", name: "Running job", status: "running", created_at: oldest },
+        ],
+      },
+      concurrency: { team_running: 1, team_limit: 2, global_running: 3, global_limit: 4 },
+      schedules: {
+        next_run_at: "2026-12-01T06:00:00Z",
+        missed_count: 1,
+        items: [{ id: "schedule-1", name: "Nightly", target_name: "Healthcheck", next_run_at: "2026-12-01T06:00:00Z", missed_at: "2026-11-30T06:00:00Z" }],
+      },
+      hosts: {
+        failed: 2,
+        stale: 1,
+        stale_after_days: 7,
+        items: [{ inventory_id: "inv-1", inventory_name: "Local", host: "web 1", result: "failed", ts: oldest }],
+      },
+      syncs: {
+        projects: [{ id: "project-1", name: "Demo", last_sync_at: oldest }],
+        inventories: [{ id: "inv-1", name: "Local", last_sync_at: oldest }],
+      },
+      workflows: {
+        running: 1,
+        failed: 1,
+        items: [{ id: "run-1", workflow_id: "workflow-1", name: "Self-Heal", status: "failed", created_at: oldest }],
+      },
+    },
+  });
+  for (const id of ["cache", "queue", "concurrency", "schedules", "hosts", "syncs", "workflows"]) {
+    assert.match(html, new RegExp(`data-glance-card="${id}"`), `the ${id} card is missing`);
+  }
+  assert.match(html, /data-glance="queue-running"><strong>1<\/strong>/);
+  assert.match(html, /data-glance="queue-pending"><strong>2<\/strong>/);
+  assert.match(html, /oldest_pending_waited/);
+  assert.match(html, /href="#\/jobs\/job-1"/);
+  assert.match(html, /href="#\/jobs\?status=pending"/);
+  assert.match(html, /href="#\/jobs\?status=running"/);
+  assert.match(html, /data-glance="team-slots"><strong>1 \/ 2<\/strong>/);
+  assert.match(html, /data-glance="global-slots"><strong>3 \/ 4<\/strong>/);
+  assert.match(html, /href="#\/schedules"/);
+  assert.match(html, /schedule_missed_state/);
+  assert.match(html, /href="#\/inventories\/inv-1\/hosts\/web%201"/);
+  assert.match(html, /hosts_stale_after_days/);
+  assert.match(html, /href="#\/projects\/project-1"/);
+  assert.match(html, /href="#\/inventories\/inv-1"/);
+  assert.match(html, /href="#\/runs\/run-1"/);
+  assert.match(html, /href="#\/workflows\/workflow-1"/);
+});
+
+test("the overview glance keeps a specific empty state for every list", async () => {
+  const { overviewGlanceHtml } = await load("features/dashboard.js");
+  const html = overviewGlanceHtml({
+    cache_bytes: 0,
+    glance: {
+      jobs: { running: 0, pending: 0, items: [] },
+      concurrency: { team_running: 0, team_limit: 2, global_running: 0, global_limit: 4 },
+      schedules: { missed_count: 0, items: [] },
+      hosts: { failed: 0, stale: 0, stale_after_days: 7, items: [] },
+      syncs: { projects: [], inventories: [] },
+      workflows: { running: 0, failed: 0, items: [] },
+    },
+  });
+  for (const key of ["no_pending_job", "no_open_jobs", "no_upcoming_schedules", "no_problem_hosts", "no_failed_syncs", "no_active_workflow_runs"]) {
+    assert.match(html, new RegExp(key), `the empty state ${key} is missing`);
+  }
+  assert.doesNotMatch(html, /<table/, "an empty glance still renders a table");
+});
+
 test("the preflight notice names the missing tool and runtime", async () => {
   const { preflightNotices } = await load("core/format.js");
   const cases = [

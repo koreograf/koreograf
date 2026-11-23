@@ -3469,6 +3469,530 @@ async fn dashboard_series_comes_from_stored_jobs_and_is_team_scoped() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+async fn create_glance_other_team(app: &axum::Router, cookie: &str) -> String {
+    let (status, organization, _) = call(
+        app,
+        "POST",
+        "/api/organizations",
+        Some(cookie),
+        None,
+        Some(json!({"name": "Glance Other", "description": ""})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{organization}");
+    let (status, team, _) = call(
+        app,
+        "POST",
+        "/api/teams",
+        Some(cookie),
+        None,
+        Some(json!({
+            "name": "Glance Other",
+            "description": "",
+            "organization_id": organization["id"]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{team}");
+    team["id"].as_str().unwrap().to_string()
+}
+
+/// Returns the oldest pending, next-run, and missed timestamps.
+fn seed_glance_rows(
+    state: &koreograf::Shared,
+    team: &str,
+    other_team: &str,
+) -> (String, String, String) {
+    let now = chrono::Utc::now();
+    let stamp = |offset: chrono::Duration| (now + offset).format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let oldest = stamp(chrono::Duration::hours(-3));
+    let pending_recent = stamp(chrono::Duration::hours(-1));
+    let running = stamp(chrono::Duration::minutes(-5));
+    let finished = stamp(chrono::Duration::minutes(-2));
+    let stale = stamp(chrono::Duration::days(-10));
+    let future = stamp(chrono::Duration::days(2));
+    let missed = stamp(chrono::Duration::days(-1));
+    let created = stamp(chrono::Duration::zero());
+    let db = state.db().expect("database");
+    let organization = |team_id: &str| -> String {
+        db.query_row(
+            "SELECT organization_id FROM teams WHERE id = ?1",
+            [team_id],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+
+    let insert_job = |id: &str, team_id: &str, status: &str, created: &str| {
+        db.execute(
+            "INSERT INTO jobs (
+                id, team_id, name, tool, status, extra_vars, launched_by, trigger, created_at
+             ) VALUES (?1, ?2, ?1, 'shell', ?3, '{}', 'admin', 'manual', ?4)",
+            (id, team_id, status, created),
+        )
+        .unwrap();
+    };
+    for index in 0..8 {
+        insert_job(
+            &format!("glance-finished-a-{index}"),
+            team,
+            "successful",
+            &finished,
+        );
+    }
+    insert_job("glance-pending-a", team, "pending", &oldest);
+    insert_job("glance-pending-a2", team, "pending", &pending_recent);
+    insert_job("glance-running-a", team, "running", &running);
+    insert_job("glance-pending-b", other_team, "pending", &oldest);
+    insert_job("glance-running-b", other_team, "running", &running);
+
+    let insert_schedule = |id: &str,
+                           team_id: &str,
+                           name: &str,
+                           enabled: bool,
+                           next_run_at: Option<&str>,
+                           missed_at: Option<&str>| {
+        db.execute(
+            "INSERT INTO schedules (
+                id, team_id, name, target_kind, target_id, timezone, start_date, start_time,
+                frequency, weekdays, end_kind, enabled, next_run_at, missed_at,
+                occurrence_count, created_by, created_at, updated_at, updated_by
+             ) VALUES (?1, ?2, ?3, 'template', ?1, 'UTC', '2026-01-01', '06:00',
+                'daily', '', 'never', ?4, ?5, ?6, 0, 'admin', ?7, ?7, '')",
+            (
+                id,
+                team_id,
+                name,
+                enabled as i64,
+                next_run_at,
+                missed_at,
+                &created,
+            ),
+        )
+        .unwrap();
+    };
+    insert_schedule(
+        "glance-schedule-upcoming-a",
+        team,
+        "Upcoming A",
+        true,
+        Some(&future),
+        None,
+    );
+    insert_schedule(
+        "glance-schedule-disabled-a",
+        team,
+        "Disabled A",
+        false,
+        Some(&future),
+        None,
+    );
+    insert_schedule(
+        "glance-schedule-missed-a",
+        team,
+        "Missed A",
+        true,
+        None,
+        Some(&missed),
+    );
+    insert_schedule(
+        "glance-schedule-upcoming-b",
+        other_team,
+        "Upcoming B",
+        true,
+        Some(&future),
+        None,
+    );
+    insert_schedule(
+        "glance-schedule-missed-b",
+        other_team,
+        "Missed B",
+        true,
+        None,
+        Some(&missed),
+    );
+
+    let insert_inventory = |id: &str, team_id: &str, name: &str| {
+        db.execute(
+            "INSERT INTO inventories (
+                id, team_id, name, body, created_at, last_sync_at, last_sync_status
+             ) VALUES (?1, ?2, ?3, '', ?4, ?5, 'failed')",
+            (id, team_id, name, &created, &missed),
+        )
+        .unwrap();
+    };
+    insert_inventory("glance-inv-a", team, "Inventory A");
+    insert_inventory("glance-inv-b", other_team, "Inventory B");
+
+    let insert_project = |id: &str, team_id: &str, name: &str| {
+        db.execute(
+            "INSERT INTO projects (
+                id, team_id, organization_id, name, source_type, source, created_at,
+                last_sync_at, last_sync_status
+             ) VALUES (?1, ?2, ?3, ?4, 'path', '/tmp/glance', ?5, ?6, 'failed')",
+            (id, team_id, organization(team_id), name, &created, &missed),
+        )
+        .unwrap();
+    };
+    insert_project("glance-project-a", team, "Project A");
+    insert_project("glance-project-b", other_team, "Project B");
+
+    let insert_host = |inventory: &str, team_id: &str, host: &str, result: &str, ts: &str| {
+        db.execute(
+            "INSERT INTO host_results (
+                job_id, team_id, inventory_id, host, playbook, role, result, ts
+             ) VALUES ('glance-job', ?1, ?2, ?3, 'site.yml', 'common', ?4, ?5)",
+            (team_id, inventory, host, result, ts),
+        )
+        .unwrap();
+    };
+    insert_host("glance-inv-a", team, "web-a", "failed", &finished);
+    insert_host(
+        "glance-inv-a",
+        team,
+        "unreachable-a",
+        "unreachable",
+        &finished,
+    );
+    insert_host("glance-inv-a", team, "old-a", "ok", &stale);
+    insert_host("glance-inv-a", team, "recovered-a", "failed", &stale);
+    insert_host("glance-inv-a", team, "recovered-a", "ok", &finished);
+    insert_host("glance-inv-b", other_team, "web-b", "failed", &finished);
+
+    let insert_workflow = |id: &str, team_id: &str, name: &str| {
+        db.execute(
+            "INSERT INTO workflows (
+                id, team_id, name, description, graph, created_at
+             ) VALUES (?1, ?2, ?3, '', '{\"nodes\":[],\"edges\":[]}', ?4)",
+            (id, team_id, name, &created),
+        )
+        .unwrap();
+    };
+    insert_workflow("glance-workflow-a", team, "Workflow A");
+    insert_workflow("glance-workflow-b", other_team, "Workflow B");
+
+    let insert_run = |id: &str, workflow: &str, team_id: &str, status: &str, created: &str| {
+        db.execute(
+            "INSERT INTO workflow_jobs (
+                id, workflow_id, team_id, name, status, extra_vars, launched_by, trigger, created_at
+             ) VALUES (?1, ?2, ?3, ?1, ?4, '{}', 'admin', 'manual', ?5)",
+            (id, workflow, team_id, status, created),
+        )
+        .unwrap();
+    };
+    insert_run(
+        "glance-run-running-a",
+        "glance-workflow-a",
+        team,
+        "running",
+        &pending_recent,
+    );
+    insert_run(
+        "glance-run-failed-a",
+        "glance-workflow-a",
+        team,
+        "failed",
+        &finished,
+    );
+    insert_run(
+        "glance-run-running-b",
+        "glance-workflow-b",
+        other_team,
+        "running",
+        &pending_recent,
+    );
+    insert_run(
+        "glance-run-failed-b",
+        "glance-workflow-b",
+        other_team,
+        "failed",
+        &finished,
+    );
+
+    (oldest, future, missed)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn overview_glance_is_team_scoped_and_viewer_readable() {
+    let harness = TestApp::boot_sqlite("overview-glance", Options::default());
+    let state = harness.state.clone();
+    let app = harness.app.clone();
+    let dir = harness.dir.clone();
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("admin cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+    let other_team = create_glance_other_team(&app, &cookie).await;
+    let (oldest, future, missed) = seed_glance_rows(&state, &team, &other_team);
+
+    let (status, overview, _) = call(
+        &app,
+        "GET",
+        "/api/v1/overview",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{overview}");
+    let glance = &overview["glance"];
+    let ids = |value: &Value| -> Vec<String> {
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let names = |value: &Value| -> Vec<String> {
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    assert_eq!(glance["jobs"]["running"], 1);
+    assert_eq!(glance["jobs"]["pending"], 2);
+    assert_eq!(glance["jobs"]["oldest_pending_at"], oldest);
+    let busy = ids(&glance["jobs"]["items"]);
+    assert!(busy.contains(&"glance-pending-a".to_string()), "{busy:?}");
+    assert!(busy.contains(&"glance-running-a".to_string()), "{busy:?}");
+    assert!(!busy.contains(&"glance-pending-b".to_string()), "{busy:?}");
+    assert!(
+        !ids(&overview["jobs"]).contains(&"glance-pending-a".to_string()),
+        "the old pending job is still in the latest eight"
+    );
+
+    assert_eq!(glance["concurrency"]["team_running"], 1);
+    assert_eq!(glance["concurrency"]["team_limit"], 2);
+    assert_eq!(glance["concurrency"]["global_running"], 2);
+    assert_eq!(glance["concurrency"]["global_limit"], 4);
+
+    assert_eq!(glance["schedules"]["next_run_at"], future);
+    assert_eq!(glance["schedules"]["missed_count"], 1);
+    let schedules = ids(&glance["schedules"]["items"]);
+    assert!(
+        schedules.contains(&"glance-schedule-upcoming-a".to_string()),
+        "{schedules:?}"
+    );
+    assert!(
+        schedules.contains(&"glance-schedule-missed-a".to_string()),
+        "{schedules:?}"
+    );
+    assert!(
+        !schedules.contains(&"glance-schedule-disabled-a".to_string()),
+        "{schedules:?}"
+    );
+    assert!(
+        !schedules.contains(&"glance-schedule-missed-b".to_string()),
+        "{schedules:?}"
+    );
+    let missed_entry = glance["schedules"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == "glance-schedule-missed-a")
+        .expect("missed schedule");
+    assert_eq!(missed_entry["missed_at"], missed);
+
+    assert_eq!(glance["hosts"]["failed"], 2);
+    assert_eq!(glance["hosts"]["stale"], 1);
+    assert_eq!(glance["hosts"]["stale_after_days"], 7);
+    let hosts: Vec<String> = glance["hosts"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["host"].as_str().unwrap().to_string())
+        .collect();
+    assert!(hosts.contains(&"web-a".to_string()), "{hosts:?}");
+    assert!(hosts.contains(&"unreachable-a".to_string()), "{hosts:?}");
+    assert!(hosts.contains(&"old-a".to_string()), "{hosts:?}");
+    assert!(!hosts.contains(&"recovered-a".to_string()), "{hosts:?}");
+    assert!(!hosts.contains(&"web-b".to_string()), "{hosts:?}");
+
+    assert_eq!(names(&glance["syncs"]["projects"]), vec!["Project A"]);
+    assert_eq!(names(&glance["syncs"]["inventories"]), vec!["Inventory A"]);
+    assert_eq!(glance["workflows"]["running"], 1);
+    assert_eq!(glance["workflows"]["failed"], 1);
+    let runs = ids(&glance["workflows"]["items"]);
+    assert!(
+        runs.contains(&"glance-run-running-a".to_string()),
+        "{runs:?}"
+    );
+    assert!(
+        runs.contains(&"glance-run-failed-a".to_string()),
+        "{runs:?}"
+    );
+    assert!(
+        !runs.contains(&"glance-run-failed-b".to_string()),
+        "{runs:?}"
+    );
+
+    let (status, _viewer, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "username": "glance-viewer",
+            "display_name": "Glance Viewer",
+            "password": "viewer-pass",
+            "is_admin": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _member, _) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{team}/members"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"username": "glance-viewer", "role": "viewer"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, viewer_me, viewer_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "glance-viewer", "password": "viewer-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{viewer_me}");
+    let viewer_cookie = viewer_cookie.expect("viewer cookie");
+    let (status, viewer, _) = call(
+        &app,
+        "GET",
+        "/api/v1/overview",
+        Some(&viewer_cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{viewer}");
+    assert_eq!(viewer["glance"]["jobs"]["pending"], 2);
+    assert_eq!(viewer["glance"]["hosts"]["failed"], 2);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn overview_glance_survives_a_restart_with_an_empty_metrics_book() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("koreograf-overview-restart-{nanos}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = koreograf::boot(config(&dir, &Options::default())).unwrap();
+    let app = koreograf::router(state.clone());
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("admin cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+    let other_team = create_glance_other_team(&app, &cookie).await;
+    seed_glance_rows(&state, &team, &other_team);
+
+    let (status, first, _) = call(
+        &app,
+        "GET",
+        "/api/v1/overview",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let first_glance = first["glance"].clone();
+    assert_eq!(first_glance["jobs"]["pending"], 2);
+    assert_eq!(first_glance["hosts"]["failed"], 2);
+
+    drop(app);
+    drop(state);
+
+    // The second process starts with an empty in-memory metrics book. Startup
+    // reconciliation fails jobs and runs that no process owns any more, so put
+    // the queue rows back as the durable rows a restarted system would have.
+    // The overview reads them from the database, not from Metrics.
+    let state = koreograf::boot(config(&dir, &Options::default())).unwrap();
+    let app = koreograf::router(state.clone());
+    {
+        let db = state.db().expect("database");
+        db.execute(
+            "UPDATE jobs SET status = 'pending', started_at = NULL
+             WHERE id IN ('glance-pending-a', 'glance-pending-a2')",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE jobs SET status = 'running', finished_at = NULL
+             WHERE id IN ('glance-running-a', 'glance-running-b')",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE workflow_jobs SET status = 'running', finished_at = NULL
+             WHERE id = 'glance-run-running-a'",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE workflow_jobs SET status = 'failed', finished_at = NULL
+             WHERE id = 'glance-run-failed-a'",
+            [],
+        )
+        .unwrap();
+    }
+    let (status, _, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let cookie = cookie.expect("admin cookie after restart");
+    let (status, second, _) = call(
+        &app,
+        "GET",
+        "/api/v1/overview",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(second["glance"], first_glance);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn mcp_tools_call_the_http_api() {
     let harness = TestApp::boot("mcp", Options::default());
