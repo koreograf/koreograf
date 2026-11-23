@@ -18,6 +18,7 @@
   "no_playbooks_found_sync_the_git_project_first": "Keine Playbooks gefunden. Bei einem Git-Projekt zuerst synchronisieren. Den Pfad kannst du unten eintragen.",
   "no_vault_credentials_in_this_team": "Keine Vault-Zugänge im Team.",
   "off_uses_the_checkout_from_the_last_sync": "Aus nutzt den Checkout vom letzten Sync.",
+  "one_credential_of_each_kind": "Pro Art ein Zugang.",
   "one_credential_of_each_kind_choose_vault_credentials": "Pro Art ein Zugang. Suche einen Vault-Zugang; er erscheint hier als Pille.",
   "options": "Optionen",
   "other_credentials": "Weitere Zugänge",

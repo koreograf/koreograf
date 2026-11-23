@@ -70,10 +70,12 @@ export function credentialFields(credentials, selectedIds, tool = "", options = 
   const present = new Set(credentials.map((row) => row.kind));
   const offered = tool ? toolCredentialKinds(tool) : null;
   const toolKinds = new Set(Object.values(TOOL_CREDENTIAL_KINDS).flat());
-  const selects = CREDENTIAL_KINDS
+  const selectKinds = CREDENTIAL_KINDS
     .map((row) => row[0])
     .filter((kind) => kind !== "vault" && present.has(kind))
-    .filter((kind) => !offered || toolKinds.has(kind))
+    .filter((kind) => !offered || toolKinds.has(kind));
+  const shownKinds = selectKinds.filter((kind) => !offered || offered.has(kind));
+  const selects = selectKinds
     .map((kind) => {
       const rows = credentials.filter((row) => row.kind === kind);
       const current = rows.find((row) => selected.has(row.id));
@@ -103,7 +105,12 @@ export function credentialFields(credentials, selectedIds, tool = "", options = 
   const legacy = tool
     ? `<div class="field" id="template-legacy-credentials" hidden><span>${h("other_credentials")}</span><div class="chips" id="legacy-pills"></div></div>`
     : "";
-  return `${empty}<p class="small muted">${h("one_credential_of_each_kind_choose_vault_credentials")}</p>${grid}${vault}${legacy}`;
+  const hint = !offered || offered.has("vault")
+    ? `<p class="small muted">${h("one_credential_of_each_kind_choose_vault_credentials")}</p>`
+    : shownKinds.length
+      ? `<p class="small muted">${h("one_credential_of_each_kind")}</p>`
+      : "";
+  return `${empty}${hint}${grid}${vault}${legacy}`;
 }
 
 export function readCredentialIds(form, tool) {
