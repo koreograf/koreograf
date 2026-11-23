@@ -529,7 +529,12 @@ export function settleRoute(back) {
   const main = document.querySelector(".main");
   const heading = main && main.querySelector("h1");
   if (!main || !heading || main.contains(document.activeElement)) return;
-  heading.focus({ preventScroll: true });
+  // The focus move is for screen readers only. focusVisible keeps the ring
+  // off where the browser supports it; the attribute is the fallback for the
+  // rest and is scoped to this heading, so other targets keep their ring.
+  heading.setAttribute("data-focus-silent", "");
+  heading.addEventListener("blur", () => heading.removeAttribute("data-focus-silent"), { once: true });
+  heading.focus({ preventScroll: true, focusVisible: false });
 }
 
 export function hasHistoryIndex(state) {
