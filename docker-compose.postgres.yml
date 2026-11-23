@@ -12,7 +12,7 @@ services:
   db:
     # PostgreSQL 17 keeps its data in /var/lib/postgresql/data.
     # PostgreSQL 18 and newer use a different path; change the volume with the image.
-    image: postgres:17
+    image: postgres:17@sha256:223efeb196329b55b3b9a13db144956411dbc18e727e59f681c3e0aede6475cf
     # Starts again after a Docker daemon restart or a host reboot.
     # A container stopped with docker compose stop stays stopped.
     restart: unless-stopped
