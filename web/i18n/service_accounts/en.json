@@ -7,8 +7,8 @@
   "search_service_accounts": "Search service accounts",
   "service_account_created_by": "Created by {name}",
   "service_account_creator_missing": "Creator deleted",
-  "service_account_hint": "A service account has no password and cannot sign in. Its tokens keep working when the creator is disabled or deleted.",
+  "service_account_hint": "A service account has no password and cannot sign in. Its tokens keep working when the creator is disabled or deleted. Only administrators can disable or delete it.",
   "service_account_teams_hint": "The role cannot be higher than your own role in that team.",
-  "service_account_tokens_hint": "The secret is shown only once. To rotate, create a new token and then revoke the old one.",
+  "service_account_tokens_hint": "The secret is shown only once. A token carries every team role of the account; only administrators and owners of all its teams manage it. To rotate, create a new token and then revoke the old one.",
   "service_accounts": "Service accounts"
 }

@@ -611,6 +611,23 @@ pub async fn add_member(
         .ok_or_else(|| ApiError::bad("unknown_user_create_the_account_first"))?;
     if member.auth_source == "service" {
         super::service::capped_role(state.store(), &user, &id, role)?;
+        // One token carries every team role of the account. A non-admin may
+        // only add it to another team when they already own all of its teams,
+        // so an owner cannot pull a foreign account into their team and mint a
+        // token for the account's other teams.
+        if !user.is_admin {
+            for membership in state.store().list_user_memberships(&member.id)? {
+                if membership.team_id != id
+                    && state
+                        .store()
+                        .role_of(&membership.team_id, &user.id)?
+                        .as_deref()
+                        != Some("owner")
+                {
+                    return Err(ApiError::Forbidden);
+                }
+            }
+        }
     }
     state
         .store()

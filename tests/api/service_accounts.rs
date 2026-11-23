@@ -446,6 +446,54 @@ async fn operators_cannot_create_service_accounts_or_their_tokens() {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{outside}");
 
+    let foreign =
+        create_service_account(&app, &admin_cookie, "ci-foreign", &other_team, "owner").await;
+    let foreign_id = foreign["id"].as_str().unwrap().to_string();
+    let (status, pull, _) = call(
+        &app,
+        "POST",
+        &format!("/api/teams/{team}/members"),
+        Some(&owner_cookie),
+        Some(&team),
+        Some(json!({"username": "ci-foreign", "role": "viewer"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{pull}");
+    let (status, tokens, _) = call(
+        &app,
+        "GET",
+        &format!("/api/service-accounts/{foreign_id}/tokens"),
+        Some(&owner_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{tokens}");
+    let (status, minted, _) = call(
+        &app,
+        "POST",
+        &format!("/api/service-accounts/{foreign_id}/tokens"),
+        Some(&owner_cookie),
+        None,
+        Some(json!({"name": "takeover"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{minted}");
+    let (status, accounts, _) = call(
+        &app,
+        "GET",
+        "/api/service-accounts",
+        Some(&owner_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{accounts}");
+    assert!(
+        !accounts.to_string().contains("ci-foreign"),
+        "an owner of another team saw a foreign account: {accounts}"
+    );
+
     let _ = std::fs::remove_dir_all(&dir);
 }
 

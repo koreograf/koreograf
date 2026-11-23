@@ -82,8 +82,10 @@ pub(super) fn create(
         .ok_or(ApiError::NotFound)
 }
 
-/// A team owner of a team the account belongs to, or an instance
-/// administrator, may read the account and manage its tokens.
+/// An instance administrator, or a team owner of every team the account
+/// belongs to, may read the account and manage its tokens. Requiring all of
+/// the account's teams keeps an owner of one team from minting a token that
+/// carries the account's roles in another team.
 pub(super) fn visible_account(
     state: &Shared,
     user: &AuthUser,
@@ -97,17 +99,21 @@ pub(super) fn visible_account(
     if user.is_admin {
         return Ok(account);
     }
-    for membership in state.store().list_user_memberships(id)? {
+    let memberships = state.store().list_user_memberships(id)?;
+    if memberships.is_empty() {
+        return Err(ApiError::Forbidden);
+    }
+    for membership in memberships {
         if state
             .store()
             .role_of(&membership.team_id, &user.id)?
             .as_deref()
-            == Some("owner")
+            != Some("owner")
         {
-            return Ok(account);
+            return Err(ApiError::Forbidden);
         }
     }
-    Err(ApiError::Forbidden)
+    Ok(account)
 }
 
 pub(super) fn list(state: &Shared, user: &AuthUser) -> AppResult<Vec<ServiceAccount>> {

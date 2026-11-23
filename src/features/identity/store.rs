@@ -92,15 +92,20 @@ pub(crate) fn list_users_sql(dialect: Dialect) -> String {
     )
 }
 
-/// A non-administrator sees a service account only through a team they own.
+/// A non-administrator sees a service account only when they own every team
+/// the account belongs to, because one token carries all of its team roles.
 pub(crate) fn list_service_accounts_sql(admin: bool) -> String {
     let access = if admin {
         ""
     } else {
-        " AND EXISTS (
+        " AND EXISTS (SELECT 1 FROM memberships m WHERE m.user_id = u.id)
+           AND NOT EXISTS (
              SELECT 1 FROM memberships sm
-             JOIN memberships om ON om.team_id = sm.team_id
-             WHERE sm.user_id = u.id AND om.user_id = ?1 AND om.role = 'owner'
+             WHERE sm.user_id = u.id
+               AND NOT EXISTS (
+                 SELECT 1 FROM memberships om
+                 WHERE om.team_id = sm.team_id AND om.user_id = ?1 AND om.role = 'owner'
+               )
            )"
     };
     format!(
