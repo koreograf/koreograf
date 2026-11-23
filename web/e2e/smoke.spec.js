@@ -1421,4 +1421,21 @@ test("the target hint follows the tool and a stored secret keeps its remove row"
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1280);
   await ansible.getByRole("button", { name: "Close" }).click();
   await expect(ansible).toHaveCount(0);
+
+  const switched = await openTarget("Healthcheck");
+  await switched.getByRole("tab", { name: "General", exact: true }).click();
+  const tool = switched.locator('select[name="tool"]');
+  await tool.selectOption("ansible");
+  await switched.getByRole("tab", { name: "Target", exact: true }).click();
+  await expect(switched.getByText(vaultHint, { exact: true })).toBeVisible();
+  await expect(switched.locator("#vault-search")).toBeVisible();
+  await switched.getByRole("tab", { name: "General", exact: true }).click();
+  await tool.selectOption("shell");
+  await switched.getByRole("tab", { name: "Target", exact: true }).click();
+  await expect(switched.getByText(vaultHint, { exact: true })).toHaveCount(0);
+  await switched.getByRole("button", { name: "Close" }).click();
+  const discard = page.getByRole("dialog").filter({ has: page.getByRole("heading", { name: "Discard unsaved changes?" }) });
+  await expect(discard).toBeVisible();
+  await discard.getByRole("button", { name: "OK", exact: true }).click();
+  await expect(switched).toHaveCount(0);
 });

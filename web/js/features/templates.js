@@ -17,6 +17,7 @@ import {
   extraVarsField,
   inventoryField,
   readCredentialIds,
+  refreshCredentialHint,
   selectedCredentialIds,
   tofuFields,
   TOOL_CREDENTIAL_KINDS,
@@ -503,6 +504,7 @@ async function openTemplateDialog(existing, initialTab = "") {
     });
     const vaultField = form.querySelector("#template-vault-field");
     if (vaultField) vaultField.hidden = !offered.has("vault");
+    refreshCredentialHint(form, form.tool.value);
     drawLegacyCredentials();
   };
   if (readOnly) {
