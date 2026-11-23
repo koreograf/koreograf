@@ -48,11 +48,32 @@ From `0.1.0-beta.1` onward every name below keeps its meaning and its default; t
 | `KOREOGRAF_IMPORT_FROM` | empty. An old data directory copied on first start when the data directory is empty |
 | `KOREOGRAF_PATH_MAP` | empty. Comma-separated `OLD=NEW` absolute prefixes applied once during an import |
 | `KOREOGRAF_IMPORT_CACHE` | off. With an import, copy the rest of the cache as well |
+| `KOREOGRAF_LDAP_URL` | empty. Without it sign-in is local only; with it the bind DN, bind password, and user base are required |
+| `KOREOGRAF_LDAP_MODE` | `ldap`. `ad` selects the Active Directory defaults for the user filter and the username attribute |
 | `KOREOGRAF_LDAP_BIND_DN` | empty. Required when `KOREOGRAF_LDAP_URL` is set |
 | `KOREOGRAF_LDAP_BIND_PASSWORD` | empty. Required when `KOREOGRAF_LDAP_URL` is set |
 | `KOREOGRAF_LDAP_USER_BASE` | empty. Required when `KOREOGRAF_LDAP_URL` is set |
-| `KOREOGRAF_LDAP_GROUP_BASE` | empty |
+| `KOREOGRAF_LDAP_USER_FILTER` | `(uid={username})`, or `(sAMAccountName={username})` in `ad` mode. `{username}` is escaped |
+| `KOREOGRAF_LDAP_USERNAME_ATTR` | `uid`, or `sAMAccountName` in `ad` mode |
+| `KOREOGRAF_LDAP_GROUP_ATTR` | `memberOf` |
+| `KOREOGRAF_LDAP_GROUP_BASE` | empty. Search base for groups when the user entry lists none; an empty value uses the user base |
+| `KOREOGRAF_LDAP_STARTTLS` | false. Starts TLS on the directory connection |
 | `KOREOGRAF_LDAP_TLS_INSECURE` | false. Skips certificate checks and writes a warning |
+| `KOREOGRAF_LLM` | off. `1`, `true`, `yes`, or `ja` enables the assistant from the environment until an administrator saves settings |
+| `KOREOGRAF_LLM_PROVIDER` | `openai`. `ollama` adds `/v1` to a bare address; every other value is `openai` |
+| `KOREOGRAF_LLM_URL` | empty, then `http://127.0.0.1:11434/v1` for `ollama`. `openai` needs an address |
+| `KOREOGRAF_LLM_MODEL` | empty. Required when the assistant is on |
+| `KOREOGRAF_LLM_API_KEY` | empty. Key for the provider; the key file wins when both are set |
+| `KOREOGRAF_LLM_API_KEY_FILE` | empty. File with the key; wins over `KOREOGRAF_LLM_API_KEY` |
+| `KOREOGRAF_LLM_MAX_TOKENS` | `800` (64 to 4096). Tokens per answer |
+| `KOREOGRAF_LLM_TIMEOUT_SECS` | `60` (5 to 300). Seconds for one provider request |
+| `KOREOGRAF_MCP` | on. `0` turns `/mcp` off and answers 404 |
+| `KOREOGRAF_HEALTHCHECK_URL` | derived from `KOREOGRAF_BIND`, for example `http://127.0.0.1:8080/healthz`. URL that `koreograf healthcheck` probes; a wildcard bind uses loopback |
+| `KOREOGRAF_DOCKER_SOCKET` | `/var/run/docker.sock`. Socket whose group the container entrypoint joins and checks before it starts the server |
+| `KOREOGRAF_GIT_SHA` | empty. Short git SHA the image build records; `/api/version` shows `unknown` when empty |
+| `KOREOGRAF_BUILT_AT` | empty. Build date the image build records; `/api/version` leaves it out when empty |
+
+The runner gives each job process its own `KOREOGRAF_*` names, such as `KOREOGRAF_TAGS` and `KOREOGRAF_WORK`. The server does not read those for its own configuration, and they are not part of this contract. [Jobs](jobs.md#job-environment) lists them. The `koreograf mcp` client reads `KOREOGRAF_URL`, `KOREOGRAF_TOKEN`, and `KOREOGRAF_TEAM_ID`; see [Editor MCP client](installation.md#editor-mcp-client).
 
 ## PostgreSQL
 
