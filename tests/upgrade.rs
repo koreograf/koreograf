@@ -321,6 +321,31 @@ fn assert_alpha_15_fixture_rows(conn: &rusqlite::Connection) {
         .expect("inventory source vars");
     assert!(source_vars.contains("group_vars/web.yml"));
     assert!(source_vars.contains("fixture_web: true"));
+
+    let created_by: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'created_by'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("created_by column");
+    assert_eq!(created_by, 1);
+    let service_accounts: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM users WHERE auth_source = 'service'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("service accounts");
+    assert_eq!(service_accounts, 0);
+    let with_creator: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM users WHERE created_by IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )
+        .expect("existing creators");
+    assert_eq!(with_creator, 0);
 }
 
 async fn assert_alpha_15_postgres_rows(client: &tokio_postgres::Client) {
@@ -528,6 +553,35 @@ async fn assert_alpha_15_postgres_rows(client: &tokio_postgres::Client) {
         .get(0);
     assert!(source_vars.contains("group_vars/web.yml"));
     assert!(source_vars.contains("fixture_web: true"));
+
+    let created_by: i64 = client
+        .query_one(
+            "SELECT COUNT(*) FROM information_schema.columns
+             WHERE table_name = 'users' AND column_name = 'created_by'",
+            &[],
+        )
+        .await
+        .expect("created_by column")
+        .get(0);
+    assert_eq!(created_by, 1);
+    let service_accounts: i64 = client
+        .query_one(
+            "SELECT COUNT(*) FROM users WHERE auth_source = 'service'",
+            &[],
+        )
+        .await
+        .expect("service accounts")
+        .get(0);
+    assert_eq!(service_accounts, 0);
+    let with_creator: i64 = client
+        .query_one(
+            "SELECT COUNT(*) FROM users WHERE created_by IS NOT NULL",
+            &[],
+        )
+        .await
+        .expect("existing creators")
+        .get(0);
+    assert_eq!(with_creator, 0);
 }
 
 async fn assert_alpha_12_postgres_rows(client: &tokio_postgres::Client) {

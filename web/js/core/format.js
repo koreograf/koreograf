@@ -101,6 +101,7 @@ export function verbosityLabel(level) {
 
 export function sourceLabel(source) {
   if (source === "ldap") return "LDAP";
+  if (source === "service") return t("service_account");
   if (source === "manual") return t("manual");
   if (source === "local") return t("local");
   return source || "";
@@ -185,4 +186,19 @@ export function scopeLabel(item) {
   if (!item || item.scope === "global") return t("global");
   if (item.scope === "organization") return t("organization_name", { name: item.organization_name || "" });
   return t("team_name", { name: item.team_name || "" });
+}
+
+export function tokenExpiryCell(token, now = Date.now()) {
+  if (!token.expires_at) return `<span class="muted">${h("token_never_expires")}</span>`;
+  const expired = token.expired === true || Date.parse(token.expires_at) <= now;
+  const date = `<span class="small muted">${esc(when(token.expires_at))}</span>`;
+  return expired
+    ? `<span class="pill failed">${h("token_is_expired")}</span> ${date}`
+    : date;
+}
+
+export function tokenScopeCell(token) {
+  return token.scope === "read"
+    ? `<span class="pill">${h("token_scope_read")}</span>`
+    : `<span class="muted">${h("token_scope_write")}</span>`;
 }

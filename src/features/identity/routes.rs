@@ -20,9 +20,9 @@ use super::model::{
 };
 use super::service::{
     authenticate, clear_cookie, client_source, directory_unreachable, disabled_sign_in,
-    ensure_last_admin, ldap_failure_hint, local_password_ok, new_password, normalize,
-    profile_email, profile_json, provision_ldap, read_cookie, request_cookie_secure, require_admin,
-    session_response, signin_failed, signin_remaining, signin_succeeded, throttled,
+    ensure_last_admin, ldap_failure_hint, local_password_ok, new_password, new_username, normalize,
+    prepare_token, profile_email, profile_json, provision_ldap, read_cookie, request_cookie_secure,
+    require_admin, session_response, signin_failed, signin_remaining, signin_succeeded, throttled,
     trimmed_display,
 };
 
@@ -81,6 +81,19 @@ pub async fn login(
         return Err(ApiError::SignInFailed);
     }
     let local = state.store().user_by_username(&username)?;
+    if local
+        .as_ref()
+        .is_some_and(|item| item.auth_source == "service")
+    {
+        signin_failed(&state.cfg.data_dir, &username, &source);
+        tracing::warn!(
+            username = %username,
+            client_ip = %source,
+            reason = "service_account",
+            "sign-in failed"
+        );
+        return Err(ApiError::SignInFailed);
+    }
     if local_password_ok(local.as_ref(), &body.password) {
         if let Some(user) = local {
             if user.disabled {
@@ -230,10 +243,21 @@ pub async fn update_me(
     Ok(Json(profile_json(&state, &updated.into())?))
 }
 
+/// A service account manages its tokens through `/api/v1/service-accounts`,
+/// not through the personal-token routes.
+fn reject_service_account(user: &AuthUser) -> AppResult<()> {
+    if user.auth_source == "service" {
+        Err(ApiError::Forbidden)
+    } else {
+        Ok(())
+    }
+}
+
 pub async fn list_tokens(
     State(state): State<Shared>,
     user: AuthUser,
 ) -> AppResult<Json<TokenListResponse>> {
+    reject_service_account(&user)?;
     let tokens = state.store().list_api_tokens(&user.id)?;
     Ok(Json(TokenListResponse(
         tokens.iter().map(TokenResponse::new).collect(),
@@ -245,46 +269,32 @@ pub async fn create_token(
     user: AuthUser,
     ApiJson(body): ApiJson<TokenBody>,
 ) -> Result<(StatusCode, Json<CreatedTokenResponse>), ApiError> {
-    let name = require_name(&body.name)?;
-    let scope = match body.scope.as_deref() {
-        None | Some("write") => "write",
-        Some("read") => "read",
-        Some(_) => return Err(ApiError::bad("token_scope_is_read_or_write")),
-    };
-    let expires_at = match body.expires_in_days {
-        None => Some(db::plus_secs(90 * 24 * 3600)),
-        Some(None) | Some(Some(0)) => None,
-        Some(Some(days)) if (1..=3650).contains(&days) => Some(db::plus_secs(days * 24 * 3600)),
-        Some(Some(_)) => return Err(ApiError::bad("token_lifetime_out_of_range")),
-    };
-    let secret = crypto::api_token();
-    let prefix = crypto::token_prefix(&secret);
-    let created_at = db::now();
-    let id = Uuid::new_v4().to_string();
+    reject_service_account(&user)?;
+    let token = prepare_token(&body)?;
     let times = db::ApiTokenTimes {
-        created_at,
-        expires_at,
-        scope: scope.to_string(),
+        created_at: token.created_at.clone(),
+        expires_at: token.expires_at.clone(),
+        scope: token.scope.clone(),
     };
     state.store().create_api_token(
-        &id,
+        &token.id,
         &user.id,
-        &name,
-        &prefix,
-        &crypto::hash_api_token(&secret),
+        &token.name,
+        &token.prefix,
+        &crypto::hash_api_token(&token.secret),
         &times,
     )?;
     Ok((
         StatusCode::CREATED,
         Json(CreatedTokenResponse {
-            id,
-            name,
-            prefix,
-            scope: times.scope.clone(),
-            secret,
-            created_at: times.created_at,
+            id: token.id,
+            name: token.name,
+            prefix: token.prefix,
+            scope: token.scope,
+            secret: token.secret,
+            created_at: token.created_at,
             last_used_at: None,
-            expires_at: times.expires_at,
+            expires_at: token.expires_at,
         }),
     ))
 }
@@ -294,6 +304,7 @@ pub async fn delete_token(
     user: AuthUser,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
+    reject_service_account(&user)?;
     if !state.store().delete_api_token(&id, &user.id)? {
         return Err(ApiError::NotFound);
     }
@@ -331,21 +342,11 @@ pub async fn create_user(
     ApiJson(body): ApiJson<UserBody>,
 ) -> Result<(StatusCode, Json<AccountResponse>), ApiError> {
     require_admin(&user)?;
-    let username = body.username.trim().to_ascii_lowercase();
-    if !username
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-')
-        || !(2..=64).contains(&username.len())
-    {
-        return Err(ApiError::bad("username_2_64_characters_a_z_0_9"));
-    }
     if body.password.len() < 8 {
         return Err(ApiError::bad("password_needs_at_least_8_characters"));
     }
     let display = trimmed_display(&body.display_name)?;
-    if state.store().user_by_username(&username)?.is_some() {
-        return Err(ApiError::bad("that_username_is_already_used"));
-    }
+    let username = new_username(state.store(), &body.username)?;
     state.store().insert_user(
         &Uuid::new_v4().to_string(),
         &username,
@@ -370,6 +371,14 @@ pub async fn update_user(
     require_admin(&user)?;
     let display = trimmed_display(&body.display_name)?;
     let existing = state.store().user_by_id(&id)?.ok_or(ApiError::NotFound)?;
+    if existing.auth_source == "service" {
+        if body.is_admin {
+            return Err(ApiError::bad("a_service_account_is_never_an_administrator"));
+        }
+        if !body.password.is_empty() {
+            return Err(ApiError::bad("a_service_account_has_no_password"));
+        }
+    }
     if body.disabled && id == user.id {
         return Err(ApiError::bad("you_cannot_disable_your_own_account"));
     }
@@ -600,6 +609,26 @@ pub async fn add_member(
         .store()
         .user_by_username(&username)?
         .ok_or_else(|| ApiError::bad("unknown_user_create_the_account_first"))?;
+    if member.auth_source == "service" {
+        super::service::capped_role(state.store(), &user, &id, role)?;
+        // One token carries every team role of the account. A non-admin may
+        // only add it to another team when they already own all of its teams,
+        // so an owner cannot pull a foreign account into their team and mint a
+        // token for the account's other teams.
+        if !user.is_admin {
+            for membership in state.store().list_user_memberships(&member.id)? {
+                if membership.team_id != id
+                    && state
+                        .store()
+                        .role_of(&membership.team_id, &user.id)?
+                        .as_deref()
+                        != Some("owner")
+                {
+                    return Err(ApiError::Forbidden);
+                }
+            }
+        }
+    }
     state
         .store()
         .grant_manual_membership(&id, &member.id, role.as_str())?;

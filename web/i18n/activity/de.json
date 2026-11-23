@@ -28,6 +28,8 @@
   "object_job": "Auftrag",
   "object_project": "Projekt",
   "object_schedule": "Zeitplan",
+  "object_service_account": "Dienstkonto",
+  "object_service_account_token": "Dienstkonto-Token",
   "object_template": "Vorlage",
   "object_workflow": "Workflow",
   "object_workflow_run": "Workflow-Lauf",

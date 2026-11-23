@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::error::{ApiError, AppResult};
 
-pub(crate) const SCHEMA_VERSION: u32 = 10;
+pub(crate) const SCHEMA_VERSION: u32 = 11;
 const BASELINE_VERSION: u32 = 1;
 
 /// A session row moves its last-seen time at most once per interval, so a
@@ -120,6 +120,12 @@ pub(crate) const SQLITE_MIGRATIONS: &[Migration] = &[
             ("inventory_sources", "vars_json"),
         ],
     },
+    Migration {
+        version: 11,
+        name: "0011_service_accounts",
+        sql: include_str!("../migrations/sqlite/0011_service_accounts.sql"),
+        legacy_columns: &[("users", "created_by")],
+    },
 ];
 
 pub(crate) const POSTGRES_MIGRATIONS: &[Migration] = &[
@@ -189,6 +195,12 @@ pub(crate) const POSTGRES_MIGRATIONS: &[Migration] = &[
             ("inventories", "vars_json"),
             ("inventory_sources", "vars_json"),
         ],
+    },
+    Migration {
+        version: 11,
+        name: "0011_service_accounts",
+        sql: include_str!("../migrations/postgres/0011_service_accounts.sql"),
+        legacy_columns: &[("users", "created_by")],
     },
 ];
 
@@ -744,6 +756,20 @@ pub struct User {
     pub disabled: bool,
     pub email: Option<String>,
     pub created_at: String,
+}
+
+/// A user with `auth_source = "service"`. It never has a password, a session,
+/// or the administrator flag; its team roles come from manual memberships.
+#[derive(Clone, Debug)]
+pub struct ServiceAccount {
+    pub id: String,
+    pub username: String,
+    pub display_name: String,
+    pub disabled: bool,
+    pub created_at: String,
+    pub created_by: Option<String>,
+    pub created_by_username: Option<String>,
+    pub team_count: i64,
 }
 
 #[derive(Clone, Debug, Serialize)]

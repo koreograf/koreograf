@@ -28,6 +28,8 @@
   "object_job": "Job",
   "object_project": "Project",
   "object_schedule": "Schedule",
+  "object_service_account": "Service account",
+  "object_service_account_token": "Service account token",
   "object_template": "Template",
   "object_workflow": "Workflow",
   "object_workflow_run": "Workflow run",

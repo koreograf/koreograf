@@ -1,0 +1,14 @@
+{
+  "creator": "Ersteller",
+  "delete_this_service_account": "Dienstkonto \"{name}\" löschen? Seine Tokens werden mit entfernt.",
+  "disable_service_account": "Dienstkonto deaktivieren",
+  "enable_service_account": "Dienstkonto aktivieren",
+  "new_service_account": "Dienstkonto anlegen",
+  "search_service_accounts": "Dienstkonten suchen",
+  "service_account_created_by": "Angelegt von {name}",
+  "service_account_creator_missing": "Ersteller gelöscht",
+  "service_account_hint": "Ein Dienstkonto hat kein Passwort und kann sich nicht anmelden. Seine Tokens funktionieren weiter, wenn sein Ersteller deaktiviert oder gelöscht wird. Nur Administratoren können es deaktivieren oder löschen.",
+  "service_account_teams_hint": "Die Rolle darf nicht höher sein als deine eigene Rolle in diesem Team.",
+  "service_account_tokens_hint": "Das Geheimnis wird nur einmal angezeigt. Ein Token trägt alle Teamrollen des Kontos; nur Administratoren und Besitzer aller zugehörigen Teams verwalten es. Für eine Rotation legst du einen neuen Token an und widerrufst danach den alten.",
+  "service_accounts": "Dienstkonten"
+}

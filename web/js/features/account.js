@@ -3,7 +3,7 @@ import { api } from "../core/api.js";
 import { confirmDialog } from "../core/dialog.js";
 import { handle, markSaved, roleLabel, route, shell } from "../core/app.js";
 import { esc, h, table } from "../core/dom.js";
-import { authSourceLabel, emailLine, sourceLabel, when } from "../core/format.js";
+import { authSourceLabel, emailLine, sourceLabel, tokenExpiryCell, tokenScopeCell, when } from "../core/format.js";
 import { t } from "../core/i18n.js";
 import { registerRoute } from "../core/router.js";
 
@@ -33,20 +33,7 @@ export function sessionRows(sessions) {
   });
 }
 
-export function tokenExpiryCell(token, now = Date.now()) {
-  if (!token.expires_at) return `<span class="muted">${h("token_never_expires")}</span>`;
-  const expired = token.expired === true || Date.parse(token.expires_at) <= now;
-  const date = `<span class="small muted">${esc(when(token.expires_at))}</span>`;
-  return expired
-    ? `<span class="pill failed">${h("token_is_expired")}</span> ${date}`
-    : date;
-}
-
-export function tokenScopeCell(token) {
-  return token.scope === "read"
-    ? `<span class="pill">${h("token_scope_read")}</span>`
-    : `<span class="muted">${h("token_scope_write")}</span>`;
-}
+export { tokenExpiryCell, tokenScopeCell };
 
 async function pageAccount() {
   appState.setMe(await api("GET", "/api/v1/me"));

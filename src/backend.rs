@@ -12,8 +12,8 @@ use crate::config::{DatabaseConfig, PostgresConfig, SslMode};
 use crate::db::{
     self, ApiToken, ApiTokenTimes, Credential, CredentialUsage, Delivery, Environment, Hook,
     Inventory, InventorySource, Job, JobActivity, JobEvent, JobQuery, Member, NewDelivery,
-    Organization, Project, Schedule, Session, Team, Template, User, UserMembership, Workflow,
-    WorkflowJob, WorkflowNodeRow,
+    Organization, Project, Schedule, ServiceAccount, Session, Team, Template, User, UserMembership,
+    Workflow, WorkflowJob, WorkflowNodeRow,
 };
 use crate::error::{ApiError, AppResult};
 use crate::features::activity::{self as activity, Activity, ActivityQuery};
@@ -61,6 +61,15 @@ pub(crate) trait Backend: Send + Sync {
     ) -> AppResult<()>;
     fn user_by_id(&self, id: &str) -> AppResult<Option<User>>;
     fn list_users(&self) -> AppResult<Vec<(User, i64)>>;
+    fn insert_service_account(
+        &self,
+        id: &str,
+        username: &str,
+        display_name: &str,
+        created_by: &str,
+    ) -> AppResult<()>;
+    fn service_account_by_id(&self, id: &str) -> AppResult<Option<ServiceAccount>>;
+    fn list_service_accounts(&self, user_id: &str, admin: bool) -> AppResult<Vec<ServiceAccount>>;
     fn update_profile(
         &self,
         id: &str,
@@ -508,6 +517,27 @@ impl Backend for SqliteBackend {
     fn list_users(&self) -> AppResult<Vec<(User, i64)>> {
         let conn = lock(&self.conn)?;
         identity_store::list_users(&conn)
+    }
+
+    fn insert_service_account(
+        &self,
+        id: &str,
+        username: &str,
+        display_name: &str,
+        created_by: &str,
+    ) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        identity_store::insert_service_account(&conn, id, username, display_name, created_by)
+    }
+
+    fn service_account_by_id(&self, id: &str) -> AppResult<Option<ServiceAccount>> {
+        let conn = lock(&self.conn)?;
+        identity_store::service_account_by_id(&conn, id)
+    }
+
+    fn list_service_accounts(&self, user_id: &str, admin: bool) -> AppResult<Vec<ServiceAccount>> {
+        let conn = lock(&self.conn)?;
+        identity_store::list_service_accounts(&conn, user_id, admin)
     }
 
     fn update_profile(
@@ -1939,6 +1969,53 @@ impl Backend for PostgresBackend {
             let rows = client.query(&sql, &[]).await?;
             rows.iter()
                 .map(|row| Ok((identity_store::row_user(row)?, row.try_get::<_, i64>(9)?)))
+                .collect()
+        })
+    }
+
+    fn insert_service_account(
+        &self,
+        id: &str,
+        username: &str,
+        display_name: &str,
+        created_by: &str,
+    ) -> AppResult<()> {
+        self.with_client(|client| async move {
+            client
+                .execute(
+                    &store::sql::postgres(identity_store::INSERT_SERVICE_ACCOUNT),
+                    &[&id, &username, &display_name, &db::now(), &created_by],
+                )
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn service_account_by_id(&self, id: &str) -> AppResult<Option<ServiceAccount>> {
+        self.with_client(|client| async move {
+            let row = client
+                .query_opt(
+                    &store::sql::postgres(identity_store::SERVICE_ACCOUNT_BY_ID),
+                    &[&id],
+                )
+                .await?;
+            row.as_ref()
+                .map(identity_store::row_service_account)
+                .transpose()
+        })
+    }
+
+    fn list_service_accounts(&self, user_id: &str, admin: bool) -> AppResult<Vec<ServiceAccount>> {
+        let sql =
+            store::sql::Dialect::Postgres.render(&identity_store::list_service_accounts_sql(admin));
+        self.with_client(|client| async move {
+            let rows = if admin {
+                client.query(&sql, &[]).await?
+            } else {
+                client.query(&sql, &[&user_id]).await?
+            };
+            rows.iter()
+                .map(identity_store::row_service_account)
                 .collect()
         })
     }
