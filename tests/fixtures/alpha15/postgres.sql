@@ -1351,5 +1351,3 @@ ALTER TABLE ONLY public.workflows
 --
 -- PostgreSQL database dump complete
 --
-
-
