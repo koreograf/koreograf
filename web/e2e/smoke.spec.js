@@ -87,6 +87,7 @@ async function focusRing(locator) {
 async function expectSilentHeading(page, name) {
   const heading = page.getByRole("heading", { level: 1, name, exact: true });
   await expect(heading).toBeFocused();
+  await expect(heading).toHaveAttribute("data-focus-silent", "");
   const ring = await focusRing(heading);
   expect(ring.focusVisible, `the ${name} heading is focus-visible`).toBe(false);
   expect(ring.outlineStyle, `the ${name} heading draws an outline`).toBe("none");

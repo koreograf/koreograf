@@ -69,6 +69,18 @@ test("the router tracks direction and restores the scroll position", async () =>
     { preventScroll: true, focusVisible: false },
     "the route focus must not request a visible ring",
   );
+  assert.equal(heading.getAttribute("data-focus-silent"), "", "the route focus needs the outline fallback");
+  heading.dispatchEvent({ type: "blur" });
+  assert.equal(heading.hasAttribute("data-focus-silent"), false, "the outline fallback outlives the focus move");
+});
+
+test("the silent heading fallback stays scoped away from the skip link", () => {
+  const css = stylesheet();
+  const silent = rule(css, "h1[data-focus-silent]:focus");
+  assert.ok(silent, "the heading fallback rule is missing");
+  assert.match(silent[1], /outline:\s*none/);
+  assert.equal(rule(css, '[tabindex="-1"]:focus'), null, "a global tabindex rule would hide the skip-link ring");
+  assert.equal(rule(css, "#main:focus"), null, "the skip-link target must keep its ring");
 });
 
 test("the schedule start date is bounded ten years ahead", async () => {
