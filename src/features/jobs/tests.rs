@@ -10,6 +10,7 @@ fn prompt_spec_replaces_listed_fields_and_clears_blanks() {
     let merged = merge_prompt_spec(
         &base,
         &json!({"limit": "db", "tags": "", "skip_tags": "slow", "job_type": "check", "verbosity": 0}),
+        "ansible",
     )
     .expect("merge");
     assert_eq!(merged["limit"], "db");
@@ -19,8 +20,37 @@ fn prompt_spec_replaces_listed_fields_and_clears_blanks() {
     assert_eq!(merged["diff"], true);
     assert!(merged.get("tags").is_none());
     assert!(merged.get("verbosity").is_none());
-    let rejected = merge_prompt_spec(&base, &json!({"forks": 2})).expect_err("forks");
+    let rejected = merge_prompt_spec(&base, &json!({"forks": 2}), "ansible").expect_err("forks");
     assert_eq!(rejected, "launch_fields_are_only_for_ansible");
+}
+
+#[test]
+fn prompt_spec_action_is_only_for_opentofu() {
+    let base = json!({"action": "plan"});
+    let merged = merge_prompt_spec(&base, &json!({"action": "apply"}), "opentofu").expect("apply");
+    assert_eq!(merged["action"], "apply");
+    let back = merge_prompt_spec(&merged, &json!({"action": "plan"}), "opentofu").expect("plan");
+    assert_eq!(back["action"], "plan");
+
+    for tool in ["ansible", "shell"] {
+        let rejected =
+            merge_prompt_spec(&base, &json!({"action": "apply"}), tool).expect_err("action");
+        assert_eq!(rejected, "launch_fields_are_only_for_ansible");
+    }
+    for overlay in [
+        json!({"action": "destroy"}),
+        json!({"action": ""}),
+        json!({"action": null}),
+    ] {
+        let rejected = merge_prompt_spec(&base, &overlay, "opentofu").expect_err("invalid action");
+        assert_eq!(rejected, "action_is_plan_or_apply");
+    }
+    let unknown = merge_prompt_spec(&base, &json!({"limit": "db"}), "opentofu").expect_err("limit");
+    assert_eq!(unknown, "launch_fields_are_only_for_ansible");
+    let empty_base = json!({});
+    let added = merge_prompt_spec(&empty_base, &json!({"action": "apply"}), "opentofu")
+        .expect("action on an empty spec");
+    assert_eq!(added, json!({"action": "apply"}));
 }
 
 fn template_without_environment() -> db::Template {

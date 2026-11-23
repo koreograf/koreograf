@@ -412,7 +412,8 @@ pub fn content_saved_by_admin(
 /// True when `params` would run the same command as `template`. A missing
 /// `tool` means the runner keeps the template. `spec.limit` is ignored because
 /// relaunch of failed hosts adds it. A template that asks at launch also
-/// ignores inventory, tags, skip tags, job type, and verbosity.
+/// ignores inventory, tags, skip tags, job type, verbosity, and the OpenTofu
+/// action.
 pub(crate) fn command_matches_template(
     template: &db::Template,
     params: &serde_json::Value,
@@ -439,7 +440,7 @@ pub(crate) fn command_matches_template(
     if !prompted && saved_target(params, "inventory_id") != template.inventory_id {
         return false;
     }
-    specs_match(&template.spec, params, prompted)
+    specs_match(&template.spec, params, prompted, &template.tool)
 }
 
 fn saved_target(params: &serde_json::Value, key: &str) -> Option<String> {
@@ -450,19 +451,26 @@ fn saved_target(params: &serde_json::Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn specs_match(template_spec: &str, params: &serde_json::Value, prompt: bool) -> bool {
+fn specs_match(template_spec: &str, params: &serde_json::Value, prompt: bool, tool: &str) -> bool {
     let Some(saved) = params.get("spec").filter(|value| value.is_object()) else {
         return true;
     };
-    spec_map(saved, prompt) == spec_map(&db::json_object(template_spec), prompt)
+    spec_map(saved, prompt, tool) == spec_map(&db::json_object(template_spec), prompt, tool)
 }
 
-fn spec_map(value: &serde_json::Value, prompt: bool) -> serde_json::Map<String, serde_json::Value> {
+fn spec_map(
+    value: &serde_json::Value,
+    prompt: bool,
+    tool: &str,
+) -> serde_json::Map<String, serde_json::Value> {
     let mut map = value.as_object().cloned().unwrap_or_default();
     map.remove("limit");
     if prompt {
         for key in ["tags", "skip_tags", "job_type", "verbosity"] {
             map.remove(key);
+        }
+        if tool == "opentofu" {
+            map.remove("action");
         }
     }
     map

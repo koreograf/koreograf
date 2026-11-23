@@ -202,6 +202,40 @@ mod auth_tests {
         });
         assert!(!command_matches_template(&template, &replaced));
     }
+
+    #[test]
+    fn a_prompted_opentofu_action_does_not_change_the_command() {
+        let mut tofu = template(r#"{"action":"plan"}"#);
+        tofu.tool = "opentofu".into();
+        tofu.entrypoint = "infra".into();
+        tofu.project_id = None;
+        tofu.inventory_id = None;
+        tofu.prompt_on_launch = true;
+        let applied = json!({
+            "tool": "opentofu",
+            "entrypoint": "infra",
+            "spec": {"action": "apply"}
+        });
+        assert!(command_matches_template(&tofu, &applied));
+        let with_options = json!({
+            "tool": "opentofu",
+            "entrypoint": "infra",
+            "spec": {"action": "apply"},
+            "launch_with_options": true
+        });
+        tofu.prompt_on_launch = false;
+        assert!(command_matches_template(&tofu, &with_options));
+        assert!(!command_matches_template(&tofu, &applied));
+        let mut shell = tofu.clone();
+        shell.tool = "shell".into();
+        let shell_params = json!({
+            "tool": "shell",
+            "entrypoint": "infra",
+            "spec": {"action": "apply"},
+            "launch_with_options": true
+        });
+        assert!(!command_matches_template(&shell, &shell_params));
+    }
 }
 
 mod ldap_tests {

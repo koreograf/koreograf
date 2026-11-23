@@ -181,3 +181,95 @@ test("the workflow editor confirms an OpenTofu apply before launching", async ()
   assert.equal(puts, 1, "the confirmed save and launch did not save");
   assert.equal(posts, 2, "the confirmed save and launch did not post");
 });
+
+test("the launch dialog offers the OpenTofu action and defaults to the template", async () => {
+  await setup();
+  const { openLaunchPrompt } = await load("features/templates.js");
+  let posted = null;
+  globalThis.fetch = async (path, init) => {
+    if (init && init.method === "POST") {
+      posted = JSON.parse(init.body);
+      return { ok: true, status: 200, text: async () => JSON.stringify({ id: "job-1" }) };
+    }
+    return { ok: true, status: 200, text: async () => "[]" };
+  };
+  const item = { id: "tofu-plan", name: "plan-prod", tool: "opentofu", extra_vars: {}, spec: { action: "plan" } };
+  await openLaunchPrompt(item, true);
+  const form = document.querySelector("#launch-prompt").querySelector(".dialog-form");
+  assert.ok(form.action, "the OpenTofu launch dialog has no action select");
+  assert.equal(form.action.value, "plan", "the select did not start on the template action");
+  form.extra_vars.value = "{}";
+  form.action.value = "apply";
+  form.dispatchEvent({ type: "submit", preventDefault() {} });
+  const confirm = document.querySelector("#tofu-apply-confirm");
+  assert.ok(confirm, "choosing apply did not ask for confirmation");
+  confirm.dispatchEvent({ type: "keydown", key: "Escape", preventDefault() {} });
+  await tick();
+  await tick();
+  assert.equal(posted, null, "cancelling the apply confirmation started a job");
+  assert.ok(document.querySelector("#launch-prompt"), "cancelling the confirmation closed the launch form");
+
+  form.dispatchEvent({ type: "submit", preventDefault() {} });
+  document.querySelector("#tofu-apply-confirm .dialog-form").dispatchEvent({ type: "submit", preventDefault() {} });
+  await tick();
+  await tick();
+  assert.ok(posted, "the confirmed apply did not post");
+  assert.deepEqual(posted.spec, { action: "apply" }, "the launch did not send the chosen action");
+  assert.equal(posted.launch_with_options, true);
+});
+
+test("launching a plan does not ask for confirmation", async () => {
+  await setup();
+  const { openLaunchPrompt } = await load("features/templates.js");
+  let posted = null;
+  globalThis.fetch = async (path, init) => {
+    if (init && init.method === "POST") {
+      posted = JSON.parse(init.body);
+      return { ok: true, status: 200, text: async () => JSON.stringify({ id: "job-1" }) };
+    }
+    return { ok: true, status: 200, text: async () => "[]" };
+  };
+  const item = { id: "tofu-plan", name: "plan-prod", tool: "opentofu", extra_vars: {}, spec: { action: "apply" } };
+  await openLaunchPrompt(item, true);
+  const form = document.querySelector("#launch-prompt").querySelector(".dialog-form");
+  assert.equal(form.action.value, "apply", "the select did not start on the template action");
+  form.action.value = "plan";
+  form.extra_vars.value = "{}";
+  form.dispatchEvent({ type: "submit", preventDefault() {} });
+  assert.equal(document.querySelector("#tofu-apply-confirm"), null, "a plan launch asked for confirmation");
+  await tick();
+  await tick();
+  assert.deepEqual(posted.spec, { action: "plan" }, "the plan launch did not send the chosen action");
+});
+
+test("the template list offers launch with options for an OpenTofu template", async () => {
+  await setup();
+  const router = await load("core/router.js");
+  await load("features/templates.js");
+  const templates = [{ id: "tofu-plan", name: "plan-prod", tool: "opentofu", spec: { action: "plan" }, prompt_on_launch: false }];
+  let posted = null;
+  globalThis.fetch = async (path, init) => {
+    if (init && init.method === "POST") {
+      posted = JSON.parse(init.body);
+      return { ok: true, status: 200, text: async () => JSON.stringify({ id: "job-1" }) };
+    }
+    const body = path.startsWith("/api/v1/templates") ? templates : [];
+    return { ok: true, status: 200, text: async () => JSON.stringify(body) };
+  };
+  location.hash = "#/templates";
+  await router.matchRoute("#/templates").handler();
+  const options = document.querySelector('[data-launch-options="tofu-plan"]');
+  assert.ok(options, "the OpenTofu row has no launch with options button");
+  options.dispatchEvent({ type: "click" });
+  await tick();
+  await tick();
+  await tick();
+  const form = document.querySelector("#launch-prompt").querySelector(".dialog-form");
+  assert.ok(form.action, "launch with options did not show the action select");
+  form.extra_vars.value = "{}";
+  form.dispatchEvent({ type: "submit", preventDefault() {} });
+  await tick();
+  await tick();
+  assert.deepEqual(posted.spec, { action: "plan" });
+  assert.equal(posted.launch_with_options, true, "launch with options did not set the flag");
+});

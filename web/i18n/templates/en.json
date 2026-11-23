@@ -11,7 +11,7 @@
   "for_example_scripts_run_sh": "e.g. scripts/run.sh",
   "for_example_site_yml": "e.g. site.yml",
   "launch_with_options": "Launch with options",
-  "launch_with_options_help": "Set the inventory, credentials, limit, tags, skip tags, job type, verbosity, and extra variables for this run only. The template stays unchanged.",
+  "launch_with_options_help": "Set the inventory, credentials, action, Ansible options, and extra variables for this run only. The template stays unchanged.",
   "module_directory": "Module directory",
   "no_credentials_in_this_team": "No credentials in this team.",
   "no_environment_run_on_the_controller": "No environment (run on the controller)",
