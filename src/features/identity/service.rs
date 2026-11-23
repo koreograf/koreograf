@@ -412,7 +412,8 @@ pub fn content_saved_by_admin(
 /// True when `params` would run the same command as `template`. A missing
 /// `tool` means the runner keeps the template. `spec.limit` is ignored because
 /// relaunch of failed hosts adds it. A template that asks at launch also
-/// ignores inventory, tags, skip tags, job type, and verbosity.
+/// ignores inventory, tags, skip tags, job type, verbosity, and the OpenTofu
+/// action.
 pub(crate) fn command_matches_template(
     template: &db::Template,
     params: &serde_json::Value,
@@ -461,7 +462,7 @@ fn spec_map(value: &serde_json::Value, prompt: bool) -> serde_json::Map<String, 
     let mut map = value.as_object().cloned().unwrap_or_default();
     map.remove("limit");
     if prompt {
-        for key in ["tags", "skip_tags", "job_type", "verbosity"] {
+        for key in ["tags", "skip_tags", "job_type", "verbosity", "action"] {
             map.remove(key);
         }
     }

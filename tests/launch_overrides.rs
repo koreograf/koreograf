@@ -3,7 +3,8 @@
 mod common;
 
 use axum::http::StatusCode;
-use common::{Options, TestApp};
+use common::{call, config, temp_dir, Options, TestApp};
+use koreograf::LocalJobs;
 use serde_json::json;
 
 async fn shell_template(
@@ -297,4 +298,58 @@ async fn launch_can_pick_plan_or_apply_for_opentofu_only() {
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{denied}");
     assert_eq!(denied["error"], "launch_fields_are_only_for_ansible");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_prompted_opentofu_action_stays_a_template_launch_for_local_admins() {
+    let dir = temp_dir("tofu-action-local");
+    let mut cfg = config(&dir, &Options::default());
+    cfg.local_jobs = LocalJobs::Admins;
+    let state = koreograf::boot(cfg).expect("boot");
+    let app = koreograf::router(state);
+    let (cookie, team) = common::sign_in(&app).await;
+    let team = team.as_str();
+
+    let (status, template) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(team),
+        Some(json!({
+            "name": "Local tofu",
+            "tool": "opentofu",
+            "entrypoint": "infra",
+            "no_environment": true,
+            "prompt_on_launch": true,
+            "extra_vars": {},
+            "spec": {"action": "plan"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().unwrap();
+
+    let (status, launched) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        Some(&cookie),
+        Some(team),
+        Some(json!({"extra_vars": {}, "spec": {"action": "apply"}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{launched}");
+    assert_eq!(launched["parameters"]["spec"]["action"], "apply");
+    let (status, canceled) = call(
+        &app,
+        "POST",
+        &format!("/api/jobs/{}/cancel", launched["id"].as_str().unwrap()),
+        Some(&cookie),
+        Some(team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{canceled}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
