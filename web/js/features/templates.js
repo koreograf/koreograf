@@ -99,6 +99,7 @@ export async function openLaunchPrompt(item, launchWithOptions = false, preset =
   if (previous) previous.remove();
   const spec = { ...(item.spec || {}), ...(preset.limit === undefined ? {} : { limit: preset.limit }) };
   const ansible = item.tool === "ansible";
+  const tofu = item.tool === "opentofu";
   const [inventories, credentials] = await Promise.all([
     ansible ? api("GET", "/api/v1/inventories") : Promise.resolve([]),
     api("GET", "/api/v1/credentials"),
@@ -106,6 +107,7 @@ export async function openLaunchPrompt(item, launchWithOptions = false, preset =
   const inventoryId = preset.inventoryId || item.inventory_id;
   const inventory = ansible ? inventoryField(inventories, inventoryId) : "";
   const ansibleOptions = ansible ? ansibleFields(spec, { extras: false }) : "";
+  const tofuOptions = tofu ? tofuFields(spec) : "";
   let submitting = false;
   const dialog = openDialog({
     id: "launch-prompt",
@@ -116,12 +118,14 @@ export async function openLaunchPrompt(item, launchWithOptions = false, preset =
       ${inventory}
       ${credentialFields(credentials, selectedCredentialIds(item), item.tool)}
       ${ansibleOptions}
+      ${tofuOptions}
       ${extraVarsField(item.extra_vars)}`,
     submit: t("launch"),
     onSubmit: async ({ form, close }) => {
       if (submitting || !flushChips(form)) return;
       submitting = true;
-      if (item.tool === "opentofu" && spec.action === "apply") {
+      const action = tofu ? (form.action.value === "apply" ? "apply" : "plan") : "";
+      if (action === "apply") {
         const confirmed = await new Promise((resolve) => {
           let settled = false;
           const finish = (value) => {
@@ -168,6 +172,7 @@ export async function openLaunchPrompt(item, launchWithOptions = false, preset =
             verbosity: Number.isInteger(level) ? level : 0,
           };
         }
+        if (tofu) body.spec = { action };
         const job = await api("POST", `/api/v1/templates/${encodeURIComponent(item.id)}/launch`, body);
         close();
         go(`#/jobs/${job.id}`);
@@ -216,7 +221,7 @@ async function pageTemplates() {
         <td class="tool narrow-hide">${esc(item.tool)}</td>
         <td class="mono entry narrow-hide"><span class="entry-path" title="${esc(entry)}">${esc(entry)}</span></td>
         <td class="small narrow-hide">${esc(templateOptionLine(item))}</td>
-        <td>${can("operator") ? `<div class="row"><button class="btn primary" type="button" data-launch="${esc(item.id)}">${h("launch")}</button>${item.tool === "ansible" && !item.prompt_on_launch ? `<button class="btn" type="button" data-launch-options="${esc(item.id)}">${h("launch_with_options")}</button>` : ""}</div>` : ""}</td>
+        <td>${can("operator") ? `<div class="row"><button class="btn primary" type="button" data-launch="${esc(item.id)}">${h("launch")}</button>${(item.tool === "ansible" || item.tool === "opentofu") && !item.prompt_on_launch ? `<button class="btn" type="button" data-launch-options="${esc(item.id)}">${h("launch_with_options")}</button>` : ""}</div>` : ""}</td>
       </tr>`;
     });
     const host = document.querySelector("#template-table");

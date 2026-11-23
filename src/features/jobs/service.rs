@@ -623,13 +623,12 @@ fn parameters_for_launch(
         controller_can_run,
     ));
     if let Some(spec) = spec_overlay {
-        if template.tool != "ansible" {
-            return Err(ApiError::bad("launch_fields_are_only_for_ansible"));
-        }
         let empty = json!({});
         let base = params.get("spec").unwrap_or(&empty);
-        let merged = merge_prompt_spec(base, spec).map_err(ApiError::bad)?;
-        runner::check_ansible_spec(&merged).map_err(ApiError::from)?;
+        let merged = merge_prompt_spec(base, spec, &template.tool).map_err(ApiError::bad)?;
+        if template.tool == "ansible" {
+            runner::check_ansible_spec(&merged).map_err(ApiError::from)?;
+        }
         let Some(map) = params.as_object_mut() else {
             return Err(ApiError::bad("parameters_are_invalid"));
         };
@@ -676,16 +675,32 @@ fn credentials_for_launch(
 }
 
 /// Prompt fields replace the template spec. An empty string or null clears the key.
-fn merge_prompt_spec(base: &Value, overlay: &Value) -> Result<Value, String> {
+/// The Ansible fields stay Ansible-only; `action` is the one OpenTofu field and
+/// takes `plan` or `apply`. An empty or unknown value is rejected rather than
+/// cleared, because OpenTofu always needs one of the two.
+fn merge_prompt_spec(base: &Value, overlay: &Value, tool: &str) -> Result<Value, String> {
     let Some(incoming) = overlay.as_object() else {
         return Err("spec_must_be_an_object".into());
     };
     let mut spec = base.as_object().cloned().unwrap_or_default();
     for (key, value) in incoming {
-        if !matches!(
+        let ansible_field = matches!(
             key.as_str(),
             "job_type" | "tags" | "skip_tags" | "limit" | "verbosity"
-        ) {
+        );
+        if key == "action" {
+            if tool != "opentofu" {
+                return Err("launch_fields_are_only_for_ansible".into());
+            }
+            match value.as_str() {
+                Some("plan" | "apply") => {
+                    spec.insert(key.clone(), value.clone());
+                    continue;
+                }
+                _ => return Err("action_is_plan_or_apply".into()),
+            }
+        }
+        if !ansible_field || tool != "ansible" {
             return Err("launch_fields_are_only_for_ansible".into());
         }
         let clear = match value {

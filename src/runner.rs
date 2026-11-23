@@ -5964,6 +5964,8 @@ exit 0
         let root = std::env::temp_dir().join(format!("koreograf-tofu-live-{nanos}"));
         let module = "terraform {\n  required_version = \">= 1.5.0\"\n}\nresource \"terraform_data\" \"marker\" {\n  input = \"koreograf\"\n}\n";
         let team_a = root.join("cache").join("team-a").join("tpl");
+        let planned = run_wrapper(&root, "plan", &team_a, module);
+        assert!(planned.contains("1 to add"), "{planned}");
         let first = run_wrapper(&root, "apply", &team_a, module);
         assert!(first.contains("1 added"), "{first}");
         let second = run_wrapper(&root, "apply", &team_a, module);
@@ -5972,6 +5974,12 @@ exit 0
             "{second}"
         );
         assert!(second.contains("0 added"), "{second}");
+        let replanned = run_wrapper(&root, "plan", &team_a, module);
+        assert!(
+            replanned.contains("No changes. Your infrastructure matches the configuration."),
+            "{replanned}"
+        );
+        assert!(team_a.join("terraform.tfstate").is_file());
         let team_b = root.join("cache").join("team-b").join("tpl");
         let other = run_wrapper(&root, "apply", &team_b, module);
         assert!(other.contains("1 added"), "{other}");

@@ -11,7 +11,7 @@
   "for_example_scripts_run_sh": "z. B. scripts/run.sh",
   "for_example_site_yml": "z. B. site.yml",
   "launch_with_options": "Mit Optionen starten",
-  "launch_with_options_help": "Inventar, Zugangsdaten, Limit, Tags, übersprungene Tags, Job-Typ, Ausführlichkeit und zusätzliche Variablen nur für diesen Lauf setzen. Die Vorlage bleibt unverändert.",
+  "launch_with_options_help": "Inventar, Zugangsdaten, Aktion, Ansible-Optionen und zusätzliche Variablen nur für diesen Lauf setzen. Die Vorlage bleibt unverändert.",
   "module_directory": "Modulverzeichnis",
   "no_credentials_in_this_team": "Keine Zugänge im Team.",
   "no_environment_run_on_the_controller": "Keine Umgebung (auf dem Controller ausführen)",

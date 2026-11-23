@@ -252,7 +252,7 @@ On the first start the database gets one global environment per tool and the mat
 | `extra_vars` | no | Object. Default `{}` |
 | `spec` | no | Object. Default `{}` |
 | `update_on_launch` | no | Default true. Git projects only |
-| `prompt_on_launch` | no | Default false. The launch dialog asks for inventory, credentials, limit, tags, skip tags, job type, verbosity, and extra variables |
+| `prompt_on_launch` | no | Default false. The launch dialog asks for inventory, credentials, the OpenTofu action, limit, tags, skip tags, job type, verbosity, and extra variables |
 
 A `PUT` replaces the stored template, and `no_environment` falls back to false when the body omits it. A migrated template that runs on the controller therefore needs `"no_environment": true` sent explicitly; omitting the field switches that template to the tool default. In the container image `no_environment` is ignored and the tool default runs.
 
@@ -277,7 +277,7 @@ Shell: `entrypoint` or `spec.script`. The script is written as `inline.sh`.
 
 ### Launch
 
-`POST /api/v1/templates/{id}/launch` and `POST /api/v1/workflows/{id}/launch` take `{"extra_vars": {}}`. The value is an object. A template launch may also send `inventory_id`, `credential_ids`, and an Ansible `spec` with `job_type`, `tags`, `skip_tags`, `limit`, and `verbosity`. Omit a field to keep the template value. An empty `inventory_id` clears it. An empty string in those spec fields clears that field. Non-empty `extra_vars` and those three override fields are accepted only when the template has `prompt_on_launch` set, or when the body sets `launch_with_options: true`. The template row's Launch with options action sends that flag. Plain API launches do not set it, so a template without `prompt_on_launch` rejects those overrides with `prompt_on_launch_is_off`. An empty body or empty `extra_vars` keeps the template. When accepted, `extra_vars` is merged onto the template values. Hooks and other trigger payloads still merge their extra vars without that flag. The template row is not changed. Workflow launch ignores those three fields and uses the graph.
+`POST /api/v1/templates/{id}/launch` and `POST /api/v1/workflows/{id}/launch` take `{"extra_vars": {}}`. The value is an object. A template launch may also send `inventory_id`, `credential_ids`, an Ansible `spec` with `job_type`, `tags`, `skip_tags`, `limit`, and `verbosity`, or, for an OpenTofu template, a `spec` with `action` of `plan` or `apply`. Omit a field to keep the template value. An empty `inventory_id` clears it. An empty string in those Ansible spec fields clears that field. An OpenTofu `action` is never cleared: any value other than `plan` or `apply` answers 400 `action_is_plan_or_apply`. Ansible fields on an OpenTofu launch, `action` on any other tool, and unknown spec keys answer 400 `launch_fields_are_only_for_ansible`. Non-empty `extra_vars` and those override fields are accepted only when the template has `prompt_on_launch` set, or when the body sets `launch_with_options: true`. The template row's Launch with options action sends that flag. Plain API launches do not set it, so a template without `prompt_on_launch` rejects those overrides with `prompt_on_launch_is_off`. An empty body or empty `extra_vars` keeps the template. When accepted, `extra_vars` is merged onto the template values. Hooks and other trigger payloads still merge their extra vars without that flag. The template row is not changed. Workflow launch ignores those override fields and uses the graph.
 
 | Method | Path |
 | --- | --- |
