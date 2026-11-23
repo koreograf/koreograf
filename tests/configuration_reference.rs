@@ -67,47 +67,17 @@ fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Every `KOREOGRAF_*` name that appears in a string literal, so a read
-/// through a helper such as `env_paths` or `migrate_env_path` counts too.
+/// Every `KOREOGRAF_*` name written at the start of a string literal, so a
+/// read through a helper such as `env_paths` or `migrate_env_path` counts too.
+/// A raw scan also avoids confusing a char literal such as `'"'` for a string.
 fn literal_names(source: &str) -> BTreeSet<String> {
-    let mut names = BTreeSet::new();
-    let bytes = source.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'/') {
-            while i < bytes.len() && bytes[i] != b'\n' {
-                i += 1;
-            }
-        } else if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'*') {
-            i += 2;
-            while i < bytes.len() && !(bytes[i] == b'*' && bytes.get(i + 1) == Some(&b'/')) {
-                i += 1;
-            }
-            i += 2;
-        } else if bytes[i] == b'"' {
-            i += 1;
-            let start = i;
-            while i < bytes.len() && bytes[i] != b'"' {
-                if bytes[i] == b'\\' {
-                    i += 1;
-                }
-                i += 1;
-            }
-            collect_reference_names(&source[start..i.min(bytes.len())], &mut names);
-            i += 1;
-        } else {
-            i += 1;
-        }
-    }
-    names
-}
-
-fn collect_reference_names(text: &str, names: &mut BTreeSet<String>) {
     const PREFIX: &str = "KOREOGRAF_";
-    let bytes = text.as_bytes();
+    const OPEN: &str = "\"KOREOGRAF_";
+    let bytes = source.as_bytes();
+    let mut names = BTreeSet::new();
     let mut from = 0;
-    while let Some(at) = text[from..].find(PREFIX) {
-        let start = from + at;
+    while let Some(at) = source[from..].find(OPEN) {
+        let start = from + at + 1;
         let after_prefix = start + PREFIX.len();
         let mut end = after_prefix;
         while end < bytes.len()
@@ -117,13 +87,14 @@ fn collect_reference_names(text: &str, names: &mut BTreeSet<String>) {
         {
             end += 1;
         }
-        if end > after_prefix {
-            names.insert(text[start..end].to_string());
+        if end > after_prefix && bytes.get(end) == Some(&b'"') {
+            names.insert(source[start..end].to_string());
             from = end;
         } else {
             from = after_prefix;
         }
     }
+    names
 }
 
 /// The "Environment variables" section, so a name in another section or in
