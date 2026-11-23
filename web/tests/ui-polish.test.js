@@ -57,12 +57,18 @@ test("the router tracks direction and restores the scroll position", async () =>
   main.className = "main";
   main.innerHTML = '<h1 tabindex="-1">Jobs</h1>';
   document.body.appendChild(main);
+  const heading = main.querySelector("h1");
   app.settleRoute(true);
   assert.deepEqual(calls.at(-1), [0, 240]);
   document.activeElement = document.body;
   app.settleRoute(false);
   assert.deepEqual(calls.at(-1), [0, 0]);
-  assert.equal(document.activeElement, main.querySelector("h1"), "a new page did not focus the heading");
+  assert.equal(document.activeElement, heading, "a new page did not focus the heading");
+  assert.deepEqual(
+    heading.focusOptions,
+    { preventScroll: true, focusVisible: false },
+    "the route focus must not request a visible ring",
+  );
 });
 
 test("the schedule start date is bounded ten years ahead", async () => {

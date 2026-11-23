@@ -222,6 +222,7 @@ Something stays a page when it needs its own address, a deep link to a record, a
 ## Accessibility
 
 - Keep the global `:focus-visible` ring. A custom control must show the same ring, as `.chips` and `.switch` do.
+- A forward route change moves focus to the page `h1` for screen readers and passes `focusVisible: false`, so the heading keeps no visible ring; do not suppress the ring for `[tabindex="-1"]` or `#main`, because the skip link still needs it.
 - Every input has a label, either the wrapping `.field` label or `aria-label` for a search box.
 - Dialogs use `role="dialog"`, `aria-modal="true"`, and `aria-labelledby`. Tabs support arrow keys, Home, and End. Escape closes a dialog and returns focus.
 - Color is never the only signal. A status pill has text, a required field has `*`, and an error has text plus `aria-invalid`.

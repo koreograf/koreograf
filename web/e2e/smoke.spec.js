@@ -73,6 +73,33 @@ async function clickEdge(page, locator, offset = 5) {
   await page.mouse.click(point.x + offset, point.y + offset);
 }
 
+async function focusRing(locator) {
+  return locator.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      focusVisible: element.matches(":focus-visible"),
+      outlineStyle: style.outlineStyle,
+      outlineWidth: style.outlineWidth,
+    };
+  });
+}
+
+async function expectSilentHeading(page, name) {
+  const heading = page.getByRole("heading", { level: 1, name, exact: true });
+  await expect(heading).toBeFocused();
+  const ring = await focusRing(heading);
+  expect(ring.focusVisible, `the ${name} heading is focus-visible`).toBe(false);
+  expect(ring.outlineStyle, `the ${name} heading draws an outline`).toBe("none");
+}
+
+async function expectVisibleRing(locator, name) {
+  await expect(locator).toBeFocused();
+  const ring = await focusRing(locator);
+  expect(ring.focusVisible, `${name} is not focus-visible`).toBe(true);
+  expect(ring.outlineStyle, `${name} has no outline`).toBe("solid");
+  expect(ring.outlineWidth, `${name} ring is too thin`).toBe("2px");
+}
+
 test("an administrator navigates every route, launches the demo shell job and switches language", async ({ page }) => {
   test.setTimeout(120000);
   await page.goto("/");
@@ -245,6 +272,39 @@ test("an administrator navigates every route, launches the demo shell job and sw
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.locator("#wf-status")).toHaveText("Unsaved changes");
   expect(new URL(page.url()).hash).toMatch(/^#\/workflows\/[^?]+$/);
+});
+
+test("a route change focuses the heading without a ring and keeps keyboard rings", async ({ page }) => {
+  await signInInEnglish(page);
+  await expectSilentHeading(page, "Overview");
+
+  await page.reload();
+  await expectSilentHeading(page, "Overview");
+
+  const nav = page.getByRole("navigation");
+  await nav.getByRole("link", { name: "Templates", exact: true }).click();
+  await expectSilentHeading(page, "Templates");
+  await nav.getByRole("link", { name: "Overview", exact: true }).click();
+  await expectSilentHeading(page, "Overview");
+
+  await page.keyboard.press("Shift+Tab");
+  await expectVisibleRing(page.getByRole("button", { name: "Sign out", exact: true }), "the sidebar button");
+  const skip = page.getByRole("link", { name: "Skip to content", exact: true });
+  await pressUntilFocused(page, "Shift+Tab", () => document.activeElement === document.querySelector(".skip-link"));
+  await expectVisibleRing(skip, "the skip link");
+  await page.keyboard.press("Tab");
+  await expectVisibleRing(page.locator("#team-select"), "the team select");
+  await page.keyboard.press("Tab");
+  const sidebar = nav.getByRole("link", { name: "Overview", exact: true });
+  await expectVisibleRing(sidebar, "the sidebar link");
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Shift+Tab");
+  await expectVisibleRing(skip, "the skip link");
+
+  await page.keyboard.press("Enter");
+  await expectVisibleRing(page.locator("#main"), "the main landmark");
+  await page.keyboard.press("Tab");
+  await expectVisibleRing(page.getByRole("tab", { name: "Overview", exact: true }), "the in-page tab");
 });
 
 test("an owner clears the dashboard cache and a viewer has no button", async ({ page }) => {

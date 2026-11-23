@@ -529,7 +529,9 @@ export function settleRoute(back) {
   const main = document.querySelector(".main");
   const heading = main && main.querySelector("h1");
   if (!main || !heading || main.contains(document.activeElement)) return;
-  heading.focus({ preventScroll: true });
+  // The focus move is for screen readers only. Without focusVisible the
+  // browser would draw the accent ring on load or after a pointer navigation.
+  heading.focus({ preventScroll: true, focusVisible: false });
 }
 
 export function hasHistoryIndex(state) {

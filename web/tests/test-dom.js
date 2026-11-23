@@ -167,7 +167,8 @@ class Element {
     this.parentNode = null;
   }
 
-  focus() {
+  focus(options) {
+    this.focusOptions = options;
     if (globalThis.document) globalThis.document.activeElement = this;
   }
 
