@@ -226,6 +226,15 @@ mod auth_tests {
         tofu.prompt_on_launch = false;
         assert!(command_matches_template(&tofu, &with_options));
         assert!(!command_matches_template(&tofu, &applied));
+        let mut shell = tofu.clone();
+        shell.tool = "shell".into();
+        let shell_params = json!({
+            "tool": "shell",
+            "entrypoint": "infra",
+            "spec": {"action": "apply"},
+            "launch_with_options": true
+        });
+        assert!(!command_matches_template(&shell, &shell_params));
     }
 }
 

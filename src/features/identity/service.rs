@@ -440,7 +440,7 @@ pub(crate) fn command_matches_template(
     if !prompted && saved_target(params, "inventory_id") != template.inventory_id {
         return false;
     }
-    specs_match(&template.spec, params, prompted)
+    specs_match(&template.spec, params, prompted, &template.tool)
 }
 
 fn saved_target(params: &serde_json::Value, key: &str) -> Option<String> {
@@ -451,19 +451,26 @@ fn saved_target(params: &serde_json::Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn specs_match(template_spec: &str, params: &serde_json::Value, prompt: bool) -> bool {
+fn specs_match(template_spec: &str, params: &serde_json::Value, prompt: bool, tool: &str) -> bool {
     let Some(saved) = params.get("spec").filter(|value| value.is_object()) else {
         return true;
     };
-    spec_map(saved, prompt) == spec_map(&db::json_object(template_spec), prompt)
+    spec_map(saved, prompt, tool) == spec_map(&db::json_object(template_spec), prompt, tool)
 }
 
-fn spec_map(value: &serde_json::Value, prompt: bool) -> serde_json::Map<String, serde_json::Value> {
+fn spec_map(
+    value: &serde_json::Value,
+    prompt: bool,
+    tool: &str,
+) -> serde_json::Map<String, serde_json::Value> {
     let mut map = value.as_object().cloned().unwrap_or_default();
     map.remove("limit");
     if prompt {
-        for key in ["tags", "skip_tags", "job_type", "verbosity", "action"] {
+        for key in ["tags", "skip_tags", "job_type", "verbosity"] {
             map.remove(key);
+        }
+        if tool == "opentofu" {
+            map.remove("action");
         }
     }
     map
