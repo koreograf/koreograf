@@ -1,14 +1,14 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-//! The environment reference in `docs/configuration.md` lists every
-//! `KOREOGRAF_*` name that the server reads at startup.
+//! The "Environment variables" section in `docs/configuration.md` lists every
+//! `KOREOGRAF_*` name that appears in the server source.
 
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Names that the server process does not read. Each group is documented
-/// elsewhere and stays out of the configuration contract.
+/// Names that the server does not read as its configuration. Each group is
+/// documented elsewhere and stays out of the configuration contract.
 const NOT_SERVER_SETTINGS: &[&str] = &[
     // Given to a job process, see docs/jobs.md#job-environment.
     "KOREOGRAF_ACTION",
@@ -67,34 +67,73 @@ fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Names passed to `env_string`, `env_or`, `env_flag`, `std::env::var`, or
-/// `std::env::var_os` as a string literal.
-fn read_names(source: &str) -> BTreeSet<String> {
-    const MARKERS: &[&str] = &[
-        "env_string(",
-        "env_or(",
-        "env_flag(",
-        "std::env::var(",
-        "std::env::var_os(",
-    ];
+/// Every `KOREOGRAF_*` name that appears in a string literal, so a read
+/// through a helper such as `env_paths` or `migrate_env_path` counts too.
+fn literal_names(source: &str) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
-    for marker in MARKERS {
-        let mut rest = source;
-        while let Some(at) = rest.find(marker) {
-            rest = &rest[at + marker.len()..];
-            let Some(literal) = rest.trim_start().strip_prefix('"') else {
-                continue;
-            };
-            let Some(end) = literal.find('"') else {
-                continue;
-            };
-            let name = &literal[..end];
-            if name.starts_with("KOREOGRAF_") {
-                names.insert(name.to_string());
+    let bytes = source.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'/') {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
             }
+        } else if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'*') {
+            i += 2;
+            while i < bytes.len() && !(bytes[i] == b'*' && bytes.get(i + 1) == Some(&b'/')) {
+                i += 1;
+            }
+            i += 2;
+        } else if bytes[i] == b'"' {
+            i += 1;
+            let start = i;
+            while i < bytes.len() && bytes[i] != b'"' {
+                if bytes[i] == b'\\' {
+                    i += 1;
+                }
+                i += 1;
+            }
+            collect_reference_names(&source[start..i.min(bytes.len())], &mut names);
+            i += 1;
+        } else {
+            i += 1;
         }
     }
     names
+}
+
+fn collect_reference_names(text: &str, names: &mut BTreeSet<String>) {
+    const PREFIX: &str = "KOREOGRAF_";
+    let bytes = text.as_bytes();
+    let mut from = 0;
+    while let Some(at) = text[from..].find(PREFIX) {
+        let start = from + at;
+        let after_prefix = start + PREFIX.len();
+        let mut end = after_prefix;
+        while end < bytes.len()
+            && (bytes[end].is_ascii_uppercase()
+                || bytes[end].is_ascii_digit()
+                || bytes[end] == b'_')
+        {
+            end += 1;
+        }
+        if end > after_prefix {
+            names.insert(text[start..end].to_string());
+            from = end;
+        } else {
+            from = after_prefix;
+        }
+    }
+}
+
+/// The "Environment variables" section, so a name in another section or in
+/// the PostgreSQL prose does not count as listed.
+fn reference_section(reference: &str) -> &str {
+    const HEADING: &str = "## Environment variables";
+    let start = reference.find(HEADING).unwrap();
+    let rest = &reference[start + HEADING.len()..];
+    let end = rest.find("\n## ").unwrap_or(rest.len());
+    &rest[..end]
 }
 
 /// Names written in the reference, as whole tokens, so `KOREOGRAF_LLM` does
@@ -133,14 +172,14 @@ fn documented_names(reference: &str) -> BTreeSet<String> {
 fn every_server_environment_variable_is_in_the_configuration_reference() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let reference = fs::read_to_string(root.join("docs/configuration.md")).unwrap();
-    let documented = documented_names(&reference);
+    let documented = documented_names(reference_section(&reference));
     let mut sources = Vec::new();
     rust_sources(&root.join("src"), &mut sources);
 
     let mut missing = BTreeSet::new();
     for path in sources {
         let source = fs::read_to_string(&path).unwrap();
-        for name in read_names(&source) {
+        for name in literal_names(&source) {
             if !documented.contains(&name) && !NOT_SERVER_SETTINGS.contains(&name.as_str()) {
                 missing.insert(name);
             }
