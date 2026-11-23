@@ -105,4 +105,23 @@ test("the OpenTofu structured view reflows at desktop and phone widths", async (
     await page.getByRole("button", { name: "Structured", exact: true }).click();
     await expect(page.locator("#tofu-output")).toBeVisible();
   }
+
+  for (const [width, height] of [[1280, 900], [390, 844]]) {
+    for (const lang of ["de", "en"]) {
+      for (const theme of ["light", "dark"]) {
+        await page.setViewportSize({ width, height });
+        await page.evaluate(([language, mode]) => {
+          localStorage.setItem("koreograf.lang", language);
+          localStorage.setItem("koreograf.theme", mode);
+          localStorage.setItem("koreograf.job-output-view", "structured");
+        }, [lang, theme]);
+        await page.reload();
+        await expect(page.locator("#tofu-output")).toBeVisible();
+        await expect(page.locator("#tf-resources tr.tf-resource")).toHaveCount(3);
+        await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe(lang);
+        await expect.poll(() => page.evaluate(() => document.documentElement.dataset.theme)).toBe(theme);
+        await noHorizontalScroll(page);
+      }
+    }
+  }
 });
