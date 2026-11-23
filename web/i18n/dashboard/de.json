@@ -19,7 +19,10 @@
   "last_14_days": "14 Tage",
   "last_7_days": "7 Tage",
   "last_successful_sync_hint": "Die Zeit stammt vom letzten erfolgreichen Lauf; eine fehlgeschlagene Synchronisierung behält sie.",
+  "ldap_is_configured": "LDAP ist konfiguriert.",
+  "local_accounts": "Lokale Konten.",
   "no_active_workflow_runs": "Keine laufenden oder fehlgeschlagenen Workflow-Läufe.",
+  "no_container_runtime": "keine Container-Laufzeit",
   "no_failed_syncs": "Keine fehlgeschlagenen Synchronisierungen.",
   "no_jobs_in_this_range": "Keine Aufträge in diesem Zeitraum.",
   "no_open_jobs": "Keine wartenden oder laufenden Aufträge.",
@@ -35,5 +38,6 @@
   "today": "Heute",
   "upcoming_schedules": "Nächste Zeitpläne",
   "webhook_deliveries": "Webhook-Eingänge",
+  "workflow_failed_window": "Fehlgeschlagene Läufe der letzten {hours} Stunden.",
   "workflow_runs": "Workflow-Läufe"
 }

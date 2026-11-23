@@ -3510,6 +3510,7 @@ fn seed_glance_rows(
     let running = stamp(chrono::Duration::minutes(-5));
     let finished = stamp(chrono::Duration::minutes(-2));
     let stale = stamp(chrono::Duration::days(-10));
+    let old_failed = stamp(chrono::Duration::days(-2));
     let future = stamp(chrono::Duration::days(2));
     let missed = stamp(chrono::Duration::days(-1));
     let created = stamp(chrono::Duration::zero());
@@ -3671,12 +3672,18 @@ fn seed_glance_rows(
     insert_workflow("glance-workflow-a", team, "Workflow A");
     insert_workflow("glance-workflow-b", other_team, "Workflow B");
 
-    let insert_run = |id: &str, workflow: &str, team_id: &str, status: &str, created: &str| {
+    let insert_run = |id: &str,
+                      workflow: &str,
+                      team_id: &str,
+                      status: &str,
+                      created: &str,
+                      finished: Option<&str>| {
         db.execute(
             "INSERT INTO workflow_jobs (
-                id, workflow_id, team_id, name, status, extra_vars, launched_by, trigger, created_at
-             ) VALUES (?1, ?2, ?3, ?1, ?4, '{}', 'admin', 'manual', ?5)",
-            (id, workflow, team_id, status, created),
+                id, workflow_id, team_id, name, status, extra_vars, launched_by, trigger,
+                created_at, finished_at
+             ) VALUES (?1, ?2, ?3, ?1, ?4, '{}', 'admin', 'manual', ?5, ?6)",
+            (id, workflow, team_id, status, created, finished),
         )
         .unwrap();
     };
@@ -3686,6 +3693,7 @@ fn seed_glance_rows(
         team,
         "running",
         &pending_recent,
+        None,
     );
     insert_run(
         "glance-run-failed-a",
@@ -3693,6 +3701,15 @@ fn seed_glance_rows(
         team,
         "failed",
         &finished,
+        Some(&finished),
+    );
+    insert_run(
+        "glance-run-old-failed-a",
+        "glance-workflow-a",
+        team,
+        "failed",
+        &old_failed,
+        Some(&old_failed),
     );
     insert_run(
         "glance-run-running-b",
@@ -3700,6 +3717,7 @@ fn seed_glance_rows(
         other_team,
         "running",
         &pending_recent,
+        None,
     );
     insert_run(
         "glance-run-failed-b",
@@ -3707,6 +3725,7 @@ fn seed_glance_rows(
         other_team,
         "failed",
         &finished,
+        Some(&finished),
     );
 
     (oldest, future, missed)
@@ -3825,6 +3844,7 @@ async fn overview_glance_is_team_scoped_and_viewer_readable() {
     assert_eq!(names(&glance["syncs"]["inventories"]), vec!["Inventory A"]);
     assert_eq!(glance["workflows"]["running"], 1);
     assert_eq!(glance["workflows"]["failed"], 1);
+    assert_eq!(glance["workflows"]["failed_window_hours"], 24);
     let runs = ids(&glance["workflows"]["items"]);
     assert!(
         runs.contains(&"glance-run-running-a".to_string()),
@@ -3832,6 +3852,10 @@ async fn overview_glance_is_team_scoped_and_viewer_readable() {
     );
     assert!(
         runs.contains(&"glance-run-failed-a".to_string()),
+        "{runs:?}"
+    );
+    assert!(
+        !runs.contains(&"glance-run-old-failed-a".to_string()),
         "{runs:?}"
     );
     assert!(
@@ -3887,6 +3911,37 @@ async fn overview_glance_is_team_scoped_and_viewer_readable() {
     assert_eq!(status, StatusCode::OK, "{viewer}");
     assert_eq!(viewer["glance"]["jobs"]["pending"], 2);
     assert_eq!(viewer["glance"]["hosts"]["failed"], 2);
+
+    let (status, _, _) = call(
+        &app,
+        "DELETE",
+        "/api/v1/inventories/glance-inv-a",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, deleted, _) = call(
+        &app,
+        "GET",
+        "/api/v1/overview",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{deleted}");
+    assert_eq!(
+        deleted["glance"]["hosts"]["failed"], 0,
+        "a deleted inventory still shows failed hosts"
+    );
+    assert_eq!(
+        deleted["glance"]["hosts"]["stale"], 0,
+        "a deleted inventory still shows stale hosts"
+    );
+    assert_eq!(deleted["glance"]["hosts"]["items"], json!([]));
+    assert_eq!(deleted["glance"]["syncs"]["inventories"], json!([]));
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -3957,12 +4012,6 @@ async fn overview_glance_survives_a_restart_with_an_empty_metrics_book() {
         db.execute(
             "UPDATE workflow_jobs SET status = 'running', finished_at = NULL
              WHERE id = 'glance-run-running-a'",
-            [],
-        )
-        .unwrap();
-        db.execute(
-            "UPDATE workflow_jobs SET status = 'failed', finished_at = NULL
-             WHERE id = 'glance-run-failed-a'",
             [],
         )
         .unwrap();

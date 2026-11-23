@@ -455,6 +455,7 @@ struct GlanceSync {
 struct GlanceWorkflowSummary {
     running: u64,
     failed: u64,
+    failed_window_hours: u64,
     items: Vec<GlanceWorkflowRun>,
 }
 
@@ -579,6 +580,8 @@ pub async fn overview(
     };
     let jobs = state.store().recent_jobs(&team, 8)?;
     let deliveries = state.store().list_deliveries(&team, 8)?;
+    // The workflow and hook fields stay in the response for API clients and
+    // the webhook test button. The overview tiles no longer render them.
     let workflow = state.store().first_workflow(&team)?;
     let hook = state.store().first_hook(&team)?;
     let cache = cacheinfo::team_cache(&state.cfg.data_dir, &team);
@@ -611,6 +614,9 @@ pub async fn overview(
 /// The stale-host threshold. A host is stale when its latest `host_results`
 /// row is older than this many days; the dashboard spells the number out.
 const HOST_STALE_AFTER_DAYS: i64 = 7;
+
+/// A failed workflow run counts as recent for this long after it finished.
+const WORKFLOW_FAILED_WINDOW_HOURS: i64 = 24;
 
 fn rows(value: i64) -> u64 {
     u64::try_from(value).unwrap_or(0)
@@ -690,9 +696,14 @@ fn overview_glance(state: &Shared, team: &str) -> AppResult<OverviewGlance> {
         .filter(|run| run.status == "running")
         .collect();
     running_runs.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    let failed_cutoff = (Utc::now() - ChronoDuration::hours(WORKFLOW_FAILED_WINDOW_HOURS))
+        .to_rfc3339_opts(SecondsFormat::Secs, true);
     let failed_runs: Vec<&db::WorkflowJob> = workflow_runs
         .iter()
-        .filter(|run| run.status == "failed")
+        .filter(|run| {
+            run.status == "failed"
+                && run.finished_at.as_deref().unwrap_or(&run.created_at) >= failed_cutoff.as_str()
+        })
         .collect();
     let running_count = rows(i64::try_from(running_runs.len()).unwrap_or(i64::MAX));
     let failed_count = rows(i64::try_from(failed_runs.len()).unwrap_or(i64::MAX));
@@ -761,6 +772,7 @@ fn overview_glance(state: &Shared, team: &str) -> AppResult<OverviewGlance> {
         workflows: GlanceWorkflowSummary {
             running: running_count,
             failed: failed_count,
+            failed_window_hours: rows(WORKFLOW_FAILED_WINDOW_HOURS),
             items: workflow_items,
         },
     })

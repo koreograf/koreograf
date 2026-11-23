@@ -129,7 +129,7 @@ function concurrencyCard(item) {
 function schedulesCard(item) {
   const schedules = item || {};
   const rows = (schedules.items || []).map((entry) => `<tr>
-    <td><a href="#/schedules">${esc(entry.name)}</a></td>
+    <td><a href="#/schedules?edit=${encodeURIComponent(entry.id)}">${esc(entry.name)}</a></td>
     <td>${esc(entry.target_name || "—")}</td>
     <td class="small muted">${entry.next_run_at ? esc(when(entry.next_run_at)) : "—"}</td>
     <td>${entry.missed_at ? `<span class="pill warn">${h("schedule_missed_state")}</span>` : ""}</td>
@@ -194,12 +194,20 @@ function workflowsCard(item) {
   return glanceCard("workflows", "workflow_runs", {
     links: [{ href: "#/workflows", label: "workflows" }],
     body: `<div class="row">${glanceStat(Number(workflows.running) || 0, "running", "running-runs")}${glanceStat(Number(workflows.failed) || 0, "failed", "failed-runs")}</div>
+      <p class="small muted">${h("workflow_failed_window", { hours: Number(workflows.failed_window_hours) || 24 })}</p>
       ${rows.length ? table([t("run"), t("workflow"), t("status"), t("created")], rows) : `<p class="small muted">${h("no_active_workflow_runs")}</p>`}`,
   });
 }
 
 function cacheCard(data) {
   return `<article class="card stat" data-glance-card="cache"><span class="small muted">${h("dependency_cache")}</span><strong>${esc(bytes(data.cache_bytes))}</strong><p class="small muted">${h("collections_roles_and_opentofu_providers_stay_between_runs")}</p></article>`;
+}
+
+export function overviewSystemLine(data) {
+  const runner = data && data.runner_mode ? esc(data.runner_mode) : "—";
+  const runtime = data && data.runtime ? esc(data.runtime) : h("no_container_runtime");
+  const directory = data && data.ldap ? h("ldap_is_configured") : h("local_accounts");
+  return `<p class="small muted" data-overview-system>${h("runner")}: ${runner} · ${runtime} · ${directory}</p>`;
 }
 
 export function overviewGlanceHtml(data) {
@@ -360,6 +368,7 @@ async function pageDashboard() {
     <div id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
       ${data.preflight ? preflightNoticeHtml(data.preflight) : ""}
       ${appState.me.is_admin && data.import ? importNoticeHtml(data.import) : ""}
+      ${overviewSystemLine(data)}
       ${jobs.length ? "" : onboardingCard()}
       <div class="stack">
         ${overviewGlanceHtml(data)}

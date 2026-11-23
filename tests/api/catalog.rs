@@ -1162,6 +1162,7 @@ async fn system_catalog_endpoints_return_the_documented_shape() {
                 },
                 "workflows": {
                     "failed": 0,
+                    "failed_window_hours": 24,
                     "items": [],
                     "running": 0
                 }

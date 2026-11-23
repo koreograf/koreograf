@@ -125,6 +125,7 @@ test("the overview glance links every queue, schedule, host, sync and run", asyn
       workflows: {
         running: 1,
         failed: 1,
+        failed_window_hours: 24,
         items: [{ id: "run-1", workflow_id: "workflow-1", name: "Self-Heal", status: "failed", created_at: oldest }],
       },
     },
@@ -141,7 +142,9 @@ test("the overview glance links every queue, schedule, host, sync and run", asyn
   assert.match(html, /data-glance="team-slots"><strong>1 \/ 2<\/strong>/);
   assert.match(html, /data-glance="global-slots"><strong>3 \/ 4<\/strong>/);
   assert.match(html, /href="#\/schedules"/);
+  assert.match(html, /href="#\/schedules\?edit=schedule-1"/);
   assert.match(html, /schedule_missed_state/);
+  assert.match(html, /workflow_failed_window/);
   assert.match(html, /href="#\/inventories\/inv-1\/hosts\/web%201"/);
   assert.match(html, /hosts_stale_after_days/);
   assert.match(html, /href="#\/projects\/project-1"/);
@@ -160,13 +163,23 @@ test("the overview glance keeps a specific empty state for every list", async ()
       schedules: { missed_count: 0, items: [] },
       hosts: { failed: 0, stale: 0, stale_after_days: 7, items: [] },
       syncs: { projects: [], inventories: [] },
-      workflows: { running: 0, failed: 0, items: [] },
+      workflows: { running: 0, failed: 0, failed_window_hours: 24, items: [] },
     },
   });
   for (const key of ["no_pending_job", "no_open_jobs", "no_upcoming_schedules", "no_problem_hosts", "no_failed_syncs", "no_active_workflow_runs"]) {
     assert.match(html, new RegExp(key), `the empty state ${key} is missing`);
   }
   assert.doesNotMatch(html, /<table/, "an empty glance still renders a table");
+});
+
+test("the overview keeps the runner, runtime and directory line", async () => {
+  const { overviewSystemLine } = await load("features/dashboard.js");
+  const line = overviewSystemLine({ runner_mode: "local", runtime: null, ldap: false });
+  assert.match(line, /data-overview-system/);
+  assert.match(line, /runner/);
+  assert.match(line, /no_container_runtime/);
+  assert.match(line, /local_accounts/);
+  assert.match(overviewSystemLine({ runner_mode: "docker", runtime: "podman", ldap: true }), /ldap_is_configured/);
 });
 
 test("the preflight notice names the missing tool and runtime", async () => {

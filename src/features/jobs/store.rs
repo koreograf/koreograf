@@ -133,34 +133,42 @@ pub(crate) const GLOBAL_RUNNING_JOBS: &str = "SELECT COUNT(*) FROM jobs WHERE st
 /// The hosts whose latest result failed, was unreachable, or is older than the
 /// stale cutoff. The window keeps one row per inventory and host; the count
 /// and the limited list share the same latest-row definition.
-const LATEST_TEAM_HOSTS: &str = "SELECT inventory_id, host, result, ts FROM (
+const LATEST_TEAM_HOSTS: &str = "SELECT h.inventory_id, i.name AS inventory_name, h.host,
+            h.result, h.ts
+     FROM (
         SELECT inventory_id, host, result, ts,
                ROW_NUMBER() OVER (
                    PARTITION BY inventory_id, host ORDER BY ts DESC, id DESC
                ) AS latest
         FROM host_results
         WHERE team_id = ?1 AND inventory_id IS NOT NULL AND inventory_id <> ''
-     ) ranked WHERE ranked.latest = 1";
+     ) h
+     JOIN inventories i ON i.id = h.inventory_id AND i.team_id = ?1
+     WHERE h.latest = 1";
 
+/// A host whose inventory was deleted has no row here, so the glance cannot
+/// point at a missing inventory. The window still keeps one row per inventory
+/// and host, and the count uses the same inventory check.
 pub(crate) const HOST_GLANCE_COUNTS: &str = "SELECT
         COALESCE(SUM(CASE WHEN latest.result IN ('failed', 'unreachable') THEN 1 ELSE 0 END), 0),
         COALESCE(SUM(CASE WHEN latest.ts < ?2 THEN 1 ELSE 0 END), 0)
      FROM (
-        SELECT result, ts,
+        SELECT h.result, h.ts,
                ROW_NUMBER() OVER (
-                   PARTITION BY inventory_id, host ORDER BY ts DESC, id DESC
+                   PARTITION BY h.inventory_id, h.host ORDER BY h.ts DESC, h.id DESC
                ) AS latest
-        FROM host_results
-        WHERE team_id = ?1 AND inventory_id IS NOT NULL AND inventory_id <> ''
+        FROM host_results h
+        JOIN inventories i ON i.id = h.inventory_id AND i.team_id = h.team_id
+        WHERE h.team_id = ?1 AND h.inventory_id IS NOT NULL AND h.inventory_id <> ''
      ) latest WHERE latest.latest = 1";
 
-/// The list joins the inventory name for the dashboard link. `LATEST_TEAM_HOSTS`
-/// stays the only place that decides which host row is the latest one.
+/// The live inventory join decides which hosts the dashboard shows. Per-host
+/// history keeps its rows when an inventory is deleted; the glance stays quiet
+/// about that stale history.
 pub(crate) fn host_glance_sql() -> String {
     format!(
-        "SELECT hosts.inventory_id, COALESCE(i.name, ''), hosts.host, hosts.result, hosts.ts
+        "SELECT hosts.inventory_id, hosts.inventory_name, hosts.host, hosts.result, hosts.ts
          FROM ({LATEST_TEAM_HOSTS}) hosts
-         LEFT JOIN inventories i ON i.id = hosts.inventory_id AND i.team_id = ?1
          WHERE hosts.result IN ('failed', 'unreachable') OR hosts.ts < ?2
          ORDER BY CASE WHEN hosts.result IN ('failed', 'unreachable') THEN 0 ELSE 1 END,
                   hosts.ts DESC, hosts.host
