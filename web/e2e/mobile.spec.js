@@ -805,6 +805,19 @@ test("the overview shows the queue, schedules, hosts, syncs and workflow cards o
   expect(columns.trim().split(/\s+/), "the glance cards keep a desktop grid on a phone").toHaveLength(1);
   await noHorizontalScroll(page);
 
+  for (const lang of ["de", "en"]) {
+    for (const theme of ["dark", "light"]) {
+      await page.evaluate(([language, mode]) => {
+        localStorage.setItem("koreograf.lang", language);
+        localStorage.setItem("koreograf.theme", mode);
+      }, [lang, theme]);
+      await page.reload();
+      await expect(page.getByRole("heading", { level: 1, name: lang === "de" ? "Übersicht" : "Overview" })).toBeVisible();
+      await expect(page.locator('[data-glance-card="queue"]')).toBeVisible();
+      await noHorizontalScroll(page);
+    }
+  }
+
   await schedules.getByRole("link", { name: "Schedules", exact: true }).first().click();
   await expect(page.getByRole("heading", { level: 1, name: "Schedules" })).toBeVisible();
   await noHorizontalScroll(page);
