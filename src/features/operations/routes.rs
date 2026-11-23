@@ -640,7 +640,7 @@ fn overview_glance(state: &Shared, team: &str) -> AppResult<OverviewGlance> {
     let inventories = state.store().list_inventories(team)?;
     let workflows = state
         .store()
-        .glance_workflow_runs(team, &failed_cutoff, 8)?;
+        .glance_workflow_runs(team, &failed_cutoff, 10)?;
 
     let global_limit = crate::config::effective_max_concurrent_jobs(state.cfg.max_concurrent_jobs);
     let team_limit = crate::config::effective_max_concurrent_jobs_per_team(

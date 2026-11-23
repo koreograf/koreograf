@@ -4151,16 +4151,27 @@ impl Backend for PostgresBackend {
                 .await?;
             let running: i64 = row.get(0);
             let failed: i64 = row.get(1);
-            let rows = client
+            let per_group = (limit.clamp(2, 100) / 2).max(1);
+            let mut items = client
                 .query(
-                    &store::sql::postgres(&workflows::store::workflow_glance_items_sql()),
-                    &[&team_id, &cutoff, &limit],
+                    &store::sql::postgres(&workflows::store::workflow_glance_running_sql()),
+                    &[&team_id, &per_group],
                 )
-                .await?;
-            let items = rows
+                .await?
                 .iter()
                 .map(workflows::store::row_workflow_job)
                 .collect::<AppResult<Vec<_>>>()?;
+            items.extend(
+                client
+                    .query(
+                        &store::sql::postgres(&workflows::store::workflow_glance_failed_sql()),
+                        &[&team_id, &cutoff, &per_group],
+                    )
+                    .await?
+                    .iter()
+                    .map(workflows::store::row_workflow_job)
+                    .collect::<AppResult<Vec<_>>>()?,
+            );
             Ok(workflows::store::GlanceWorkflowRuns {
                 running,
                 failed,

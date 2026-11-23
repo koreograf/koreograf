@@ -109,17 +109,20 @@ pub(crate) const WORKFLOW_GLANCE_COUNTS: &str = "SELECT
             AND COALESCE(finished_at, created_at) >= ?2 THEN 1 ELSE 0 END), 0)
      FROM workflow_jobs WHERE team_id = ?1";
 
-pub(crate) fn workflow_glance_items_sql() -> String {
+pub(crate) fn workflow_glance_running_sql() -> String {
     format!(
         "SELECT {WORKFLOW_JOB_COLUMNS} FROM workflow_jobs
-         WHERE team_id = ?1
-           AND (status = 'running'
-             OR (status = 'failed' AND COALESCE(finished_at, created_at) >= ?2))
-         ORDER BY CASE WHEN status = 'running' THEN 0 ELSE 1 END,
-                  CASE WHEN status = 'running' THEN created_at END ASC,
-                  CASE WHEN status = 'failed' THEN created_at END DESC,
-                  id
-         LIMIT ?3"
+         WHERE team_id = ?1 AND status = 'running'
+         ORDER BY created_at ASC, id ASC LIMIT ?2"
+    )
+}
+
+pub(crate) fn workflow_glance_failed_sql() -> String {
+    format!(
+        "SELECT {WORKFLOW_JOB_COLUMNS} FROM workflow_jobs
+         WHERE team_id = ?1 AND status = 'failed'
+           AND COALESCE(finished_at, created_at) >= ?2
+         ORDER BY created_at DESC, id DESC LIMIT ?3"
     )
 }
 
@@ -139,12 +142,19 @@ pub(crate) fn glance_workflow_runs(
         Ok((SqlRow::get::<i64>(row, 0)?, SqlRow::get::<i64>(row, 1)?))
     })?;
     let (running, failed) = counts.unwrap_or((0, 0));
-    let items = sql::sqlite_all(
+    let per_group = (limit.clamp(2, 100) / 2).max(1);
+    let mut items = sql::sqlite_all(
         c,
-        &workflow_glance_items_sql(),
-        params![team_id, cutoff, limit.clamp(1, 100)],
+        &workflow_glance_running_sql(),
+        params![team_id, per_group],
         sqlite_row_workflow_job,
     )?;
+    items.extend(sql::sqlite_all(
+        c,
+        &workflow_glance_failed_sql(),
+        params![team_id, cutoff, per_group],
+        sqlite_row_workflow_job,
+    )?);
     Ok(GlanceWorkflowRuns {
         running,
         failed,

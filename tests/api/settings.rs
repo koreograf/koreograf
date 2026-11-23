@@ -3739,6 +3739,17 @@ fn seed_glance_rows(
             Some(&finished),
         );
     }
+    // Eight busy runs must not push the failed run out of the short list.
+    for index in 0..8 {
+        insert_run(
+            &format!("glance-run-running-extra-a-{index}"),
+            "glance-workflow-a",
+            team,
+            "running",
+            &pending_recent,
+            None,
+        );
+    }
 
     (oldest, future, missed)
 }
@@ -3854,7 +3865,7 @@ async fn overview_glance_is_team_scoped_and_viewer_readable() {
 
     assert_eq!(names(&glance["syncs"]["projects"]), vec!["Project A"]);
     assert_eq!(names(&glance["syncs"]["inventories"]), vec!["Inventory A"]);
-    assert_eq!(glance["workflows"]["running"], 1);
+    assert_eq!(glance["workflows"]["running"], 9);
     assert_eq!(glance["workflows"]["failed"], 1);
     assert_eq!(glance["workflows"]["failed_window_hours"], 24);
     let runs = ids(&glance["workflows"]["items"]);
@@ -4023,8 +4034,8 @@ async fn overview_glance_survives_a_restart_with_an_empty_metrics_book() {
         .unwrap();
         db.execute(
             "UPDATE workflow_jobs SET status = 'running', finished_at = NULL
-             WHERE id = 'glance-run-running-a'",
-            [],
+             WHERE team_id = ?1 AND id LIKE 'glance-run-running-%'",
+            [&team],
         )
         .unwrap();
     }
