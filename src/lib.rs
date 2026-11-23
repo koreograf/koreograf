@@ -35,6 +35,7 @@ mod runner;
 mod seed;
 mod store;
 mod tls;
+mod tofu_events;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};

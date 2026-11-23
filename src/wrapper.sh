@@ -401,11 +401,11 @@ EOF
   fi
   if [ "$KOREOGRAF_ACTION" = "apply" ]; then
     log "tofu apply"
-    tofu apply -input=false -auto-approve -no-color
+    tofu apply -input=false -auto-approve -no-color -json
     code=$?
   else
     log "tofu plan"
-    tofu plan -input=false -no-color
+    tofu plan -input=false -no-color -json
     code=$?
   fi
   if [ "$injected" -eq 1 ] && [ -f "$state_file" ]; then

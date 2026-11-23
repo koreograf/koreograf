@@ -1151,6 +1151,74 @@ fn job_page_and_download_keep_the_raw_log_only() {
 }
 
 #[test]
+fn tofu_events_stay_out_of_the_raw_log_and_keep_their_own_stream() {
+    let state = page_state("tofu-raw");
+    {
+        let db = state.db().unwrap();
+        crate::features::jobs::store::insert_event(&db, "job", "stdout", "init line").unwrap();
+        crate::features::jobs::store::insert_event(
+            &db,
+            "job",
+            crate::tofu_events::STREAM,
+            r#"{"type":"planned_change","action":"create","addr":"terraform_data.web"}"#,
+        )
+        .unwrap();
+        crate::features::jobs::store::insert_event(&db, "job", "stdout", "after events").unwrap();
+    }
+    let events = events_for_page(state.store(), "job").unwrap();
+    assert!(events
+        .iter()
+        .all(|event| event.stream != crate::tofu_events::STREAM));
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.line.as_str())
+            .collect::<Vec<_>>(),
+        vec!["init line", "after events"]
+    );
+    let download = crate::features::jobs::routes::render_job_output(state.store(), "job").unwrap();
+    assert!(download.contains("init line"));
+    assert!(download.contains("after events"));
+    assert!(!download.contains("planned_change"));
+    let structured =
+        crate::features::jobs::routes::tofu_events_for_job(state.store(), "job").unwrap();
+    assert_eq!(structured.len(), 1);
+    let returned = serde_json::to_value(&structured).expect("json");
+    assert_eq!(returned[0]["event"]["type"], "planned_change");
+    assert_eq!(returned[0]["event"]["addr"], "terraform_data.web");
+    assert!(
+        crate::features::jobs::routes::ansible_events_for_job(state.store(), "job")
+            .unwrap()
+            .is_empty()
+    );
+    let _ = std::fs::remove_dir_all(&state.cfg.data_dir);
+}
+
+#[test]
+fn shell_jobs_invent_no_structured_events() {
+    let state = page_state("shell-raw");
+    {
+        let db = state.db().unwrap();
+        crate::features::jobs::store::insert_event(&db, "job", "stdout", "shell line").unwrap();
+    }
+    assert!(
+        crate::features::jobs::routes::tofu_events_for_job(state.store(), "job")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        crate::features::jobs::routes::ansible_events_for_job(state.store(), "job")
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        crate::features::jobs::routes::render_job_output(state.store(), "job").unwrap(),
+        "shell line\n"
+    );
+    let _ = std::fs::remove_dir_all(&state.cfg.data_dir);
+}
+
+#[test]
 fn a_raw_line_between_the_page_reads_is_replayed_from_the_page_cursor() {
     let state = page_state("page-cursor");
     {

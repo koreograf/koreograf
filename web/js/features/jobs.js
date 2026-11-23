@@ -462,7 +462,10 @@ function logState(log) {
 export const OUTPUT_VIEW_KEY = "koreograf.job-output-view";
 
 export function structuredEventsAvailable(job) {
-  return Boolean(job && job.tool === "ansible" && Array.isArray(job.ansible_events) && job.ansible_events.length);
+  if (!job) return false;
+  if (job.tool === "ansible") return Boolean(Array.isArray(job.ansible_events) && job.ansible_events.length);
+  if (job.tool === "opentofu") return Boolean(Array.isArray(job.tofu_events) && job.tofu_events.length);
+  return false;
 }
 
 export function outputViewPreference() {
@@ -604,6 +607,138 @@ export function statusCounts(hosts) {
     counts[host.status] = (counts[host.status] || 0) + 1;
   }
   return counts;
+}
+
+export const TOFU_ACTIONS = ["create", "update", "delete", "replace", "read", "no-op"];
+const TOFU_STATUSES = ["planned", "applying", "applied", "failed"];
+const TOFU_SEVERITIES = ["error", "warning"];
+const TOFU_ACTION_KEYS = {
+  create: "tofu_action_create",
+  update: "tofu_action_update",
+  delete: "tofu_action_delete",
+  replace: "tofu_action_replace",
+  read: "tofu_action_read",
+  "no-op": "tofu_action_noop",
+};
+const TOFU_STATUS_KEYS = {
+  planned: "tofu_status_planned",
+  applying: "tofu_status_applying",
+  applied: "tofu_status_applied",
+  failed: "tofu_status_failed",
+};
+const TOFU_SEVERITY_KEYS = {
+  error: "tofu_severity_error",
+  warning: "tofu_severity_warning",
+};
+
+function tofuCount(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
+}
+
+/** Turns the `tofu` event stream into a summary, resources, diagnostics, and outputs. */
+export function buildTofuModel(events) {
+  const model = {
+    summary: null,
+    resources: [],
+    byAddress: new Map(),
+    diagnostics: [],
+    outputs: [],
+    outputByName: new Map(),
+    truncated: false,
+    limit: 0,
+  };
+  const resourceFor = (event) => {
+    const address = typeof event.addr === "string" ? event.addr : "";
+    if (!address) return null;
+    let row = model.byAddress.get(address);
+    if (!row) {
+      row = { address, action: "create", status: "planned", elapsed: null };
+      model.byAddress.set(address, row);
+      model.resources.push(row);
+    }
+    if (TOFU_ACTIONS.includes(event.action)) row.action = event.action;
+    return row;
+  };
+  for (const item of events || []) {
+    const event = eventPayload(item);
+    if (!event || typeof event.type !== "string") continue;
+    if (event.type === "limit") {
+      model.truncated = true;
+      model.limit = tofuCount(event.events);
+      continue;
+    }
+    if (event.type === "change_summary") {
+      model.summary = {
+        operation: event.operation === "apply" ? "apply" : "plan",
+        add: tofuCount(event.add),
+        change: tofuCount(event.change),
+        remove: tofuCount(event.remove),
+        import: tofuCount(event.import),
+      };
+      continue;
+    }
+    if (["planned_change", "apply_start", "apply_progress", "apply_complete", "apply_errored"].includes(event.type)) {
+      const row = resourceFor(event);
+      if (!row) continue;
+      if (event.type === "planned_change") row.status = "planned";
+      else if (event.type === "apply_start" || event.type === "apply_progress") row.status = "applying";
+      else if (event.type === "apply_complete") row.status = "applied";
+      else row.status = "failed";
+      const elapsed = Number(event.elapsed_seconds);
+      if (Number.isFinite(elapsed) && elapsed >= 0) row.elapsed = elapsed;
+      continue;
+    }
+    if (event.type === "diagnostic") {
+      model.diagnostics.push({
+        severity: event.severity === "warning" ? "warning" : "error",
+        summary: typeof event.summary === "string" ? event.summary : "",
+        detail: typeof event.detail === "string" ? event.detail : "",
+      });
+      continue;
+    }
+    if (event.type === "outputs" && event.outputs && typeof event.outputs === "object") {
+      for (const [name, output] of Object.entries(event.outputs)) {
+        if (!output || typeof output !== "object") continue;
+        const row = {
+          name,
+          sensitive: output.sensitive === true,
+          value: typeof output.value === "string" ? output.value : "",
+        };
+        if (model.outputByName.has(name)) {
+          Object.assign(model.outputByName.get(name), row);
+        } else {
+          model.outputByName.set(name, row);
+          model.outputs.push(row);
+        }
+      }
+    }
+  }
+  return model;
+}
+
+/** Counts for the summary bar, falling back to the planned resources. */
+export function tofuCounts(model) {
+  if (model && model.summary) return model.summary;
+  const counts = { add: 0, change: 0, remove: 0, import: 0 };
+  for (const row of (model && model.resources) || []) {
+    if (row.action === "create") counts.add += 1;
+    else if (row.action === "update" || row.action === "replace") counts.change += 1;
+    else if (row.action === "delete") counts.remove += 1;
+  }
+  return counts;
+}
+
+function tofuActionKey(action) {
+  return TOFU_ACTION_KEYS[action] || TOFU_ACTION_KEYS.create;
+}
+
+function tofuStatusKey(status) {
+  return TOFU_STATUS_KEYS[status] || TOFU_STATUS_KEYS.planned;
+}
+
+function tofuSeverityKey(severity) {
+  return TOFU_SEVERITY_KEYS[severity] || TOFU_SEVERITY_KEYS.error;
 }
 
 /**
@@ -1583,6 +1718,178 @@ function bindStructuredOutput(job, startedAt) {
   };
 }
 
+function bindTofuOutput(job, startedAt) {
+  const switchBox = document.querySelector("#output-view");
+  const box = document.querySelector("#tofu-output");
+  const countsBox = document.querySelector("#tf-counts");
+  const operation = document.querySelector("#tf-operation");
+  const resourceBody = document.querySelector("#tf-resources");
+  const noResources = document.querySelector("#tf-no-resources");
+  const diagnosticsBox = document.querySelector("#tf-diagnostics");
+  const noDiagnostics = document.querySelector("#tf-no-diagnostics");
+  const outputsBox = document.querySelector("#tf-outputs");
+  const noOutputs = document.querySelector("#tf-no-outputs");
+  const limitNote = document.querySelector("#tf-limit");
+  const log = document.querySelector("#log");
+  const tools = document.querySelector("#output-tools");
+  if (!switchBox || !box || !countsBox || !resourceBody || !diagnosticsBox || !outputsBox || !log) return null;
+  const state = {
+    events: [...(job.tofu_events || [])],
+    seen: new Set((job.tofu_events || []).map((item) => Number(item && item.id)).filter((id) => Number.isFinite(id) && id > 0)),
+    model: buildTofuModel(job.tofu_events || []),
+    view: "raw",
+    explicit: false,
+    tab: true,
+    frame: 0,
+    rendered: false,
+    startedAt: Number(startedAt) || 0,
+  };
+  const available = () => state.events.length > 0;
+
+  const applyView = () => {
+    const raw = state.view !== "structured";
+    const has = available();
+    switchBox.hidden = !has || !state.tab;
+    switchBox.querySelectorAll("[data-output-view]").forEach((button) => {
+      const active = button.dataset.outputView === state.view;
+      button.classList.toggle("primary", active);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+    box.hidden = raw || !state.tab;
+    if (tools) tools.hidden = !raw || !state.tab;
+    log.hidden = !raw || !state.tab;
+  };
+
+  const draw = () => {
+    state.frame = 0;
+    const model = state.model;
+    const counts = tofuCounts(model);
+    const parts = [
+      ["tofu_add", counts.add, "add"],
+      ["tofu_change", counts.change, "change"],
+      ["tofu_destroy", counts.remove, "destroy"],
+    ];
+    countsBox.replaceChildren(...parts.map(([key, value, kind]) => {
+      const item = stNode("div", `tf-count ${kind}`);
+      item.dataset.tfCount = kind;
+      item.appendChild(stNode("span", "tf-count-label", t(key)));
+      const strong = stNode("strong", "tf-count-value", String(value));
+      item.appendChild(strong);
+      return item;
+    }));
+    if (operation) {
+      operation.textContent = model.summary ? t(model.summary.operation === "apply" ? "tofu_operation_apply" : "tofu_operation_plan") : "";
+      operation.hidden = !model.summary;
+    }
+    const rows = model.resources.map((row) => {
+      const tr = stNode("tr", "tf-resource");
+      tr.dataset.tfAction = row.action;
+      tr.dataset.tfStatus = row.status;
+      tr.dataset.tfAddress = row.address;
+      const action = stNode("td", "", "");
+      action.dataset.label = t("action");
+      const badge = stNode("span", `tf-badge action ${TOFU_ACTIONS.includes(row.action) ? row.action : "create"}`, t(tofuActionKey(row.action)));
+      action.appendChild(badge);
+      const address = stNode("td", "tf-address", row.address);
+      address.dataset.label = t("address");
+      const status = stNode("td", "", "");
+      status.dataset.label = t("status");
+      const statusBadge = stNode("span", `tf-badge status ${TOFU_STATUSES.includes(row.status) ? row.status : "planned"}`, t(tofuStatusKey(row.status)));
+      status.appendChild(statusBadge);
+      if (row.elapsed !== null) status.appendChild(stNode("span", "tf-elapsed", formatDuration(row.elapsed)));
+      tr.appendChild(action);
+      tr.appendChild(address);
+      tr.appendChild(status);
+      return tr;
+    });
+    resourceBody.replaceChildren(...rows);
+    if (noResources) noResources.hidden = rows.length > 0;
+
+    const diagnostics = model.diagnostics.map((diagnostic) => {
+      const severity = TOFU_SEVERITIES.includes(diagnostic.severity) ? diagnostic.severity : "error";
+      const item = stNode("article", `tf-diagnostic ${severity}`);
+      item.dataset.tfSeverity = severity;
+      const head = stNode("div", "tf-diagnostic-head");
+      head.appendChild(stNode("span", `tf-badge severity ${severity}`, t(tofuSeverityKey(severity))));
+      head.appendChild(stNode("span", "tf-diagnostic-summary", diagnostic.summary));
+      item.appendChild(head);
+      if (diagnostic.detail) item.appendChild(stNode("pre", "st-pre", diagnostic.detail));
+      return item;
+    });
+    diagnosticsBox.replaceChildren(...diagnostics);
+    if (noDiagnostics) noDiagnostics.hidden = diagnostics.length > 0;
+
+    const outputs = model.outputs.map((output) => {
+      const item = stNode("div", "tf-output");
+      item.dataset.tfOutput = output.name;
+      item.dataset.tfSensitive = String(output.sensitive);
+      item.appendChild(stNode("span", "tf-output-name", output.name));
+      item.appendChild(stNode(
+        "span",
+        output.sensitive ? "small muted tf-output-value" : "tf-output-value mono",
+        output.sensitive ? t("tofu_sensitive") : output.value,
+      ));
+      return item;
+    });
+    outputsBox.replaceChildren(...outputs);
+    if (noOutputs) noOutputs.hidden = outputs.length > 0;
+    if (limitNote) {
+      limitNote.hidden = !model.truncated;
+      limitNote.textContent = model.truncated ? t("structured_output_limited", { count: model.limit || 2000 }) : "";
+    }
+    box.dataset.resourceCount = String(model.resources.length);
+    box.dataset.summaryAdd = String(counts.add);
+    box.dataset.summaryChange = String(counts.change);
+    box.dataset.summaryRemove = String(counts.remove);
+    if (!state.rendered && state.view === "structured") {
+      state.rendered = true;
+      if (state.startedAt) box.dataset.renderMs = String(Math.max(0, Math.round(performance.now() - state.startedAt)));
+    }
+  };
+
+  const schedule = () => {
+    if (state.frame) return;
+    const run = () => draw();
+    state.frame = window.requestAnimationFrame ? window.requestAnimationFrame(run) : window.setTimeout(run, 16);
+  };
+
+  switchBox.querySelectorAll("[data-output-view]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.view = button.dataset.outputView === "raw" ? "raw" : "structured";
+      state.explicit = true;
+      rememberOutputView(state.view);
+      applyView();
+    });
+  });
+
+  const refresh = () => {
+    state.model = buildTofuModel(state.events);
+    if (available() && state.view === "raw" && !state.explicit && outputViewPreference() === "structured") {
+      state.view = "structured";
+    }
+    if (!available()) state.view = "raw";
+    applyView();
+    schedule();
+  };
+
+  applyView();
+  refresh();
+
+  return {
+    append(item) {
+      if (!pushStructuredEvent(state, item)) return;
+      refresh();
+    },
+    reload() {
+      refresh();
+    },
+    tab(show) {
+      state.tab = show;
+      applyView();
+    },
+  };
+}
+
 async function pageJob(id) {
   const live = appState.generation;
   const startedAt = performance.now();
@@ -1624,6 +1931,36 @@ async function pageJob(id) {
     </div>
     <div id="panel-output">
       <div class="log-summary" id="log-summary" hidden></div>
+      <div class="structured tofu" id="tofu-output" hidden>
+        <section class="tf-summary" id="tf-summary">
+          <div class="spread tf-summary-head">
+            <h2>${h("tofu_summary")}</h2>
+            <span class="small muted" id="tf-operation" hidden></span>
+          </div>
+          <div class="tf-counts" id="tf-counts"></div>
+        </section>
+        <section class="tf-section">
+          <h2>${h("resources")}</h2>
+          <div class="table-wrap">
+            <table class="table tf-resources">
+              <thead><tr><th>${h("action")}</th><th>${h("address")}</th><th>${h("status")}</th></tr></thead>
+              <tbody id="tf-resources"></tbody>
+            </table>
+          </div>
+          <p class="small muted tf-empty" id="tf-no-resources" hidden>${h("tofu_no_resources")}</p>
+        </section>
+        <section class="tf-section">
+          <h2>${h("tofu_diagnostics")}</h2>
+          <div class="tf-diagnostics" id="tf-diagnostics"></div>
+          <p class="small muted tf-empty" id="tf-no-diagnostics" hidden>${h("tofu_no_diagnostics")}</p>
+        </section>
+        <section class="tf-section">
+          <h2>${h("tofu_outputs")}</h2>
+          <div class="tf-outputs" id="tf-outputs"></div>
+          <p class="small muted tf-empty" id="tf-no-outputs" hidden>${h("tofu_no_outputs")}</p>
+        </section>
+        <p class="small muted tf-empty" id="tf-limit" hidden></p>
+      </div>
       <div class="structured" id="structured-output" hidden>
         <section class="st-recap" id="log-result" hidden>
           <div class="spread st-recap-head">
@@ -1675,7 +2012,9 @@ async function pageJob(id) {
     <div id="panel-parameters" hidden>${jobParameters(job)}</div>`);
   const badge = document.querySelector(".pill");
   bindJobLog(document.querySelector("#log"), job);
-  const structured = bindStructuredOutput(job, startedAt);
+  const structured = job.tool === "opentofu"
+    ? bindTofuOutput(job, startedAt)
+    : bindStructuredOutput(job, startedAt);
   (job.events || []).forEach(appendLog);
   const relaunchButtons = () => document.querySelectorAll("[data-action=relaunch], [data-action=relaunch-failed]");
   const startAgain = async (onlyFailed) => {
@@ -1782,6 +2121,10 @@ async function pageJob(id) {
     appendLog(JSON.parse(event.data));
   });
   appState.source.addEventListener("ansible", (event) => {
+    if (live !== appState.generation) return;
+    if (structured) structured.append(JSON.parse(event.data));
+  });
+  appState.source.addEventListener("tofu", (event) => {
     if (live !== appState.generation) return;
     if (structured) structured.append(JSON.parse(event.data));
   });

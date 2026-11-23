@@ -7,7 +7,7 @@ const { dataDir, password, port, root, username } = require("./env");
 
 module.exports = defineConfig({
   testDir: __dirname,
-  testMatch: /(smoke|mobile|structured)\.spec\.js/,
+  testMatch: /(smoke|mobile|structured|tofu)\.spec\.js/,
   timeout: 30000,
   fullyParallel: false,
   workers: 1,
@@ -22,6 +22,7 @@ module.exports = defineConfig({
   projects: [
     { name: "chromium", testMatch: "smoke.spec.js", use: { ...devices["Desktop Chrome"] } },
     { name: "structured", testMatch: "structured.spec.js", use: { ...devices["Desktop Chrome"] } },
+    { name: "tofu", testMatch: "tofu.spec.js", use: { ...devices["Desktop Chrome"] } },
     { name: "iPhone 13", testMatch: "mobile.spec.js", use: { ...devices["iPhone 13"], browserName: "chromium" } },
     { name: "Pixel 7", testMatch: "mobile.spec.js", use: { ...devices["Pixel 7"] } },
   ],

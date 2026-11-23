@@ -76,21 +76,25 @@ pub(crate) const INSERT_EVENT: &str =
     "INSERT INTO job_events (job_id, ts, stream, line) VALUES (?1, ?2, ?3, ?4)";
 
 pub(crate) const EVENTS_AFTER: &str = "SELECT id, ts, stream, line FROM job_events
-     WHERE job_id = ?1 AND id > ?2 AND stream <> 'ansible' ORDER BY id LIMIT ?3";
+     WHERE job_id = ?1 AND id > ?2 AND stream NOT IN ('ansible', 'tofu')
+     ORDER BY id LIMIT ?3";
 
-/// Raw log events plus structured events. The event stream uses this so an
-/// `ansible` event cannot be skipped when a raw event advances the cursor.
+/// Raw log events plus structured events. The event stream uses this so a
+/// structured event cannot be skipped when a raw event advances the cursor.
 pub(crate) const EVENTS_ALL_AFTER: &str = "SELECT id, ts, stream, line FROM job_events
      WHERE job_id = ?1 AND id > ?2 ORDER BY id LIMIT ?3";
 
 pub(crate) const ANSIBLE_EVENTS_AFTER: &str = "SELECT id, ts, stream, line FROM job_events
      WHERE job_id = ?1 AND id > ?2 AND stream = 'ansible' ORDER BY id LIMIT ?3";
 
+pub(crate) const TOFU_EVENTS_AFTER: &str = "SELECT id, ts, stream, line FROM job_events
+     WHERE job_id = ?1 AND id > ?2 AND stream = 'tofu' ORDER BY id LIMIT ?3";
+
 pub(crate) const EVENTS_COUNT_BETWEEN: &str = "SELECT COUNT(*) FROM job_events
-     WHERE job_id = ?1 AND id > ?2 AND id < ?3 AND stream <> 'ansible'";
+     WHERE job_id = ?1 AND id > ?2 AND id < ?3 AND stream NOT IN ('ansible', 'tofu')";
 
 pub(crate) const EVENTS_LAST: &str = "SELECT id, ts, stream, line FROM job_events
-     WHERE job_id = ?1 AND stream <> 'ansible' ORDER BY id DESC LIMIT ?2";
+     WHERE job_id = ?1 AND stream NOT IN ('ansible', 'tofu') ORDER BY id DESC LIMIT ?2";
 
 pub(crate) const INSERT_HOST_RESULT: &str = "INSERT INTO host_results (
         job_id, team_id, inventory_id, host, playbook, role, result,
@@ -569,6 +573,21 @@ pub(crate) fn ansible_events_after(
     sql::sqlite_all(
         c,
         ANSIBLE_EVENTS_AFTER,
+        params![job_id, after, limit],
+        sqlite_row_job_event,
+    )
+}
+
+/// Structured OpenTofu events only. The raw log queries leave this stream out.
+pub(crate) fn tofu_events_after(
+    c: &Connection,
+    job_id: &str,
+    after: i64,
+    limit: i64,
+) -> AppResult<Vec<JobEvent>> {
+    sql::sqlite_all(
+        c,
+        TOFU_EVENTS_AFTER,
         params![job_id, after, limit],
         sqlite_row_job_event,
     )
