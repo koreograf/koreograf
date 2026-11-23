@@ -149,6 +149,31 @@ The runner writes every prepared credential into the job environment, but these 
 
 Secrets are stored with AES-GCM. The list API returns the name and the kind, never the secret. Opening one credential returns public fields such as the username and the names of stored secrets, still without the secret values. An owner can change the name and the secret. A stored password, private key, passphrase, or become password is shown with the usual password dots. Replacing those dots stores the new value. Leaving them, or leaving the field empty, keeps the stored value. `clear` removes named secret fields. The kind stays as it was created. Files written for the job, including the container environment file, use mode `0600`.
 
+## Job environment
+
+The runner starts each job with its own `KOREOGRAF_*` variables. The server does not read them as its configuration, and they are not part of the [beta configuration contract](configuration.md#environment-variables). Set them from a template, a launch form, or a credential; a value exported in the server environment does not reach the job.
+
+| Variable | Set from |
+| --- | --- |
+| `KOREOGRAF_TOOL` | the template tool (`ansible`, `opentofu`, or `shell`) |
+| `KOREOGRAF_ACTION` | `plan` or `apply` for OpenTofu |
+| `KOREOGRAF_ENTRYPOINT` | the playbook, module, or script path in the project |
+| `KOREOGRAF_PROJECT`, `KOREOGRAF_WORK` | the project copy and the job work directory; `/runner/project` and `/runner/work` in a container |
+| `KOREOGRAF_COLLECTIONS`, `KOREOGRAF_ROLES`, `KOREOGRAF_TOFU` | the team cache directories |
+| `KOREOGRAF_TOFU_STATE` | the kept OpenTofu state directory for an OpenTofu job |
+| `KOREOGRAF_INVENTORY`, `KOREOGRAF_EXTRA` | the inventory and extra-vars files in the work directory |
+| `KOREOGRAF_CHECK`, `KOREOGRAF_DIFF` | `1` for a check run and for diff output |
+| `KOREOGRAF_TAGS`, `KOREOGRAF_SKIP_TAGS`, `KOREOGRAF_LIMIT`, `KOREOGRAF_FORKS`, `KOREOGRAF_VERBOSITY` | the launch options for an Ansible job |
+| `KOREOGRAF_VAULT_FILE`, `KOREOGRAF_VAULT_ID`, `KOREOGRAF_VAULT_LIST` | the attached Ansible Vault credentials; the list holds one `id|path` line per vault |
+| `KOREOGRAF_AUTH_EXTRA` | the extra-vars file of an `ssh` credential |
+| `KOREOGRAF_PRIVATE_KEY`, `KOREOGRAF_REMOTE_USER`, `KOREOGRAF_CONNECTION_PASSWORD_FILE`, `KOREOGRAF_BECOME_METHOD`, `KOREOGRAF_BECOME_USER`, `KOREOGRAF_BECOME_PASSWORD_FILE` | the attached `ssh` credential |
+| `KOREOGRAF_KEY_PASSPHRASE_FILE` | the passphrase of an `ssh` or `scm` credential |
+| `KOREOGRAF_GIT_USERNAME`, `KOREOGRAF_GIT_PASSWORD_FILE`, `KOREOGRAF_GIT_SSH_KEY`, `KOREOGRAF_GIT_KEY_PASSPHRASE_FILE`, `KOREOGRAF_SSH_ASKPASS_FILE` | the selected `scm` credential for the project and Galaxy step |
+| `KOREOGRAF_REGISTRY_HOST`, `KOREOGRAF_REGISTRY_USERNAME`, `KOREOGRAF_REGISTRY_PASSWORD` | the attached `registry` credential |
+| `ANSIBLE_KOREOGRAF_EVENTS` | the structured event file next to the job log |
+
+A password, private key, or passphrase is a file with mode `0600`, not the secret itself. The wrapper removes the Git files and unsets the Git variables before `ansible-playbook` starts. `koreograf git-ssh` reads `KOREOGRAF_GIT_SSH_KEY` for the same credential. Names under `KOREOGRAF_` are reserved in an `env` credential, so a job cannot replace them.
+
 ## Playbooks and inventory sources
 
 `GET /api/projects/{id}/contents` reads an Ansible project and lists playbooks. A file counts when it ends in `.yml` or `.yaml`, the first content line is a list, and `hosts:` appears somewhere. `requirements.yml`, `galaxy.yml`, and role directories such as `tasks`, `handlers`, and `group_vars` stay out. A git project has to be synced first. The template offers the files that were found. Another path can still be typed by hand.

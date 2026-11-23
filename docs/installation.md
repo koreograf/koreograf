@@ -64,7 +64,7 @@ sudo dnf remove koreograf
 
 ## Assistant
 
-The assistant is optional and off by default. Turn it on under **Settings → Assistant** and choose the provider, base URL, model, and optional API key. An environment-only install can use `KOREOGRAF_LLM=1`, `KOREOGRAF_LLM_PROVIDER=ollama` or `openai`, `KOREOGRAF_LLM_URL`, `KOREOGRAF_LLM_MODEL`, and either `KOREOGRAF_LLM_API_KEY` or `KOREOGRAF_LLM_API_KEY_FILE`. The key file wins when both are set. The saved settings replace those variables after an administrator saves; **Use environment variables** clears them again.
+The assistant is optional and off by default. Turn it on under **Settings → Assistant** and choose the provider, base URL, model, and optional API key. An environment-only install can use `KOREOGRAF_LLM=1`, `KOREOGRAF_LLM_PROVIDER=ollama` or `openai`, `KOREOGRAF_LLM_URL`, `KOREOGRAF_LLM_MODEL`, and either `KOREOGRAF_LLM_API_KEY` or `KOREOGRAF_LLM_API_KEY_FILE`. The key file wins when both are set. The saved settings replace those variables after an administrator saves; **Use environment variables** clears them again. The variables and their defaults are in [Configuration](configuration.md#environment-variables).
 
 Both provider kinds speak the OpenAI-compatible `/chat/completions` API. `ollama` adds `/v1` to a bare address such as `http://127.0.0.1:11434`; `openai` treats the address as a base URL. A local Ollama usually needs no key:
 
