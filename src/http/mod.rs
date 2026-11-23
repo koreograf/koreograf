@@ -252,8 +252,12 @@ async fn mcp_auth(
     let Some(token) = auth::bearer_token(&headers) else {
         return ApiError::Unauthorized.into_response();
     };
+    // A live read token may open the MCP session and call read tools. The API
+    // guard behind `Server::http` still refuses every write with ReadOnlyToken.
+    // Do not touch `last_used_at` here for a read token, so a refused write
+    // leaves the row unchanged; an accepted API call touches it.
     match auth::api_token_read_only(&state, &token) {
-        Ok(true) => return ApiError::ReadOnlyToken.into_response(),
+        Ok(true) => return next.run(request).await,
         Ok(false) => {}
         Err(error) => return error.into_response(),
     }

@@ -3800,7 +3800,7 @@ async fn mcp_tools_call_the_http_api() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn mcp_rejects_read_only_tokens() {
+async fn mcp_read_only_tokens_use_read_tools_and_refuse_writes() {
     let harness = TestApp::boot("mcp-read-only", Options::default());
     let app = harness.app.clone();
     let dir = harness.dir.clone();
@@ -3816,6 +3816,27 @@ async fn mcp_rejects_read_only_tokens() {
     .await;
     assert_eq!(status, StatusCode::OK, "{me}");
     let cookie = cookie.expect("admin cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, templates, _) = call(
+        &app,
+        "GET",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{templates}");
+    let template_id = templates
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["name"] == "Healthcheck")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     let (status, read, _) = call(
         &app,
@@ -3835,18 +3856,167 @@ async fn mcp_rejects_read_only_tokens() {
         mcp_request(&app, Some(&read_secret), None, mcp_initialize_body()).await;
     assert_eq!(
         status,
-        StatusCode::FORBIDDEN,
+        StatusCode::OK,
         "{}",
         String::from_utf8_lossy(&bytes)
     );
-    let refused: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(refused["error"], "token_is_read_only");
-    let untouched = harness
-        .sql_i64(&format!(
-            "SELECT COUNT(*) FROM api_tokens WHERE id = '{read_id}' AND last_used_at IS NULL"
+    let session = mcp_session(&app, &read_secret).await;
+    assert!(!session.is_empty());
+
+    let (status, bytes, _) = mcp_request(
+        &app,
+        Some(&read_secret),
+        Some(&session),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    let listed = sse_message(&bytes);
+    let names: Vec<&str> = listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
+    assert!(names.contains(&"whoami"), "{listed}");
+    assert!(names.contains(&"launch_template"), "{listed}");
+
+    let (status, bytes, _) = mcp_request(
+        &app,
+        Some(&read_secret),
+        Some(&session),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {"name": "whoami", "arguments": {"team_id": team}}
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    let whoami = sse_message(&bytes);
+    assert_eq!(whoami["result"]["isError"], false, "{whoami}");
+    assert!(
+        whoami["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("admin"),
+        "{whoami}"
+    );
+    let used = harness
+        .sql_text(&format!(
+            "SELECT COALESCE(last_used_at, '') FROM api_tokens WHERE id = '{read_id}'"
         ))
         .await;
-    assert_eq!(untouched, 1, "a rejected read token updated last_used_at");
+    assert_eq!(used.len(), 1);
+    assert!(
+        !used[0].is_empty(),
+        "the accepted read tool did not touch the token"
+    );
+
+    let jobs_before = harness.sql_i64("SELECT COUNT(*) FROM jobs").await;
+    let (status, bytes, _) = mcp_request(
+        &app,
+        Some(&read_secret),
+        Some(&session),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {
+                "name": "launch_template",
+                "arguments": {"id": template_id, "extra_vars": {}, "team_id": team}
+            }
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    let refused = sse_message(&bytes);
+    assert_eq!(refused["result"]["isError"], true, "{refused}");
+    assert!(
+        refused["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("token_is_read_only"),
+        "{refused}"
+    );
+    let jobs_after = harness.sql_i64("SELECT COUNT(*) FROM jobs").await;
+    assert_eq!(jobs_after, jobs_before, "a refused MCP write started a job");
+    let after = harness
+        .sql_text(&format!(
+            "SELECT COALESCE(last_used_at, '') FROM api_tokens WHERE id = '{read_id}'"
+        ))
+        .await;
+    assert_eq!(after, used, "a refused read token updated last_used_at");
+
+    let (status, bytes, _) =
+        mcp_request(&app, Some("koro_unknown"), None, mcp_initialize_body()).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let refused: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(refused["error"], "sign_in_is_required");
+
+    let (status, expired, _) = call(
+        &app,
+        "POST",
+        "/api/me/tokens",
+        Some(&cookie),
+        None,
+        Some(json!({"name": "mcp-expired", "scope": "read"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{expired}");
+    let expired_id = expired["id"].as_str().unwrap().to_string();
+    let expired_secret = expired["secret"].as_str().unwrap().to_string();
+    harness
+        .execute_sql(&format!(
+            "UPDATE api_tokens SET expires_at = '2000-01-01T00:00:00Z' WHERE id = '{expired_id}'"
+        ))
+        .await;
+    let (status, bytes, _) =
+        mcp_request(&app, Some(&expired_secret), None, mcp_initialize_body()).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let refused: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(refused["error"], "token_expired");
+    let untouched = harness
+        .sql_i64(&format!(
+            "SELECT COUNT(*) FROM api_tokens WHERE id = '{expired_id}' AND last_used_at IS NULL"
+        ))
+        .await;
+    assert_eq!(untouched, 1, "an expired token updated last_used_at");
+
+    let (status, _, _) = call_raw(
+        &app,
+        "POST",
+        "/mcp",
+        Some(&cookie),
+        &[
+            ("host", "localhost"),
+            ("content-type", "application/json"),
+            ("accept", "application/json, text/event-stream"),
+        ],
+        Some(mcp_initialize_body().to_string().into_bytes()),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "a cookie alone opened an MCP session"
+    );
 
     let (status, write, _) = call(
         &app,
@@ -3862,6 +4032,179 @@ async fn mcp_rejects_read_only_tokens() {
     let session = mcp_session(&app, &write_secret).await;
     assert!(!session.is_empty());
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_stdio_read_only_tokens_use_read_tools_and_refuse_writes() {
+    use std::process::Stdio;
+
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::process::{ChildStdin, ChildStdout, Command};
+
+    let harness = TestApp::boot("mcp-stdio-read-only", Options::default());
+    let app = harness.app.clone();
+    let dir = harness.dir.clone();
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("admin cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+    let (status, templates, _) = call(
+        &app,
+        "GET",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{templates}");
+    let template_id = templates
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["name"] == "Healthcheck")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (status, read, _) = call(
+        &app,
+        "POST",
+        "/api/me/tokens",
+        Some(&cookie),
+        None,
+        Some(json!({"name": "mcp-stdio-read-only", "scope": "read"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{read}");
+    let read_secret = read["secret"].as_str().unwrap().to_string();
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let served = app.clone();
+    let server = tokio::spawn(async move { axum::serve(listener, served).await.unwrap() });
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_koreograf"))
+        .arg("mcp")
+        .env("KOREOGRAF_URL", format!("http://{address}"))
+        .env("KOREOGRAF_TOKEN", &read_secret)
+        .env_remove("KOREOGRAF_TEAM_ID")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn koreograf mcp");
+    let mut stdin = child.stdin.take().unwrap();
+    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+
+    async fn send(stdin: &mut ChildStdin, message: Value) {
+        let mut line = serde_json::to_vec(&message).unwrap();
+        line.push(b'\n');
+        stdin.write_all(&line).await.unwrap();
+        stdin.flush().await.unwrap();
+    }
+    async fn receive(lines: &mut tokio::io::Lines<BufReader<ChildStdout>>, id: u64) -> Value {
+        loop {
+            let line = tokio::time::timeout(Duration::from_secs(20), lines.next_line())
+                .await
+                .expect("mcp stdio response timed out")
+                .expect("mcp stdio read")
+                .expect("mcp stdio closed");
+            if let Ok(value) = serde_json::from_str::<Value>(&line) {
+                if value["id"] == id {
+                    return value;
+                }
+            }
+        }
+    }
+
+    send(&mut stdin, mcp_initialize_body()).await;
+    let initialized = receive(&mut lines, 1).await;
+    assert!(initialized.get("result").is_some(), "{initialized}");
+    send(
+        &mut stdin,
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+    )
+    .await;
+
+    send(
+        &mut stdin,
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+    )
+    .await;
+    let listed = receive(&mut lines, 2).await;
+    let names: Vec<&str> = listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
+    assert!(names.contains(&"whoami"), "{listed}");
+    assert!(names.contains(&"launch_template"), "{listed}");
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {"name": "whoami", "arguments": {"team_id": team}}
+        }),
+    )
+    .await;
+    let whoami = receive(&mut lines, 3).await;
+    assert_eq!(whoami["result"]["isError"], false, "{whoami}");
+    assert!(
+        whoami["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("admin"),
+        "{whoami}"
+    );
+
+    let jobs_before = harness.sql_i64("SELECT COUNT(*) FROM jobs").await;
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {
+                "name": "launch_template",
+                "arguments": {"id": template_id, "extra_vars": {}, "team_id": team}
+            }
+        }),
+    )
+    .await;
+    let refused = receive(&mut lines, 4).await;
+    assert_eq!(refused["result"]["isError"], true, "{refused}");
+    assert!(
+        refused["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("token_is_read_only"),
+        "{refused}"
+    );
+    let jobs_after = harness.sql_i64("SELECT COUNT(*) FROM jobs").await;
+    assert_eq!(
+        jobs_after, jobs_before,
+        "a refused stdio write started a job"
+    );
+
+    let _ = child.kill().await;
+    let _ = child.wait().await;
+    server.abort();
     let _ = std::fs::remove_dir_all(&dir);
 }
 
