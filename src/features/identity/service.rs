@@ -67,17 +67,95 @@ pub fn authorize(
     if user.is_admin {
         return Ok(());
     }
-    let Some(role) = store.role_of(team_id, &user.id)? else {
-        return Err(ApiError::Forbidden);
-    };
-    let Some(role) = Role::parse(&role) else {
-        return Err(ApiError::Forbidden);
-    };
+    let role = role_in_team(store, &user.id, team_id)?.ok_or(ApiError::Forbidden)?;
     if role >= min {
         Ok(())
     } else {
         Err(ApiError::Forbidden)
     }
+}
+
+fn role_in_team(
+    store: &dyn crate::backend::Backend,
+    user_id: &str,
+    team_id: &str,
+) -> AppResult<Option<Role>> {
+    Ok(store
+        .role_of(team_id, user_id)?
+        .as_deref()
+        .and_then(Role::parse))
+}
+
+/// The caller's role, which is `owner` for an administrator. A role below
+/// `min` is `Forbidden`. A service account is granted a team role through this
+/// same cap.
+pub(crate) fn team_role(
+    store: &dyn crate::backend::Backend,
+    user: &AuthUser,
+    team_id: &str,
+    min: Role,
+) -> AppResult<Role> {
+    if user.is_admin {
+        return Ok(Role::Owner);
+    }
+    let role = role_in_team(store, &user.id, team_id)?.ok_or(ApiError::Forbidden)?;
+    if role >= min {
+        Ok(role)
+    } else {
+        Err(ApiError::Forbidden)
+    }
+}
+
+/// A role above the caller's own role in that team is refused.
+pub(crate) fn capped_role(
+    store: &dyn crate::backend::Backend,
+    user: &AuthUser,
+    team_id: &str,
+    role: Role,
+) -> AppResult<()> {
+    let current = team_role(store, user, team_id, Role::Owner)?;
+    if role > current {
+        return Err(ApiError::bad("you_cannot_grant_a_higher_role_than_yours"));
+    }
+    Ok(())
+}
+
+/// One prepared API token. The secret exists only in this value and in the
+/// create response; the database receives the hash.
+pub(crate) struct NewToken {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) prefix: String,
+    pub(crate) secret: String,
+    pub(crate) scope: String,
+    pub(crate) created_at: String,
+    pub(crate) expires_at: Option<String>,
+}
+
+/// The shared `read`/`write`, 90-day default, and `0`/`null` no-expiry rules.
+pub(crate) fn prepare_token(body: &super::model::TokenBody) -> AppResult<NewToken> {
+    let name = crate::http::require_name(&body.name)?;
+    let scope = match body.scope.as_deref() {
+        None | Some("write") => "write",
+        Some("read") => "read",
+        Some(_) => return Err(ApiError::bad("token_scope_is_read_or_write")),
+    };
+    let expires_at = match body.expires_in_days {
+        None => Some(db::plus_secs(90 * 24 * 3600)),
+        Some(None) | Some(Some(0)) => None,
+        Some(Some(days)) if (1..=3650).contains(&days) => Some(db::plus_secs(days * 24 * 3600)),
+        Some(Some(_)) => return Err(ApiError::bad("token_lifetime_out_of_range")),
+    };
+    let secret = crypto::api_token();
+    Ok(NewToken {
+        id: Uuid::new_v4().to_string(),
+        prefix: crypto::token_prefix(&secret),
+        name,
+        secret,
+        scope: scope.to_string(),
+        created_at: db::now(),
+        expires_at,
+    })
 }
 
 pub fn local_password_ok(user: Option<&User>, password: &str) -> bool {
@@ -996,10 +1074,14 @@ pub(super) fn session_response(
     headers: &HeaderMap,
     user: &User,
 ) -> AppResult<Response> {
-    if user.disabled {
+    if user.disabled || user.auth_source == "service" {
         tracing::warn!(
             username = %user.username,
-            reason = "disabled",
+            reason = if user.auth_source == "service" {
+                "service_account"
+            } else {
+                "disabled"
+            },
             "sign-in failed"
         );
         return Err(ApiError::SignInFailed);
@@ -1141,6 +1223,22 @@ pub(super) fn ldap_failure_hint(error: &str) -> &'static str {
     } else {
         "reject"
     }
+}
+
+/// The shared username rules for a new local or service account.
+pub(crate) fn new_username(store: &dyn crate::backend::Backend, raw: &str) -> AppResult<String> {
+    let username = raw.trim().to_ascii_lowercase();
+    if !username
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-')
+        || !(2..=64).contains(&username.len())
+    {
+        return Err(ApiError::bad("username_2_64_characters_a_z_0_9"));
+    }
+    if store.user_by_username(&username)?.is_some() {
+        return Err(ApiError::bad("that_username_is_already_used"));
+    }
+    Ok(username)
 }
 
 pub(super) fn normalize(username: &str) -> AppResult<String> {

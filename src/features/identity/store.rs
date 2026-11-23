@@ -1,6 +1,6 @@
 use rusqlite::{params, Connection};
 
-use crate::db::{self, ApiToken, Member, Organization, Team, User, UserMembership};
+use crate::db::{self, ApiToken, Member, Organization, ServiceAccount, Team, User, UserMembership};
 use crate::error::{ApiError, AppResult};
 use crate::store::sql::{self, Dialect, SqlRow};
 
@@ -26,6 +26,15 @@ pub(crate) const UPDATE_USER_PASSWORD: &str = "UPDATE users SET display_name = ?
  WHERE id = ?1";
 pub(crate) const UPDATE_USER: &str =
     "UPDATE users SET display_name = ?2, is_admin = ?3, disabled = ?4 WHERE id = ?1";
+pub(crate) const INSERT_SERVICE_ACCOUNT: &str =
+    "INSERT INTO users (id, username, display_name, password_hash, auth_source, is_admin,
+        created_at, created_by)
+     VALUES (?1, ?2, ?3, NULL, 'service', 0, ?4, ?5)";
+pub(crate) const SERVICE_ACCOUNT_BY_ID: &str = "SELECT u.id, u.username, u.display_name,
+        u.disabled, u.created_at, u.created_by, c.username,
+        (SELECT COUNT(*) FROM memberships m WHERE m.user_id = u.id)
+ FROM users u LEFT JOIN users c ON c.id = u.created_by
+ WHERE u.id = ?1 AND u.auth_source = 'service'";
 pub(crate) const DELETE_USER_SESSIONS: &str = "DELETE FROM sessions WHERE user_id = ?1";
 pub(crate) const DELETE_USER: &str = "DELETE FROM users WHERE id = ?1";
 pub(crate) const OTHER_ACTIVE_ADMINS: &str =
@@ -81,6 +90,60 @@ pub(crate) fn list_users_sql(dialect: Dialect) -> String {
                 (SELECT COUNT(*) FROM memberships m WHERE m.user_id = users.id)
          FROM users ORDER BY {order}"
     )
+}
+
+/// A non-administrator sees a service account only through a team they own.
+pub(crate) fn list_service_accounts_sql(admin: bool) -> String {
+    let access = if admin {
+        ""
+    } else {
+        " AND EXISTS (
+             SELECT 1 FROM memberships sm
+             JOIN memberships om ON om.team_id = sm.team_id
+             WHERE sm.user_id = u.id AND om.user_id = ?1 AND om.role = 'owner'
+           )"
+    };
+    format!(
+        "SELECT u.id, u.username, u.display_name, u.disabled, u.created_at, u.created_by,
+                c.username,
+                (SELECT COUNT(*) FROM memberships m WHERE m.user_id = u.id)
+         FROM users u LEFT JOIN users c ON c.id = u.created_by
+         WHERE u.auth_source = 'service'{access}
+         ORDER BY u.username"
+    )
+}
+
+pub(crate) fn insert_service_account(
+    c: &Connection,
+    id: &str,
+    username: &str,
+    display_name: &str,
+    created_by: &str,
+) -> AppResult<()> {
+    c.execute(
+        INSERT_SERVICE_ACCOUNT,
+        params![id, username, display_name, db::now(), created_by],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn service_account_by_id(c: &Connection, id: &str) -> AppResult<Option<ServiceAccount>> {
+    sql::sqlite_opt(c, SERVICE_ACCOUNT_BY_ID, [id], |row| {
+        row_service_account(row)
+    })
+}
+
+pub(crate) fn list_service_accounts(
+    c: &Connection,
+    user_id: &str,
+    admin: bool,
+) -> AppResult<Vec<ServiceAccount>> {
+    let statement = list_service_accounts_sql(admin);
+    if admin {
+        sql::sqlite_all(c, &statement, [], |row| row_service_account(row))
+    } else {
+        sql::sqlite_all(c, &statement, [user_id], |row| row_service_account(row))
+    }
 }
 
 pub(crate) fn insert_user(
@@ -331,6 +394,19 @@ pub(crate) fn row_user<R: SqlRow>(row: &R) -> AppResult<User> {
         disabled: row.get(6)?,
         created_at: row.get(7)?,
         email: row.get(8)?,
+    })
+}
+
+pub(crate) fn row_service_account<R: SqlRow>(row: &R) -> AppResult<ServiceAccount> {
+    Ok(ServiceAccount {
+        id: row.get(0)?,
+        username: row.get(1)?,
+        display_name: row.get(2)?,
+        disabled: row.get(3)?,
+        created_at: row.get(4)?,
+        created_by: row.get(5)?,
+        created_by_username: row.get(6)?,
+        team_count: row.get(7)?,
     })
 }
 

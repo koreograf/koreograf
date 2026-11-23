@@ -3,6 +3,9 @@
   "a_node_has_no_id": "Ein Knoten hat keine ID.",
   "a_passphrase_needs_a_private_key": "Passphrase braucht einen privaten Schlüssel.",
   "a_project_stays_in_the_organization_of_the": "Ein Projekt bleibt in der Organisation des gewählten Teams.",
+  "a_service_account_has_no_password": "Ein Dienstkonto hat kein Passwort.",
+  "a_service_account_is_never_an_administrator": "Ein Dienstkonto ist nie Administrator.",
+  "a_service_account_needs_at_least_one_team": "Ein Dienstkonto gehört zu mindestens einem Team.",
   "a_source_is_manual_project_or_netbox": "Quelle ist manuell, Projekt oder NetBox.",
   "action_is_plan_or_apply": "Aktion ist plan oder apply.",
   "alert_name_is_missing": "Alertname fehlt.",
@@ -255,6 +258,8 @@
   "the_settings_body_is_incomplete": "Die Einstellungen sind unvollständig. Fehlende Felder: {fields}.",
   "the_source_control_credential_cannot_be_read": "Der Quellcode-Zugang kann nicht gelesen werden.",
   "the_source_control_credential_is_disabled": "Dieser Quellcode-Zugang ist deaktiviert.",
+  "the_team_is_listed_twice": "Das Team ist doppelt aufgeführt.",
+  "the_team_is_missing": "Das Team fehlt.",
   "the_time_limit_must_be_between_30_and": "Zeitlimit muss zwischen 30 und 86400 Sekunden liegen.",
   "the_user_was_not_found_uniquely": "Benutzer wurde nicht eindeutig gefunden.",
   "the_value_contains_invalid_characters": "Der Wert enthält ungültige Zeichen.",
@@ -296,5 +301,6 @@
   "you_are_not_allowed_to_do_this": "Keine Berechtigung für diese Aktion.",
   "you_cannot_delete_your_own_account": "Du kannst dein eigenes Konto nicht löschen.",
   "you_cannot_disable_your_own_account": "Du kannst dein eigenes Konto nicht deaktivieren.",
+  "you_cannot_grant_a_higher_role_than_yours": "Du kannst keine höhere Rolle vergeben als deine eigene.",
   "you_cannot_remove_yourself_from_the_team": "Du kannst dich nicht selbst aus dem Team nehmen."
 }

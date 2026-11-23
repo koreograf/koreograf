@@ -7,4 +7,5 @@ pub(crate) mod jobs;
 pub(crate) mod operations;
 pub(crate) mod projects;
 pub(crate) mod schedules;
+pub(crate) mod service_accounts;
 pub(crate) mod workflows;

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::routing::get;
@@ -65,10 +67,13 @@ pub(crate) struct ActivityResponse {
     object_name: String,
     result: String,
     created_at: String,
+    /// The human who created a service account, so the activity view can show
+    /// it next to the service-account actor.
+    actor_created_by: Option<String>,
 }
 
 impl ActivityResponse {
-    fn new(item: &Activity) -> Self {
+    fn new(item: &Activity, actor_created_by: Option<String>) -> Self {
         Self {
             id: item.id.clone(),
             team_id: item.team_id.clone(),
@@ -79,6 +84,7 @@ impl ActivityResponse {
             object_name: item.object_name.clone(),
             result: item.result.clone(),
             created_at: item.created_at.clone(),
+            actor_created_by,
         }
     }
 }
@@ -110,8 +116,34 @@ pub async fn list_activity(
     };
     let db = state.store();
     let (items, total) = db.list_activity(&team, &filter)?;
+    let mut creators: HashMap<String, Option<String>> = HashMap::new();
+    let mut responses = Vec::with_capacity(items.len());
+    for item in &items {
+        let creator = match creators.get(&item.actor) {
+            Some(value) => value.clone(),
+            None => {
+                let value = actor_creator(&state, &item.actor)?;
+                creators.insert(item.actor.clone(), value.clone());
+                value
+            }
+        };
+        responses.push(ActivityResponse::new(item, creator));
+    }
     Ok(Json(ActivityListResponse {
-        items: items.iter().map(ActivityResponse::new).collect(),
+        items: responses,
         total,
     }))
+}
+
+fn actor_creator(state: &Shared, username: &str) -> AppResult<Option<String>> {
+    let Some(user) = state.store().user_by_username(username)? else {
+        return Ok(None);
+    };
+    if user.auth_source != "service" {
+        return Ok(None);
+    }
+    Ok(state
+        .store()
+        .service_account_by_id(&user.id)?
+        .and_then(|account| account.created_by_username))
 }

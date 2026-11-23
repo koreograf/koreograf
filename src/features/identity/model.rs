@@ -138,14 +138,14 @@ pub(super) struct MeUpdate {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct TokenBody {
-    pub(super) name: String,
+pub(crate) struct TokenBody {
+    pub(crate) name: String,
     /// Omitted means the default lifetime; JSON `null` means no expiry.
     #[serde(default, deserialize_with = "deserialize_token_lifetime")]
-    pub(super) expires_in_days: Option<Option<i64>>,
+    pub(crate) expires_in_days: Option<Option<i64>>,
     /// `read` or `write`; omitted means `write`.
     #[serde(default)]
-    pub(super) scope: Option<String>,
+    pub(crate) scope: Option<String>,
 }
 
 fn deserialize_token_lifetime<'de, D>(deserializer: D) -> Result<Option<Option<i64>>, D::Error>

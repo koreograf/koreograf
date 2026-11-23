@@ -66,9 +66,12 @@ function openUserDialog(item, teams, initialTab = "") {
       : "";
     return `<tr><td>${esc(org + row.team_name)}</td><td>${roleCell}</td><td>${esc(sourceLabel(row.source))}</td><td>${remove}</td></tr>`;
   });
+  const service = item.auth_source === "service";
   const passwordField = item.auth_source === "local"
     ? `<label class="field"><span>${h("new_password")}</span><input name="password" type="password" minlength="8" autocomplete="new-password" placeholder="${h("leave_empty_to_keep_the_password")}"></label>`
-    : `<p class="small muted">${h("the_password_comes_from_ldap_or_active_directory")}</p>`;
+    : service
+      ? `<p class="small muted">${h("a_service_account_has_no_password")}</p>`
+      : `<p class="small muted">${h("the_password_comes_from_ldap_or_active_directory")}</p>`;
   const teamChoices = openTeams.map((team) => {
     const label = team.organization_name ? `${team.organization_name} · ${team.name}` : team.name;
     return `<option value="${esc(team.id)}">${esc(label)}</option>`;
@@ -77,7 +80,8 @@ function openUserDialog(item, teams, initialTab = "") {
     <p class="small muted">${h("username")}: ${esc(item.username)} · ${esc(authSourceLabel(item.auth_source))}</p>
     <p class="small">${h("email")}: ${emailLine(item.email)}</p>
     <label class="field required"><span>${h("display_name")}</span><input name="display_name" value="${esc(item.display_name)}" required></label>
-    <label class="row"><input name="is_admin" type="checkbox"${item.is_admin ? " checked" : ""}> ${h("administrator")}</label>
+    <label class="row"><input name="is_admin" type="checkbox"${item.is_admin ? " checked" : ""}${service ? " disabled" : ""}> ${h("administrator")}</label>
+    ${service ? `<p class="small muted">${h("a_service_account_is_never_an_administrator")}</p>` : ""}
     <label class="row"><input name="account_disabled" type="checkbox"${item.disabled ? " checked" : ""}${self ? " disabled" : ""}> ${h("disable_account")}</label>
     ${passwordField}
     <div class="form-section">

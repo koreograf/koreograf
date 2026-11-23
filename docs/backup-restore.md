@@ -15,7 +15,7 @@ An administrator opens **Backup** in the sidebar. In the German UI the link is *
 - Files written into the data directory belong to uid 10001 when the container starts as root through the entrypoint. In the published image the server itself already runs as uid 10001.
 - The file is secret: it contains users, hooks, and the key for every credential. The upload and total backup limit is 256 MiB; a download that would exceed it fails instead of producing a backup that restore refuses.
 
-`GET /api/admin/backup` and `POST /api/admin/backup` are limited to the local administrator. A read-only personal API token cannot download the backup, because the zip holds `secret.key`; that request answers 403 `token_is_read_only`. `GET /api/admin/backup?tofu_state=true` includes the OpenTofu state.
+`GET /api/admin/backup` and `POST /api/admin/backup` are limited to the local administrator. A read-only API token, personal or service-account, cannot download the backup, because the zip holds `secret.key`; that request answers 403 `token_is_read_only`. `GET /api/admin/backup?tofu_state=true` includes the OpenTofu state.
 
 ## Schema versions and upgrades
 

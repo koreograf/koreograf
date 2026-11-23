@@ -3,6 +3,9 @@
   "a_node_has_no_id": "A node has no id.",
   "a_passphrase_needs_a_private_key": "A passphrase needs a private key.",
   "a_project_stays_in_the_organization_of_the": "A project stays in the organization of the selected team.",
+  "a_service_account_has_no_password": "A service account has no password.",
+  "a_service_account_is_never_an_administrator": "A service account is never an administrator.",
+  "a_service_account_needs_at_least_one_team": "A service account needs at least one team.",
   "a_source_is_manual_project_or_netbox": "A source is manual, project, or NetBox.",
   "action_is_plan_or_apply": "Action is plan or apply.",
   "alert_name_is_missing": "Alert name is missing.",
@@ -255,6 +258,8 @@
   "the_settings_body_is_incomplete": "The settings body is incomplete. Missing fields: {fields}.",
   "the_source_control_credential_cannot_be_read": "The source control credential cannot be read.",
   "the_source_control_credential_is_disabled": "This source control credential is disabled.",
+  "the_team_is_listed_twice": "The team is listed twice.",
+  "the_team_is_missing": "The team is missing.",
   "the_time_limit_must_be_between_30_and": "The time limit must be between 30 and 86400 seconds.",
   "the_user_was_not_found_uniquely": "The user was not found uniquely.",
   "the_value_contains_invalid_characters": "The value contains invalid characters.",
@@ -296,5 +301,6 @@
   "you_are_not_allowed_to_do_this": "You are not allowed to do this.",
   "you_cannot_delete_your_own_account": "You cannot delete your own account.",
   "you_cannot_disable_your_own_account": "You cannot disable your own account.",
+  "you_cannot_grant_a_higher_role_than_yours": "You cannot grant a higher role than your own.",
   "you_cannot_remove_yourself_from_the_team": "You cannot remove yourself from the team."
 }

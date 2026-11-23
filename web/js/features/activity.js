@@ -7,7 +7,7 @@ import { handle, needTeam, shell } from "../core/app.js";
 import { pill, relativeTime, when } from "../core/format.js";
 
 const ACTIONS = ["sync", "create", "update", "delete", "launch", "cancel", "relaunch"];
-const OBJECT_TYPES = ["project", "inventory", "inventory_source", "template", "credential", "environment", "schedule", "workflow", "job", "workflow_run", "cache"];
+const OBJECT_TYPES = ["project", "inventory", "inventory_source", "template", "credential", "environment", "schedule", "workflow", "job", "workflow_run", "cache", "service_account", "service_account_token"];
 
 const ACTION_KEYS = {
   sync: "action_sync",
@@ -31,6 +31,8 @@ const OBJECT_KEYS = {
   job: "object_job",
   workflow_run: "object_workflow_run",
   cache: "object_cache",
+  service_account: "object_service_account",
+  service_account_token: "object_service_account_token",
 };
 
 export function actionLabel(action) {
@@ -101,6 +103,7 @@ export function objectHref(item) {
     case "workflow": return `#/workflows/${id}`;
     case "job": return `#/jobs/${id}`;
     case "workflow_run": return `#/runs/${id}`;
+    case "service_account": return `#/service-accounts?edit=${id}`;
     default: return "";
   }
 }
@@ -111,7 +114,10 @@ export function activityTable(items) {
     const href = objectHref(item);
     const object = href ? `<a href="${href}">${esc(label)}</a>` : esc(label);
     const result = item.result === "success" ? "successful" : "failed";
-    return `<tr><td class="small muted"><time datetime="${esc(item.created_at)}" title="${esc(when(item.created_at))}">${esc(when(item.created_at))}</time><br><span class="small">${esc(relativeTime(item.created_at))}</span></td><td>${esc(item.actor)}</td><td>${esc(actionLabel(item.action))}</td><td>${object}<div class="small muted">${esc(objectLabel(item.object_type))}</div></td><td>${pill(result)}</td></tr>`;
+    const creator = item.actor_created_by
+      ? `<div class="small muted">${h("service_account_created_by", { name: item.actor_created_by })}</div>`
+      : "";
+    return `<tr><td class="small muted"><time datetime="${esc(item.created_at)}" title="${esc(when(item.created_at))}">${esc(when(item.created_at))}</time><br><span class="small">${esc(relativeTime(item.created_at))}</span></td><td>${esc(item.actor)}${creator}</td><td>${esc(actionLabel(item.action))}</td><td>${object}<div class="small muted">${esc(objectLabel(item.object_type))}</div></td><td>${pill(result)}</td></tr>`;
   });
   return table([t("column_time"), t("column_actor"), t("column_action"), t("column_object"), t("column_result")], rows);
 }

@@ -12,6 +12,7 @@ import "./jobs.js";
 import "./organizations.js";
 import "./projects.js";
 import "./schedules.js";
+import "./service-accounts.js";
 import "./settings.js";
 import "./team.js";
 import "./templates.js";

@@ -326,6 +326,7 @@ export function shell(title, body, actions) {
     [t("nav.team"), [
       ["#/team", t("team")],
       ["#/organizations", t("organizations")],
+      ["#/service-accounts", t("service_accounts")],
     ]],
     ...(appState.me.is_admin ? [[t("nav.administration"), [
       ["#/settings", t("settings")],
@@ -489,6 +490,7 @@ export const ROUTE_TITLES = {
   inventories: "inventories",
   credentials: "credentials",
   organizations: "organizations",
+  "service-accounts": "service_accounts",
   account: "account",
   users: "users",
   settings: "settings",

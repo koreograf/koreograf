@@ -16,6 +16,7 @@ mod projects;
 mod retention;
 mod routes;
 mod schedules;
+mod service_accounts;
 mod settings;
 mod sources;
 mod teams;

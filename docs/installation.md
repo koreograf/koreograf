@@ -82,7 +82,7 @@ A cloud provider receives every prompt, tool result, and explained job in that e
 
 ## Editor MCP client
 
-`koreograf mcp` speaks the Model Context Protocol over stdin and stdout and calls the running server over HTTP. Create a personal API token under **My account** and put it in the editor configuration. `KOREOGRAF_TEAM_ID` is optional; a tool argument `team_id` overrides it for that call. The process refuses to start with an empty token and writes its logs to stderr.
+`koreograf mcp` speaks the Model Context Protocol over stdin and stdout and calls the running server over HTTP. Create a personal API token under **My account** or a service-account token under **Service accounts**, and put it in the editor configuration. `KOREOGRAF_TEAM_ID` is optional; a tool argument `team_id` overrides it for that call. The process refuses to start with an empty token and writes its logs to stderr.
 
 ```json
 {
