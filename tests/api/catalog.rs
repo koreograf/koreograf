@@ -1146,10 +1146,14 @@ async fn system_catalog_endpoints_return_the_documented_shape() {
                     "stale_after_days": 7
                 },
                 "jobs": {
+                    "failed_24h": 0,
+                    "failed_items": [],
+                    "finished_24h": 0,
                     "items": [],
                     "oldest_pending_at": null,
                     "pending": 0,
-                    "running": 0
+                    "running": 0,
+                    "successful_24h": 0
                 },
                 "schedules": {
                     "items": [],

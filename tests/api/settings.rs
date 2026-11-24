@@ -3524,28 +3524,66 @@ fn seed_glance_rows(
         .unwrap()
     };
 
-    let insert_job = |id: &str, team_id: &str, status: &str, created: &str| {
-        db.execute(
-            "INSERT INTO jobs (
-                id, team_id, name, tool, status, extra_vars, launched_by, trigger, created_at
-             ) VALUES (?1, ?2, ?1, 'shell', ?3, '{}', 'admin', 'manual', ?4)",
-            (id, team_id, status, created),
-        )
-        .unwrap();
-    };
+    let insert_job =
+        |id: &str, team_id: &str, status: &str, created: &str, finished_at: Option<&str>| {
+            db.execute(
+                "INSERT INTO jobs (
+                id, team_id, name, tool, status, extra_vars, launched_by, trigger,
+                started_at, finished_at, created_at
+             ) VALUES (?1, ?2, ?1, 'shell', ?3, '{}', 'admin', 'manual', ?5, ?5, ?4)",
+                (id, team_id, status, created, finished_at),
+            )
+            .unwrap();
+        };
     for index in 0..8 {
         insert_job(
             &format!("glance-finished-a-{index}"),
             team,
             "successful",
             &finished,
+            Some(&finished),
         );
     }
-    insert_job("glance-pending-a", team, "pending", &oldest);
-    insert_job("glance-pending-a2", team, "pending", &pending_recent);
-    insert_job("glance-running-a", team, "running", &running);
-    insert_job("glance-pending-b", other_team, "pending", &oldest);
-    insert_job("glance-running-b", other_team, "running", &running);
+    // Six failed jobs and one canceled job in the last 24 hours. They are older
+    // than the eight successful recents, so only failed_items can show them.
+    for index in 0..6 {
+        let created_at = stamp(chrono::Duration::hours(-6) + chrono::Duration::minutes(index * 10));
+        let finished_at =
+            stamp(chrono::Duration::hours(-5) + chrono::Duration::minutes(index * 10));
+        insert_job(
+            &format!("glance-failed-a-{index}"),
+            team,
+            "failed",
+            &created_at,
+            Some(&finished_at),
+        );
+    }
+    insert_job(
+        "glance-canceled-a",
+        team,
+        "canceled",
+        &stamp(chrono::Duration::hours(-5)),
+        Some(&stamp(chrono::Duration::hours(-4))),
+    );
+    insert_job(
+        "glance-failed-old-a",
+        team,
+        "failed",
+        &old_failed,
+        Some(&old_failed),
+    );
+    insert_job(
+        "glance-failed-b",
+        other_team,
+        "failed",
+        &stamp(chrono::Duration::hours(-4)),
+        Some(&stamp(chrono::Duration::hours(-4))),
+    );
+    insert_job("glance-pending-a", team, "pending", &oldest, None);
+    insert_job("glance-pending-a2", team, "pending", &pending_recent, None);
+    insert_job("glance-running-a", team, "running", &running, None);
+    insert_job("glance-pending-b", other_team, "pending", &oldest, None);
+    insert_job("glance-running-b", other_team, "running", &running, None);
 
     let insert_schedule = |id: &str,
                            team_id: &str,
@@ -3816,6 +3854,43 @@ async fn overview_glance_is_team_scoped_and_viewer_readable() {
         "the old pending job is still in the latest eight"
     );
 
+    assert_eq!(glance["jobs"]["failed_24h"], 6);
+    assert_eq!(glance["jobs"]["successful_24h"], 8);
+    assert_eq!(glance["jobs"]["finished_24h"], 15);
+    let failed = ids(&glance["jobs"]["failed_items"]);
+    assert_eq!(
+        failed.len(),
+        5,
+        "failed_items ignores its limit: {failed:?}"
+    );
+    assert!(
+        failed.contains(&"glance-canceled-a".to_string()),
+        "{failed:?}"
+    );
+    assert!(
+        !failed.contains(&"glance-failed-old-a".to_string()),
+        "a job outside the window is listed: {failed:?}"
+    );
+    assert!(
+        !failed.contains(&"glance-failed-b".to_string()),
+        "another team's failed job is listed: {failed:?}"
+    );
+    assert!(
+        !ids(&overview["jobs"]).contains(&"glance-failed-a-5".to_string()),
+        "the failed job is among the eight recents"
+    );
+    let newest_failed = glance["jobs"]["failed_items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == "glance-canceled-a")
+        .expect("canceled job");
+    assert_eq!(newest_failed["status"], "canceled");
+    assert!(
+        newest_failed["finished_at"].is_string(),
+        "the failed item has no finish time"
+    );
+
     assert_eq!(glance["concurrency"]["team_running"], 1);
     assert_eq!(glance["concurrency"]["team_limit"], 2);
     assert_eq!(glance["concurrency"]["global_running"], 2);
@@ -3933,6 +4008,14 @@ async fn overview_glance_is_team_scoped_and_viewer_readable() {
     .await;
     assert_eq!(status, StatusCode::OK, "{viewer}");
     assert_eq!(viewer["glance"]["jobs"]["pending"], 2);
+    assert_eq!(viewer["glance"]["jobs"]["failed_24h"], 6);
+    assert_eq!(
+        viewer["glance"]["jobs"]["failed_items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        5
+    );
     assert_eq!(viewer["glance"]["hosts"]["failed"], 2);
 
     let (status, _, _) = call(
@@ -4021,7 +4104,7 @@ async fn overview_glance_survives_a_restart_with_an_empty_metrics_book() {
     {
         let db = state.db().expect("database");
         db.execute(
-            "UPDATE jobs SET status = 'pending', started_at = NULL
+            "UPDATE jobs SET status = 'pending', started_at = NULL, finished_at = NULL
              WHERE id IN ('glance-pending-a', 'glance-pending-a2')",
             [],
         )

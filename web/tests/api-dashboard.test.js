@@ -90,75 +90,134 @@ test("the seven and fourteen day series keep every day and the empty ones", asyn
   }
 });
 
-test("the overview glance links every queue, schedule, host, sync and run", async () => {
-  const { overviewGlanceHtml, waitedText } = await load("features/dashboard.js");
+test("the overview kpi tiles are links with warning tones", async () => {
+  const { kpiRow, waitedText } = await load("features/dashboard.js");
   const oldest = new Date(Date.now() - 2 * 60 * 60 * 1000 - 5 * 60 * 1000).toISOString();
   assert.match(waitedText(oldest), /^2h 0[45]m$/);
-  const html = overviewGlanceHtml({
+
+  const calm = kpiRow({
+    glance: {
+      jobs: { running: 0, pending: 0, failed_24h: 0, successful_24h: 0, finished_24h: 0 },
+      concurrency: { team_running: 0, team_limit: 2 },
+      hosts: { failed: 0, stale: 0 },
+    },
+  });
+  assert.match(calm, /data-kpi="running"[^>]*href="#\/jobs\?status=running"/);
+  assert.match(calm, /data-kpi="pending"[^>]*href="#\/jobs\?status=pending"/);
+  assert.match(calm, /data-kpi="failed-24h"[^>]*href="#\/jobs\?status=failed"/);
+  assert.match(calm, /data-kpi="success-rate"[^>]*href="#\/jobs\?status=successful"/);
+  assert.match(calm, /data-kpi="problem-hosts"[^>]*href="#\/inventories"/);
+  assert.match(calm, /<strong class="kpi-value">0 \/ 2<\/strong>/);
+  assert.match(calm, /<strong class="kpi-value">—<\/strong>/, "an empty window has no success rate");
+  assert.match(calm, /no_pending_job/);
+  assert.doesNotMatch(calm, /class="kpi warn"/, "an idle team gets a warning tone");
+  assert.doesNotMatch(calm, /class="kpi bad"/, "an idle team gets a bad tone");
+
+  const busy = kpiRow({
+    glance: {
+      jobs: { running: 2, pending: 3, oldest_pending_at: oldest, failed_24h: 4, successful_24h: 6, finished_24h: 10 },
+      concurrency: { team_running: 2, team_limit: 2 },
+      hosts: { failed: 2, stale: 1 },
+    },
+  });
+  assert.match(busy, /class="kpi warn" data-kpi="running"/, "a full team limit has no warning tone");
+  assert.match(busy, /class="kpi bad" data-kpi="failed-24h"/, "failed jobs have no bad tone");
+  assert.match(busy, /class="kpi bad" data-kpi="problem-hosts"/, "problem hosts have no bad tone");
+  assert.match(busy, /<strong class="kpi-value">2 \/ 2<\/strong>/);
+  assert.match(busy, /<strong class="kpi-value">60%<\/strong>/);
+  assert.match(busy, /oldest_pending_waited/);
+  assert.match(busy, /problem_hosts_detail/);
+});
+
+test("the overview shares one attention list and drops the cache card", async () => {
+  const state = await load("core/state.js");
+  const { overviewGlanceHtml, attentionItems, attentionHtml } = await load("features/dashboard.js");
+  state.setMe({ is_admin: false, display_name: "Operator", auth_source: "local", teams: [{ id: "t1", name: "Team", role: "operator" }] });
+  state.setTeamId("t1");
+  const old = new Date(Date.now() - 40 * 60 * 1000).toISOString();
+  const now = new Date().toISOString();
+  const data = {
     cache_bytes: 2048,
+    jobs: Array.from({ length: 8 }, (_, index) => ({
+      id: `recent-${index}`,
+      name: `Recent ${index}`,
+      status: "successful",
+      created_at: now,
+    })),
     glance: {
       jobs: {
         running: 1,
-        pending: 2,
-        oldest_pending_at: oldest,
+        pending: 1,
+        oldest_pending_at: old,
+        failed_24h: 1,
+        successful_24h: 8,
+        finished_24h: 9,
         items: [
-          { id: "job-1", name: "Waiting job", status: "pending", created_at: oldest },
-          { id: "job-2", name: "Running job", status: "running", created_at: oldest },
+          { id: "still-pending", name: "Waiting job", status: "pending", created_at: old },
+          ...Array.from({ length: 7 }, (_, index) => ({ id: `recent-${index}`, name: `Recent ${index}`, status: "successful", created_at: now })),
         ],
+        failed_items: [{ id: "failed-hidden", name: "Failed outside recents", status: "failed", created_at: old, finished_at: old }],
       },
       concurrency: { team_running: 1, team_limit: 2, global_running: 3, global_limit: 4 },
       schedules: {
         next_run_at: "2026-12-01T06:00:00Z",
         missed_count: 1,
-        items: [{ id: "schedule-1", name: "Nightly", target_name: "Healthcheck", next_run_at: "2026-12-01T06:00:00Z", missed_at: "2026-11-30T06:00:00Z" }],
+        items: [{ id: "schedule-1", name: "Nightly", target_name: "Healthcheck", next_run_at: "2026-12-01T06:00:00Z", missed_at: old }],
       },
       hosts: {
         failed: 2,
         stale: 1,
         stale_after_days: 7,
-        items: [{ inventory_id: "inv-1", inventory_name: "Local", host: "web 1", result: "failed", ts: oldest }],
+        items: [{ inventory_id: "inv-1", inventory_name: "Local", host: "web 1", result: "failed", ts: old }],
       },
       syncs: {
-        projects: [{ id: "project-1", name: "Demo", last_sync_at: oldest }],
-        inventories: [{ id: "inv-1", name: "Local", last_sync_at: oldest }],
+        projects: [{ id: "project-1", name: "Demo", kind: "git", last_sync_at: old }],
+        inventories: [{ id: "inv-1", name: "Local", kind: "project", last_sync_at: old }],
       },
       workflows: {
         running: 1,
         failed: 1,
         failed_window_hours: 24,
-        items: [{ id: "run-1", workflow_id: "workflow-1", name: "Self-Heal", status: "failed", created_at: oldest }],
+        items: [{ id: "run-1", workflow_id: "workflow-1", name: "Self-Heal", status: "failed", created_at: old, finished_at: old }],
       },
     },
-  });
-  for (const id of ["cache", "queue", "concurrency", "schedules", "hosts", "syncs", "workflows"]) {
-    assert.match(html, new RegExp(`data-glance-card="${id}"`), `the ${id} card is missing`);
-  }
-  assert.match(html, /data-glance="queue-running"><strong>1<\/strong>/);
-  assert.match(html, /data-glance="queue-pending"><strong>2<\/strong>/);
-  assert.match(html, /oldest_pending_waited/);
-  assert.match(html, /href="#\/jobs\/job-1"/);
-  assert.match(html, /href="#\/jobs\?status=pending"/);
-  assert.match(html, /href="#\/jobs\?status=running"/);
-  assert.match(html, /data-glance="team-slots"><strong>1 \/ 2<\/strong>/);
-  assert.match(html, /data-glance="global-slots"><strong>3 \/ 4<\/strong>/);
-  assert.match(html, /href="#\/schedules"/);
-  assert.match(html, /href="#\/schedules\?edit=schedule-1"/);
-  assert.match(html, /schedule_missed_state/);
-  assert.match(html, /workflow_failed_window/);
-  assert.match(html, /href="#\/inventories\/inv-1\/hosts\/web%201"/);
-  assert.match(html, /hosts_stale_after_days/);
-  assert.match(html, /href="#\/projects\/project-1"/);
-  assert.match(html, /href="#\/inventories\/inv-1"/);
+  };
+  const html = overviewGlanceHtml(data);
+  assert.doesNotMatch(html, /data-glance-card="cache"/, "the overview still shows the dependency cache");
+  assert.doesNotMatch(html, /cache_bytes/, "the overview renders the cache number");
+  assert.match(html, /class="kpi-row"/);
+  assert.match(html, /class="overview-main"/);
+  assert.match(html, /data-attention/);
+  assert.match(html, /data-recent-activity/);
+  const items = attentionItems(data);
+  assert.deepEqual(items.map((item) => /data-attention-kind="([^"]+)"/.exec(item)[1]), [
+    "job", "workflow", "schedule", "project", "inventory", "host", "pending",
+  ], "the attention list lost its order");
+  assert.match(html, /Failed outside recents/, "a failed job outside the eight recents is missing");
+  assert.match(html, /data-attention-relaunch="failed-hidden"/);
+  assert.match(html, /href="#\/jobs\/failed-hidden"/);
+  assert.match(html, /data-attention-sync="\/api\/v1\/projects\/project-1\/sync"/);
+  assert.match(html, /data-attention-sync="\/api\/v1\/inventories\/inv-1\/sync"/);
   assert.match(html, /href="#\/runs\/run-1"/);
-  assert.match(html, /href="#\/workflows\/workflow-1"/);
+  assert.match(html, /href="#\/schedules\?edit=schedule-1"/);
+  assert.match(html, /href="#\/inventories\/inv-1\/hosts\/web%201"/);
+  assert.match(html, /data-attention-kind="pending"/);
+  const recentStart = html.indexOf("data-recent-activity");
+  const recent = html.slice(recentStart, html.indexOf("</section>", recentStart));
+  assert.equal((recent.match(/<tr>/g) || []).length, 6, "the recent card does not hold a header and five jobs");
+
+  const empty = attentionHtml({ glance: {} });
+  assert.match(empty, /data-attention-clear/);
+  assert.match(empty, /attention_all_clear/);
+  assert.doesNotMatch(empty, /attention-item/, "an empty attention list still renders rows");
 });
 
-test("the overview glance keeps a specific empty state for every list", async () => {
+test("the overview detail cards keep an empty state", async () => {
   const { overviewGlanceHtml } = await load("features/dashboard.js");
   const html = overviewGlanceHtml({
-    cache_bytes: 0,
+    jobs: [],
     glance: {
-      jobs: { running: 0, pending: 0, items: [] },
+      jobs: { running: 0, pending: 0, items: [], failed_items: [] },
       concurrency: { team_running: 0, team_limit: 2, global_running: 0, global_limit: 4 },
       schedules: { missed_count: 0, items: [] },
       hosts: { failed: 0, stale: 0, stale_after_days: 7, items: [] },
@@ -166,10 +225,10 @@ test("the overview glance keeps a specific empty state for every list", async ()
       workflows: { running: 0, failed: 0, failed_window_hours: 24, items: [] },
     },
   });
-  for (const key of ["no_pending_job", "no_open_jobs", "no_upcoming_schedules", "no_problem_hosts", "no_failed_syncs", "no_active_workflow_runs"]) {
+  for (const key of ["no_pending_job", "no_upcoming_schedules", "no_problem_hosts", "no_failed_syncs", "no_active_workflow_runs"]) {
     assert.match(html, new RegExp(key), `the empty state ${key} is missing`);
   }
-  assert.doesNotMatch(html, /<table/, "an empty glance still renders a table");
+  assert.doesNotMatch(html, /data-glance-card="queue"/, "the queue card came back");
 });
 
 test("the overview keeps the runner, runtime and directory line", async () => {

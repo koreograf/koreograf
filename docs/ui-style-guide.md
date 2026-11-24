@@ -154,6 +154,12 @@ Use `.banner` with `.good`, `.bad`, or `.warn`. A save confirmation is `.banner.
 <p class="banner warn">This environment uses a proxy.</p>
 ```
 
+### KPI tiles and the attention list
+
+The overview starts with `.kpi-row`, one `.kpi` link per number. The tile holds `.kpi-label`, `.kpi-value`, and an optional `.kpi-hint`; the value uses `--sans` and `tabular-nums`. A `.kpi.warn` tile uses the `--warn` pair and a `.kpi.bad` tile the `--bad` pair, so the tone works in both themes. The whole tile is the link, never a nested button.
+
+`Needs attention` is one `.attention-list` inside a card. Each `.attention-item` carries a status pill, an `.attention-body` with the object link and its relative time, and `.attention-actions` with the action links or buttons. An empty list renders one `.attention-clear` line instead of empty cards.
+
 ### Tabs
 
 Page-level tabs use `.tabs` and `.tab-bar` above the panels. Tabs inside an overlay use `.dialog-tabs`, `.dialog-tab`, and `.dialog-panel`. The overlay helper sets `role="tablist"`, `role="tab"`, `role="tabpanel"`, `aria-selected`, and `tabindex`.

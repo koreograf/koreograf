@@ -134,6 +134,26 @@ pub(crate) const OLDEST_PENDING_JOB: &str = "SELECT created_at FROM jobs
 
 pub(crate) const GLOBAL_RUNNING_JOBS: &str = "SELECT COUNT(*) FROM jobs WHERE status = 'running'";
 
+/// Finished jobs in the attention window, grouped by status. The overview
+/// turns these rows into the failed and success-rate tiles.
+pub(crate) const FINISHED_JOB_COUNTS: &str = "SELECT status, COUNT(*) FROM jobs
+     WHERE team_id = ?1 AND status IN ('successful', 'failed', 'canceled')
+       AND finished_at IS NOT NULL AND finished_at >= ?2
+     GROUP BY status";
+
+/// The newest failed and canceled jobs in the attention window. The overview
+/// lists them even when newer successful jobs push them out of the recents.
+pub(crate) const FAILED_JOB_ITEMS_LIMIT: i64 = 5;
+
+pub(crate) fn failed_jobs_sql() -> String {
+    format!(
+        "SELECT {JOB_COLUMNS} FROM jobs
+         WHERE team_id = ?1 AND status IN ('failed', 'canceled')
+           AND finished_at IS NOT NULL AND finished_at >= ?2
+         ORDER BY finished_at DESC, id DESC LIMIT ?3"
+    )
+}
+
 /// The hosts whose latest result failed, was unreachable, or is older than the
 /// stale cutoff. The window keeps one row per inventory and host; the count
 /// and the limited list share the same latest-row definition.
@@ -194,7 +214,11 @@ pub(crate) struct GlanceJobs {
     pub(crate) pending: i64,
     pub(crate) global_running: i64,
     pub(crate) oldest_pending_at: Option<String>,
+    pub(crate) failed_24h: i64,
+    pub(crate) successful_24h: i64,
+    pub(crate) finished_24h: i64,
     pub(crate) items: Vec<Job>,
+    pub(crate) failed_items: Vec<Job>,
 }
 
 pub(crate) struct GlanceHost {
@@ -361,7 +385,12 @@ pub(crate) fn recent_jobs(c: &Connection, team_id: &str, limit: i64) -> AppResul
     )
 }
 
-pub(crate) fn glance_jobs(c: &Connection, team_id: &str, limit: i64) -> AppResult<GlanceJobs> {
+pub(crate) fn glance_jobs(
+    c: &Connection,
+    team_id: &str,
+    cutoff: &str,
+    limit: i64,
+) -> AppResult<GlanceJobs> {
     let counts: Vec<(String, i64)> = sql::sqlite_all(c, BUSY_JOB_COUNTS, [team_id], |row| {
         Ok((SqlRow::get(row, 0)?, SqlRow::get(row, 1)?))
     })?;
@@ -371,6 +400,21 @@ pub(crate) fn glance_jobs(c: &Connection, team_id: &str, limit: i64) -> AppResul
         match status.as_str() {
             "running" => running = count,
             "pending" => pending = count,
+            _ => {}
+        }
+    }
+    let finished: Vec<(String, i64)> =
+        sql::sqlite_all(c, FINISHED_JOB_COUNTS, params![team_id, cutoff], |row| {
+            Ok((SqlRow::get(row, 0)?, SqlRow::get(row, 1)?))
+        })?;
+    let mut failed_24h = 0;
+    let mut successful_24h = 0;
+    let mut finished_24h = 0;
+    for (status, count) in finished {
+        finished_24h += count;
+        match status.as_str() {
+            "failed" => failed_24h = count,
+            "successful" => successful_24h = count,
             _ => {}
         }
     }
@@ -384,12 +428,22 @@ pub(crate) fn glance_jobs(c: &Connection, team_id: &str, limit: i64) -> AppResul
         params![team_id, limit.clamp(1, 100)],
         sqlite_row_job,
     )?;
+    let failed_items = sql::sqlite_all(
+        c,
+        &failed_jobs_sql(),
+        params![team_id, cutoff, FAILED_JOB_ITEMS_LIMIT],
+        sqlite_row_job,
+    )?;
     Ok(GlanceJobs {
         running,
         pending,
         global_running,
         oldest_pending_at,
+        failed_24h,
+        successful_24h,
+        finished_24h,
         items,
+        failed_items,
     })
 }
 
