@@ -184,6 +184,15 @@ test("the overview shares one attention list and drops the cache card", async ()
     },
   };
   const html = overviewGlanceHtml(data);
+  const card = (id) => {
+    const start = html.indexOf(`data-glance-card="${id}"`);
+    assert.notEqual(start, -1, `the ${id} card is missing`);
+    return html.slice(start, html.indexOf("</section>", start));
+  };
+  for (const id of ["schedules", "hosts", "syncs", "workflows"]) {
+    assert.match(card(id), /<table/, `the populated ${id} card lost its list`);
+    assert.doesNotMatch(card(id), /data-glance-healthy/, `the populated ${id} card shows a healthy line`);
+  }
   assert.doesNotMatch(html, /data-glance-card="cache"/, "the overview still shows the dependency cache");
   assert.doesNotMatch(html, /cache_bytes/, "the overview renders the cache number");
   assert.match(html, /class="kpi-row"/);
@@ -237,7 +246,7 @@ test("the attention list falls back to the oldest wait when the queue is full", 
   assert.match(items[0], /oldest_pending_job/);
 });
 
-test("the overview detail cards keep an empty state", async () => {
+test("empty glance cards collapse into one healthy line", async () => {
   const { overviewGlanceHtml } = await load("features/dashboard.js");
   const html = overviewGlanceHtml({
     jobs: [],
@@ -250,10 +259,46 @@ test("the overview detail cards keep an empty state", async () => {
       workflows: { running: 0, failed: 0, failed_window_hours: 24, items: [] },
     },
   });
-  for (const key of ["no_pending_job", "no_upcoming_schedules", "no_problem_hosts", "no_failed_syncs", "no_active_workflow_runs"]) {
-    assert.match(html, new RegExp(key), `the empty state ${key} is missing`);
+  const card = (source, id) => {
+    const start = source.indexOf(`data-glance-card="${id}"`);
+    assert.notEqual(start, -1, `the ${id} card is missing`);
+    return source.slice(start, source.indexOf("</section>", start));
+  };
+  for (const [id, key] of [
+    ["schedules", "schedules_all_clear"],
+    ["hosts", "hosts_all_clear"],
+    ["syncs", "syncs_all_clear"],
+    ["workflows", "runs_all_clear"],
+  ]) {
+    const body = card(html, id);
+    assert.doesNotMatch(body, /<table/, `the empty ${id} card still renders a table`);
+    assert.doesNotMatch(body, /class="stat"/, `the empty ${id} card still renders a zero-stat pair`);
+    assert.equal((body.match(/<p /g) || []).length, 1, `the empty ${id} card is not one healthy line`);
+    assert.equal((body.match(/data-glance-healthy/g) || []).length, 1, `the empty ${id} card has no healthy line`);
+    assert.match(body, new RegExp(`data-glance-healthy="${id}"`));
+    assert.match(body, new RegExp(key), `the ${id} healthy line lost its copy`);
   }
+  assert.match(html, /no_pending_job/);
+  assert.doesNotMatch(html, /no_upcoming_schedules|no_failed_syncs|no_active_workflow_runs/, "the old empty copy is still rendered");
   assert.doesNotMatch(html, /data-glance-card="queue"/, "the queue card came back");
+
+  const mixed = overviewGlanceHtml({
+    glance: {
+      hosts: {
+        failed: 1,
+        stale: 0,
+        stale_after_days: 7,
+        items: [{ inventory_id: "inv-1", inventory_name: "Local", host: "web-1", result: "failed", ts: "2026-11-01T00:00:00Z" }],
+      },
+      syncs: { projects: [], inventories: [] },
+    },
+  });
+  assert.match(card(mixed, "hosts"), /<table/, "the populated host card lost its list in a mixed row");
+  assert.match(card(mixed, "syncs"), /data-glance-healthy="syncs"/, "the empty sync card lost its healthy line in a mixed row");
+  const { stylesheet, rule } = require("./css.js");
+  const grid = rule(stylesheet(), ".glance-grid");
+  assert.ok(grid, "the glance grid rule is missing");
+  assert.match(grid[1], /align-items:\s*start;/, "a healthy card can stretch to a tall neighbour");
 });
 
 test("the overview keeps the runner, runtime and directory line", async () => {

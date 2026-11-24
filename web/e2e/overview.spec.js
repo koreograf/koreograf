@@ -62,6 +62,29 @@ async function createViewer(page) {
   return user;
 }
 
+async function createTeam(page, name) {
+  const created = await post(page.request, "/api/v1/teams", {
+    data: { name, description: "" },
+  });
+  expect(created.status()).toBe(201);
+  return created.json();
+}
+
+async function selectTeam(page, teamId) {
+  await page.evaluate((id) => localStorage.setItem("koreograf.team", id), teamId);
+  await page.reload();
+  await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
+}
+
+async function createSchedule(page, teamId, templateId, name) {
+  const created = await post(page.request, `/api/v1/templates/${templateId}/schedules`, {
+    headers: { "X-Team-Id": teamId },
+    data: { name, timezone: "UTC", start_date: "2027-06-01", start_time: "06:00", frequency: "daily", end_kind: "never" },
+  });
+  expect(created.status()).toBe(201);
+  return created.json();
+}
+
 async function launchAndWait(page, template) {
   const headers = await teamHeaders(page);
   const launched = await post(page.request, `/api/v1/templates/${template.id}/launch`, {
@@ -213,6 +236,66 @@ test("the 1280 overview keeps two columns in German and dark", async ({ page }, 
   await expect(page.locator("[data-kpi-row] [data-kpi]")).toHaveCount(5);
   const columns = await page.locator(".overview-main").evaluate((node) => getComputedStyle(node).gridTemplateColumns);
   expect(columns.trim().split(/\s+/), "the overview does not use two columns at 1280").toHaveLength(2);
+  await noHorizontalScroll(page);
+});
+
+test("an empty overview keeps every glance card compact", async ({ page }) => {
+  test.setTimeout(60000);
+  await signIn(page);
+  const team = await createTeam(page, `Zz overview healthy ${Date.now().toString(36)}`);
+  await selectTeam(page, team.id);
+
+  const cards = [
+    ["schedules", "No missed schedules."],
+    ["hosts", "No problem hosts."],
+    ["syncs", "No failed syncs."],
+    ["workflows", "No running or failed runs."],
+  ];
+  for (const [id, text] of cards) {
+    const card = page.locator(`[data-glance-card="${id}"]`);
+    await expect(card).toBeVisible();
+    await expect(card.locator("[data-glance-healthy]")).toHaveCount(1);
+    await expect(card.getByText(text, { exact: true })).toBeVisible();
+    await expect(card.locator("table")).toHaveCount(0);
+    await expect(card.locator(".stat")).toHaveCount(0);
+    const box = await card.boundingBox();
+    expect(box, `${id} has no box`).not.toBeNull();
+    expect(box.height, `the empty ${id} card is ${box.height}px tall`).toBeLessThanOrEqual(120);
+  }
+
+  const viewport = page.viewportSize();
+  if (viewport.width > 900) {
+    const syncs = await page.locator('[data-glance-card="syncs"]').boundingBox();
+    const workflows = await page.locator('[data-glance-card="workflows"]').boundingBox();
+    expect(Math.abs(syncs.y - workflows.y), "the empty glance cards do not share one row").toBeLessThanOrEqual(1);
+    expect(Math.max(syncs.height, workflows.height), "an empty glance row is too tall").toBeLessThanOrEqual(120);
+  }
+  await noHorizontalScroll(page);
+});
+
+test("a mixed glance row keeps the healthy card short", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "overview", "the desktop viewport project only");
+  test.setTimeout(60000);
+  await signIn(page);
+  const team = await createTeam(page, `Zz overview mixed ${Date.now().toString(36)}`);
+  const created = await post(page.request, "/api/v1/templates", {
+    headers: { "X-Team-Id": team.id },
+    data: { name: `Overview scheduled ${Date.now().toString(36)}`, description: "", tool: "shell", spec: { script: "echo ok" } },
+  });
+  expect(created.status()).toBe(201);
+  const template = await created.json();
+  await createSchedule(page, team.id, template.id, "Nightly check");
+  await selectTeam(page, team.id);
+
+  const schedules = page.locator('[data-glance-card="schedules"]');
+  await expect(schedules.locator("table")).toBeVisible();
+  await expect(schedules.locator(".stat")).toHaveCount(1);
+  const hosts = page.locator('[data-glance-card="hosts"]');
+  await expect(hosts.locator("[data-glance-healthy]")).toBeVisible();
+  const scheduleBox = await schedules.boundingBox();
+  const hostBox = await hosts.boundingBox();
+  expect(hostBox.height, "the healthy card stretched to the taller schedule card").toBeLessThan(scheduleBox.height);
+  expect(hostBox.height, `the healthy host card is ${hostBox.height}px tall`).toBeLessThanOrEqual(120);
   await noHorizontalScroll(page);
 });
 

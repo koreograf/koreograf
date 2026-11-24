@@ -247,6 +247,7 @@ h2 { font-size: 18px; margin: 0 0 10px; }
 .spread > * { min-width: 0; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.glance-grid { align-items: start; }
 .stack { display: flex; flex-direction: column; gap: 14px; }
 .role-legend { margin: 0 0 12px; padding-left: 18px; display: grid; gap: 6px; }
 .table select { min-width: 9rem; }
@@ -309,6 +310,7 @@ h2 { font-size: 18px; margin: 0 0 10px; }
 .attention-body { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
 .attention-actions { justify-content: flex-end; }
 .attention-clear { margin: 0; }
+.glance-healthy { margin: 0; }
 .loading-skeleton { display: grid; gap: 14px; }
 .skeleton-card {
   background: var(--panel);

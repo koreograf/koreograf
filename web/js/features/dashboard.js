@@ -89,6 +89,10 @@ function glanceStat(value, label, id) {
   return `<div class="stat"${id ? ` data-glance="${esc(id)}"` : ""}><strong>${esc(value)}</strong><span class="small muted">${h(label)}</span></div>`;
 }
 
+function healthyLine(id, label) {
+  return `<p class="small muted glance-healthy" data-glance-healthy="${esc(id)}">${h(label)}</p>`;
+}
+
 function glanceCard(id, title, { links = [], body = "" } = {}) {
   const actions = links
     .map((link) => `<a class="btn compact" href="${esc(link.href)}">${h(link.label)}</a>`)
@@ -369,12 +373,20 @@ function schedulesCard(item) {
     <td class="small muted">${entry.next_run_at ? esc(when(entry.next_run_at)) : "—"}</td>
     <td>${entry.missed_at ? `<span class="pill warn">${h("schedule_missed_state")}</span>` : ""}</td>
   </tr>`);
+  const links = [{ href: "#/schedules", label: "schedules" }];
+  const missed = Number(schedules.missed_count) || 0;
+  if (!rows.length && !missed) {
+    return glanceCard("schedules", "upcoming_schedules", {
+      links,
+      body: healthyLine("schedules", "schedules_all_clear"),
+    });
+  }
   const next = schedules.next_run_at ? esc(when(schedules.next_run_at)) : h("schedule_no_upcoming");
   return glanceCard("schedules", "upcoming_schedules", {
-    links: [{ href: "#/schedules", label: "schedules" }],
-    body: `<div class="row">${glanceStat(Number(schedules.missed_count) || 0, "schedule_missed_state", "missed-schedules")}</div>
+    links,
+    body: `<div class="row">${glanceStat(missed, "schedule_missed_state", "missed-schedules")}</div>
       <p class="small muted">${h("next_run")}: ${next}</p>
-      ${rows.length ? table([t("name"), t("target"), t("next_run"), t("status")], rows) : `<p class="small muted">${h("no_upcoming_schedules")}</p>`}`,
+      ${table([t("name"), t("target"), t("next_run"), t("status")], rows)}`,
   });
 }
 
@@ -386,11 +398,20 @@ function hostsCard(item) {
     <td>${pill(entry.result)}</td>
     <td class="small muted">${esc(when(entry.ts))}</td>
   </tr>`);
+  const links = [{ href: "#/inventories", label: "inventories" }];
+  const failed = Number(hosts.failed) || 0;
+  const stale = Number(hosts.stale) || 0;
+  if (!rows.length && !failed && !stale) {
+    return glanceCard("hosts", "problem_hosts", {
+      links,
+      body: healthyLine("hosts", "hosts_all_clear"),
+    });
+  }
   return glanceCard("hosts", "problem_hosts", {
-    links: [{ href: "#/inventories", label: "inventories" }],
-    body: `<div class="row">${glanceStat(Number(hosts.failed) || 0, "failed_hosts", "failed-hosts")}${glanceStat(Number(hosts.stale) || 0, "stale_hosts", "stale-hosts")}</div>
+    links,
+    body: `<div class="row">${glanceStat(failed, "failed_hosts", "failed-hosts")}${glanceStat(stale, "stale_hosts", "stale-hosts")}</div>
       <p class="small muted">${h("hosts_stale_after_days", { days: Number(hosts.stale_after_days) || 7 })}</p>
-      ${rows.length ? table([t("host"), t("inventory"), t("run_result"), t("last_run")], rows) : `<p class="small muted">${h("no_problem_hosts")}</p>`}`,
+      ${table([t("host"), t("inventory"), t("run_result"), t("last_run")], rows)}`,
   });
 }
 
@@ -407,14 +428,21 @@ function syncsCard(item) {
     ...projects.slice(0, 5).map((entry) => row(entry, "project", `#/projects/${encodeURIComponent(entry.id)}`)),
     ...inventories.slice(0, 5).map((entry) => row(entry, "inventory", `#/inventories/${encodeURIComponent(entry.id)}`)),
   ];
+  const links = [
+    { href: "#/projects", label: "projects" },
+    { href: "#/inventories", label: "inventories" },
+  ];
+  if (!rows.length) {
+    return glanceCard("syncs", "failed_syncs", {
+      links,
+      body: healthyLine("syncs", "syncs_all_clear"),
+    });
+  }
   return glanceCard("syncs", "failed_syncs", {
-    links: [
-      { href: "#/projects", label: "projects" },
-      { href: "#/inventories", label: "inventories" },
-    ],
+    links,
     body: `<div class="row">${glanceStat(projects.length, "projects", "failed-projects")}${glanceStat(inventories.length, "inventories", "failed-inventories")}</div>
       <p class="small muted">${h("last_successful_sync_hint")}</p>
-      ${rows.length ? table([t("name"), t("type"), t("last_sync")], rows) : `<p class="small muted">${h("no_failed_syncs")}</p>`}`,
+      ${table([t("name"), t("type"), t("last_sync")], rows)}`,
   });
 }
 
@@ -426,11 +454,20 @@ function workflowsCard(item) {
     <td>${pill(entry.status)}</td>
     <td class="small muted">${esc(when(entry.created_at))}</td>
   </tr>`);
+  const links = [{ href: "#/workflows", label: "workflows" }];
+  const running = Number(workflows.running) || 0;
+  const failed = Number(workflows.failed) || 0;
+  if (!rows.length && !running && !failed) {
+    return glanceCard("workflows", "workflow_runs", {
+      links,
+      body: healthyLine("workflows", "runs_all_clear"),
+    });
+  }
   return glanceCard("workflows", "workflow_runs", {
-    links: [{ href: "#/workflows", label: "workflows" }],
-    body: `<div class="row">${glanceStat(Number(workflows.running) || 0, "running", "running-runs")}${glanceStat(Number(workflows.failed) || 0, "failed", "failed-runs")}</div>
+    links,
+    body: `<div class="row">${glanceStat(running, "running", "running-runs")}${glanceStat(failed, "failed", "failed-runs")}</div>
       <p class="small muted">${h("workflow_failed_window", { hours: Number(workflows.failed_window_hours) || 24 })}</p>
-      ${rows.length ? table([t("run"), t("workflow"), t("status"), t("created")], rows) : `<p class="small muted">${h("no_active_workflow_runs")}</p>`}`,
+      ${table([t("run"), t("workflow"), t("status"), t("created")], rows)}`,
   });
 }
 
@@ -448,8 +485,8 @@ export function overviewGlanceHtml(data) {
       <div class="stack">${quickLaunchHtml(data)}${attentionHtml(data)}</div>
       ${recentActivityCard(data && data.jobs)}
     </div>
-    <div class="grid-3">${concurrencyCard(glance.concurrency)}${schedulesCard(glance.schedules)}${hostsCard(glance.hosts)}</div>
-    <div class="grid-3">${syncsCard(glance.syncs)}${workflowsCard(glance.workflows)}</div>`;
+    <div class="grid-3 glance-grid">${concurrencyCard(glance.concurrency)}${schedulesCard(glance.schedules)}${hostsCard(glance.hosts)}</div>
+    <div class="grid-3 glance-grid">${syncsCard(glance.syncs)}${workflowsCard(glance.workflows)}</div>`;
 }
 
 let chartSerial = 0;
