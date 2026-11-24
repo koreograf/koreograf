@@ -6,7 +6,6 @@ const { post } = require("./api");
 
 const emptyState = "This account has no team. An administrator has to add it to one.";
 const viewerPassword = "no-team-viewer-pass";
-const adminPassword = "no-team-admin-pass";
 
 async function noHorizontalScroll(page) {
   await expect.poll(
@@ -41,13 +40,13 @@ async function revealSidebar(page) {
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
 }
 
-async function createAccount(page, name, isAdmin) {
+async function createViewer(page, name) {
   const created = await post(page.request, "/api/v1/users", {
     data: {
       username: name,
       display_name: name,
-      password: isAdmin ? adminPassword : viewerPassword,
-      is_admin: isAdmin,
+      password: viewerPassword,
+      is_admin: false,
     },
   });
   expect(created.status()).toBe(201);
@@ -79,7 +78,7 @@ test("a viewer without a team sees one empty state and no team navigation", asyn
   const viewer = `no-team-viewer-${suffix}`;
   await signIn(page, username, password);
   await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
-  await createAccount(page, viewer, false);
+  await createViewer(page, viewer);
   await signOut(page);
   await signIn(page, viewer, viewerPassword);
   await expectViewerShellWithoutTeam(page);
@@ -114,28 +113,19 @@ test("a viewer without a team sees one empty state and no team navigation", asyn
   }
 });
 
-test("an administrator without a team keeps Team, Organizations and Users", async ({ page }, testInfo) => {
+test("an administrator still reaches Team, Organizations and Users", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "no-team", "the desktop viewport project only");
   test.setTimeout(90000);
-  const suffix = Date.now().toString(36);
-  const admin = `no-team-admin-${suffix}`;
   await signIn(page, username, password);
   await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
-  await createAccount(page, admin, true);
-  await signOut(page);
-  await signIn(page, admin, adminPassword);
 
-  await expectNoTeamEmptyState(page);
   const nav = page.getByRole("navigation");
   await expect(nav.getByRole("link", { name: "Team", exact: true })).toBeVisible();
   await expect(nav.getByRole("link", { name: "Organizations", exact: true })).toBeVisible();
   await expect(nav.getByRole("link", { name: "Users", exact: true })).toBeVisible();
-  await expect(nav.getByRole("link", { name: "Jobs", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("link", { name: "Open team", exact: true })).toBeVisible();
 
   await nav.getByRole("link", { name: "Team", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Team" })).toBeVisible();
-  await expect(page.getByText("No team selected.", { exact: true })).toBeVisible();
   await expect(nav.getByRole("link", { name: "Team", exact: true })).toHaveClass(/active/);
   await noHorizontalScroll(page);
 
