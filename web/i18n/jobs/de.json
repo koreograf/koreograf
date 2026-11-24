@@ -5,6 +5,7 @@
   "changed": "Geändert",
   "counters": "Zähler",
   "download_output": "Ausgabe herunterladen",
+  "exit_code": "Exit-Code {code}",
   "failed_first": "Fehlgeschlagene zuerst",
   "failed_hosts": "Fehlgeschlagene Hosts",
   "failed_hosts_only": "Nur fehlgeschlagene Hosts",

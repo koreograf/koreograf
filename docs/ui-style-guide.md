@@ -45,6 +45,8 @@ All design tokens are custom properties on `:root` in `web/app.css`.
 | `--mark-bg`, `--mark-line` | Brand mark |
 | `--neutral-line` | Neutral workflow edges |
 | `--log-bg`, `--log-text`, `--log-key`, `--log-value` | Job log and structured data |
+| `--log-stderr`, `--log-stderr-bg` | stderr text and its gutter background |
+| `--log-ansi-red` | ANSI colours for the job log, through `--log-ansi-bright-white` |
 | `--shadow` | Card, menu, and dialog elevation |
 
 The light palette is the default. The dark palette redefines the same tokens under `:root[data-theme="dark"]`; a page never carries its own colours. The theme switch offers `system`, `light`, and `dark`, stores the choice in `localStorage` under `koreograf.theme`, and the resolved value is the `data-theme` attribute on `<html>`. `system` follows `prefers-color-scheme` and updates when the desktop changes.
@@ -187,6 +189,8 @@ Use `.overlay` for the backdrop and `.overlay-card` for the panel. `openDialog` 
 ### Logs and code
 
 Use `.log` for job output, `.log-tools` for its search and controls, and `pre.vars` for structured data. `.log.wrap` and `.log-summary` are supported variants. Use `code` or `.mono` for inline identifiers. Keep the log text selectable and never put a catalog key in it.
+
+The raw log renders ANSI as allowlisted spans: `.ansi-fg-red`, `.ansi-fg-green`, `.ansi-bg-green`, `.ansi-bold`, `.ansi-dim`, `.ansi-italic`, and `.ansi-underline`. Build them with `textContent`, never with raw escape text or markup. stderr keeps `.stderr` and adds a light background and an inset left gutter. A finished process adds one `Exit code: N` system line, and the job header shows the same code next to `#job-duration`.
 
 A job output with structured Ansible events uses `.output-view` with `.tabs` for the Structured and Raw log switch. The structured view opens with the compact host summary in `.st-recap`: `.st-counts` holds one `.btn.compact.st-count` per status and `.st-count-value` carries the number. The detailed host list is a `.st-host-panel` `details` element with the shared `.filter-bar`, `.search`, and pager pattern; its rows use the normal `.table-wrap` and `.table` markup, and `.st-count-pair` shows a non-zero counter. The plays tree sits below in `.st-tree`; its native collapsible sections use `.st-play`, `.st-task`, and `.st-host`, `.st-badge` carries the status word next to its colour, `.st-pre` holds message, output, and diff text, and `.st-more` opens the next page of hosts inside one task. The raw log, its search, and its wrap controls stay the same.
 

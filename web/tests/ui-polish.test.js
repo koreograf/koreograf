@@ -18,7 +18,8 @@ test("the job log hides escape codes without losing the raw line", async () => {
   appendLog({ line: "\u001b[31mred\u001b[0m", stream: "stdout" });
   appendLog({ line: "\u001b[1;32mok\u001b[0m run", stream: "stdout" });
   appendLog({ line: "\u001b[2Kline", stream: "stdout" });
-  assert.deepEqual(log.children.map((line) => line.textContent), ["red", "ok run", "line"]);
+  assert.deepEqual(log.children.map((line) => line.koreografRaw), ["red", "ok run", "line"]);
+  assert.equal(log.children[0].children[0].textContent, "red");
   assert.equal(log.children[0].koreografRaw, "red");
 });
 

@@ -236,6 +236,184 @@ function plainLogLine(text) {
     .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
 }
 
+// SGR foreground and background codes become allowlisted classes. Anything the
+// renderer does not know is dropped, so the log never carries raw escape text.
+const ANSI_FG = {
+  30: "black",
+  31: "red",
+  32: "green",
+  33: "yellow",
+  34: "blue",
+  35: "magenta",
+  36: "cyan",
+  37: "white",
+  90: "bright-black",
+  91: "bright-red",
+  92: "bright-green",
+  93: "bright-yellow",
+  94: "bright-blue",
+  95: "bright-magenta",
+  96: "bright-cyan",
+  97: "bright-white",
+};
+
+const ANSI_BG = {
+  40: "black",
+  41: "red",
+  42: "green",
+  43: "yellow",
+  44: "blue",
+  45: "magenta",
+  46: "cyan",
+  47: "white",
+  100: "bright-black",
+  101: "bright-red",
+  102: "bright-green",
+  103: "bright-yellow",
+  104: "bright-blue",
+  105: "bright-magenta",
+  106: "bright-cyan",
+  107: "bright-white",
+};
+
+const ANSI_CSI = /^\u001b\[([0-?]*)([ -/]*)([@-~])/;
+const ANSI_CSI_PARTIAL = /^\u001b\[[0-?]*[ -/]*/;
+const ANSI_ESC = /^\u001b(?:[ -/]*)([@-~])/;
+
+function ansiState() {
+  return { fg: "", bg: "", bold: false, dim: false, italic: false, underline: false };
+}
+
+function resetAnsi(state) {
+  state.fg = "";
+  state.bg = "";
+  state.bold = false;
+  state.dim = false;
+  state.italic = false;
+  state.underline = false;
+}
+
+function ansiClasses(state) {
+  const classes = [];
+  if (state.bold) classes.push("ansi-bold");
+  if (state.dim) classes.push("ansi-dim");
+  if (state.italic) classes.push("ansi-italic");
+  if (state.underline) classes.push("ansi-underline");
+  if (state.fg) classes.push(`ansi-fg-${state.fg}`);
+  if (state.bg) classes.push(`ansi-bg-${state.bg}`);
+  return classes;
+}
+
+function applySgr(state, params) {
+  const parts = params === "" ? ["0"] : params.split(/[;:]/);
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    if (part === "") {
+      resetAnsi(state);
+      continue;
+    }
+    if (!/^\d+$/.test(part)) continue;
+    const code = Number(part);
+    // Extended colours (38, 48, 58) take extra parameters that must not be
+    // read as bold or underline.
+    if (code === 38 || code === 48 || code === 58) {
+      const mode = parts[index + 1];
+      if (mode === "5") index += 2;
+      else if (mode === "2") index += 4;
+      else index += 1;
+      continue;
+    }
+    if (code === 0) resetAnsi(state);
+    else if (code === 1) state.bold = true;
+    else if (code === 2) state.dim = true;
+    else if (code === 3) state.italic = true;
+    else if (code === 4) state.underline = true;
+    else if (code === 21 || code === 22) {
+      state.bold = false;
+      state.dim = false;
+    } else if (code === 23) state.italic = false;
+    else if (code === 24) state.underline = false;
+    else if (code === 39) state.fg = "";
+    else if (code === 49) state.bg = "";
+    else if (ANSI_FG[code]) state.fg = ANSI_FG[code];
+    else if (ANSI_BG[code]) state.bg = ANSI_BG[code];
+  }
+}
+
+/** The end of one escape sequence, or the next index after a broken one. */
+function ansiEscape(input, start) {
+  const rest = input.slice(start);
+  const stringControl = /^\u001b[\]PX^_]/.test(rest);
+  if (stringControl) {
+    const end = rest.search(/\u0007|\u001b\\/);
+    if (end < 0) return { next: input.length, params: null };
+    return { next: start + end + (rest[end] === "\u0007" ? 1 : 2), params: null };
+  }
+  const csi = ANSI_CSI.exec(rest);
+  if (csi) {
+    return {
+      next: start + csi[0].length,
+      params: csi[3] === "m" && !csi[2] ? csi[1] : null,
+    };
+  }
+  const partial = ANSI_CSI_PARTIAL.exec(rest);
+  if (partial && partial[0].length > 2) {
+    return { next: start + partial[0].length, params: null };
+  }
+  const esc = ANSI_ESC.exec(rest);
+  if (esc) return { next: start + esc[0].length, params: null };
+  return { next: start + 1, params: null };
+}
+
+/**
+ * One log line split into text runs with an allowlisted class list. SGR
+ * colours, bold, dim, italic, and underline survive; OSC, CSI, and every other
+ * escape sequence is dropped. The text is never parsed as markup. A caller can
+ * pass the state of the previous line so an open colour spans line breaks.
+ */
+export function ansiRuns(text, state = ansiState()) {
+  const input = String(text ?? "");
+  const runs = [];
+  let buffer = "";
+  const flush = () => {
+    if (!buffer) return;
+    runs.push({ text: buffer, classes: ansiClasses(state) });
+    buffer = "";
+  };
+  let index = 0;
+  while (index < input.length) {
+    const char = input[index];
+    if (char === "\u001b") {
+      flush();
+      const escape = ansiEscape(input, index);
+      if (escape.params !== null) applySgr(state, escape.params);
+      index = escape.next;
+      continue;
+    }
+    if ((char < " " && char !== "\t") || (char >= "\u007f" && char <= "\u009f")) {
+      index += 1;
+      continue;
+    }
+    buffer += char;
+    index += 1;
+  }
+  flush();
+  const merged = [];
+  runs.forEach((run) => {
+    const previous = merged[merged.length - 1];
+    if (previous && previous.classes.join(" ") === run.classes.join(" ")) {
+      previous.text += run.text;
+    } else {
+      merged.push({ text: run.text, classes: run.classes });
+    }
+  });
+  return merged;
+}
+
+function ansiText(runs) {
+  return runs.map((run) => run.text).join("");
+}
+
 // ansible-galaxy prints ERROR! and the playbook still runs from the cache.
 function galaxyPhase(log, text) {
   const install = text.includes("ansible-galaxy collection install")
@@ -454,6 +632,7 @@ function logState(log) {
       current: -1,
       atBottom: true,
       onRecap: null,
+      sgr: new Map(),
     };
   }
   return log.koreografLog;
@@ -836,20 +1015,48 @@ export function formatDuration(seconds) {
 }
 
 function paintLogLine(line, query) {
-  const marks = [];
+  const groups = [];
   line.replaceChildren();
-  searchSegments(line.koreografRaw ?? "", query).forEach((segment) => {
-    if (segment.hit) {
-      const mark = document.createElement("mark");
-      mark.className = "log-hit";
-      mark.textContent = segment.text;
-      line.appendChild(mark);
-      marks.push(mark);
-    } else if (segment.text) {
-      line.appendChild(document.createTextNode(segment.text));
-    }
+  const runs = Array.isArray(line.koreografRuns)
+    ? line.koreografRuns
+    : [{ text: line.koreografRaw ?? "", classes: [] }];
+  const raw = runs.map((run) => run.text).join("");
+  let offset = 0;
+  const segments = searchSegments(raw, query).map((segment) => {
+    const start = offset;
+    offset += segment.text.length;
+    const entry = { ...segment, start, end: offset, marks: [] };
+    if (entry.hit) groups.push(entry.marks);
+    return entry;
   });
-  return marks;
+  let runStart = 0;
+  runs.forEach((run) => {
+    const runEnd = runStart + run.text.length;
+    segments.forEach((segment) => {
+      const from = Math.max(runStart, segment.start);
+      const to = Math.min(runEnd, segment.end);
+      if (to <= from) return;
+      const text = run.text.slice(from - runStart, to - runStart);
+      if (segment.hit) {
+        const mark = document.createElement("mark");
+        mark.className = run.classes && run.classes.length
+          ? `log-hit ${run.classes.join(" ")}`
+          : "log-hit";
+        mark.textContent = text;
+        line.appendChild(mark);
+        segment.marks.push(mark);
+      } else if (run.classes && run.classes.length) {
+        const span = document.createElement("span");
+        span.className = run.classes.join(" ");
+        span.textContent = text;
+        line.appendChild(span);
+      } else {
+        line.appendChild(document.createTextNode(text));
+      }
+    });
+    runStart = runEnd;
+  });
+  return groups;
 }
 
 function updateRecap(state, text) {
@@ -889,10 +1096,10 @@ function jumpToSearchMatch(log, state, index) {
   }
   const total = state.matches.length;
   state.current = ((index % total) + total) % total;
-  state.matches.forEach((mark) => mark.classList.remove("current"));
-  const mark = state.matches[state.current];
-  mark.classList.add("current");
-  scrollLogLine(log, mark.parentElement);
+  state.matches.forEach((group) => group.forEach((mark) => mark.classList.remove("current")));
+  const group = state.matches[state.current];
+  group.forEach((mark) => mark.classList.add("current"));
+  scrollLogLine(log, group[0].parentElement);
   updateSearchCount(state);
 }
 
@@ -921,6 +1128,7 @@ function bindJobLog(log, job) {
   state.current = -1;
   state.atBottom = true;
   state.onRecap = null;
+  state.sgr.clear();
   const search = document.querySelector("#log-search");
   const count = document.querySelector("#log-search-count");
   const first = document.querySelector("#log-first-failure");
@@ -996,6 +1204,31 @@ export function classifyLogLine(log, row) {
   return "";
 }
 
+/** The exit code of the runner's single `Exit code: N` system line. */
+export function exitCodeFromLine(text) {
+  const match = /^Exit code: (-?\d+)$/.exec(plainLogLine(text).trim());
+  return match ? Number(match[1]) : null;
+}
+
+/** The last recorded exit code, or null while the process has not exited. */
+export function exitCodeFromEvents(events) {
+  let code = null;
+  for (const row of Array.isArray(events) ? events : []) {
+    if (!row || row.stream !== "system") continue;
+    const found = exitCodeFromLine(row.line);
+    if (found !== null) code = found;
+  }
+  return code;
+}
+
+function showJobExitCode(code) {
+  if (code === null || code === undefined) return;
+  const box = document.querySelector("#job-exit-code");
+  if (!box) return;
+  box.textContent = t("exit_code", { code });
+  box.hidden = false;
+}
+
 function markRecap(line) {
   const text = plainLogLine(line.textContent);
   if (!(/\bfailed=[1-9]\d*\b/.test(text) || /\bunreachable=[1-9]\d*\b/.test(text))) return;
@@ -1038,8 +1271,11 @@ export function appendLog(row) {
   const kind = classifyLogLine(log, row);
   if (tagFilterNote(row)) showTagFilterBanner();
   if (kind) line.className = kind;
-  line.textContent = plainLogLine(row.line);
-  line.koreografRaw = line.textContent;
+  const sgr = state.sgr.get(row.stream) || ansiState();
+  line.koreografRuns = ansiRuns(row.line, sgr);
+  state.sgr.set(row.stream, sgr);
+  line.koreografRaw = ansiText(line.koreografRuns);
+  paintLogLine(line, "");
   log.appendChild(line);
   if (kind === "fail") {
     markRecap(line);
@@ -1049,15 +1285,16 @@ export function appendLog(row) {
       if (first) first.hidden = false;
     }
   }
-  pinFailure(plainLogLine(row.line), kind);
-  updateRecap(state, plainLogLine(row.line));
+  pinFailure(line.koreografRaw, kind);
+  updateRecap(state, line.koreografRaw);
+  if (row.stream === "system") showJobExitCode(exitCodeFromLine(line.koreografRaw));
   if (state.query) {
-    const marks = paintLogLine(line, state.query);
-    if (marks.length) {
-      state.matches.push(...marks);
+    const groups = paintLogLine(line, state.query);
+    if (groups.length) {
+      state.matches.push(...groups);
       if (state.current < 0) {
         state.current = 0;
-        state.matches[0].classList.add("current");
+        state.matches[0].forEach((mark) => mark.classList.add("current"));
       }
       updateSearchCount(state);
     }
@@ -1898,7 +2135,7 @@ async function pageJob(id) {
   const actions = jobActions(job);
   shell(job.name, `
     <div class="spread" style="margin-bottom:12px">
-      <div class="row">${pill(job.status)} <span class="tool">${esc(job.tool)}</span> <span class="small muted">${esc(job.trigger)} · ${esc(job.launched_by)} · ${esc(when(job.started_at || job.created_at))} · <span id="job-duration">${esc(spanText(job.started_at, job.finished_at, job.status))}</span></span></div>
+      <div class="row">${pill(job.status)} <span class="tool">${esc(job.tool)}</span> <span class="small muted">${esc(job.trigger)} · ${esc(job.launched_by)} · ${esc(when(job.started_at || job.created_at))} · <span id="job-duration">${esc(spanText(job.started_at, job.finished_at, job.status))}</span></span><span class="small muted" id="job-exit-code" hidden></span></div>
     </div>
     <div class="job-sticky">
       <div class="spread tab-bar">
@@ -2012,6 +2249,7 @@ async function pageJob(id) {
     <div id="panel-parameters" hidden>${jobParameters(job)}</div>`);
   const badge = document.querySelector(".pill");
   bindJobLog(document.querySelector("#log"), job);
+  showJobExitCode(exitCodeFromEvents(job.events));
   const structured = job.tool === "opentofu"
     ? bindTofuOutput(job, startedAt)
     : bindStructuredOutput(job, startedAt);
