@@ -313,6 +313,10 @@ pub struct TemplateBody {
     update_on_launch: bool,
     #[serde(default)]
     prompt_on_launch: bool,
+    /// Fields the launch dialog may replace. Unknown or tool-mismatched keys
+    /// are ignored.
+    #[serde(default)]
+    prompt_fields: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -337,6 +341,7 @@ pub(super) struct TemplateResponse {
     created_at: String,
     update_on_launch: bool,
     prompt_on_launch: bool,
+    prompt_fields: Vec<String>,
 }
 
 impl TemplateResponse {
@@ -368,6 +373,7 @@ impl TemplateResponse {
             created_at: template.created_at.clone(),
             update_on_launch: template.update_on_launch,
             prompt_on_launch: template.prompt_on_launch,
+            prompt_fields: template.prompt_fields(),
         }
     }
 }
@@ -625,6 +631,7 @@ fn build_template(
     }
     let credential_ids = chosen.ids;
     let credential_id = chosen.primary_id;
+    let prompt_fields = db::normalize_prompt_fields(&body.tool, &body.prompt_fields);
     Ok((
         Template {
             id: id.unwrap_or_else(|| Uuid::new_v4().to_string()),
@@ -644,6 +651,8 @@ fn build_template(
             update_on_launch: body.update_on_launch,
             admin_saved: false,
             prompt_on_launch: body.prompt_on_launch,
+            prompt_fields: serde_json::to_string(&prompt_fields)
+                .unwrap_or_else(|_| "[]".to_string()),
         },
         credential_ids,
     ))

@@ -292,6 +292,7 @@ async fn an_operator_schedule_does_not_start_an_admin_only_local_run() {
                 update_on_launch: false,
                 admin_saved: true,
                 prompt_on_launch: false,
+                prompt_fields: "[]".into(),
             },
         )
         .expect("template");
@@ -451,6 +452,7 @@ async fn a_removed_member_does_not_start_the_next_run() {
                 update_on_launch: false,
                 admin_saved: true,
                 prompt_on_launch: false,
+                prompt_fields: "[]".into(),
             },
         )
         .expect("template");

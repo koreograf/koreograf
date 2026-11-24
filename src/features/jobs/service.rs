@@ -593,8 +593,44 @@ fn parameters_for_launch(
             controller_can_run,
         ));
     }
-    if !template.prompt_on_launch && !req.overrides.launch_with_options {
+    if !template.prompt_on_launch
+        && !req.overrides.launch_with_options
+        && template.prompt_fields().is_empty()
+    {
         return Err(ApiError::bad("prompt_on_launch_is_off"));
+    }
+    let prompts_all = template.prompt_on_launch || req.overrides.launch_with_options;
+    let prompt_fields = template.prompt_fields();
+    let prompted = |field: &str| {
+        prompts_all
+            || prompt_fields
+                .iter()
+                .any(|item| item == field && db::prompt_field_fits_tool(&template.tool, field))
+    };
+    let mut blocked = false;
+    if req.overrides.inventory_id.is_some() && !prompted("inventory") {
+        blocked = true;
+    }
+    if req.overrides.credential_ids.is_some() && !prompted("credentials") {
+        blocked = true;
+    }
+    if extra_overlay && !prompted("extra_vars") {
+        blocked = true;
+    }
+    if let Some(spec) = spec_overlay {
+        if let Some(map) = spec.as_object() {
+            for key in map.keys() {
+                if db::PROMPT_FIELDS.contains(&key.as_str())
+                    && !prompted(key)
+                    && db::prompt_field_fits_tool(&template.tool, key)
+                {
+                    blocked = true;
+                }
+            }
+        }
+    }
+    if blocked {
+        return Err(ApiError::bad("field_is_not_prompted"));
     }
     let mut effective = template.clone();
     if let Some(inventory_id) = &req.overrides.inventory_id {
@@ -634,8 +670,10 @@ fn parameters_for_launch(
         };
         map.insert("spec".into(), merged);
     }
-    if let Some(map) = params.as_object_mut() {
-        map.insert("launch_with_options".into(), Value::Bool(true));
+    if req.overrides.launch_with_options {
+        if let Some(map) = params.as_object_mut() {
+            map.insert("launch_with_options".into(), Value::Bool(true));
+        }
     }
     Ok(params.to_string())
 }

@@ -25,6 +25,46 @@ const catalog = {
   },
 };
 
+async function signInEnglish(page) {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Sprache" }).click();
+  await page.getByRole("option", { name: /English/ }).click();
+  await page.getByLabel("Username").fill(username);
+  await page.getByLabel("Password").fill(password);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(page.getByRole("navigation")).toBeVisible();
+}
+
+async function teamHeaders(page) {
+  const profile = await page.evaluate(async () => (await fetch("/api/v1/me")).json());
+  return { "X-Team-Id": profile.teams[0].id };
+}
+
+async function createPartialAnsibleTemplate(page, name, promptFields = ["limit"]) {
+  const headers = await teamHeaders(page);
+  const inventory = await post(page.request, "/api/v1/inventories", {
+    headers,
+    data: { name: `Partial hosts ${Date.now().toString(36)}`, body: "[web]\nweb-1\n" },
+  });
+  expect(inventory.status()).toBe(201);
+  const row = await inventory.json();
+  const created = await post(page.request, "/api/v1/templates", {
+    headers,
+    data: {
+      name,
+      tool: "ansible",
+      entrypoint: "site.yml",
+      inventory_id: row.id,
+      no_environment: true,
+      prompt_fields: promptFields,
+      prompt_on_launch: false,
+      spec: { job_type: "run", tags: "ping", limit: "web" },
+    },
+  });
+  expect(created.status()).toBe(201);
+  return created.json();
+}
+
 async function signInInEnglish(page) {
   await page.goto("/");
   await page.getByRole("button", { name: "Sprache" }).click();
@@ -1438,4 +1478,64 @@ test("the target hint follows the tool and a stored secret keeps its remove row"
   await expect(discard).toBeVisible();
   await discard.getByRole("button", { name: "OK", exact: true }).click();
   await expect(switched).toHaveCount(0);
+});
+
+test("a template can prompt for one field and keeps the other values", async ({ page }) => {
+  test.setTimeout(60000);
+  const suffix = `${test.info().project.name}-${Date.now()}`.replace(/\s+/g, "-");
+  await signInEnglish(page);
+  const template = await createPartialAnsibleTemplate(page, `Partial prompt ${suffix}`);
+
+  await page.getByRole("navigation").getByRole("link", { name: "Templates", exact: true }).click();
+  const row = page.locator("#template-table tbody tr").filter({ hasText: template.name }).first();
+  await expect(row).toBeVisible();
+  await row.getByRole("button", { name: "Launch", exact: true }).click();
+
+  const dialog = page.locator("#launch-prompt");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('input[name="limit"]')).toHaveValue("web");
+  await expect(dialog.locator('select[name="inventory_id"]')).toHaveCount(0);
+  await expect(dialog.locator("[data-credential-field]")).toHaveCount(0);
+  await expect(dialog.locator('textarea[name="extra_vars"]')).toHaveCount(0);
+  await expect(dialog.locator('input[name="tags"]')).toHaveCount(0);
+  await expect(dialog.locator('select[name="job_type"]')).toHaveCount(0);
+  await dialog.locator('input[name="limit"]').fill("db");
+  await dialog.getByRole("button", { name: "Launch", exact: true }).click();
+  await expect(page).toHaveURL(/#\/jobs\/[0-9a-f-]+$/);
+
+  await page.getByRole("button", { name: "Parameters", exact: true }).click();
+  const parameters = page.locator("#panel-parameters");
+  await expect(parameters).toContainText("Limit");
+  await expect(parameters).toContainText("db");
+  await expect(parameters).toContainText("ping");
+
+  const headers = await teamHeaders(page);
+  const stored = await (await page.request.get("/api/v1/templates", { headers })).json();
+  const after = stored.find((item) => item.id === template.id);
+  expect(after.prompt_on_launch).toBe(false);
+  expect(after.prompt_fields).toEqual(["limit"]);
+  expect(after.spec.limit).toBe("web");
+  expect(after.spec.tags).toBe("ping");
+
+  await page.goto(`/#/templates?edit=${template.id}`);
+  const edit = page.getByRole("dialog");
+  await expect(edit.getByRole("heading", { name: "Edit template" })).toBeVisible();
+  const fieldBoxes = edit.locator('input[name="prompt_field"]');
+  await expect(fieldBoxes).toHaveCount(8);
+  await expect(edit.locator('input[name="prompt_field"][value="limit"]')).toBeChecked();
+  await expect(edit.locator('input[name="prompt_field"][value="tags"]')).not.toBeChecked();
+  const master = edit.locator('input[name="prompt_on_launch"]');
+  await expect(master).not.toBeChecked();
+  await master.check();
+  for (const box of await fieldBoxes.all()) {
+    await expect(box).toBeChecked();
+    await expect(box).toBeDisabled();
+  }
+  await edit.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(edit).toHaveCount(0);
+
+  const saved = await (await page.request.get("/api/v1/templates", { headers })).json();
+  const final = saved.find((item) => item.id === template.id);
+  expect(final.prompt_on_launch).toBe(true);
+  expect(final.prompt_fields).toEqual([]);
 });

@@ -4423,6 +4423,7 @@ mod tests {
             update_on_launch: false,
             admin_saved: true,
             prompt_on_launch: false,
+            prompt_fields: "[]".into(),
         }
     }
 

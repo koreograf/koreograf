@@ -28,6 +28,58 @@ import { bindScheduleActions, openScheduleForm, scheduleTable } from "./schedule
 
 const NO_ENVIRONMENT = "__no_environment__";
 
+export const PROMPT_FIELDS = [
+  "inventory",
+  "credentials",
+  "extra_vars",
+  "limit",
+  "tags",
+  "skip_tags",
+  "job_type",
+  "verbosity",
+  "action",
+];
+
+const TOOL_PROMPT_FIELDS = {
+  ansible: ["inventory", "credentials", "extra_vars", "limit", "tags", "skip_tags", "job_type", "verbosity"],
+  opentofu: ["credentials", "extra_vars", "action"],
+  shell: ["credentials", "extra_vars"],
+};
+
+const PROMPT_FIELD_LABELS = {
+  inventory: "inventory",
+  credentials: "credentials",
+  extra_vars: "extra_variables",
+  limit: "limit",
+  tags: "tags",
+  skip_tags: "skip_tags",
+  job_type: "type",
+  verbosity: "verbosity",
+  action: "action",
+};
+
+export function promptFieldsForTool(tool) {
+  return [...(TOOL_PROMPT_FIELDS[tool] || [])];
+}
+
+export function normalizePromptFields(tool, fields) {
+  const allowed = new Set(promptFieldsForTool(tool));
+  const chosen = new Set(fields || []);
+  return PROMPT_FIELDS.filter((field) => allowed.has(field) && chosen.has(field));
+}
+
+export function selectedPromptFields(form) {
+  return [...form.querySelectorAll('input[name="prompt_field"]:checked')].map((input) => input.value);
+}
+
+export function promptFieldsControl(tool, selected, options = {}) {
+  const chosen = new Set(selected || []);
+  const disabled = options.disabled || options.readOnly ? " disabled" : "";
+  return `<div class="check-grid" id="prompt-fields">${promptFieldsForTool(tool).map((field) =>
+    `<label class="check-row"><input type="checkbox" name="prompt_field" value="${esc(field)}"${chosen.has(field) ? " checked" : ""}${disabled}><span>${h(PROMPT_FIELD_LABELS[field])}</span></label>`
+  ).join("")}</div>`;
+}
+
 export function templateSpec(form) {
   if (form.tool.value === "ansible") {
     const spec = { job_type: form.job_type.value === "check" ? "check" : "run" };
@@ -97,17 +149,27 @@ function tofuApply(item) {
 export async function openLaunchPrompt(item, launchWithOptions = false, preset = {}) {
   const previous = document.querySelector("#launch-prompt");
   if (previous) previous.remove();
-  const spec = { ...(item.spec || {}), ...(preset.limit === undefined ? {} : { limit: preset.limit }) };
+  const promptAll = launchWithOptions || Boolean(item.prompt_on_launch);
+  const wanted = new Set(promptAll
+    ? promptFieldsForTool(item.tool)
+    : normalizePromptFields(item.tool, item.prompt_fields || []));
+  const shows = (field) => wanted.has(field);
+  const spec = {
+    ...(item.spec || {}),
+    ...(preset.limit !== undefined && shows("limit") ? { limit: preset.limit } : {}),
+  };
   const ansible = item.tool === "ansible";
   const tofu = item.tool === "opentofu";
   const [inventories, credentials] = await Promise.all([
-    ansible ? api("GET", "/api/v1/inventories") : Promise.resolve([]),
-    api("GET", "/api/v1/credentials"),
+    ansible && shows("inventory") ? api("GET", "/api/v1/inventories") : Promise.resolve([]),
+    shows("credentials") ? api("GET", "/api/v1/credentials") : Promise.resolve([]),
   ]);
   const inventoryId = preset.inventoryId || item.inventory_id;
-  const inventory = ansible ? inventoryField(inventories, inventoryId) : "";
-  const ansibleOptions = ansible ? ansibleFields(spec, { extras: false }) : "";
-  const tofuOptions = tofu ? tofuFields(spec) : "";
+  const inventory = ansible && shows("inventory") ? inventoryField(inventories, inventoryId) : "";
+  const ansibleOptions = ansible
+    ? ansibleFields(spec, { extras: false, only: promptAll ? null : [...wanted] })
+    : "";
+  const tofuOptions = tofu && shows("action") ? tofuFields(spec) : "";
   let submitting = false;
   const dialog = openDialog({
     id: "launch-prompt",
@@ -116,15 +178,16 @@ export async function openLaunchPrompt(item, launchWithOptions = false, preset =
     body: `
       <p class="small muted">${h(launchWithOptions ? "launch_with_options_help" : "the_launch_dialog_starts_from_the_template")}</p>
       ${inventory}
-      ${credentialFields(credentials, selectedCredentialIds(item), item.tool)}
+      ${shows("credentials") ? credentialFields(credentials, selectedCredentialIds(item), item.tool) : ""}
       ${ansibleOptions}
       ${tofuOptions}
-      ${extraVarsField(item.extra_vars)}`,
+      ${shows("extra_vars") ? extraVarsField(item.extra_vars) : ""}`,
     submit: t("launch"),
     onSubmit: async ({ form, close }) => {
       if (submitting || !flushChips(form)) return;
       submitting = true;
-      const action = tofu ? (form.action.value === "apply" ? "apply" : "plan") : "";
+      const templateAction = (item.spec || {}).action === "apply" ? "apply" : "plan";
+      const action = tofu ? (shows("action") ? (form.action.value === "apply" ? "apply" : "plan") : templateAction) : "";
       if (action === "apply") {
         const confirmed = await new Promise((resolve) => {
           let settled = false;
@@ -156,23 +219,24 @@ export async function openLaunchPrompt(item, launchWithOptions = false, preset =
         submitButton.setAttribute("aria-busy", "true");
       }
       try {
-        const body = {
-          extra_vars: jsonObject(form.extra_vars.value, "extra_variables"),
-          credential_ids: readCredentialIds(form, item.tool),
-        };
+        const body = { extra_vars: {} };
+        if (shows("extra_vars")) body.extra_vars = jsonObject(form.extra_vars.value, "extra_variables");
+        if (shows("credentials")) body.credential_ids = readCredentialIds(form, item.tool);
         if (launchWithOptions) body.launch_with_options = true;
         if (ansible) {
-          body.inventory_id = form.inventory_id.value;
-          const level = Number(form.verbosity.value);
-          body.spec = {
-            job_type: form.job_type.value === "check" ? "check" : "run",
-            tags: form.tags.value.trim(),
-            skip_tags: form.skip_tags.value.trim(),
-            limit: form.limit.value.trim(),
-            verbosity: Number.isInteger(level) ? level : 0,
-          };
+          if (shows("inventory")) body.inventory_id = form.inventory_id.value;
+          const specBody = {};
+          if (shows("job_type")) specBody.job_type = form.job_type.value === "check" ? "check" : "run";
+          if (shows("tags")) specBody.tags = form.tags.value.trim();
+          if (shows("skip_tags")) specBody.skip_tags = form.skip_tags.value.trim();
+          if (shows("limit")) specBody.limit = form.limit.value.trim();
+          if (shows("verbosity")) {
+            const level = Number(form.verbosity.value);
+            specBody.verbosity = Number.isInteger(level) ? level : 0;
+          }
+          if (Object.keys(specBody).length) body.spec = specBody;
         }
-        if (tofu) body.spec = { action };
+        if (tofu && shows("action")) body.spec = { action };
         const job = await api("POST", `/api/v1/templates/${encodeURIComponent(item.id)}/launch`, body);
         close();
         go(`#/jobs/${job.id}`);
@@ -221,7 +285,7 @@ async function pageTemplates() {
         <td class="tool narrow-hide">${esc(item.tool)}</td>
         <td class="mono entry narrow-hide"><span class="entry-path" title="${esc(entry)}">${esc(entry)}</span></td>
         <td class="small narrow-hide">${esc(templateOptionLine(item))}</td>
-        <td>${can("operator") ? `<div class="row"><button class="btn primary" type="button" data-launch="${esc(item.id)}">${h("launch")}</button>${(item.tool === "ansible" || item.tool === "opentofu") && !item.prompt_on_launch ? `<button class="btn" type="button" data-launch-options="${esc(item.id)}">${h("launch_with_options")}</button>` : ""}</div>` : ""}</td>
+        <td>${can("operator") ? `<div class="row"><button class="btn primary" type="button" data-launch="${esc(item.id)}">${h("launch")}</button>${(item.tool === "ansible" || item.tool === "opentofu") && !item.prompt_on_launch && !(item.prompt_fields || []).length ? `<button class="btn" type="button" data-launch-options="${esc(item.id)}">${h("launch_with_options")}</button>` : ""}</div>` : ""}</td>
       </tr>`;
     });
     const host = document.querySelector("#template-table");
@@ -235,7 +299,7 @@ async function pageTemplates() {
     document.querySelectorAll("[data-launch]").forEach((button) => {
       button.addEventListener("click", async () => {
         const item = items.find((row) => row.id === button.dataset.launch);
-        if (item && item.prompt_on_launch) {
+        if (item && (item.prompt_on_launch || (item.prompt_fields || []).length)) {
           try {
             await openLaunchPrompt(item);
           } catch (error) {
@@ -329,6 +393,7 @@ async function openTemplateDialog(existing, initialTab = "") {
   const item = existing || {
     name: "", description: "", tool: "ansible", project_id: "", inventory_id: "",
     credential_id: "", credential_ids: [], environment_id: "", entrypoint: "", extra_vars: {}, spec: {},
+    prompt_fields: [],
   };
   const environmentsForTool = (tool) => environmentsFor(environments, tool);
   const environmentDefault = (tool) => runner[`default_environment_${tool}`] || "";
@@ -351,11 +416,17 @@ async function openTemplateDialog(existing, initialTab = "") {
     return control + rows;
   };
   const verbosity = Number(spec.verbosity) || 0;
+  const promptFieldSelected = normalizePromptFields(item.tool, item.prompt_fields || []);
   const general = `
     <label class="field required"><span>${h("name")}</span><input name="name" required value="${esc(item.name)}"></label>
     ${descriptionField(item.description)}
-    <label class="field check"><span>${h("prompt_on_launch")}</span><input name="prompt_on_launch" type="checkbox"${item.prompt_on_launch ? " checked" : ""}></label>
-    <p class="small muted">${h("the_launch_dialog_starts_from_the_template")}</p>
+    <div class="form-section">
+      <h2>${h("prompt_fields")}</h2>
+      <label class="field check"><span>${h("prompt_on_launch")}</span><input name="prompt_on_launch" type="checkbox"${item.prompt_on_launch ? " checked" : ""}${readOnly ? " disabled" : ""}></label>
+      <p class="small muted">${h("the_launch_dialog_starts_from_the_template")}</p>
+      <p class="small muted">${h("prompt_fields_hint")}</p>
+      ${promptFieldsControl(item.tool, promptFieldSelected, { disabled: item.prompt_on_launch, readOnly })}
+    </div>
     <div class="field-row">
       <label class="field"><span>${h("tool")}</span>
         <select class="fit" name="tool">
@@ -444,6 +515,9 @@ async function openTemplateDialog(existing, initialTab = "") {
           extra_vars: jsonObject(form.extra_vars.value, "extra_variables"),
           spec: templateSpec(form),
           prompt_on_launch: form.prompt_on_launch.checked,
+          prompt_fields: form.prompt_on_launch.checked
+            ? []
+            : normalizePromptFields(form.tool.value, selectedPromptFields(form)),
         };
         if (editing) await api("PUT", `/api/v1/templates/${encodeURIComponent(item.id)}`, body);
         else await api("POST", "/api/v1/templates", body);
@@ -460,6 +534,25 @@ async function openTemplateDialog(existing, initialTab = "") {
     onTab: (tab) => rememberEditHash(editing ? { edit: item.id, tab } : { create: "1", tab }, false),
   });
   const form = dialog.form;
+  const syncPromptFieldState = () => {
+    const disabled = form.prompt_on_launch.checked || readOnly;
+    form.querySelectorAll('input[name="prompt_field"]').forEach((input) => {
+      input.disabled = disabled;
+      if (form.prompt_on_launch.checked) input.checked = true;
+    });
+  };
+  const drawPromptFields = () => {
+    const host = form.querySelector("#prompt-fields");
+    if (!host) return;
+    const current = new Set(selectedPromptFields(form));
+    host.outerHTML = promptFieldsControl(form.tool.value, [...current], {
+      disabled: form.prompt_on_launch.checked,
+      readOnly,
+    });
+    syncPromptFieldState();
+  };
+  form.prompt_on_launch.addEventListener("change", syncPromptFieldState);
+  syncPromptFieldState();
   const initialCredentialIds = new Set(selectedCredentialIds(item));
   const toolKinds = new Set(Object.values(TOOL_CREDENTIAL_KINDS).flat());
   const legacyCredentialIds = new Set([...initialCredentialIds].filter((id) => {
@@ -624,6 +717,7 @@ async function openTemplateDialog(existing, initialTab = "") {
     }
     form.entrypoint.setAttribute("aria-required", tool === "shell" ? "false" : "true");
     dialog.overlay.querySelector("#entrypoint-field").classList.toggle("required", tool !== "shell");
+    drawPromptFields();
     if (!incompatible) showEnvironmentWarning();
   };
   form.tool.addEventListener("change", () => {

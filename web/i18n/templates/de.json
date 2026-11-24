@@ -26,6 +26,8 @@
   "playbook_from_the_project": "Playbook aus dem Projekt",
   "playbook_path": "Playbook-Pfad",
   "playbooks_cannot_be_read": "Playbooks lassen sich nicht lesen.",
+  "prompt_fields": "Diese Felder beim Start abfragen",
+  "prompt_fields_hint": "Wähle einzelne Felder. „Beim Start fragen“ schaltet alle Felder des Werkzeugs ein.",
   "prompt_on_launch": "Beim Start fragen",
   "read_only_template": "{name} (schreibgeschützt)",
   "read_only_template_hint": "Diese Vorlage ist schreibgeschützt.",

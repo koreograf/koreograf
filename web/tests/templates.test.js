@@ -66,6 +66,19 @@ test("template specs reject a forks value that is not a whole number", async () 
   assert.throws(() => templateSpec(form({ forks: "2.5" })), /forks_is_a_whole_number/);
 });
 
+test("prompt field choices follow the tool", async () => {
+  const { promptFieldsForTool, normalizePromptFields } = await load();
+  assert.deepEqual(promptFieldsForTool("ansible"), [
+    "inventory", "credentials", "extra_vars", "limit", "tags", "skip_tags", "job_type", "verbosity",
+  ]);
+  assert.deepEqual(promptFieldsForTool("opentofu"), ["credentials", "extra_vars", "action"]);
+  assert.deepEqual(promptFieldsForTool("shell"), ["credentials", "extra_vars"]);
+  assert.deepEqual(promptFieldsForTool("unknown"), []);
+  assert.deepEqual(normalizePromptFields("ansible", ["action", "tags", "limit", "limit", "forks"]), ["limit", "tags"]);
+  assert.deepEqual(normalizePromptFields("shell", ["limit", "extra_vars", "credentials"]), ["credentials", "extra_vars"]);
+  assert.deepEqual(normalizePromptFields("opentofu", ["inventory", "action", "tags", "credentials"]), ["credentials", "action"]);
+});
+
 test("the template entry point is required for Ansible and OpenTofu", async () => {
   const { templateEntrypointError } = await load();
   assert.equal(templateEntrypointError("ansible", ""), "ansible_needs_a_playbook_as_the_entry");

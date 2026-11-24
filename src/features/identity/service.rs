@@ -411,9 +411,8 @@ pub fn content_saved_by_admin(
 
 /// True when `params` would run the same command as `template`. A missing
 /// `tool` means the runner keeps the template. `spec.limit` is ignored because
-/// relaunch of failed hosts adds it. A template that asks at launch also
-/// ignores inventory, tags, skip tags, job type, verbosity, and the OpenTofu
-/// action.
+/// relaunch of failed hosts adds it. The template's master flag, its per-field
+/// list, or an explicit options launch makes exactly those fields ignorable.
 pub(crate) fn command_matches_template(
     template: &db::Template,
     params: &serde_json::Value,
@@ -432,15 +431,15 @@ pub(crate) fn command_matches_template(
     if saved_target(params, "project_id") != template.project_id {
         return false;
     }
-    let prompted = template.prompt_on_launch
-        || params
-            .get("launch_with_options")
-            .and_then(serde_json::Value::as_bool)
-            == Some(true);
-    if !prompted && saved_target(params, "inventory_id") != template.inventory_id {
+    let launch_options = params
+        .get("launch_with_options")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true);
+    let prompted = |field: &str| launch_options || template.prompts_field(field);
+    if !prompted("inventory") && saved_target(params, "inventory_id") != template.inventory_id {
         return false;
     }
-    specs_match(&template.spec, params, prompted, &template.tool)
+    specs_match(&template.spec, params, &prompted, &template.tool)
 }
 
 fn saved_target(params: &serde_json::Value, key: &str) -> Option<String> {
@@ -451,27 +450,32 @@ fn saved_target(params: &serde_json::Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn specs_match(template_spec: &str, params: &serde_json::Value, prompt: bool, tool: &str) -> bool {
+fn specs_match(
+    template_spec: &str,
+    params: &serde_json::Value,
+    prompted: &dyn Fn(&str) -> bool,
+    tool: &str,
+) -> bool {
     let Some(saved) = params.get("spec").filter(|value| value.is_object()) else {
         return true;
     };
-    spec_map(saved, prompt, tool) == spec_map(&db::json_object(template_spec), prompt, tool)
+    spec_map(saved, prompted, tool) == spec_map(&db::json_object(template_spec), prompted, tool)
 }
 
 fn spec_map(
     value: &serde_json::Value,
-    prompt: bool,
+    prompted: &dyn Fn(&str) -> bool,
     tool: &str,
 ) -> serde_json::Map<String, serde_json::Value> {
     let mut map = value.as_object().cloned().unwrap_or_default();
     map.remove("limit");
-    if prompt {
-        for key in ["tags", "skip_tags", "job_type", "verbosity"] {
+    for key in ["tags", "skip_tags", "job_type", "verbosity"] {
+        if prompted(key) {
             map.remove(key);
         }
-        if tool == "opentofu" {
-            map.remove("action");
-        }
+    }
+    if tool == "opentofu" && prompted("action") {
+        map.remove("action");
     }
     map
 }

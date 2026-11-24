@@ -56,18 +56,37 @@ export function extraVarsField(value, id = "") {
 
 export function ansibleFields(spec, options = {}) {
   const ids = options.ids || {};
+  const only = options.only ? new Set(options.only) : null;
+  const wanted = (field) => !only || only.has(field);
   const verbosity = Number(spec.verbosity) || 0;
   const jobType = spec.job_type === "check" ? "check" : "run";
+  const type = wanted("job_type")
+    ? `<label class="field"><span>${h("type")}</span><select class="fit"${control(ids, "job_type")}><option value="run"${jobType === "check" ? "" : " selected"}>${h("run_2")}</option><option value="check"${jobType === "check" ? " selected" : ""}>${h("check_dry_run")}</option></select></label>`
+    : "";
+  const verbosityField = wanted("verbosity")
+    ? `<label class="field"><span>${h("verbosity")}</span><select class="fit"${control(ids, "verbosity")}>${[0, 1, 2, 3, 4].map((level) => `<option value="${level}"${verbosity === level ? " selected" : ""}>${h(verbosityLabel(level))}</option>`).join("")}</select></label>`
+    : "";
+  const tags = wanted("tags") ? chipBox("tags", "tags", spec.tags, ids.tags) : "";
+  const skipTags = wanted("skip_tags") ? chipBox("skip_tags", "skip_tags", spec.skip_tags, ids.skip_tags) : "";
+  const limit = wanted("limit")
+    ? `<div class="field-row"><label class="field"><span>${h("limit")}</span><input class="fit"${control(ids, "limit")} value="${esc(spec.limit || "")}" placeholder="web:&db"></label></div>`
+    : "";
+  if (only) {
+    const typeRow = type || verbosityField ? `<div class="field-row">${type}${verbosityField}</div>` : "";
+    const tagRow = tags || skipTags ? `<div class="field-row">${tags}${skipTags}</div>` : "";
+    const tagHint = tags || skipTags ? `<p class="small muted">${h("a_comma_or_a_space_turns_the_typed")}</p>` : "";
+    return `${typeRow}${tagRow}${tagHint}${limit}`;
+  }
   const extras = options.extras === false ? "" : `
     <label class="field"><span>${h("forks")}</span><input class="tiny"${control(ids, "forks")} inputmode="numeric" value="${esc(spec.forks ?? "")}" placeholder="5"></label>
     <label class="field check"><span>${h("diff")}</span><input${control(ids, "diff")} type="checkbox"${spec.diff ? " checked" : ""}></label>`;
   return `<div class="field-row">
-    <label class="field"><span>${h("type")}</span><select class="fit"${control(ids, "job_type")}><option value="run"${jobType === "check" ? "" : " selected"}>${h("run_2")}</option><option value="check"${jobType === "check" ? " selected" : ""}>${h("check_dry_run")}</option></select></label>
-    <label class="field"><span>${h("verbosity")}</span><select class="fit"${control(ids, "verbosity")}>${[0, 1, 2, 3, 4].map((level) => `<option value="${level}"${verbosity === level ? " selected" : ""}>${h(verbosityLabel(level))}</option>`).join("")}</select></label>${extras}
+    ${type}
+    ${verbosityField}${extras}
   </div>
-  <div class="field-row">${chipBox("tags", "tags", spec.tags, ids.tags)}${chipBox("skip_tags", "skip_tags", spec.skip_tags, ids.skip_tags)}</div>
+  <div class="field-row">${tags}${skipTags}</div>
   <p class="small muted">${h("a_comma_or_a_space_turns_the_typed")}</p>
-  <div class="field-row"><label class="field"><span>${h("limit")}</span><input class="fit"${control(ids, "limit")} value="${esc(spec.limit || "")}" placeholder="web:&db"></label></div>`;
+  ${limit}`;
 }
 
 export function tofuFields(spec, options = {}) {

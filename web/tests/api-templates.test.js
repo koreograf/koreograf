@@ -125,7 +125,7 @@ const launchCredentials = [
   { id: "netbox-1", kind: "netbox", name: "NetBox" },
 ];
 
-async function openLaunch(tool, item) {
+async function openLaunch(tool, item, launchWithOptions = true) {
   const state = await load("core/state.js");
   state.setMe({ is_admin: true, display_name: "Admin", teams: [{ id: "t1", name: "Team", role: "owner" }] });
   state.setTeamId("t1");
@@ -142,7 +142,7 @@ async function openLaunch(tool, item) {
     return { ok: true, status: 200, text: async () => JSON.stringify(body) };
   };
   const { openLaunchPrompt } = await load("features/templates.js");
-  await openLaunchPrompt({ id: `tpl-${tool}`, name: tool, tool, extra_vars: {}, spec: {}, ...item }, true);
+  await openLaunchPrompt({ id: `tpl-${tool}`, name: tool, tool, extra_vars: {}, spec: {}, ...item }, launchWithOptions);
   const dialog = document.querySelector("#launch-prompt");
   return { form: dialog.querySelector(".dialog-form"), posts };
 }
@@ -178,6 +178,28 @@ test("the launch dialog keeps the stored credentials in the payload", async () =
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(posts.length, 1, "the launch did not post");
   assert.deepEqual([...posts[0].credential_ids].sort(), ["netbox-1", "ssh-1", "vault-1"]);
+});
+
+test("a partial prompt shows and posts only the listed fields", async () => {
+  const { form, posts } = await openLaunch("ansible", {
+    prompt_on_launch: false,
+    prompt_fields: ["limit"],
+    inventory_id: "inv-1",
+    extra_vars: { keep: "template" },
+    spec: { job_type: "run", tags: "ping", limit: "web" },
+  }, false);
+  assert.equal(form.querySelector('select[name="inventory_id"]'), null, "the inventory is prompted");
+  assert.equal(form.querySelector("[data-credential-field]"), null, "credentials are prompted");
+  assert.equal(form.querySelector('textarea[name="extra_vars"]'), null, "extra vars are prompted");
+  assert.equal(form.querySelector('input[name="tags"]'), null, "tags are prompted");
+  assert.equal(form.querySelector('select[name="job_type"]'), null, "the job type is prompted");
+  const limit = form.querySelector('input[name="limit"]');
+  assert.equal(limit.value, "web", "the limit is not pre-filled");
+  limit.value = "db";
+  form.dispatchEvent({ type: "submit", preventDefault() {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(posts.length, 1, "the launch did not post");
+  assert.deepEqual(posts[0], { extra_vars: {}, spec: { limit: "db" } });
 });
 
 test("the template validation errors map to their fields", async () => {

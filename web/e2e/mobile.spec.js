@@ -175,6 +175,31 @@ async function createShellTemplate(page, name, script, prompt = false, descripti
   return created.json();
 }
 
+async function createPartialAnsibleTemplate(page, name) {
+  const headers = await teamHeaders(page);
+  const inventory = await post(page.request, "/api/v1/inventories", {
+    headers,
+    data: { name: `Partial hosts ${Date.now().toString(36)}`, body: "[web]\nweb-1\n" },
+  });
+  expect(inventory.status()).toBe(201);
+  const row = await inventory.json();
+  const created = await post(page.request, "/api/v1/templates", {
+    headers,
+    data: {
+      name,
+      tool: "ansible",
+      entrypoint: "site.yml",
+      inventory_id: row.id,
+      no_environment: true,
+      prompt_fields: ["limit"],
+      prompt_on_launch: false,
+      spec: { job_type: "run", tags: "ping", limit: "web" },
+    },
+  });
+  expect(created.status()).toBe(201);
+  return created.json();
+}
+
 async function createSchedule(page, name) {
   const headers = await teamHeaders(page);
   const templates = await (await page.request.get("/api/v1/templates", { headers })).json();
@@ -187,7 +212,6 @@ async function createSchedule(page, name) {
   expect(created.status()).toBe(201);
   return created.json();
 }
-
 test("signs in, opens a labelled template list and launches from a fullscreen dialog", async ({ page }) => {
   const suffix = `${test.info().project.name}-${Date.now()}`.replace(/\s+/g, "-");
   await signIn(page);
@@ -820,5 +844,48 @@ test("the overview shows the queue, schedules, hosts, syncs and workflow cards o
 
   await schedules.getByRole("link", { name: "Schedules", exact: true }).first().click();
   await expect(page.getByRole("heading", { level: 1, name: "Schedules" })).toBeVisible();
+  await noHorizontalScroll(page);
+});
+
+test("a phone prompts for one field and keeps the prompt checkboxes usable", async ({ page }) => {
+  test.setTimeout(60000);
+  const suffix = `${test.info().project.name}-${Date.now()}`.replace(/\s+/g, "-");
+  await signIn(page);
+  const template = await createPartialAnsibleTemplate(page, `Mobile partial ${suffix}`);
+
+  await goTo(page, "Templates");
+  const row = page.locator("#template-table tbody tr").filter({ hasText: template.name }).first();
+  await row.getByRole("button", { name: "Launch", exact: true }).click();
+  const dialog = page.locator("#launch-prompt");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('input[name="limit"]')).toHaveValue("web");
+  await expect(dialog.locator('select[name="inventory_id"]')).toHaveCount(0);
+  await expect(dialog.locator("[data-credential-field]")).toHaveCount(0);
+  await expect(dialog.locator('textarea[name="extra_vars"]')).toHaveCount(0);
+  await expect(dialog.locator('input[name="tags"]')).toHaveCount(0);
+  await dialog.locator('input[name="limit"]').fill("db");
+  await dialog.getByRole("button", { name: "Launch", exact: true }).click();
+  await expect(page).toHaveURL(/#\/jobs\/[0-9a-f-]+$/);
+
+  const jobId = new URL(page.url()).hash.match(/^#\/jobs\/(.+)$/)[1];
+  const headers = await teamHeaders(page);
+  const job = await (await page.request.get(`/api/v1/jobs/${jobId}`, { headers })).json();
+  expect(job.parameters.spec.limit).toBe("db");
+  expect(job.parameters.spec.tags).toBe("ping");
+
+  await page.goto(`/#/templates?edit=${template.id}`);
+  const edit = page.getByRole("dialog");
+  await expect(edit.getByRole("heading", { name: "Edit template" })).toBeVisible();
+  const boxes = edit.locator('input[name="prompt_field"]');
+  await expect(boxes).toHaveCount(8);
+  await expect(edit.locator('input[name="prompt_field"][value="limit"]')).toBeChecked();
+  await expect(edit.locator('input[name="prompt_field"][value="tags"]')).not.toBeChecked();
+  for (const label of await edit.locator("#prompt-fields .check-row").all()) {
+    await expectTouchTarget(label, "prompt field checkbox row");
+  }
+  const master = edit.locator('input[name="prompt_on_launch"]');
+  await master.check();
+  await expect(boxes.first()).toBeChecked();
+  await expect(boxes.first()).toBeDisabled();
   await noHorizontalScroll(page);
 });

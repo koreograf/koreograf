@@ -83,6 +83,7 @@
   "field.part_invalid": "{field} '{part}' is invalid.",
   "field.text": "{field} must be text.",
   "field.too_long": "{field} is too long.",
+  "field_is_not_prompted": "This field is not prompted on launch for this template.",
   "file_is_missing_from_the_project": "File is missing from the project.",
   "filter_line_is_invalid": "Filter “{line}” is invalid.",
   "filter_line_needs_key_value": "Filter “{line}” needs key=value.",
