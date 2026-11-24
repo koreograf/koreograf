@@ -4123,6 +4123,7 @@ async fn overview_recent_templates_are_team_scoped_and_distinct() {
 
     let first = create_overview_template(&app, &cookie, &team, "Recent First").await;
     let second = create_overview_template(&app, &cookie, &team, "Recent Second").await;
+    let old = create_overview_template(&app, &cookie, &team, "Recent Old").await;
     let other = create_overview_template(&app, &cookie, &other_team, "Recent Other").await;
     let fallback_a = create_overview_template(&app, &cookie, &fallback_team, "Fallback A").await;
     let fallback_b = create_overview_template(&app, &cookie, &fallback_team, "Fallback B").await;
@@ -4138,22 +4139,27 @@ async fn overview_recent_templates_are_team_scoped_and_distinct() {
     let older = stamp(5);
     {
         let db = state.db().expect("database");
-        let insert =
-            |id: &str, team_id: &str, template_id: &str, status: &str, finished: Option<&str>| {
-                db.execute(
-                    "INSERT INTO jobs (
+        let insert = |id: &str,
+                      team_id: &str,
+                      template_id: &str,
+                      status: &str,
+                      created: &str,
+                      finished: Option<&str>| {
+            db.execute(
+                "INSERT INTO jobs (
                     id, team_id, template_id, name, tool, status, extra_vars, launched_by, trigger,
                     created_at, finished_at
                  ) VALUES (?1, ?2, ?3, ?1, 'shell', ?4, '{}', 'admin', 'manual', ?5, ?6)",
-                    (id, team_id, template_id, status, &newest, finished),
-                )
-                .unwrap();
-            };
+                (id, team_id, template_id, status, created, finished),
+            )
+            .unwrap();
+        };
         insert(
             "recent-job-first-new",
             &team,
             &first,
             "successful",
+            &newest,
             Some(&newest),
         );
         insert(
@@ -4161,6 +4167,7 @@ async fn overview_recent_templates_are_team_scoped_and_distinct() {
             &team,
             &first,
             "failed",
+            &older,
             Some(&older),
         );
         insert(
@@ -4168,13 +4175,24 @@ async fn overview_recent_templates_are_team_scoped_and_distinct() {
             &team,
             &second,
             "successful",
+            &stamp(2),
             Some(&stamp(2)),
+        );
+        let old_launch = stamp(60 * 24 * 40);
+        insert(
+            "recent-job-old",
+            &team,
+            &old,
+            "successful",
+            &old_launch,
+            Some(&old_launch),
         );
         insert(
             "recent-job-other",
             &other_team,
             &other,
             "successful",
+            &newest,
             Some(&newest),
         );
         insert(
@@ -4182,6 +4200,7 @@ async fn overview_recent_templates_are_team_scoped_and_distinct() {
             &fallback_team,
             &fallback_c,
             "running",
+            &newest,
             None,
         );
     }
@@ -4236,6 +4255,10 @@ async fn overview_recent_templates_are_team_scoped_and_distinct() {
         "a template with two jobs is listed twice"
     );
     assert_eq!(last_launched(recent, &first), newest);
+    assert!(
+        last_launched(recent, &old).is_null(),
+        "a launch older than the window still counts"
+    );
 
     let (status, other_overview, _) = call(
         &app,

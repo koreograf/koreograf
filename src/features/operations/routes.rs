@@ -644,12 +644,17 @@ const RECENT_TEMPLATE_LIMIT: usize = 5;
 /// templates, so a new team still gets a useful picker.
 const RECENT_TEMPLATE_MIN: usize = 3;
 
-/// Distinct templates from the team's finished jobs, newest launch first. When
-/// those are fewer than three, fresh team templates fill the card.
+/// A finished job counts as a launch for the quick launch card this far back.
+const RECENT_TEMPLATE_WINDOW_DAYS: i64 = 30;
+
+/// Distinct templates from the team's recent finished jobs, newest launch
+/// first. When those are fewer than three, fresh team templates fill the card.
 fn overview_recent_templates(state: &Shared, team: &str) -> AppResult<Vec<GlanceTemplate>> {
+    let cutoff = (Utc::now() - ChronoDuration::days(RECENT_TEMPLATE_WINDOW_DAYS))
+        .to_rfc3339_opts(SecondsFormat::Secs, true);
     let mut items: Vec<GlanceTemplate> = state
         .store()
-        .recent_launched_templates(team, RECENT_TEMPLATE_LIMIT as i64)?
+        .recent_launched_templates(team, &cutoff, RECENT_TEMPLATE_LIMIT as i64)?
         .into_iter()
         .map(|item| GlanceTemplate {
             id: item.id,

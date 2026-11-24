@@ -233,9 +233,10 @@ pub(crate) struct LaunchedTemplate {
     pub(crate) last_launched_at: String,
 }
 
-/// Distinct templates behind the team's finished jobs. A job may run a
+/// Distinct templates behind the team's recent finished jobs. A job may run a
 /// template many times, so `GROUP BY` keeps one row per template and
-/// `MAX(finished_at)` orders them by their latest launch. The template join
+/// `MAX(finished_at)` orders them by their latest launch. The `finished_at`
+/// cutoff keeps the aggregate off the whole job history, and the template join
 /// keeps the answer team-scoped even when a job row names another team's
 /// template.
 pub(crate) const RECENT_LAUNCHED_TEMPLATES: &str = "SELECT t.id, t.name, t.tool,
@@ -245,10 +246,11 @@ pub(crate) const RECENT_LAUNCHED_TEMPLATES: &str = "SELECT t.id, t.name, t.tool,
      WHERE j.team_id = ?1 AND t.team_id = ?1
        AND j.template_id IS NOT NULL
        AND j.finished_at IS NOT NULL
+       AND j.finished_at >= ?2
        AND j.status IN ('successful', 'failed', 'canceled')
      GROUP BY t.id, t.name, t.tool
      ORDER BY last_launched_at DESC, t.name
-     LIMIT ?2";
+     LIMIT ?3";
 
 pub(crate) fn row_launched_template<R: SqlRow>(row: &R) -> AppResult<LaunchedTemplate> {
     Ok(LaunchedTemplate {
@@ -266,12 +268,13 @@ fn sqlite_row_launched_template(row: &rusqlite::Row<'_>) -> AppResult<LaunchedTe
 pub(crate) fn recent_launched_templates(
     c: &Connection,
     team_id: &str,
+    cutoff: &str,
     limit: i64,
 ) -> AppResult<Vec<LaunchedTemplate>> {
     sql::sqlite_all(
         c,
         RECENT_LAUNCHED_TEMPLATES,
-        params![team_id, limit.clamp(1, 20)],
+        params![team_id, cutoff, limit.clamp(1, 20)],
         sqlite_row_launched_template,
     )
 }

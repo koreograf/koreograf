@@ -328,6 +328,7 @@ pub(crate) trait Backend: Send + Sync {
     fn recent_launched_templates(
         &self,
         team_id: &str,
+        cutoff: &str,
         limit: i64,
     ) -> AppResult<Vec<jobs::store::LaunchedTemplate>>;
     fn job_activity(&self, team_id: &str, from: &str, to: &str) -> AppResult<Vec<JobActivity>>;
@@ -1356,10 +1357,11 @@ impl Backend for SqliteBackend {
     fn recent_launched_templates(
         &self,
         team_id: &str,
+        cutoff: &str,
         limit: i64,
     ) -> AppResult<Vec<jobs::store::LaunchedTemplate>> {
         let conn = lock(&self.conn)?;
-        jobs::store::recent_launched_templates(&conn, team_id, limit)
+        jobs::store::recent_launched_templates(&conn, team_id, cutoff, limit)
     }
 
     fn job_activity(&self, team_id: &str, from: &str, to: &str) -> AppResult<Vec<JobActivity>> {
@@ -4443,6 +4445,7 @@ impl Backend for PostgresBackend {
     fn recent_launched_templates(
         &self,
         team_id: &str,
+        cutoff: &str,
         limit: i64,
     ) -> AppResult<Vec<jobs::store::LaunchedTemplate>> {
         let limit = limit.clamp(1, 20);
@@ -4450,7 +4453,7 @@ impl Backend for PostgresBackend {
             let rows = client
                 .query(
                     &store::sql::postgres(jobs::store::RECENT_LAUNCHED_TEMPLATES),
-                    &[&team_id, &limit],
+                    &[&team_id, &cutoff, &limit],
                 )
                 .await?;
             rows.iter()
