@@ -204,7 +204,16 @@ async fn relaunch_copies_parameters_and_limits_failed_hosts() {
         )
         .expect("insert");
     }
-    let copy = relaunch(&state, "src-failed", "admin", true).expect("relaunch");
+    let copy = relaunch(
+        &state,
+        "src-failed",
+        "admin",
+        RelaunchOverrides {
+            only_failed_hosts: true,
+            ..Default::default()
+        },
+    )
+    .expect("relaunch");
     let params = {
         let db = state.db().expect("db");
         let job = crate::features::jobs::store::job(&db, &copy)
@@ -230,15 +239,42 @@ async fn relaunch_copies_parameters_and_limits_failed_hosts() {
         )
         .expect("status");
     }
-    let shell = relaunch(&state, "src-failed", "admin", true).expect_err("shell");
+    let shell = relaunch(
+        &state,
+        "src-failed",
+        "admin",
+        RelaunchOverrides {
+            only_failed_hosts: true,
+            ..Default::default()
+        },
+    )
+    .expect_err("shell");
     assert!(shell.to_string().contains("ansible"), "{shell}");
-    let running = relaunch(&state, &copy, "admin", false).expect_err("not failed");
-    assert!(
-        running
-            .to_string()
-            .contains("only_a_failed_or_canceled_job_can_be_relaunched"),
-        "{running}"
-    );
+    let again = relaunch(&state, &copy, "admin", RelaunchOverrides::default())
+        .expect("a successful job can be relaunched");
+    {
+        let db = state.db().expect("db");
+        let job = crate::features::jobs::store::job(&db, &again)
+            .expect("read")
+            .expect("job");
+        assert_eq!(job.trigger, "relaunch");
+        assert_eq!(db::json_object(&job.parameters)["source_job_id"], copy);
+    }
+    for status in ["pending", "running"] {
+        {
+            let db = state.db().expect("db");
+            db.execute("UPDATE jobs SET status = ?1 WHERE id = ?2", (status, &copy))
+                .expect("status");
+        }
+        let running =
+            relaunch(&state, &copy, "admin", RelaunchOverrides::default()).expect_err("unfinished");
+        assert!(
+            running
+                .to_string()
+                .contains("only_a_failed_or_canceled_job_can_be_relaunched"),
+            "{status}: {running}"
+        );
+    }
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -319,14 +355,29 @@ async fn relaunch_accepts_a_canceled_job_and_keeps_the_failed_host_limit() {
         )
         .expect("insert hosts");
     }
-    let empty = relaunch(&state, "src-canceled", "admin", true).expect_err("no hosts");
+    let empty = relaunch(
+        &state,
+        "src-canceled",
+        "admin",
+        RelaunchOverrides {
+            only_failed_hosts: true,
+            ..Default::default()
+        },
+    )
+    .expect_err("no hosts");
     assert!(
         empty
             .to_string()
             .contains("no_failed_hosts_are_stored_for_this_job"),
         "{empty}"
     );
-    let copy = relaunch(&state, "src-canceled", "admin", false).expect("relaunch");
+    let copy = relaunch(
+        &state,
+        "src-canceled",
+        "admin",
+        RelaunchOverrides::default(),
+    )
+    .expect("relaunch");
     {
         let db = state.db().expect("db");
         let job = crate::features::jobs::store::job(&db, &copy)
@@ -339,13 +390,32 @@ async fn relaunch_accepts_a_canceled_job_and_keeps_the_failed_host_limit() {
         assert_eq!(params["spec"]["tags"], "heal");
         assert!(params["spec"].get("limit").is_none());
     }
-    for status in ["pending", "running", "successful"] {
+    {
+        let db = state.db().expect("db");
+        db.execute(
+            "UPDATE jobs SET status = 'successful' WHERE id = ?1",
+            [&copy],
+        )
+        .expect("status");
+    }
+    let successful =
+        relaunch(&state, &copy, "admin", RelaunchOverrides::default()).expect("successful job");
+    {
+        let db = state.db().expect("db");
+        let job = crate::features::jobs::store::job(&db, &successful)
+            .expect("read")
+            .expect("job");
+        assert_eq!(job.trigger, "relaunch");
+        assert_eq!(db::json_object(&job.parameters)["source_job_id"], copy);
+    }
+    for status in ["pending", "running"] {
         {
             let db = state.db().expect("db");
             db.execute("UPDATE jobs SET status = ?1 WHERE id = ?2", (status, &copy))
                 .expect("status");
         }
-        let rejected = relaunch(&state, &copy, "admin", false).expect_err(status);
+        let rejected =
+            relaunch(&state, &copy, "admin", RelaunchOverrides::default()).expect_err(status);
         assert!(
             rejected
                 .to_string()
@@ -353,7 +423,16 @@ async fn relaunch_accepts_a_canceled_job_and_keeps_the_failed_host_limit() {
             "{status}: {rejected}"
         );
     }
-    let limited = relaunch(&state, "src-canceled-hosts", "admin", true).expect("limit");
+    let limited = relaunch(
+        &state,
+        "src-canceled-hosts",
+        "admin",
+        RelaunchOverrides {
+            only_failed_hosts: true,
+            ..Default::default()
+        },
+    )
+    .expect("limit");
     {
         let db = state.db().expect("db");
         let job = crate::features::jobs::store::job(&db, &limited)
@@ -868,14 +947,26 @@ async fn relaunch_rejects_stored_parameters_the_template_does_not_have() {
         )
         .expect("job");
     }
-    let operator = relaunch(&state, "stored-shell", "operator", false).expect_err("operator");
+    let operator = relaunch(
+        &state,
+        "stored-shell",
+        "operator",
+        RelaunchOverrides::default(),
+    )
+    .expect_err("operator");
     assert!(
         operator
             .to_string()
             .contains("local_runs_are_limited_to_administrators"),
         "{operator}"
     );
-    let admin = relaunch(&state, "stored-shell", "admin", false).expect_err("admin");
+    let admin = relaunch(
+        &state,
+        "stored-shell",
+        "admin",
+        RelaunchOverrides::default(),
+    )
+    .expect_err("admin");
     assert!(
         admin
             .to_string()
@@ -899,7 +990,13 @@ async fn relaunch_rejects_stored_parameters_the_template_does_not_have() {
         )
         .expect("match");
     }
-    relaunch(&state, "stored-shell", "admin", false).expect("matching snapshot");
+    relaunch(
+        &state,
+        "stored-shell",
+        "admin",
+        RelaunchOverrides::default(),
+    )
+    .expect("matching snapshot");
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -991,7 +1088,8 @@ async fn relaunch_of_a_workflow_snapshot_needs_that_workflow_release() {
         .expect("job");
         workflow_id
     };
-    let denied = relaunch(&state, "node-job", "admin", false).expect_err("unreleased");
+    let denied = relaunch(&state, "node-job", "admin", RelaunchOverrides::default())
+        .expect_err("unreleased");
     assert!(
         denied
             .to_string()
@@ -1006,7 +1104,7 @@ async fn relaunch_of_a_workflow_snapshot_needs_that_workflow_release() {
         )
         .expect("release");
     }
-    relaunch(&state, "node-job", "admin", false).expect("released workflow");
+    relaunch(&state, "node-job", "admin", RelaunchOverrides::default()).expect("released workflow");
     let _ = std::fs::remove_dir_all(dir);
 }
 

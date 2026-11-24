@@ -15,7 +15,7 @@ use crate::hooks::{self, AlertEvent};
 use crate::runner;
 use crate::Shared;
 
-use super::model::{Dispatch, LaunchOverrides, LaunchRequest};
+use super::model::{Dispatch, LaunchOverrides, LaunchRequest, RelaunchOverrides};
 
 pub fn launch(state: &Shared, req: LaunchRequest) -> AppResult<String> {
     if state.in_maintenance() {
@@ -240,13 +240,15 @@ pub fn relaunch(
     state: &Shared,
     source_id: &str,
     launched_by: &str,
-    only_failed_hosts: bool,
+    overrides: RelaunchOverrides,
 ) -> AppResult<String> {
     let settings = crate::features::operations::load(state)?;
     let (team_id, template_id, extra, parameters, workflow_job_id) = {
         let db = state.store();
         let job = db.job(source_id)?.ok_or(ApiError::NotFound)?;
-        if job.status != "failed" && job.status != "canceled" {
+        if !matches!(job.status.as_str(), "successful" | "failed" | "canceled") {
+            // Keep the old key for clients that match on it even though a
+            // successful job now passes; the catalog text names a finished job.
             return Err(ApiError::bad(
                 "only_a_failed_or_canceled_job_can_be_relaunched",
             ));
@@ -281,14 +283,24 @@ pub fn relaunch(
             )
         };
         let mut parsed = db::json_object(&parameters);
+        let mut extra = db::json_object(&job.extra_vars);
         if let Some(map) = parsed.as_object_mut() {
             map.remove("project_commit");
             map.remove("project_commit_full");
             refresh_inventory(db, &job.team_id, map)?;
             refresh_credential(db, &job.team_id, map)?;
+            apply_relaunch_overrides(state, db, &job, &template, map, &overrides)?;
+            if let Some(requested) = overrides
+                .extra_vars
+                .as_ref()
+                .filter(|extra| extra.as_object().is_some_and(|map| !map.is_empty()))
+            {
+                extra = runner::merge_vars(&extra, requested);
+            }
+            map.insert("source_job_id".into(), json!(source_id));
             parameters = parsed.to_string();
         }
-        if only_failed_hosts {
+        if overrides.only_failed_hosts {
             if job.tool != "ansible" {
                 return Err(ApiError::bad("only_ansible_jobs_have_failed_hosts"));
             }
@@ -308,13 +320,7 @@ pub fn relaunch(
         } else {
             None
         };
-        (
-            job.team_id,
-            template_id,
-            db::json_object(&job.extra_vars),
-            parameters,
-            workflow_job_id,
-        )
+        (job.team_id, template_id, extra, parameters, workflow_job_id)
     };
     launch(
         state,
@@ -330,6 +336,126 @@ pub fn relaunch(
             overrides: LaunchOverrides::default(),
         },
     )
+}
+
+/// Applies the prompted overrides of a relaunch onto the stored parameters.
+/// The rules match a template launch: every override needs the master flag,
+/// its entry in the per-field list, or `launch_with_options`.
+fn apply_relaunch_overrides(
+    state: &Shared,
+    db: &dyn crate::backend::Backend,
+    job: &db::Job,
+    template: &db::Template,
+    params: &mut serde_json::Map<String, Value>,
+    overrides: &RelaunchOverrides,
+) -> AppResult<()> {
+    if let Some(extra) = &overrides.extra_vars {
+        if !extra.is_object() {
+            return Err(ApiError::bad("extra_vars_must_be_an_object"));
+        }
+    }
+    if let Some(spec) = &overrides.spec {
+        if !spec.is_object() {
+            return Err(ApiError::bad("spec_must_be_an_object"));
+        }
+    }
+    let extra_overlay = overrides
+        .extra_vars
+        .as_ref()
+        .filter(|extra| extra.as_object().is_some_and(|map| !map.is_empty()));
+    let spec_overlay = overrides
+        .spec
+        .as_ref()
+        .filter(|spec| spec.as_object().is_some_and(|map| !map.is_empty()));
+    let asked = overrides.inventory_id.is_some()
+        || overrides.credential_ids.is_some()
+        || spec_overlay.is_some()
+        || extra_overlay.is_some();
+    if !asked {
+        return Ok(());
+    }
+    check_override_prompt_rules(
+        template,
+        overrides.launch_with_options,
+        overrides.inventory_id.is_some(),
+        overrides.credential_ids.is_some(),
+        spec_overlay,
+        extra_overlay.is_some(),
+    )?;
+    if let Some(inventory_id) = &overrides.inventory_id {
+        match blank_text(inventory_id) {
+            Some(id) => {
+                let inventory = db.inventory(&id)?.ok_or(ApiError::NotFound)?;
+                if inventory.team_id != job.team_id {
+                    return Err(ApiError::NotFound);
+                }
+                params.insert("inventory_id".into(), json!(inventory.id));
+                params.insert("inventory_name".into(), json!(inventory.name));
+            }
+            None => {
+                params.insert("inventory_id".into(), Value::Null);
+                params.insert("inventory_name".into(), Value::Null);
+            }
+        }
+    }
+    if let Some(ids) = &overrides.credential_ids {
+        apply_stored_credentials(state, db, &job.team_id, &job.tool, ids, params)?;
+    }
+    if let Some(spec) = spec_overlay {
+        let base = params.get("spec").cloned().unwrap_or_else(|| json!({}));
+        let merged = merge_prompt_spec(&base, spec, &job.tool).map_err(ApiError::bad)?;
+        if job.tool == "ansible" {
+            runner::check_ansible_spec(&merged).map_err(ApiError::from)?;
+        }
+        params.insert("spec".into(), merged);
+    }
+    if let Some(extra) = extra_overlay {
+        let base = params
+            .get("extra_vars")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        params.insert("extra_vars".into(), runner::merge_vars(&base, extra));
+    }
+    if overrides.launch_with_options {
+        params.insert("launch_with_options".into(), Value::Bool(true));
+    }
+    Ok(())
+}
+
+/// Replaces the stored credential summary with rows from the current database.
+/// Only ids, names, and kinds are kept; the secret stays on the credential.
+fn apply_stored_credentials(
+    state: &Shared,
+    db: &dyn crate::backend::Backend,
+    team_id: &str,
+    tool: &str,
+    ids: &[String],
+    params: &mut serde_json::Map<String, Value>,
+) -> AppResult<()> {
+    let chosen = credentials_for_launch(state, db, team_id, tool, ids)?;
+    let mut list = Vec::with_capacity(chosen.ids.len());
+    for id in &chosen.ids {
+        let credential = db.credential(id)?.ok_or(ApiError::NotFound)?;
+        list.push(credential_entry(&credential));
+    }
+    let primary = match chosen.primary_id.as_deref() {
+        Some(id) => Some(db.credential(id)?.ok_or(ApiError::NotFound)?),
+        None => None,
+    };
+    match primary {
+        Some(credential) => {
+            params.insert("credential_id".into(), json!(credential.id));
+            params.insert("credential_name".into(), json!(credential.name));
+            params.insert("credential_kind".into(), json!(credential.kind));
+        }
+        None => {
+            params.insert("credential_id".into(), Value::Null);
+            params.insert("credential_name".into(), Value::Null);
+            params.insert("credential_kind".into(), Value::Null);
+        }
+    }
+    params.insert("credentials".into(), Value::Array(list));
+    Ok(())
 }
 
 fn parameter_has_environment(template: &db::Template, params: &Value) -> bool {
@@ -593,45 +719,14 @@ fn parameters_for_launch(
             controller_can_run,
         ));
     }
-    if !template.prompt_on_launch
-        && !req.overrides.launch_with_options
-        && template.prompt_fields().is_empty()
-    {
-        return Err(ApiError::bad("prompt_on_launch_is_off"));
-    }
-    let prompts_all = template.prompt_on_launch || req.overrides.launch_with_options;
-    let prompt_fields = template.prompt_fields();
-    let prompted = |field: &str| {
-        prompts_all
-            || prompt_fields
-                .iter()
-                .any(|item| item == field && db::prompt_field_fits_tool(&template.tool, field))
-    };
-    let mut blocked = false;
-    if req.overrides.inventory_id.is_some() && !prompted("inventory") {
-        blocked = true;
-    }
-    if req.overrides.credential_ids.is_some() && !prompted("credentials") {
-        blocked = true;
-    }
-    if extra_overlay && !prompted("extra_vars") {
-        blocked = true;
-    }
-    if let Some(spec) = spec_overlay {
-        if let Some(map) = spec.as_object() {
-            for key in map.keys() {
-                if db::PROMPT_FIELDS.contains(&key.as_str())
-                    && !prompted(key)
-                    && db::prompt_field_fits_tool(&template.tool, key)
-                {
-                    blocked = true;
-                }
-            }
-        }
-    }
-    if blocked {
-        return Err(ApiError::bad("field_is_not_prompted"));
-    }
+    check_override_prompt_rules(
+        template,
+        req.overrides.launch_with_options,
+        req.overrides.inventory_id.is_some(),
+        req.overrides.credential_ids.is_some(),
+        spec_overlay,
+        extra_overlay,
+    )?;
     let mut effective = template.clone();
     if let Some(inventory_id) = &req.overrides.inventory_id {
         let inventory_id = blank_text(inventory_id);
@@ -710,6 +805,53 @@ fn credentials_for_launch(
         }
     }
     Ok(chosen)
+}
+
+/// A launch and a prompted relaunch share one gate: an override needs the
+/// master flag, its entry in the per-field list, or `launch_with_options`.
+fn check_override_prompt_rules(
+    template: &db::Template,
+    launch_with_options: bool,
+    inventory: bool,
+    credentials: bool,
+    spec: Option<&Value>,
+    extra_vars: bool,
+) -> AppResult<()> {
+    if !template.prompt_on_launch && !launch_with_options && template.prompt_fields().is_empty() {
+        return Err(ApiError::bad("prompt_on_launch_is_off"));
+    }
+    let prompts_all = template.prompt_on_launch || launch_with_options;
+    let prompt_fields = template.prompt_fields();
+    let prompted = |field: &str| {
+        prompts_all
+            || prompt_fields
+                .iter()
+                .any(|item| item == field && db::prompt_field_fits_tool(&template.tool, field))
+    };
+    let mut blocked = false;
+    if inventory && !prompted("inventory") {
+        blocked = true;
+    }
+    if credentials && !prompted("credentials") {
+        blocked = true;
+    }
+    if extra_vars && !prompted("extra_vars") {
+        blocked = true;
+    }
+    if let Some(spec) = spec.and_then(Value::as_object) {
+        for key in spec.keys() {
+            if db::PROMPT_FIELDS.contains(&key.as_str())
+                && !prompted(key)
+                && db::prompt_field_fits_tool(&template.tool, key)
+            {
+                blocked = true;
+            }
+        }
+    }
+    if blocked {
+        return Err(ApiError::bad("field_is_not_prompted"));
+    }
+    Ok(())
 }
 
 /// Prompt fields replace the template spec. An empty string or null clears the key.
