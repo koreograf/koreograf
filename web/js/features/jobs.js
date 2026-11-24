@@ -9,6 +9,7 @@ import { chipReadout } from "../core/chips.js";
 import { credentialKindLabel } from "../core/credentials.js";
 import { pill, relativeTime, spanText, statusLabel, verbosityLabel, when } from "../core/format.js";
 import { explainFailure } from "./assistant.js";
+import { openLaunchPrompt } from "./templates.js";
 
 export function jobsState(hash = location.hash || "") {
   const params = new URLSearchParams((hash || "").split("?")[1] || "");
@@ -121,7 +122,7 @@ async function pageJobs() {
         : emptyState("empty_jobs", can("operator") ? "#/templates" : "", "launch_a_template");
     } else {
       const rows = current.map((job) =>
-        `<tr><td><a href="#/jobs/${esc(job.id)}">${esc(job.name)}</a></td><td class="tool narrow-hide">${esc(job.tool)}</td><td>${pill(job.status)}</td><td class="small narrow-hide">${esc(job.trigger)}</td><td class="small">${esc(job.launched_by)}</td><td class="small muted"><time datetime="${esc(job.created_at)}" title="${esc(when(job.created_at))}">${esc(when(job.created_at))}</time><br><span class="small">${esc(relativeTime(job.created_at))}</span></td><td class="small muted narrow-hide">${esc(spanText(job.started_at, job.finished_at, job.status))}</td><td>${jobListActions(job)}</td></tr>`
+        `<tr><td><a href="#/jobs/${esc(job.id)}">${esc(job.name)}</a></td><td class="tool narrow-hide">${esc(job.tool)}</td><td>${pill(job.status)}</td><td class="small narrow-hide">${esc(job.trigger)}</td><td class="small">${esc(job.launched_by)}</td><td class="small muted"><time datetime="${esc(job.created_at)}" title="${esc(when(job.created_at))}">${esc(when(job.created_at))}</time><br><span class="small">${esc(relativeTime(job.created_at))}</span></td><td class="small muted narrow-hide">${esc(spanText(job.started_at, job.finished_at, job.status))}</td><td>${jobListActions(job, templates.find((item) => item.id === job.template_id))}</td></tr>`
       );
       jobTable.innerHTML = table([t("name"), t("tool"), t("status"), t("trigger"), t("launched_by"), t("created"), t("duration"), ""], rows);
     }
@@ -203,6 +204,21 @@ async function pageJobs() {
   jobTable.addEventListener("click", async (event) => {
     if (event.target.closest("#clear-job-filter")) {
       resetFilters();
+      return;
+    }
+    const changes = event.target.closest("[data-relaunch-changes]");
+    if (changes) {
+      const job = current.find((item) => item.id === changes.dataset.relaunchChanges);
+      const template = templates.find((item) => item.id === job?.template_id);
+      if (!job || !template) return;
+      changes.disabled = true;
+      try {
+        await openRelaunchPrompt(job, template);
+      } catch (error) {
+        handle(error);
+      } finally {
+        changes.disabled = false;
+      }
       return;
     }
     const button = event.target.closest("[data-relaunch]");
@@ -1343,8 +1359,12 @@ export function jobParameters(job) {
   const hostLine = hosts.length
     ? `<dt>${h("failed_hosts")}</dt><dd>${hosts.map((host) => esc(host)).join(", ")}</dd>`
     : "";
+  const sourceJob = params.source_job_id
+    ? `<a href="#/jobs/${esc(params.source_job_id)}"><span class="mono">${esc(params.source_job_id)}</span></a>`
+    : "";
   return `<dl class="kv">
     <dt>${h("template")}</dt><dd>${template}</dd>
+    ${paramRowHtml("source_job", sourceJob)}
     ${paramRow("tool", params.tool)}
     ${paramRow("entry", params.entrypoint)}
     ${paramRow("project", params.project_name)}
@@ -1374,25 +1394,59 @@ function relaunchPrompt(job, onlyFailed) {
   return t(onlyFailed ? "relaunch_this_job_on_failed_hosts" : "relaunch_this_job", { name: job.name, limit });
 }
 
-function jobListActions(job) {
-  if (!can("operator") || (job.status !== "failed" && job.status !== "canceled")) return "";
-  const hosts = Array.isArray(job.failed_hosts) ? job.failed_hosts : [];
-  const failedHosts = job.tool === "ansible" && hosts.length
-    ? `<button class="btn" type="button" data-relaunch="${esc(job.id)}" data-failed="1">${h("failed_hosts_only")}</button>`
-    : "";
-  return `<div class="row"><button class="btn" type="button" data-relaunch="${esc(job.id)}" data-failed="0">${h("relaunch")}</button>${failedHosts}</div>`;
+export function templatePrompts(template) {
+  return Boolean(template && (template.prompt_on_launch || (Array.isArray(template.prompt_fields) && template.prompt_fields.length)));
 }
 
-function jobActions(job) {
+function relaunchItem(job, template) {
+  const params = job.parameters || {};
+  const credentials = Array.isArray(params.credentials) ? params.credentials : [];
+  const credentialIds = credentials.map((item) => item && item.id).filter(Boolean);
+  return {
+    ...template,
+    spec: params.spec || template.spec || {},
+    inventory_id: params.inventory_id || "",
+    credential_id: params.credential_id || "",
+    credential_ids: credentialIds.length ? credentialIds : (params.credential_id ? [params.credential_id] : []),
+    extra_vars: params.extra_vars || {},
+  };
+}
+
+export async function openRelaunchPrompt(job, template) {
+  if (!templatePrompts(template)) return;
+  await openLaunchPrompt(relaunchItem(job, template), false, {}, {
+    url: `/api/v1/jobs/${encodeURIComponent(job.id)}/relaunch`,
+    title: "relaunch_with_changes",
+    submit: "relaunch",
+    help: "the_relaunch_dialog_starts_from_the_job",
+  });
+}
+
+export function jobListActions(job, template) {
+  if (!can("operator") || !["successful", "failed", "canceled"].includes(job.status)) return "";
+  const hosts = Array.isArray(job.failed_hosts) ? job.failed_hosts : [];
+  const failedHosts = job.status !== "successful" && job.tool === "ansible" && hosts.length
+    ? `<button class="btn" type="button" data-relaunch="${esc(job.id)}" data-failed="1">${h("failed_hosts_only")}</button>`
+    : "";
+  const changes = templatePrompts(template)
+    ? `<button class="btn" type="button" data-relaunch-changes="${esc(job.id)}">${h("relaunch_with_changes")}</button>`
+    : "";
+  return `<div class="row"><button class="btn" type="button" data-relaunch="${esc(job.id)}" data-failed="0">${h("relaunch")}</button>${failedHosts}${changes}</div>`;
+}
+
+export function jobActions(job, template) {
   const running = job.status === "pending" || job.status === "running";
   const hosts = Array.isArray(job.failed_hosts) ? job.failed_hosts : [];
   if (!can("operator")) return "";
   if (running) return `<button class="btn danger" type="button" data-action="cancel">${h("cancel")}</button>`;
-  if (job.status !== "failed" && job.status !== "canceled") return "";
-  const failedHosts = job.tool === "ansible" && hosts.length
+  if (!["successful", "failed", "canceled"].includes(job.status)) return "";
+  const failedHosts = job.status !== "successful" && job.tool === "ansible" && hosts.length
     ? `<button class="btn" type="button" data-action="relaunch-failed">${h("failed_hosts_only")}</button>`
     : "";
-  return `<button class="btn primary" type="button" data-action="relaunch">${h("relaunch")}</button>${failedHosts}`;
+  const changes = templatePrompts(template)
+    ? `<button class="btn" type="button" data-action="relaunch-changes">${h("relaunch_with_changes")}</button>`
+    : "";
+  return `<button class="btn primary" type="button" data-action="relaunch">${h("relaunch")}</button>${failedHosts}${changes}`;
 }
 
 function stNode(tag, className, text) {
@@ -2132,8 +2186,16 @@ async function pageJob(id) {
   const live = appState.generation;
   const startedAt = performance.now();
   const job = await api("GET", `/api/v1/jobs/${encodeURIComponent(id)}`);
+  let template = null;
+  if (can("operator") && job.template_id && ["successful", "failed", "canceled"].includes(job.status)) {
+    try {
+      template = await api("GET", `/api/v1/templates/${encodeURIComponent(job.template_id)}`);
+    } catch {
+      template = null;
+    }
+  }
   const running = job.status === "pending" || job.status === "running";
-  const actions = jobActions(job);
+  const actions = jobActions(job, template);
   shell(job.name, `
     <div class="spread" style="margin-bottom:12px">
       <div class="row">${pill(job.status)} <span class="tool">${esc(job.tool)}</span> <span class="small muted">${esc(job.trigger)} · ${esc(job.launched_by)} · ${esc(when(job.started_at || job.created_at))} · <span id="job-duration">${esc(spanText(job.started_at, job.finished_at, job.status))}</span></span><span class="small muted" id="job-exit-code" hidden></span></div>
@@ -2257,7 +2319,7 @@ async function pageJob(id) {
     ? bindTofuOutput(job, startedAt)
     : bindStructuredOutput(job, startedAt);
   (job.events || []).forEach(appendLog);
-  const relaunchButtons = () => document.querySelectorAll("[data-action=relaunch], [data-action=relaunch-failed]");
+  const relaunchButtons = () => document.querySelectorAll("[data-action=relaunch], [data-action=relaunch-failed], [data-action=relaunch-changes]");
   const startAgain = async (onlyFailed) => {
     if (!(await confirmDialog({ title: t("relaunch"), body: relaunchPrompt(job, onlyFailed), confirmLabel: t("relaunch") }))) return;
     relaunchButtons().forEach((button) => {
@@ -2292,6 +2354,23 @@ async function pageJob(id) {
   });
   document.querySelectorAll("[data-action=relaunch-failed]").forEach((button) => {
     button.addEventListener("click", () => startAgain(true));
+  });
+  document.querySelectorAll("[data-action=relaunch-changes]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (!template) return;
+      relaunchButtons().forEach((item) => {
+        item.disabled = true;
+      });
+      try {
+        await openRelaunchPrompt(job, template);
+      } catch (error) {
+        handle(error);
+      } finally {
+        relaunchButtons().forEach((item) => {
+          item.disabled = false;
+        });
+      }
+    });
   });
   document.querySelectorAll("[data-job-tab]").forEach((button) => {
     button.addEventListener("click", () => {

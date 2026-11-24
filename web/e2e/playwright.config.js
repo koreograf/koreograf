@@ -7,7 +7,7 @@ const { dataDir, password, port, root, username } = require("./env");
 
 module.exports = defineConfig({
   testDir: __dirname,
-  testMatch: /(smoke|mobile|structured|tofu|shell|assistant|assistant-phone)\.spec\.js/,
+  testMatch: /(smoke|mobile|structured|tofu|shell|assistant|assistant-phone|relaunch)\.spec\.js/,
   timeout: 30000,
   fullyParallel: false,
   workers: 1,
@@ -28,6 +28,8 @@ module.exports = defineConfig({
     { name: "Pixel 7", testMatch: "mobile.spec.js", use: { ...devices["Pixel 7"] } },
     { name: "assistant", testMatch: "assistant.spec.js", use: { ...devices["Desktop Chrome"] } },
     { name: "Pixel 9 assistant", testMatch: "assistant-phone.spec.js", use: { ...devices["Pixel 9"] } },
+    { name: "relaunch", testMatch: "relaunch.spec.js", use: { ...devices["Desktop Chrome"] } },
+    { name: "Pixel 8 relaunch", testMatch: "relaunch.spec.js", use: { ...devices["Pixel 8"] } },
   ],
   webServer: {
     command: `sh -c 'rm -rf "${dataDir}" && exec ./target/debug/koreograf'`,

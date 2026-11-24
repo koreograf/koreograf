@@ -314,3 +314,36 @@ test("the output view preference falls back to structured", async () => {
   assert.equal(structuredEventsAvailable({ tool: "opentofu", tofu_events: [] }), false);
   assert.equal(structuredEventsAvailable({ tool: "shell", ansible_events: structuredEvents, tofu_events: tofuEvents }), false);
 });
+
+test("relaunch actions show for an operator and stay hidden for a viewer", async () => {
+  const state = await import(pathToFileURL(join(__dirname, "..", "js", "core", "state.js")).href);
+  const { jobActions, jobListActions } = await load();
+  const template = { id: "tpl-1", tool: "ansible", prompt_on_launch: false, prompt_fields: ["limit"] };
+  const successful = { id: "job-1", name: "Green", tool: "ansible", status: "successful", failed_hosts: ["web-1"], parameters: { spec: { limit: "web" } } };
+  state.setMe({ is_admin: false, display_name: "Operator", teams: [{ id: "team-1", role: "operator" }] });
+  state.setTeamId("team-1");
+  const list = jobListActions(successful, template);
+  assert.match(list, /data-relaunch="job-1"/);
+  assert.match(list, /data-relaunch-changes="job-1"/);
+  assert.doesNotMatch(list, /data-failed="1"/);
+  const page = jobActions(successful, template);
+  assert.match(page, /data-action="relaunch"/);
+  assert.match(page, /data-action="relaunch-changes"/);
+  assert.doesNotMatch(page, /data-action="relaunch-failed"/);
+
+  state.setMe({ is_admin: false, display_name: "Viewer", teams: [{ id: "team-1", role: "viewer" }] });
+  assert.equal(jobListActions(successful, template), "");
+  assert.equal(jobActions(successful, template), "");
+});
+
+test("the parameters tab links back to the source job", async () => {
+  const { jobParameters } = await load();
+  const html = jobParameters({
+    id: "job-2",
+    template_id: "tpl-1",
+    failed_hosts: [],
+    parameters: { tool: "shell", spec: { script: "true" }, extra_vars: {}, source_job_id: "job-1" },
+  });
+  assert.match(html, /href="#\/jobs\/job-1"/);
+  assert.match(html, /source_job/);
+});

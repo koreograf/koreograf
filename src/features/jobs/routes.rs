@@ -21,7 +21,7 @@ use crate::runner;
 use crate::Shared;
 
 use super::service::job_work_dir;
-use super::{cancel, relaunch};
+use super::{cancel, relaunch, RelaunchOverrides};
 
 pub(crate) fn routes() -> Router<Shared> {
     Router::new()
@@ -34,11 +34,21 @@ pub(crate) fn routes() -> Router<Shared> {
         .route("/jobs/{id}/events", get(job_events))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub(super) struct RelaunchBody {
     #[serde(default)]
     only_failed_hosts: bool,
+    #[serde(default)]
+    extra_vars: Option<Value>,
+    #[serde(default)]
+    inventory_id: Option<String>,
+    #[serde(default)]
+    credential_ids: Option<Vec<String>>,
+    #[serde(default)]
+    spec: Option<Value>,
+    #[serde(default)]
+    launch_with_options: bool,
 }
 
 #[derive(Deserialize)]
@@ -516,7 +526,19 @@ pub async fn relaunch_job(
         let job = db.job(&id)?.ok_or(ApiError::NotFound)?;
         crate::features::identity::authorize(db, &user, &job.team_id, Role::Operator)?;
     }
-    let job_id = relaunch(&state, &id, &user.username, body.only_failed_hosts)?;
+    let job_id = relaunch(
+        &state,
+        &id,
+        &user.username,
+        RelaunchOverrides {
+            only_failed_hosts: body.only_failed_hosts,
+            extra_vars: body.extra_vars,
+            inventory_id: body.inventory_id,
+            credential_ids: body.credential_ids,
+            spec: body.spec,
+            launch_with_options: body.launch_with_options,
+        },
+    )?;
     let db = state.store();
     let job = db.job(&job_id)?.ok_or(ApiError::NotFound)?;
     Ok((StatusCode::ACCEPTED, Json(JobResponse::new(&job, None))))

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
-use axum::routing::{get, post, put};
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -43,7 +43,9 @@ pub(crate) fn routes() -> Router<Shared> {
         .route("/templates", get(list_templates).post(create_template))
         .route(
             "/templates/{id}",
-            put(update_template).delete(delete_template),
+            get(get_template)
+                .put(update_template)
+                .delete(delete_template),
         )
         .route("/templates/{id}/launch", post(launch_template))
 }
@@ -408,6 +410,23 @@ pub async fn list_templates(
             })
             .collect(),
     )))
+}
+
+pub async fn get_template(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Json<TemplateResponse>> {
+    let team = team_header(&headers)?;
+    gate(&state, &user, &team, Role::Viewer)?;
+    let db = state.store();
+    let template = db
+        .template(&id)?
+        .filter(|template| template.team_id == team)
+        .ok_or(ApiError::NotFound)?;
+    let credential_ids = db.template_credential_ids(&template.id)?;
+    Ok(Json(TemplateResponse::new(&template, &credential_ids)))
 }
 
 pub async fn create_template(
