@@ -186,6 +186,10 @@ Use `.overlay` for the backdrop and `.overlay-card` for the panel. `openDialog` 
 </div>
 ```
 
+### Assistant panel
+
+When the assistant is enabled, `.assistant-dock` sits fixed in the bottom-right corner with `.assistant-launcher`. The launcher opens `.assistant-panel`, which is mounted outside `#app` so a route change keeps the transcript and a pending confirmation. The panel reuses `.assistant-thread`, `.assistant-message`, `.assistant-confirm`, and `.assistant-compose` from the assistant feature. `.assistant-context-chip` carries the current page and its `.chip-remove` drops the context for the next message. The panel is `role="dialog"`, the launcher carries `aria-expanded`, Escape closes it, and focus moves to the composer and back to the launcher. At 640 px the panel becomes a fullscreen sheet with `100dvh` and safe-area padding. The assistant has no sidebar entry.
+
 ### Logs and code
 
 Use `.log` for job output, `.log-tools` for its search and controls, and `pre.vars` for structured data. `.log.wrap` and `.log-summary` are supported variants. Use `code` or `.mono` for inline identifiers. Keep the log text selectable and never put a catalog key in it.

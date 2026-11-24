@@ -12,8 +12,9 @@ use crate::Shared;
 
 use super::model::{ChatBody, LlmError, LlmSetup, PendingActionResponse};
 use super::service::{
-    api_text, collect_secrets, config_for, conversation, drop_pending, http_status, job_context,
-    request_credential, run_tools, take_pending, within_rate_limit, write_request, RunError,
+    api_text, chat_context, collect_secrets, config_for, conversation, drop_pending, http_status,
+    is_context_kind, request_credential, run_tools, take_pending, within_rate_limit, write_request,
+    RunError,
 };
 
 pub(crate) fn routes() -> Router<Shared> {
@@ -99,18 +100,22 @@ pub async fn chat(
         .filter(|value| !value.is_empty())
         .map(str::to_string);
     let secrets = collect_secrets(&state, &user, &teams, &credential);
-    let job_context = match body.job_id.as_deref().map(str::trim) {
-        Some(id) if !id.is_empty() => {
-            match job_context(&state, &credential, id, team.as_deref(), &secrets).await {
+    let page_context = match body.context.as_ref() {
+        Some(reference) => {
+            let kind = reference.kind.trim().to_ascii_lowercase();
+            if !is_context_kind(&kind) {
+                return failure(StatusCode::BAD_REQUEST, "assistant_context_is_unknown");
+            }
+            match chat_context(&state, &credential, reference, team.as_deref(), &secrets).await {
                 Ok(context) => Some(context),
                 Err(_) => {
-                    return failure(StatusCode::NOT_FOUND, "assistant_job_is_unavailable");
+                    return failure(StatusCode::NOT_FOUND, "assistant_context_is_unavailable");
                 }
             }
         }
-        _ => None,
+        None => None,
     };
-    let messages = match conversation(&user, &teams, &body, job_context.as_deref()) {
+    let messages = match conversation(&user, &teams, &body, page_context.as_deref()) {
         Ok(messages) => messages,
         Err(key) => return failure(StatusCode::BAD_REQUEST, key),
     };
