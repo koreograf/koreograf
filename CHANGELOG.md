@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.1.0-alpha.16](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.15...v0.1.0-alpha.16) (2026-11-24)
+
+
+### Features
+
+* add service accounts for ci api tokens ([#641](https://github.com/koreograf/koreograf/issues/641)) ([c16291a](https://github.com/koreograf/koreograf/commit/c16291ac1772306db793848feda80aab7285f47c))
+* choose plan or apply when launching an opentofu template ([#643](https://github.com/koreograf/koreograf/issues/643)) ([5d0aab7](https://github.com/koreograf/koreograf/commit/5d0aab7ac5e84e1811dbf211e6fd5723621146a1))
+* open the assistant as a floating panel with page context ([#646](https://github.com/koreograf/koreograf/issues/646)) ([275dc5f](https://github.com/koreograf/koreograf/commit/275dc5fd4db76116dc913c2a91214f3c69800c27))
+* render ansi colors and a compact header on shell output ([#645](https://github.com/koreograf/koreograf/issues/645)) ([dc3d99d](https://github.com/koreograf/koreograf/commit/dc3d99dc00481327b47e438360ca5bde95c87117))
+* show queue, schedules and failing hosts on the dashboard ([#642](https://github.com/koreograf/koreograf/issues/642)) ([f487c49](https://github.com/koreograf/koreograf/commit/f487c4978853c0f50c59e87c8a054f9924176263))
+* show structured opentofu output with a raw log toggle ([#644](https://github.com/koreograf/koreograf/issues/644)) ([9a92ea6](https://github.com/koreograf/koreograf/commit/9a92ea6cd82c331364c719a165285b82ff457853))
+
+
+### Bug Fixes
+
+* correct template vault hint and secret remove checkbox layout ([#640](https://github.com/koreograf/koreograf/issues/640)) ([17212b9](https://github.com/koreograf/koreograf/commit/17212b9bb8429ee829cfb058718ee5373722a632))
+* hide the page heading focus ring on load ([#629](https://github.com/koreograf/koreograf/issues/629)) ([8cd6477](https://github.com/koreograf/koreograf/commit/8cd64771f5858d7bf2d0187e78a357e0a61535e0))
+* let read-only api tokens use mcp read tools ([#639](https://github.com/koreograf/koreograf/issues/639)) ([ecb0917](https://github.com/koreograf/koreograf/commit/ecb09171e09518572b338042663a46e840295997))
+
 ## [0.1.0-alpha.15](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.14...v0.1.0-alpha.15) (2026-11-22)
 
 
