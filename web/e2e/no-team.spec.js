@@ -17,9 +17,12 @@ async function noHorizontalScroll(page) {
 
 async function signIn(page, user, pass) {
   await page.goto("/");
-  await expect(page.getByRole("button", { name: "Sprache" })).toBeVisible();
-  await page.getByRole("button", { name: "Sprache" }).click();
-  await page.getByRole("option", { name: /English/ }).click();
+  const language = page.locator("[data-lang-button]");
+  await expect(language).toBeVisible();
+  if ((await language.getAttribute("aria-label")) === "Sprache") {
+    await language.click();
+    await page.getByRole("option", { name: /English/ }).click();
+  }
   await page.getByLabel("Username").fill(user);
   await page.getByLabel("Password").fill(pass);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
