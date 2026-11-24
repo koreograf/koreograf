@@ -237,7 +237,7 @@
   "theme_dark": "Dark",
   "theme_light": "Light",
   "theme_system": "System",
-  "this_account_has_no_team_an_administrator_creates": "This account has no team. An administrator creates one under Team.",
+  "this_account_has_no_team_an_administrator_creates": "This account has no team. An administrator has to add it to one.",
   "this_field_needs_a_valid_value": "This field needs a valid value.",
   "this_page_does_not_exist": "This page does not exist.",
   "time": "Time",

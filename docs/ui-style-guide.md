@@ -13,6 +13,8 @@ This guide describes the browser UI as it exists today. `web/app.css`, `web/js/`
 
 The signed-in UI uses the `.shell` grid: a 232 px sidebar and a flexible main column. `.main` carries the page padding and the `#main` landmark. The sidebar holds `.side`, `.nav`, `.nav-group`, and `.nav-label`. A page starts with `.top`, which holds the `h1` and page actions. The sidebar foot (`.side-foot`) sits at the bottom and holds the account link, the build line with the repository link, the theme switch, the language switch, and the sign-out button.
 
+When the signed-in account has no team, `needTeam()` shows one card that asks an administrator to add the account to a team. The page title follows the route, and the sidebar omits the Operations, Automation, and Resources groups so no link leads back to the same card. A viewer gets no Team link. An administrator keeps Team and Organizations in the sidebar, plus the Administration group with Users.
+
 All design tokens are custom properties on `:root` in `web/app.css`.
 
 ### Colors

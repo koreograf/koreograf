@@ -237,7 +237,7 @@
   "theme_dark": "Dunkel",
   "theme_light": "Hell",
   "theme_system": "System",
-  "this_account_has_no_team_an_administrator_creates": "Diesem Konto ist kein Team zugeordnet. Ein Administrator legt eines unter Team an.",
+  "this_account_has_no_team_an_administrator_creates": "Diesem Konto ist kein Team zugeordnet. Ein Administrator muss dieses Konto einem Team hinzufügen.",
   "this_field_needs_a_valid_value": "Dieses Feld braucht einen gültigen Wert.",
   "this_page_does_not_exist": "Diese Seite gibt es nicht.",
   "time": "Zeit",

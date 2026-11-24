@@ -7,7 +7,7 @@ const { dataDir, password, port, root, username } = require("./env");
 
 module.exports = defineConfig({
   testDir: __dirname,
-  testMatch: /(smoke|mobile|overview|structured|tofu|shell|assistant|assistant-phone|relaunch)\.spec\.js/,
+  testMatch: /(smoke|mobile|overview|no-team|structured|tofu|shell|assistant|assistant-phone|relaunch)\.spec\.js/,
   timeout: 30000,
   fullyParallel: false,
   workers: 1,
@@ -26,6 +26,8 @@ module.exports = defineConfig({
     { name: "shell", testMatch: "shell.spec.js", use: { ...devices["Desktop Chrome"] } },
     { name: "overview", testMatch: "overview.spec.js", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } } },
     { name: "Pixel 9 overview", testMatch: "overview.spec.js", use: { ...devices["Pixel 9"], viewport: { width: 412, height: 923 } } },
+    { name: "no-team", testMatch: "no-team.spec.js", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } } },
+    { name: "Pixel 9 no-team", testMatch: "no-team.spec.js", use: { ...devices["Pixel 9"], viewport: { width: 412, height: 923 } } },
     { name: "iPhone 13", testMatch: "mobile.spec.js", use: { ...devices["iPhone 13"], browserName: "chromium" } },
     { name: "Pixel 7", testMatch: "mobile.spec.js", use: { ...devices["Pixel 7"] } },
     { name: "assistant", testMatch: "assistant.spec.js", use: { ...devices["Desktop Chrome"] } },
