@@ -90,6 +90,23 @@ test("the 1440 overview keeps kpis and five recent jobs in the first viewport", 
   await noHorizontalScroll(page);
 });
 
+test("the 1280 overview keeps two columns in German and dark", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "overview", "the desktop viewport project only");
+  test.setTimeout(60000);
+  await signIn(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.evaluate(() => {
+    localStorage.setItem("koreograf.lang", "de");
+    localStorage.setItem("koreograf.theme", "dark");
+  });
+  await page.reload();
+  await expect(page.getByRole("heading", { level: 1, name: "Übersicht" })).toBeVisible();
+  await expect(page.locator("[data-kpi-row] [data-kpi]")).toHaveCount(5);
+  const columns = await page.locator(".overview-main").evaluate((node) => getComputedStyle(node).gridTemplateColumns);
+  expect(columns.trim().split(/\s+/), "the overview does not use two columns at 1280").toHaveLength(2);
+  await noHorizontalScroll(page);
+});
+
 test("the 412 overview and its dark theme keep one column without sideways scroll", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "Pixel 9 overview", "the phone viewport project only");
   test.setTimeout(60000);
