@@ -89,9 +89,11 @@ test("a shell job renders ansi colours, a distinct stderr line, and the exit cod
 
   // A hit that crosses the colour boundary still highlights every part.
   await page.locator("#log-search").fill("ansi-ok done");
-  await expect(page.locator("#log-search-count")).toHaveText("1 of 2");
+  await expect(page.locator("#log-search-count")).toHaveText("1 of 1");
   await expect(page.locator("#log mark.log-hit")).toHaveCount(2);
   await expect(page.locator("#log mark.log-hit").first()).toHaveClass(/ansi-fg-green/);
+  await expect(page.locator("#log mark.log-hit").first()).toHaveClass(/current/);
+  await expect(page.locator("#log mark.log-hit").last()).toHaveClass(/current/);
 
   await noHorizontalScroll(page);
   await page.locator("#log-search").fill("");

@@ -1958,6 +1958,7 @@ async fn cancel_stops_the_local_process_group() {
     let events = body["events"].to_string();
     assert!(events.contains("Cancel requested."), "{events}");
     assert!(!events.contains("should-not-run"), "{events}");
+    assert!(!events.contains("Exit code: "), "{events}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -1015,7 +1015,7 @@ export function formatDuration(seconds) {
 }
 
 function paintLogLine(line, query) {
-  const marks = [];
+  const groups = [];
   line.replaceChildren();
   const runs = Array.isArray(line.koreografRuns)
     ? line.koreografRuns
@@ -1025,7 +1025,9 @@ function paintLogLine(line, query) {
   const segments = searchSegments(raw, query).map((segment) => {
     const start = offset;
     offset += segment.text.length;
-    return { ...segment, start, end: offset };
+    const entry = { ...segment, start, end: offset, marks: [] };
+    if (entry.hit) groups.push(entry.marks);
+    return entry;
   });
   let runStart = 0;
   runs.forEach((run) => {
@@ -1042,7 +1044,7 @@ function paintLogLine(line, query) {
           : "log-hit";
         mark.textContent = text;
         line.appendChild(mark);
-        marks.push(mark);
+        segment.marks.push(mark);
       } else if (run.classes && run.classes.length) {
         const span = document.createElement("span");
         span.className = run.classes.join(" ");
@@ -1054,7 +1056,7 @@ function paintLogLine(line, query) {
     });
     runStart = runEnd;
   });
-  return marks;
+  return groups;
 }
 
 function updateRecap(state, text) {
@@ -1094,10 +1096,10 @@ function jumpToSearchMatch(log, state, index) {
   }
   const total = state.matches.length;
   state.current = ((index % total) + total) % total;
-  state.matches.forEach((mark) => mark.classList.remove("current"));
-  const mark = state.matches[state.current];
-  mark.classList.add("current");
-  scrollLogLine(log, mark.parentElement);
+  state.matches.forEach((group) => group.forEach((mark) => mark.classList.remove("current")));
+  const group = state.matches[state.current];
+  group.forEach((mark) => mark.classList.add("current"));
+  scrollLogLine(log, group[0].parentElement);
   updateSearchCount(state);
 }
 
@@ -1287,12 +1289,12 @@ export function appendLog(row) {
   updateRecap(state, line.koreografRaw);
   if (row.stream === "system") showJobExitCode(exitCodeFromLine(line.koreografRaw));
   if (state.query) {
-    const marks = paintLogLine(line, state.query);
-    if (marks.length) {
-      state.matches.push(...marks);
+    const groups = paintLogLine(line, state.query);
+    if (groups.length) {
+      state.matches.push(...groups);
       if (state.current < 0) {
         state.current = 0;
-        state.matches[0].classList.add("current");
+        state.matches[0].forEach((mark) => mark.classList.add("current"));
       }
       updateSearchCount(state);
     }

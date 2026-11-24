@@ -102,7 +102,8 @@ test("search crosses an ansi boundary and keeps the run classes", async () => {
   const marks = log.children[1].querySelectorAll("mark.log-hit");
   assert.deepEqual(marks.map((mark) => mark.textContent), ["ansi-ok", " done"]);
   assert.match(marks[0].className, /ansi-fg-green/);
-  assert.equal(log.koreografLog.matches.length, 2);
+  assert.equal(log.koreografLog.matches.length, 1, "one match must count once");
+  assert.equal(log.koreografLog.matches[0].length, 2, "the match keeps both run parts");
 });
 
 test("the exit code comes from the system line and fills the header", async () => {
