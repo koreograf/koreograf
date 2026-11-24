@@ -306,38 +306,51 @@ export async function loadMaintenance() {
   }
 }
 
-export function shell(title, body, actions) {
-  const here = (location.hash || "#/").split("?")[0];
-  const groups = [
-    [t("nav.operations"), [
-      ["#/", t("overview")],
-      ["#/jobs", t("jobs")],
-      ["#/activity", t("activity")],
-      ["#/schedules", t("schedules")],
-    ]],
-    [t("automation"), [
-      ["#/templates", t("templates")],
-      ["#/workflows", t("workflows")],
-      ["#/hooks", t("webhooks")],
-    ]],
-    [t("resources"), [
-      ["#/projects", t("projects")],
-      ["#/inventories", t("inventories")],
-      ["#/credentials", t("credentials")],
-      ["#/runtime", t("execution_environments")],
-    ]],
-    [t("nav.team"), [
-      ["#/team", t("team")],
-      ["#/organizations", t("organizations")],
-      ["#/service-accounts", t("service_accounts")],
-    ]],
+export function navGroups() {
+  const team = Boolean(appState.teamId);
+  return [
+    ...(team ? [
+      [t("nav.operations"), [
+        ["#/", t("overview")],
+        ["#/jobs", t("jobs")],
+        ["#/activity", t("activity")],
+        ["#/schedules", t("schedules")],
+      ]],
+      [t("automation"), [
+        ["#/templates", t("templates")],
+        ["#/workflows", t("workflows")],
+        ["#/hooks", t("webhooks")],
+      ]],
+      [t("resources"), [
+        ["#/projects", t("projects")],
+        ["#/inventories", t("inventories")],
+        ["#/credentials", t("credentials")],
+        ["#/runtime", t("execution_environments")],
+      ]],
+    ] : []),
+    ...(team
+      ? [[t("nav.team"), [
+        ["#/team", t("team")],
+        ["#/organizations", t("organizations")],
+        ["#/service-accounts", t("service_accounts")],
+      ]]]
+      : appState.me.is_admin
+        ? [[t("nav.team"), [
+          ["#/team", t("team")],
+          ["#/organizations", t("organizations")],
+        ]]]
+        : []),
     ...(appState.me.is_admin ? [[t("nav.administration"), [
       ["#/settings", t("settings")],
       ["#/users", t("users")],
       ["#/backup", t("backup")],
     ]]] : []),
   ];
-  const nav = groups.map(([label, links]) => `
+}
+
+export function shell(title, body, actions) {
+  const here = (location.hash || "#/").split("?")[0];
+  const nav = navGroups().map(([label, links]) => `
     <div class="nav-group">
       <div class="nav-label">${label}</div>
       ${links.map(([href, text]) => `<a href="${href}" class="${navActive(here, href) ? "active" : ""}">${text}</a>`).join("")}
@@ -354,7 +367,7 @@ export function shell(title, body, actions) {
       <aside class="side">
         <div class="brand-lockup"><span class="mark" aria-hidden="true"></span><p class="word">Koreograf</p></div>
         <label class="field"><span class="small">${h("organization_team")}</span><select id="team-select">${options || `<option value="">${h("no_team")}</option>`}</select></label>
-        <nav class="nav">${nav}</nav>
+        ${nav ? `<nav class="nav">${nav}</nav>` : ""}
         <div class="side-foot">
           <a class="account-link" href="#/account">${esc(appState.me.display_name)} · ${esc(roleLabel(roleOf()))}${appState.me.auth_source === "ldap" ? " · LDAP" : ""}</a>
           ${versionSlot()}
@@ -420,7 +433,10 @@ export function deny(title, min) {
 
 export function needTeam() {
   if (appState.teamId) return true;
-  shell(t("team"), `<div class="card"><p>${h("this_account_has_no_team_an_administrator_creates")}</p><p><a href="#/team">${h("open_team")}</a></p></div>`);
+  const here = (location.hash || "#/").split("?")[0];
+  const parts = here.slice(1).split("/").filter(Boolean);
+  const link = appState.me.is_admin ? `<p><a href="#/team">${h("open_team")}</a></p>` : "";
+  shell(routeTitle(parts), `<div class="card"><p>${h("this_account_has_no_team_an_administrator_creates")}</p>${link}</div>`);
   return false;
 }
 
