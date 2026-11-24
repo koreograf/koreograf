@@ -347,6 +347,8 @@ test("a route change focuses the heading without a ring and keeps keyboard rings
   await page.keyboard.press("Enter");
   await expectVisibleRing(page.locator("#main"), "the main landmark");
   await page.keyboard.press("Tab");
+  await expectVisibleRing(page.getByRole("button", { name: "Launch template", exact: true }), "the header action");
+  await page.keyboard.press("Tab");
   await expectVisibleRing(page.getByRole("tab", { name: "Overview", exact: true }), "the in-page tab");
 });
 

@@ -225,6 +225,57 @@ pub(crate) struct GlanceJobs {
     pub(crate) failed_items: Vec<Job>,
 }
 
+/// A template that finished jobs used recently, newest finish first.
+pub(crate) struct LaunchedTemplate {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) tool: String,
+    pub(crate) last_launched_at: String,
+}
+
+/// Distinct templates behind the team's finished jobs. A job may run a
+/// template many times, so `GROUP BY` keeps one row per template and
+/// `MAX(finished_at)` orders them by their latest launch. The template join
+/// keeps the answer team-scoped even when a job row names another team's
+/// template.
+pub(crate) const RECENT_LAUNCHED_TEMPLATES: &str = "SELECT t.id, t.name, t.tool,
+        MAX(j.finished_at) AS last_launched_at
+     FROM jobs j
+     JOIN templates t ON t.id = j.template_id
+     WHERE j.team_id = ?1 AND t.team_id = ?1
+       AND j.template_id IS NOT NULL
+       AND j.finished_at IS NOT NULL
+       AND j.status IN ('successful', 'failed', 'canceled')
+     GROUP BY t.id, t.name, t.tool
+     ORDER BY last_launched_at DESC, t.name
+     LIMIT ?2";
+
+pub(crate) fn row_launched_template<R: SqlRow>(row: &R) -> AppResult<LaunchedTemplate> {
+    Ok(LaunchedTemplate {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        tool: row.get(2)?,
+        last_launched_at: row.get(3)?,
+    })
+}
+
+fn sqlite_row_launched_template(row: &rusqlite::Row<'_>) -> AppResult<LaunchedTemplate> {
+    row_launched_template(row)
+}
+
+pub(crate) fn recent_launched_templates(
+    c: &Connection,
+    team_id: &str,
+    limit: i64,
+) -> AppResult<Vec<LaunchedTemplate>> {
+    sql::sqlite_all(
+        c,
+        RECENT_LAUNCHED_TEMPLATES,
+        params![team_id, limit.clamp(1, 20)],
+        sqlite_row_launched_template,
+    )
+}
+
 pub(crate) struct GlanceHost {
     pub(crate) inventory_id: String,
     pub(crate) inventory_name: String,

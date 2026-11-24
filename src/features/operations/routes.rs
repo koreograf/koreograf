@@ -378,6 +378,15 @@ struct OverviewGlance {
     hosts: GlanceHostSummary,
     syncs: GlanceSyncSummary,
     workflows: GlanceWorkflowSummary,
+    recent_templates: Vec<GlanceTemplate>,
+}
+
+#[derive(Serialize)]
+struct GlanceTemplate {
+    id: String,
+    name: String,
+    tool: String,
+    last_launched_at: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -628,6 +637,49 @@ const WORKFLOW_FAILED_WINDOW_HOURS: i64 = 24;
 /// the attention list for this long after they finished.
 const JOB_ATTENTION_WINDOW_HOURS: i64 = 24;
 
+/// The quick launch card shows at most five templates.
+const RECENT_TEMPLATE_LIMIT: usize = 5;
+
+/// Below this many launched templates the card also offers the team's newest
+/// templates, so a new team still gets a useful picker.
+const RECENT_TEMPLATE_MIN: usize = 3;
+
+/// Distinct templates from the team's finished jobs, newest launch first. When
+/// those are fewer than three, fresh team templates fill the card.
+fn overview_recent_templates(state: &Shared, team: &str) -> AppResult<Vec<GlanceTemplate>> {
+    let mut items: Vec<GlanceTemplate> = state
+        .store()
+        .recent_launched_templates(team, RECENT_TEMPLATE_LIMIT as i64)?
+        .into_iter()
+        .map(|item| GlanceTemplate {
+            id: item.id,
+            name: item.name,
+            tool: item.tool,
+            last_launched_at: Some(item.last_launched_at),
+        })
+        .collect();
+    if items.len() >= RECENT_TEMPLATE_MIN {
+        return Ok(items);
+    }
+    let mut templates = state.store().list_templates(team)?;
+    templates.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    for template in templates {
+        if items.len() >= RECENT_TEMPLATE_LIMIT {
+            break;
+        }
+        if items.iter().any(|item| item.id == template.id) {
+            continue;
+        }
+        items.push(GlanceTemplate {
+            id: template.id,
+            name: template.name,
+            tool: template.tool,
+            last_launched_at: None,
+        });
+    }
+    Ok(items)
+}
+
 fn rows(value: i64) -> u64 {
     u64::try_from(value).unwrap_or(0)
 }
@@ -724,6 +776,8 @@ fn overview_glance(state: &Shared, team: &str) -> AppResult<OverviewGlance> {
         })
         .collect();
 
+    let recent_templates = overview_recent_templates(state, team)?;
+
     let workflow_items = workflows
         .items
         .iter()
@@ -785,6 +839,7 @@ fn overview_glance(state: &Shared, team: &str) -> AppResult<OverviewGlance> {
             failed_window_hours: rows(WORKFLOW_FAILED_WINDOW_HOURS),
             items: workflow_items,
         },
+        recent_templates,
     })
 }
 

@@ -1,12 +1,13 @@
 import * as appState from "../core/state.js";
 import { api } from "../core/api.js";
 import { can, go, handle, markSaved, needTeam, route, shell } from "../core/app.js";
-import { confirmDialog } from "../core/dialog.js";
+import { confirmDialog, openDialog } from "../core/dialog.js";
 import { esc, h, table } from "../core/dom.js";
 import { bytes, pill, preflightNoticeHtml, relativeTime, when } from "../core/format.js";
 import { currentLanguage, t } from "../core/i18n.js";
 import { registerRoute } from "../core/router.js";
 import { relaunchJob } from "./jobs.js";
+import { filterTemplates, openLaunchPrompt } from "./templates.js";
 
 function onboardingCard() {
   const steps = [
@@ -231,6 +232,127 @@ export function recentActivityCard(jobs) {
   </section>`;
 }
 
+export function overviewActions() {
+  return can("operator")
+    ? `<button class="btn primary" type="button" data-launch-template>${h("launch_template")}</button>`
+    : "";
+}
+
+export function quickLaunchHtml(data) {
+  if (!can("operator")) return "";
+  const templates = ((data && data.glance) || {}).recent_templates || [];
+  if (!templates.length) return "";
+  const rows = templates.slice(0, 5).map((item) => {
+    const detail = item.last_launched_at
+      ? `${esc(item.tool)} · ${esc(relativeTime(item.last_launched_at))}`
+      : esc(item.tool);
+    return `<li class="quick-launch-item" data-quick-launch="${esc(item.id)}">
+      <div class="quick-launch-body">
+        <a href="#/templates?edit=${encodeURIComponent(item.id)}">${esc(item.name)}</a>
+        <span class="small muted">${detail}</span>
+      </div>
+      <button class="btn compact" type="button" data-quick-launch-start="${esc(item.id)}">${h("start")}</button>
+    </li>`;
+  }).join("");
+  return `<section class="card" data-quick-launch-card>
+    <div class="spread"><h2>${h("quick_launch")}</h2><a href="#/templates">${h("all")}</a></div>
+    <ul class="quick-launch-list">${rows}</ul>
+  </section>`;
+}
+
+export function webhookDeliveriesCard(data) {
+  const deliveries = ((data && data.deliveries) || []).map((item) =>
+    `<tr><td>${esc(item.hook_name)}</td><td>${pill(item.status)}</td><td>${esc(item.summary)}</td></tr>`
+  );
+  const test = can("operator") && data && data.hook_id
+    ? `<button class="btn" id="test-alert" type="button">${h("test_alert")}</button>`
+    : "";
+  return `<section class="card">
+    <div class="spread">
+      <h2>${h("webhook_deliveries")}</h2>
+      ${test}
+    </div>
+    ${table([t("hook"), t("status"), t("summary")], deliveries)}
+  </section>`;
+}
+
+async function openTemplatePicker() {
+  const items = await api("GET", "/api/v1/templates");
+  if (!items.length) {
+    go("#/templates?new=1");
+    return;
+  }
+  let query = "";
+  const dialog = openDialog({
+    id: "template-picker",
+    title: t("launch_template"),
+    body: `<p class="small muted">${h("launch_template_help")}</p>
+      <input class="search" id="template-picker-search" type="search" placeholder="${h("search_templates")}" autocomplete="off" aria-label="${h("search_templates")}">
+      <div class="picker-list" id="template-picker-list"></div>`,
+  });
+  const list = dialog.form.querySelector("#template-picker-list");
+  const draw = () => {
+    const shown = filterTemplates(items, "all", query);
+    list.innerHTML = shown.length
+      ? shown.map((item) => `<button class="btn picker-option" type="button" data-pick-template="${esc(item.id)}">
+          <span>${esc(item.name)}</span>
+          <span class="small muted">${esc(item.tool)}</span>
+        </button>`).join("")
+      : `<p class="small muted">${h("nothing_here")}</p>`;
+    list.querySelectorAll("[data-pick-template]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const item = items.find((row) => row.id === button.dataset.pickTemplate);
+        if (!item) return;
+        dialog.close();
+        try {
+          await openLaunchPrompt(item);
+        } catch (error) {
+          handle(error);
+        }
+      });
+    });
+  };
+  dialog.form.querySelector("#template-picker-search").addEventListener("input", (event) => {
+    query = event.target.value;
+    dialog.clean();
+    draw();
+  });
+  draw();
+}
+
+export function bindOverviewActions(root = document) {
+  const button = root.querySelector("[data-launch-template]");
+  if (!button) return;
+  button.addEventListener("click", async () => {
+    if (button.disabled) return;
+    button.disabled = true;
+    try {
+      await openTemplatePicker();
+    } catch (error) {
+      handle(error);
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
+export function bindQuickLaunch(root = document) {
+  root.querySelectorAll("[data-quick-launch-start]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (button.disabled) return;
+      button.disabled = true;
+      try {
+        const item = await api("GET", `/api/v1/templates/${encodeURIComponent(button.dataset.quickLaunchStart)}`);
+        await openLaunchPrompt(item);
+      } catch (error) {
+        handle(error);
+      } finally {
+        button.disabled = false;
+      }
+    });
+  });
+}
+
 function concurrencyCard(item) {
   const use = item || {};
   return glanceCard("concurrency", "concurrency", {
@@ -323,7 +445,7 @@ export function overviewGlanceHtml(data) {
   const glance = (data && data.glance) || {};
   return `${kpiRow(data)}
     <div class="overview-main">
-      ${attentionHtml(data)}
+      <div class="stack">${quickLaunchHtml(data)}${attentionHtml(data)}</div>
       ${recentActivityCard(data && data.jobs)}
     </div>
     <div class="grid-3">${concurrencyCard(glance.concurrency)}${schedulesCard(glance.schedules)}${hostsCard(glance.hosts)}</div>
@@ -504,9 +626,6 @@ async function pageDashboard() {
   if (dashboardTab() === "dashboard") return pageDashboardTab();
   const data = await api("GET", "/api/v1/overview");
   const hasJobs = (data.jobs || []).length > 0;
-  const deliveries = (data.deliveries || []).map((item) =>
-    `<tr><td>${esc(item.hook_name)}</td><td>${pill(item.status)}</td><td>${esc(item.summary)}</td></tr>`
-  );
   shell(t("overview"), `
     ${dashboardTabs("overview")}
     <div id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
@@ -516,16 +635,12 @@ async function pageDashboard() {
       ${hasJobs ? "" : onboardingCard()}
       <div class="stack">
         ${overviewGlanceHtml(data)}
-        <section class="card">
-          <div class="spread">
-            <h2>${h("webhook_deliveries")}</h2>
-            ${data.hook_id && can("operator") ? `<button class="btn primary" id="test-alert" type="button">${h("test_alert")}</button>` : ""}
-          </div>
-          ${table([t("hook"), t("status"), t("summary")], deliveries)}
-        </section>
+        ${webhookDeliveriesCard(data)}
       </div>
-    </div>`);
+    </div>`, overviewActions());
   bindDashboard("overview", dashboardRange());
+  bindOverviewActions();
+  bindQuickLaunch();
   bindAttention();
   const test = document.querySelector("#test-alert");
   if (test) {

@@ -325,6 +325,11 @@ pub(crate) trait Backend: Send + Sync {
     ) -> AppResult<()>;
     fn workflow_nodes(&self, workflow_job_id: &str) -> AppResult<Vec<WorkflowNodeRow>>;
     fn recent_jobs(&self, team_id: &str, limit: i64) -> AppResult<Vec<Job>>;
+    fn recent_launched_templates(
+        &self,
+        team_id: &str,
+        limit: i64,
+    ) -> AppResult<Vec<jobs::store::LaunchedTemplate>>;
     fn job_activity(&self, team_id: &str, from: &str, to: &str) -> AppResult<Vec<JobActivity>>;
     fn import_report(&self) -> AppResult<Option<serde_json::Value>>;
     fn first_workflow(&self, team_id: &str) -> AppResult<Option<Workflow>>;
@@ -1346,6 +1351,15 @@ impl Backend for SqliteBackend {
     fn recent_jobs(&self, team_id: &str, limit: i64) -> AppResult<Vec<Job>> {
         let conn = lock(&self.conn)?;
         jobs::store::recent_jobs(&conn, team_id, limit)
+    }
+
+    fn recent_launched_templates(
+        &self,
+        team_id: &str,
+        limit: i64,
+    ) -> AppResult<Vec<jobs::store::LaunchedTemplate>> {
+        let conn = lock(&self.conn)?;
+        jobs::store::recent_launched_templates(&conn, team_id, limit)
     }
 
     fn job_activity(&self, team_id: &str, from: &str, to: &str) -> AppResult<Vec<JobActivity>> {
@@ -4423,6 +4437,25 @@ impl Backend for PostgresBackend {
                 )
                 .await?;
             rows.iter().map(jobs::store::row_job).collect()
+        })
+    }
+
+    fn recent_launched_templates(
+        &self,
+        team_id: &str,
+        limit: i64,
+    ) -> AppResult<Vec<jobs::store::LaunchedTemplate>> {
+        let limit = limit.clamp(1, 20);
+        self.with_client(|client| async move {
+            let rows = client
+                .query(
+                    &store::sql::postgres(jobs::store::RECENT_LAUNCHED_TEMPLATES),
+                    &[&team_id, &limit],
+                )
+                .await?;
+            rows.iter()
+                .map(jobs::store::row_launched_template)
+                .collect()
         })
     }
 
