@@ -282,6 +282,20 @@ h2 { font-size: 18px; margin: 0 0 10px; }
 .kpi.warn .kpi-label, .kpi.warn .kpi-hint { color: var(--warn); }
 .kpi.bad .kpi-label, .kpi.bad .kpi-hint { color: var(--bad); }
 .overview-main { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+.quick-launch-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.quick-launch-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.quick-launch-item:first-child { padding-top: 0; border-top: 0; }
+.quick-launch-body { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.picker-list { display: grid; gap: 8px; margin-top: 10px; max-height: min(50vh, 360px); overflow-y: auto; }
+.picker-option { display: flex; justify-content: space-between; gap: 12px; text-align: left; width: 100%; }
+.picker-option .small { flex: none; }
 .attention-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
 .attention-item {
   display: grid;

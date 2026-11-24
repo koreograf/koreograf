@@ -11,16 +11,23 @@ async function noHorizontalScroll(page) {
   ).toBe(true);
 }
 
-async function signIn(page) {
+async function signInAs(page, user, secret) {
   await page.goto("/");
-  await expect(page.getByRole("button", { name: "Sprache" })).toBeVisible();
-  await page.getByRole("button", { name: "Sprache" }).click();
-  await page.getByRole("option", { name: /English/ }).click();
-  await page.getByLabel("Username").fill(username);
-  await page.getByLabel("Password").fill(password);
+  await expect(page.getByRole("button", { name: /^(Sprache|Language)$/ })).toBeVisible();
+  const german = page.getByRole("button", { name: "Sprache", exact: true });
+  if (await german.isVisible()) {
+    await german.click();
+    await page.getByRole("option", { name: /English/ }).click();
+  }
+  await page.getByLabel("Username").fill(user);
+  await page.getByLabel("Password").fill(secret);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
   await noHorizontalScroll(page);
+}
+
+async function signIn(page) {
+  await signInAs(page, username, password);
 }
 
 async function teamHeaders(page) {
@@ -28,14 +35,31 @@ async function teamHeaders(page) {
   return { "X-Team-Id": profile.teams[0].id };
 }
 
-async function createShellTemplate(page, name, script) {
+async function createShellTemplate(page, name, script, prompt = false) {
   const headers = await teamHeaders(page);
   const created = await post(page.request, "/api/v1/templates", {
     headers,
-    data: { name, description: "", tool: "shell", spec: { script }, prompt_on_launch: false },
+    data: { name, description: "", tool: "shell", spec: { script }, prompt_on_launch: prompt },
   });
   expect(created.status()).toBe(201);
   return created.json();
+}
+
+async function createViewer(page) {
+  const suffix = Date.now().toString(36);
+  const user = {
+    username: `overview-viewer-${suffix}`,
+    display_name: "Overview Viewer",
+    password: "overview-viewer-pass",
+  };
+  const created = await post(page.request, "/api/v1/users", { data: user });
+  expect(created.status()).toBe(201);
+  const headers = await teamHeaders(page);
+  const member = await post(page.request, `/api/v1/teams/${headers["X-Team-Id"]}/members`, {
+    data: { username: user.username, role: "viewer" },
+  });
+  expect(member.status()).toBe(201);
+  return user;
 }
 
 async function launchAndWait(page, template) {
@@ -87,6 +111,91 @@ test("the 1440 overview keeps kpis and five recent jobs in the first viewport", 
 
   const columns = await page.locator(".overview-main").evaluate((node) => getComputedStyle(node).gridTemplateColumns);
   expect(columns.trim().split(/\s+/), "the overview does not use two columns").toHaveLength(2);
+  await noHorizontalScroll(page);
+});
+
+test("the 1440 overview launches from the header picker and quick launch", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "overview", "the desktop viewport project only");
+  test.setTimeout(120000);
+  await signIn(page);
+  const suffix = Date.now().toString(36);
+  const prompt = await createShellTemplate(page, `Overview prompt ${suffix}`, "echo prompt-ok", true);
+  const plain = await createShellTemplate(page, `Overview plain ${suffix}`, "echo plain-ok");
+  await launchAndWait(page, prompt);
+  await launchAndWait(page, plain);
+
+  await page.goto("/#/");
+  await page.reload();
+  await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
+
+  const header = page.locator("[data-launch-template]");
+  await expect(header).toBeVisible();
+  await expect(header).toHaveClass(/primary/);
+  await expect(page.locator(".top .btn.primary")).toHaveCount(1, { timeout: 10000 });
+
+  const quick = page.locator("[data-quick-launch-card]");
+  await expect(quick).toBeVisible();
+  await expect(quick.locator(`[data-quick-launch-start="${plain.id}"]`)).toBeVisible();
+
+  await header.click();
+  const picker = page.locator("#template-picker");
+  await expect(picker).toBeVisible();
+  await picker.locator(`[data-pick-template="${prompt.id}"]`).click();
+  const dialog = page.locator("#launch-prompt");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("heading", { name: "Launch", exact: true })).toBeVisible();
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+
+  await quick.locator(`[data-quick-launch-start="${plain.id}"]`).click();
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("heading", { name: "Launch", exact: true })).toBeVisible();
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+
+  const box = await header.boundingBox();
+  expect(box.y + box.height, "the header action is below the first viewport").toBeLessThanOrEqual(900);
+  await noHorizontalScroll(page);
+});
+
+test("the overview hides every launch control from viewers", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "overview", "the desktop viewport project only");
+  test.setTimeout(60000);
+  await signIn(page);
+  const viewer = await createViewer(page);
+  await page.context().clearCookies();
+  await signInAs(page, viewer.username, viewer.password);
+
+  await expect(page.locator("[data-launch-template]")).toHaveCount(0);
+  await expect(page.locator("[data-quick-launch-card]")).toHaveCount(0);
+  await expect(page.locator("[data-quick-launch-start]")).toHaveCount(0);
+  await noHorizontalScroll(page);
+});
+
+test("the 412 overview keeps the header action and a quick start usable", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "Pixel 9 overview", "the phone viewport project only");
+  test.setTimeout(120000);
+  await signIn(page);
+  const template = await createShellTemplate(page, `Overview phone ${Date.now().toString(36)}`, "echo phone-ok");
+  await launchAndWait(page, template);
+
+  await page.goto("/#/");
+  await page.reload();
+  await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
+  const header = page.locator("[data-launch-template]");
+  await expect(header).toBeVisible();
+  const box = await header.boundingBox();
+  expect(box.y + box.height, "the header action is below the phone viewport").toBeLessThanOrEqual(923);
+
+  const quick = page.locator("[data-quick-launch-card]");
+  await expect(quick).toBeVisible();
+  const start = quick.locator(`[data-quick-launch-start="${template.id}"]`);
+  await expect(start).toBeVisible();
+  await start.click();
+  const dialog = page.locator("#launch-prompt");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
   await noHorizontalScroll(page);
 });
 

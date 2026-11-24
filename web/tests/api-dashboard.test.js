@@ -284,6 +284,94 @@ test("the preflight notice names the missing tool and runtime", async () => {
   }
 });
 
+test("the overview gives operators one primary launch action and a quiet test alert", async () => {
+  const state = await load("core/state.js");
+  const { overviewActions, quickLaunchHtml, webhookDeliveriesCard } = await load("features/dashboard.js");
+  state.setMe({ is_admin: false, display_name: "Operator", auth_source: "local", teams: [{ id: "t1", name: "Team", role: "operator" }] });
+  state.setTeamId("t1");
+  const actions = overviewActions();
+  assert.equal((actions.match(/class="btn primary"/g) || []).length, 1, "the header does not carry one primary action");
+  assert.match(actions, /data-launch-template/);
+  assert.match(actions, /launch_template/);
+  assert.doesNotMatch(actions, /test-alert/);
+
+  const webhook = webhookDeliveriesCard({
+    hook_id: "hook-1",
+    deliveries: [{ hook_name: "Deploy", status: "successful", summary: "ok" }],
+  });
+  assert.match(webhook, /class="btn" id="test-alert"/);
+  assert.doesNotMatch(webhook, /btn primary/, "the test alert is still primary");
+
+  const recent = Array.from({ length: 6 }, (_, index) => ({
+    id: `tpl-${index}`,
+    name: `Template ${index}`,
+    tool: "shell",
+    last_launched_at: new Date().toISOString(),
+  }));
+  const quick = quickLaunchHtml({ glance: { recent_templates: recent } });
+  assert.match(quick, /data-quick-launch-card/);
+  assert.equal((quick.match(/data-quick-launch-start=/g) || []).length, 5, "the quick launch card does not cap at five");
+  assert.doesNotMatch(quick, /btn primary/, "a quick launch Start is primary");
+  assert.match(quickLaunchHtml({ glance: { recent_templates: [] } }), /^$/);
+
+  state.setMe({ is_admin: false, display_name: "Viewer", auth_source: "local", teams: [{ id: "t1", name: "Team", role: "viewer" }] });
+  assert.equal(overviewActions(), "", "a viewer still gets a launch action");
+  assert.equal(quickLaunchHtml({ glance: { recent_templates: recent } }), "", "a viewer still gets the quick launch card");
+  assert.doesNotMatch(webhookDeliveriesCard({ hook_id: "hook-1", deliveries: [] }), /test-alert/);
+});
+
+test("the overview picker and a quick launch start open the shared launch dialog", async () => {
+  const state = await load("core/state.js");
+  const { overviewActions, quickLaunchHtml, bindOverviewActions, bindQuickLaunch } = await load("features/dashboard.js");
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+  state.setMe({ is_admin: false, display_name: "Operator", auth_source: "local", teams: [{ id: "t1", name: "Team", role: "operator" }] });
+  state.setTeamId("t1");
+  const template = {
+    id: "tpl-echo",
+    name: "Echo",
+    tool: "shell",
+    description: "",
+    spec: { script: "true" },
+    prompt_on_launch: false,
+    prompt_fields: [],
+    extra_vars: {},
+  };
+  const calls = [];
+  globalThis.fetch = async (path) => {
+    calls.push(path);
+    const body = path === "/api/v1/templates" ? [template] : template;
+    return { ok: true, status: 200, text: async () => JSON.stringify(body) };
+  };
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  host.innerHTML = `<div class="row">${overviewActions()}${quickLaunchHtml({ glance: { recent_templates: [{ id: template.id, name: template.name, tool: "shell" }] } })}</div>`;
+  bindOverviewActions(host);
+  bindQuickLaunch(host);
+
+  host.querySelector("[data-launch-template]").dispatchEvent({ type: "click" });
+  await tick();
+  await tick();
+  const picker = document.querySelector("#template-picker");
+  assert.ok(picker, "the header action did not open the template picker");
+  picker.querySelector("[data-pick-template]").dispatchEvent({ type: "click" });
+  await tick();
+  await tick();
+  assert.equal(document.querySelector("#template-picker"), null, "the picker stayed open behind the launch dialog");
+  assert.ok(document.querySelector("#launch-prompt"), "a picker option did not open the shared launch dialog");
+  document.querySelector("#launch-prompt").remove();
+
+  host.querySelector("[data-quick-launch-start]").dispatchEvent({ type: "click" });
+  await tick();
+  await tick();
+  assert.ok(document.querySelector("#launch-prompt"), "a quick launch Start did not open the shared launch dialog");
+  assert.deepEqual(calls, [
+    "/api/v1/templates",
+    "/api/v1/templates/tpl-echo",
+  ]);
+  document.querySelector("#launch-prompt").remove();
+  host.remove();
+});
+
 test("the version line links the repository and keeps the commit", async () => {
   const state = await load("core/state.js");
   const { shell, versionSlot, loadVersion } = await load("core/app.js");

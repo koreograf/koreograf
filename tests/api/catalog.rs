@@ -1155,6 +1155,7 @@ async fn system_catalog_endpoints_return_the_documented_shape() {
                     "running": 0,
                     "successful_24h": 0
                 },
+                "recent_templates": overview["glance"]["recent_templates"].clone(),
                 "schedules": {
                     "items": [],
                     "missed_count": 0,
@@ -1187,6 +1188,16 @@ async fn system_catalog_endpoints_return_the_documented_shape() {
     assert_eq!(overview["workflow_name"], "Self-Heal Ablauf");
     assert!(overview["hook_id"].is_string());
     assert_eq!(overview["hook_name"], "DiskSpaceLow");
+    let recent_templates = overview["glance"]["recent_templates"]
+        .as_array()
+        .expect("recent template list");
+    assert_eq!(recent_templates.len(), 4);
+    for item in recent_templates {
+        assert!(item["id"].is_string(), "{item}");
+        assert!(item["name"].is_string(), "{item}");
+        assert!(item["tool"].is_string(), "{item}");
+        assert!(item["last_launched_at"].is_null(), "{item}");
+    }
 
     let (status, dashboard, _) = call(
         &app,

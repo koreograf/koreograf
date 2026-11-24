@@ -3497,6 +3497,59 @@ async fn create_glance_other_team(app: &axum::Router, cookie: &str) -> String {
     team["id"].as_str().unwrap().to_string()
 }
 
+async fn create_overview_team(app: &axum::Router, cookie: &str, name: &str) -> String {
+    let (status, organization, _) = call(
+        app,
+        "POST",
+        "/api/organizations",
+        Some(cookie),
+        None,
+        Some(json!({"name": name, "description": ""})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{organization}");
+    let (status, team, _) = call(
+        app,
+        "POST",
+        "/api/teams",
+        Some(cookie),
+        None,
+        Some(json!({
+            "name": name,
+            "description": "",
+            "organization_id": organization["id"]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{team}");
+    team["id"].as_str().unwrap().to_string()
+}
+
+async fn create_overview_template(
+    app: &axum::Router,
+    cookie: &str,
+    team: &str,
+    name: &str,
+) -> String {
+    let (status, template, _) = call(
+        app,
+        "POST",
+        "/api/v1/templates",
+        Some(cookie),
+        Some(team),
+        Some(json!({
+            "name": name,
+            "description": "",
+            "tool": "shell",
+            "spec": {"script": "true"},
+            "prompt_on_launch": false
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    template["id"].as_str().unwrap().to_string()
+}
+
 /// Returns the oldest pending, next-run, and missed timestamps.
 fn seed_glance_rows(
     state: &koreograf::Shared,
@@ -4054,6 +4107,195 @@ async fn overview_glance_is_team_scoped_and_viewer_readable() {
     );
     assert_eq!(deleted["glance"]["hosts"]["items"], json!([]));
     assert_eq!(deleted["glance"]["syncs"]["inventories"], json!([]));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn overview_recent_templates_are_team_scoped_and_distinct() {
+    let harness = TestApp::boot_sqlite("overview-recent-templates", Options::default());
+    let app = harness.app.clone();
+    let state = harness.state.clone();
+    let dir = harness.dir.clone();
+    let (cookie, team) = harness.sign_in().await;
+    let other_team = create_overview_team(&app, &cookie, "Overview Other").await;
+    let fallback_team = create_overview_team(&app, &cookie, "Overview Fallback").await;
+
+    let first = create_overview_template(&app, &cookie, &team, "Recent First").await;
+    let second = create_overview_template(&app, &cookie, &team, "Recent Second").await;
+    let old = create_overview_template(&app, &cookie, &team, "Recent Old").await;
+    let other = create_overview_template(&app, &cookie, &other_team, "Recent Other").await;
+    let fallback_a = create_overview_template(&app, &cookie, &fallback_team, "Fallback A").await;
+    let fallback_b = create_overview_template(&app, &cookie, &fallback_team, "Fallback B").await;
+    let fallback_c = create_overview_template(&app, &cookie, &fallback_team, "Fallback C").await;
+
+    let now = chrono::Utc::now();
+    let stamp = |minutes: i64| {
+        (now - chrono::Duration::minutes(minutes))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string()
+    };
+    let newest = stamp(1);
+    let older = stamp(5);
+    {
+        let db = state.db().expect("database");
+        let insert = |id: &str,
+                      team_id: &str,
+                      template_id: &str,
+                      status: &str,
+                      created: &str,
+                      finished: Option<&str>| {
+            db.execute(
+                "INSERT INTO jobs (
+                    id, team_id, template_id, name, tool, status, extra_vars, launched_by, trigger,
+                    created_at, finished_at
+                 ) VALUES (?1, ?2, ?3, ?1, 'shell', ?4, '{}', 'admin', 'manual', ?5, ?6)",
+                (id, team_id, template_id, status, created, finished),
+            )
+            .unwrap();
+        };
+        insert(
+            "recent-job-first-new",
+            &team,
+            &first,
+            "successful",
+            &newest,
+            Some(&newest),
+        );
+        insert(
+            "recent-job-first-old",
+            &team,
+            &first,
+            "failed",
+            &older,
+            Some(&older),
+        );
+        insert(
+            "recent-job-second",
+            &team,
+            &second,
+            "successful",
+            &stamp(2),
+            Some(&stamp(2)),
+        );
+        let old_launch = stamp(60 * 24 * 40);
+        insert(
+            "recent-job-old",
+            &team,
+            &old,
+            "successful",
+            &old_launch,
+            Some(&old_launch),
+        );
+        insert(
+            "recent-job-other",
+            &other_team,
+            &other,
+            "successful",
+            &newest,
+            Some(&newest),
+        );
+        insert(
+            "recent-job-fallback-running",
+            &fallback_team,
+            &fallback_c,
+            "running",
+            &newest,
+            None,
+        );
+    }
+
+    let ids = |value: &Value| -> Vec<String> {
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let last_launched = |value: &Value, id: &str| -> Value {
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == id)
+            .map(|item| item["last_launched_at"].clone())
+            .unwrap_or(Value::Null)
+    };
+
+    let (status, overview, _) = call(
+        &app,
+        "GET",
+        "/api/v1/overview",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{overview}");
+    let recent = &overview["glance"]["recent_templates"];
+    let recent_ids = ids(recent);
+    assert!(
+        (3..=5).contains(&recent_ids.len()),
+        "the quick launch list is not filled: {recent_ids:?}"
+    );
+    let mut unique = recent_ids.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), recent_ids.len(), "{recent_ids:?}");
+    assert_eq!(recent_ids[0], first, "the newest launch is not first");
+    assert!(recent_ids.contains(&second), "{recent_ids:?}");
+    assert!(
+        !recent_ids.contains(&other),
+        "another team's template is listed"
+    );
+    assert_eq!(
+        recent_ids.iter().filter(|id| **id == first).count(),
+        1,
+        "a template with two jobs is listed twice"
+    );
+    assert_eq!(last_launched(recent, &first), newest);
+    assert!(
+        last_launched(recent, &old).is_null(),
+        "a launch older than the window still counts"
+    );
+
+    let (status, other_overview, _) = call(
+        &app,
+        "GET",
+        "/api/v1/overview",
+        Some(&cookie),
+        Some(&other_team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{other_overview}");
+    let other_recent = &other_overview["glance"]["recent_templates"];
+    assert_eq!(ids(other_recent), vec![other.clone()]);
+    assert_eq!(last_launched(other_recent, &other), newest);
+
+    let (status, fallback, _) = call(
+        &app,
+        "GET",
+        "/api/v1/overview",
+        Some(&cookie),
+        Some(&fallback_team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{fallback}");
+    let fallback_recent = &fallback["glance"]["recent_templates"];
+    let fallback_ids = ids(fallback_recent);
+    assert_eq!(fallback_ids.len(), 3, "{fallback_ids:?}");
+    assert!(fallback_ids.contains(&fallback_a), "{fallback_ids:?}");
+    assert!(fallback_ids.contains(&fallback_b), "{fallback_ids:?}");
+    assert!(fallback_ids.contains(&fallback_c), "{fallback_ids:?}");
+    assert!(
+        fallback_ids
+            .iter()
+            .all(|id| last_launched(fallback_recent, id).is_null()),
+        "a template without a finished job claims a launch time"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

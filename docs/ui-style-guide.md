@@ -162,6 +162,8 @@ The overview starts with `.kpi-row`, one `.kpi` link per number. The tile holds 
 
 `Needs attention` is one `.attention-list` inside a card. Each `.attention-item` carries a status pill, an `.attention-body` with the object link and its relative time, and `.attention-actions` with the action links or buttons. An empty list renders one `.attention-clear` line instead of empty cards.
 
+The overview header carries its one primary action, `Launch template`, in the `shell` actions slot. A Quick launch card lists the team's recent templates in `.quick-launch-list`; each `.quick-launch-item` keeps the name and its Start button on one row. The header action opens a picker whose `.picker-list` holds one `.picker-option` button per template. Both a picker option and a Start button open the same launch dialog as the templates page. Test alert stays a secondary `.btn`.
+
 ### Tabs
 
 Page-level tabs use `.tabs` and `.tab-bar` above the panels. Tabs inside an overlay use `.dialog-tabs`, `.dialog-tab`, and `.dialog-panel`. The overlay helper sets `role="tablist"`, `role="tab"`, `role="tabpanel"`, `aria-selected`, and `tabindex`.
