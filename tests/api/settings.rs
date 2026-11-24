@@ -3808,8 +3808,14 @@ async fn overview_glance_is_team_scoped_and_viewer_readable() {
     assert_eq!(glance["jobs"]["pending"], 2);
     assert_eq!(glance["jobs"]["oldest_pending_at"], oldest);
     let busy = ids(&glance["jobs"]["items"]);
-    assert!(busy.contains(&"glance-pending-a".to_string()), "{busy:?}");
-    assert!(busy.contains(&"glance-running-a".to_string()), "{busy:?}");
+    assert_eq!(
+        busy,
+        vec![
+            "glance-running-a".to_string(),
+            "glance-pending-a".to_string(),
+            "glance-pending-a2".to_string(),
+        ]
+    );
     assert!(!busy.contains(&"glance-pending-b".to_string()), "{busy:?}");
     assert!(
         !ids(&overview["jobs"]).contains(&"glance-pending-a".to_string()),
@@ -3965,6 +3971,100 @@ async fn overview_glance_is_team_scoped_and_viewer_readable() {
     );
     assert_eq!(deleted["glance"]["hosts"]["items"], json!([]));
     assert_eq!(deleted["glance"]["syncs"]["inventories"], json!([]));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn overview_queue_lists_running_jobs_before_pending_ones() {
+    let harness = TestApp::boot("overview-queue-order", Options::default());
+    let app = harness.app.clone();
+    let dir = harness.dir.clone();
+    let (cookie, team) = harness.sign_in().await;
+    let other_team = create_glance_other_team(&app, &cookie).await;
+
+    let insert_job = |id: &str, team: &str, status: &str, created: &str| {
+        format!(
+            "INSERT INTO jobs (
+                id, team_id, name, tool, status, extra_vars, launched_by, trigger, created_at
+             ) VALUES ('{id}', '{team}', '{id}', 'shell', '{status}', '{{}}', 'admin',
+                       'manual', '{created}');"
+        )
+    };
+    let mut sql = String::new();
+    for index in 0..8 {
+        sql.push_str(&insert_job(
+            &format!("queue-pending-{index}"),
+            &team,
+            "pending",
+            &format!("2026-01-01T00:00:0{index}Z"),
+        ));
+    }
+    // The running job is older than every pending job, so only the status
+    // grouping can keep it visible in a queue of eight.
+    sql.push_str(&insert_job(
+        "queue-running",
+        &team,
+        "running",
+        "2025-12-31T23:00:00Z",
+    ));
+    sql.push_str(&insert_job(
+        "queue-other-pending",
+        &other_team,
+        "pending",
+        "2025-01-01T00:00:00Z",
+    ));
+    sql.push_str(&insert_job(
+        "queue-other-running",
+        &other_team,
+        "running",
+        "2025-01-01T00:00:00Z",
+    ));
+    harness.execute_sql(&sql).await;
+
+    let (status, overview, _) = call(
+        &app,
+        "GET",
+        "/api/v1/overview",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{overview}");
+    let queue = &overview["glance"]["jobs"];
+    assert_eq!(queue["running"], 1);
+    assert_eq!(queue["pending"], 8);
+    assert_eq!(queue["oldest_pending_at"], "2026-01-01T00:00:00Z");
+
+    let items = queue["items"].as_array().expect("queue items");
+    let ids: Vec<&str> = items
+        .iter()
+        .map(|item| item["id"].as_str().expect("job id"))
+        .collect();
+    assert_eq!(
+        ids,
+        vec![
+            "queue-running",
+            "queue-pending-0",
+            "queue-pending-1",
+            "queue-pending-2",
+            "queue-pending-3",
+            "queue-pending-4",
+            "queue-pending-5",
+            "queue-pending-6",
+        ]
+    );
+    let statuses: Vec<&str> = items
+        .iter()
+        .map(|item| item["status"].as_str().expect("job status"))
+        .collect();
+    assert_eq!(
+        statuses,
+        vec![
+            "running", "pending", "pending", "pending", "pending", "pending", "pending", "pending",
+        ]
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
