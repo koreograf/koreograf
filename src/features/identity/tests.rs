@@ -303,6 +303,13 @@ mod auth_tests {
             "spec": {"job_type": "check", "tags": "other", "skip_tags": "slow", "verbosity": 2}
         });
         assert!(command_matches_template(&template, &master));
+
+        let mut mismatched = template(r#"{}"#);
+        mismatched.prompt_fields = r#"["action"]"#.into();
+        assert!(
+            !mismatched.prompts_field("action"),
+            "an Ansible template cannot prompt for the OpenTofu action"
+        );
     }
 }
 

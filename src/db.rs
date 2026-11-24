@@ -1040,7 +1040,9 @@ impl Template {
 
     /// True when the template's master flag or its own list asks for `field`.
     pub fn prompts_field(&self, field: &str) -> bool {
-        self.prompt_on_launch || self.prompt_fields().iter().any(|item| item == field)
+        self.prompt_on_launch
+            || (prompt_field_fits_tool(&self.tool, field)
+                && self.prompt_fields().iter().any(|item| item == field))
     }
 }
 
