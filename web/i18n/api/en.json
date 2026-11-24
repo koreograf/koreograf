@@ -127,7 +127,7 @@
   "no_default_execution_environment": "No default execution environment is set for {tool}. Set one under Settings → Jobs.",
   "no_failed_hosts_are_stored_for_this_job": "No failed hosts are stored for this job.",
   "not_found": "Not found.",
-  "only_a_failed_or_canceled_job_can_be_relaunched": "Only a failed or canceled job can be relaunched.",
+  "only_a_finished_job_can_be_relaunched": "Only a finished job can be relaunched.",
   "only_a_finished_workflow_run_can_be_relaunched": "Only a finished workflow run can be relaunched.",
   "only_ansible_jobs_have_failed_hosts": "Only Ansible jobs have failed hosts.",
   "only_one_credential_of_each_kind_is_allowed": "Only one credential of each kind is allowed.",

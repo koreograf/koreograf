@@ -146,7 +146,7 @@ function tofuApply(item) {
   return Boolean(item) && item.tool === "opentofu" && (item.spec || {}).action === "apply";
 }
 
-export async function openLaunchPrompt(item, launchWithOptions = false, preset = {}) {
+export async function openLaunchPrompt(item, launchWithOptions = false, preset = {}, target = {}) {
   const previous = document.querySelector("#launch-prompt");
   if (previous) previous.remove();
   const promptAll = launchWithOptions || Boolean(item.prompt_on_launch);
@@ -174,15 +174,15 @@ export async function openLaunchPrompt(item, launchWithOptions = false, preset =
   const dialog = openDialog({
     id: "launch-prompt",
     formId: "launch-prompt-form",
-    title: t("launch"),
+    title: t(target.title || "launch"),
     body: `
-      <p class="small muted">${h(launchWithOptions ? "launch_with_options_help" : "the_launch_dialog_starts_from_the_template")}</p>
+      <p class="small muted">${h(target.help || (launchWithOptions ? "launch_with_options_help" : "the_launch_dialog_starts_from_the_template"))}</p>
       ${inventory}
       ${shows("credentials") ? credentialFields(credentials, selectedCredentialIds(item), item.tool) : ""}
       ${ansibleOptions}
       ${tofuOptions}
       ${shows("extra_vars") ? extraVarsField(item.extra_vars) : ""}`,
-    submit: t("launch"),
+    submit: t(target.submit || "launch"),
     onSubmit: async ({ form, close }) => {
       if (submitting || !flushChips(form)) return;
       submitting = true;
@@ -237,7 +237,8 @@ export async function openLaunchPrompt(item, launchWithOptions = false, preset =
           if (Object.keys(specBody).length) body.spec = specBody;
         }
         if (tofu && shows("action")) body.spec = { action };
-        const job = await api("POST", `/api/v1/templates/${encodeURIComponent(item.id)}/launch`, body);
+        const url = target.url || `/api/v1/templates/${encodeURIComponent(item.id)}/launch`;
+        const job = await api("POST", url, body);
         close();
         go(`#/jobs/${job.id}`);
       } catch (error) {

@@ -444,11 +444,12 @@ async fn jobs_return_the_documented_shape() {
     )
     .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{relaunched}");
-    let fail_parameters = job_parameters(
+    let mut fail_parameters = job_parameters(
         &fail_template,
         "Shape Fail",
         "printf 'shape-fail\\n' >&2; exit 1",
     );
+    fail_parameters["source_job_id"] = json!(failed_id);
     assert_eq!(
         relaunched,
         job_shape(

@@ -14,6 +14,21 @@ pub struct LaunchOverrides {
     pub extra_vars_are_overrides: bool,
 }
 
+/// Fields a prompted relaunch may replace on the stored job parameters.
+#[derive(Default)]
+pub struct RelaunchOverrides {
+    pub only_failed_hosts: bool,
+    /// Extra variables merged onto the stored values when present.
+    pub extra_vars: Option<Value>,
+    /// An empty string clears the stored inventory.
+    pub inventory_id: Option<String>,
+    /// Replaces the stored credential list, including an empty list.
+    pub credential_ids: Option<Vec<String>>,
+    /// Ansible or OpenTofu fields merged onto the stored spec.
+    pub spec: Option<Value>,
+    pub launch_with_options: bool,
+}
+
 pub struct LaunchRequest {
     pub team_id: String,
     pub template_id: String,

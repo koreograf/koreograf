@@ -1429,6 +1429,29 @@ async fn read_only_api_tokens_cannot_write() {
     let read_id = read["id"].as_str().unwrap().to_string();
     let read_secret = read["secret"].as_str().unwrap().to_string();
 
+    let (status, launched, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"extra_vars": {}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{launched}");
+    let relaunch_id = launched["id"].as_str().unwrap().to_string();
+    let (status, denied) = call_bearer(
+        &app,
+        "POST",
+        &format!("/api/jobs/{relaunch_id}/relaunch"),
+        &read_secret,
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+    assert_eq!(denied["error"], "token_is_read_only");
+
     let (status, denied) =
         call_bearer(&app, "GET", "/api/admin/backup", &read_secret, None, None).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");

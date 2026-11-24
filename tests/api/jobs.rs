@@ -89,6 +89,42 @@ async fn seed_viewer(app: &axum::Router, admin: &str, team: &str, username: &str
     cookie.expect("viewer cookie")
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn seed_finished_job(
+    harness: &TestApp,
+    id: &str,
+    team: &str,
+    template_id: Option<&str>,
+    tool: &str,
+    status: &str,
+    parameters: &Value,
+    failed_hosts: &Value,
+) {
+    let template = template_id
+        .map(|item| format!("'{item}'"))
+        .unwrap_or_else(|| "NULL".into());
+    let extra = parameters
+        .get("extra_vars")
+        .cloned()
+        .unwrap_or_else(|| json!({}))
+        .to_string()
+        .replace('\'', "''");
+    let parameters = parameters.to_string().replace('\'', "''");
+    let failed = failed_hosts.to_string().replace('\'', "''");
+    harness
+        .execute_sql(&format!(
+            "INSERT INTO jobs (
+                id, team_id, template_id, name, tool, status, extra_vars, launched_by,
+                trigger, started_at, finished_at, created_at, parameters, failed_hosts
+             ) VALUES (
+                '{id}', '{team}', {template}, 'Seed', '{tool}', '{status}', '{extra}',
+                'admin', 'manual', '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z',
+                '2026-01-01T00:00:00Z', '{parameters}', '{failed}'
+             )"
+        ))
+        .await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn host_ansible_detail_is_bounded_censored_and_past_the_cap() {
     let harness = TestApp::boot("host-detail", Options::default());
@@ -746,6 +782,383 @@ async fn failed_job_shows_parameters_and_can_be_relaunched() {
     assert_eq!(denied["error"], "only_ansible_jobs_have_failed_hosts");
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_successful_job_reuses_its_stored_parameters_and_links_the_source() {
+    let harness = TestApp::boot("successful-relaunch", Options::default());
+    let app = harness.app.clone();
+    let (cookie, team) = harness.sign_in().await;
+
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Green",
+            "tool": "shell",
+            "entrypoint": "",
+            "extra_vars": {"keep": "template"},
+            "spec": {"script": "true"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().unwrap().to_string();
+    let (status, inventory, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Kept hosts", "body": "[web]\nweb-1\n"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{inventory}");
+    let inventory_id = inventory["id"].as_str().unwrap().to_string();
+    let (status, credential, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Kept SSH",
+            "kind": "ssh",
+            "secret": {"username": "deploy", "password": "kept-pass"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{credential}");
+    let credential_id = credential["id"].as_str().unwrap().to_string();
+
+    let parameters = json!({
+        "template_id": template_id,
+        "template_name": "Green",
+        "tool": "shell",
+        "entrypoint": "",
+        "inventory_id": inventory_id,
+        "inventory_name": "Kept hosts",
+        "credential_id": credential_id,
+        "credential_name": "Kept SSH",
+        "credential_kind": "ssh",
+        "credentials": [{"id": credential_id, "name": "Kept SSH", "kind": "ssh"}],
+        "extra_vars": {"keep": "template", "from_launch": "yes"},
+        "spec": {"script": "true"},
+        "project_commit": "1234567",
+        "project_commit_full": "1234567890abcdef1234567890abcdef12345678"
+    });
+    seed_finished_job(
+        &harness,
+        "successful-source",
+        &team,
+        Some(&template_id),
+        "shell",
+        "successful",
+        &parameters,
+        &json!([]),
+    )
+    .await;
+
+    let (status, copy, _) = call(
+        &app,
+        "POST",
+        "/api/jobs/successful-source/relaunch",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{copy}");
+    assert_ne!(copy["id"], "successful-source");
+    assert_eq!(copy["trigger"], "relaunch");
+    assert_eq!(copy["parameters"]["source_job_id"], "successful-source");
+    assert_eq!(copy["parameters"]["inventory_id"], inventory_id);
+    assert_eq!(copy["parameters"]["credentials"][0]["id"], credential_id);
+    assert_eq!(copy["parameters"]["spec"]["script"], "true");
+    assert_eq!(copy["parameters"]["extra_vars"]["from_launch"], "yes");
+    assert_eq!(copy["extra_vars"]["from_launch"], "yes");
+    assert!(copy["parameters"].get("project_commit").is_none());
+    assert!(
+        !copy.to_string().contains("kept-pass"),
+        "relaunch echoed a credential secret"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn relaunch_with_changes_only_accepts_prompted_fields() {
+    let harness = TestApp::boot("relaunch-changes", Options::default());
+    let app = harness.app.clone();
+    let (cookie, team) = harness.sign_in().await;
+
+    let (status, inventory, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Prompt hosts", "body": "[web]\nweb-1\n"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{inventory}");
+    let inventory_id = inventory["id"].as_str().unwrap().to_string();
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Partial",
+            "tool": "ansible",
+            "entrypoint": "site.yml",
+            "inventory_id": inventory_id,
+            "no_environment": true,
+            "prompt_fields": ["limit"],
+            "extra_vars": {"keep": "template"},
+            "spec": {"job_type": "run", "tags": "ping", "limit": "web"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().unwrap().to_string();
+    let parameters = json!({
+        "template_id": template_id,
+        "template_name": "Partial",
+        "tool": "ansible",
+        "entrypoint": "site.yml",
+        "inventory_id": inventory_id,
+        "inventory_name": "Prompt hosts",
+        "extra_vars": {"keep": "template", "stored": "yes"},
+        "spec": {"job_type": "run", "tags": "ping", "limit": "web"}
+    });
+    seed_finished_job(
+        &harness,
+        "prompt-source",
+        &team,
+        Some(&template_id),
+        "ansible",
+        "successful",
+        &parameters,
+        &json!([]),
+    )
+    .await;
+
+    let (status, copy, _) = call(
+        &app,
+        "POST",
+        "/api/jobs/prompt-source/relaunch",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"spec": {"limit": "db"}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{copy}");
+    assert_eq!(copy["parameters"]["spec"]["limit"], "db");
+    assert_eq!(copy["parameters"]["spec"]["tags"], "ping");
+    assert_eq!(copy["parameters"]["spec"]["job_type"], "run");
+    assert_eq!(copy["parameters"]["extra_vars"]["stored"], "yes");
+    assert_eq!(copy["parameters"]["source_job_id"], "prompt-source");
+
+    for body in [
+        json!({"spec": {"tags": "other"}}),
+        json!({"extra_vars": {"changed": "yes"}}),
+        json!({"inventory_id": inventory_id}),
+        json!({"credential_ids": []}),
+    ] {
+        let (status, denied, _) = call(
+            &app,
+            "POST",
+            "/api/jobs/prompt-source/relaunch",
+            Some(&cookie),
+            Some(&team),
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {denied}");
+        assert_eq!(denied["error"], "field_is_not_prompted", "{body}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn relaunch_rejects_unfinished_jobs_and_deleted_credentials() {
+    let harness = TestApp::boot("relaunch-gates", Options::default());
+    let app = harness.app.clone();
+    let (cookie, team) = harness.sign_in().await;
+
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Gate",
+            "tool": "shell",
+            "entrypoint": "",
+            "spec": {"script": "true"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().unwrap().to_string();
+    let (status, credential, _) = call(
+        &app,
+        "POST",
+        "/api/credentials",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Deleted SSH",
+            "kind": "ssh",
+            "secret": {"username": "deploy", "password": "deleted-pass"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{credential}");
+    let credential_id = credential["id"].as_str().unwrap().to_string();
+    let (status, _, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/credentials/{credential_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let parameters = json!({
+        "template_id": template_id,
+        "template_name": "Gate",
+        "tool": "shell",
+        "entrypoint": "",
+        "credential_id": credential_id,
+        "credential_name": "Deleted SSH",
+        "credential_kind": "ssh",
+        "credentials": [{"id": credential_id, "name": "Deleted SSH", "kind": "ssh"}],
+        "extra_vars": {},
+        "spec": {"script": "true"}
+    });
+    for status_name in ["pending", "running", "successful"] {
+        seed_finished_job(
+            &harness,
+            &format!("gate-{status_name}"),
+            &team,
+            Some(&template_id),
+            "shell",
+            status_name,
+            &parameters,
+            &json!([]),
+        )
+        .await;
+    }
+    for status_name in ["pending", "running"] {
+        let (status, denied, _) = call(
+            &app,
+            "POST",
+            &format!("/api/jobs/gate-{status_name}/relaunch"),
+            Some(&cookie),
+            Some(&team),
+            Some(json!({})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{status_name}: {denied}");
+        assert_eq!(denied["error"], "only_a_finished_job_can_be_relaunched");
+    }
+    let (status, denied, _) = call(
+        &app,
+        "POST",
+        "/api/jobs/gate-successful/relaunch",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{denied}");
+    assert_eq!(denied["error"], "not_found");
+
+    let viewer_cookie = seed_viewer(&app, &cookie, &team, "relaunch-viewer").await;
+    let (status, denied, _) = call(
+        &app,
+        "POST",
+        "/api/jobs/gate-successful/relaunch",
+        Some(&viewer_cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn only_failed_hosts_is_rejected_when_no_hosts_were_stored() {
+    let harness = TestApp::boot("relaunch-hosts", Options::default());
+    let app = harness.app.clone();
+    let (cookie, team) = harness.sign_in().await;
+    let (status, inventory, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Hosts", "body": "[web]\nweb-1\n"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{inventory}");
+    let inventory_id = inventory["id"].as_str().unwrap().to_string();
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Healed",
+            "tool": "ansible",
+            "entrypoint": "site.yml",
+            "inventory_id": inventory_id,
+            "no_environment": true,
+            "spec": {"job_type": "run"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let template_id = template["id"].as_str().unwrap().to_string();
+    let parameters = json!({
+        "template_id": template_id,
+        "template_name": "Healed",
+        "tool": "ansible",
+        "entrypoint": "site.yml",
+        "inventory_id": inventory_id,
+        "inventory_name": "Hosts",
+        "extra_vars": {},
+        "spec": {"job_type": "run"}
+    });
+    seed_finished_job(
+        &harness,
+        "healthy-source",
+        &team,
+        Some(&template_id),
+        "ansible",
+        "successful",
+        &parameters,
+        &json!([]),
+    )
+    .await;
+    let (status, denied, _) = call(
+        &app,
+        "POST",
+        "/api/jobs/healthy-source/relaunch",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"only_failed_hosts": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{denied}");
+    assert_eq!(denied["error"], "no_failed_hosts_are_stored_for_this_job");
 }
 
 #[tokio::test(flavor = "multi_thread")]
