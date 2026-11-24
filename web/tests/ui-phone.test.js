@@ -158,6 +158,14 @@ test("a fullscreen overlay keeps the shared chrome and scrolls its body", () => 
   assert.match(rule(css, ".dialog-form")[1], /display:\s*flex/, "the edit chrome is not the shared form layout");
 });
 
+test("the assistant sheet is fullscreen at 640 px and keeps the safe area", () => {
+  const block = mediaBlock(stylesheet(), "@media (max-width: 640px)");
+  assert.match(block, /\.assistant-panel\s*\{[^}]*position:\s*fixed/, "the assistant does not become a fixed sheet");
+  assert.match(block, /\.assistant-panel\s*\{[^}]*height:\s*100dvh/, "the assistant sheet does not use the dynamic viewport");
+  assert.match(block, /\.assistant-panel\s*\{[^}]*padding:\s*env\(safe-area-inset-top\)[\s\S]*env\(safe-area-inset-bottom\)/, "the assistant sheet ignores the safe area");
+  assert.match(block, /\.assistant-dock\s*\{[^}]*env\(safe-area-inset-bottom\)/, "the launcher ignores the bottom safe area");
+});
+
 test("the dashboard writes the chart count into the visible day", async () => {
   const { dashboardBody } = await load("features/dashboard.js");
   const en = catalog("en");

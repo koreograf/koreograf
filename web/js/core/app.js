@@ -229,8 +229,12 @@ export function go(hash) {
   else location.hash = hash;
 }
 
-export function assistantNavItem(enabled) {
-  return enabled ? [["#/assistant", t("assistant")]] : [];
+let lastRouteHash = null;
+
+/// The hash the router painted before the current one. The compatibility
+/// redirect for `#/assistant` uses it to return to the page that opened it.
+export function previousRouteHash() {
+  return lastRouteHash;
 }
 
 export function navActive(here, href) {
@@ -310,7 +314,6 @@ export function shell(title, body, actions) {
       ["#/jobs", t("jobs")],
       ["#/activity", t("activity")],
       ["#/schedules", t("schedules")],
-      ...assistantNavItem(appState.assistantEnabled),
     ]],
     [t("automation"), [
       ["#/templates", t("templates")],
@@ -448,6 +451,7 @@ export function renderLogin(message, tone, vars, username) {
   bindThemeSwitch();
   loadVersion();
   loadMaintenance();
+  window.dispatchEvent(new Event("koreograf:session"));
   const initial = username
     ? document.querySelector("#login-form [name=password]")
     : document.querySelector("#login-form [name=username]");
@@ -466,6 +470,7 @@ export function renderLogin(message, tone, vars, username) {
       const known = (appState.me.teams || []).some((team) => team.id === appState.teamId);
       if (!known) appState.setTeamId(preferredTeam());
       localStorage.setItem("koreograf.team", appState.teamId);
+      await loadAssistantStatus();
       go("#/");
     } catch (error) {
       renderLogin(error.message || "invalid_username_or_password", "bad", error.vars, entered);
@@ -566,6 +571,7 @@ export async function route() {
   }
   async function load() {
     appState.setLeaveGuard(null);
+    lastRouteHash = appState.shownHash;
     const previousHash = appState.shownHash;
     appState.setShownHash(nextHash);
     closeLive();
@@ -610,6 +616,18 @@ export async function route() {
   return load();
 }
 
+export async function loadAssistantStatus() {
+  try {
+    const assistant = await api("GET", "/api/v1/assistant");
+    appState.setAssistantEnabled(Boolean(assistant && assistant.enabled));
+    appState.setAssistantModel(assistant && assistant.model ? String(assistant.model) : "");
+  } catch {
+    appState.setAssistantEnabled(false);
+    appState.setAssistantModel("");
+  }
+  window.dispatchEvent(new Event("koreograf:session"));
+}
+
 export async function boot() {
   const catalogs = currentLanguage() === "de" ? ["de"] : ["de", currentLanguage()];
   await Promise.all(catalogs.map(loadCatalog));
@@ -620,16 +638,10 @@ export async function boot() {
       appState.setTeamId(preferredTeam());
       localStorage.setItem("koreograf.team", appState.teamId);
     }
-    try {
-      const assistant = await api("GET", "/api/v1/assistant");
-      appState.setAssistantEnabled(Boolean(assistant && assistant.enabled));
-      appState.setAssistantModel(assistant && assistant.model ? String(assistant.model) : "");
-    } catch {
-      appState.setAssistantEnabled(false);
-      appState.setAssistantModel("");
-    }
+    await loadAssistantStatus();
   } catch {
     appState.setMe(null);
+    window.dispatchEvent(new Event("koreograf:session"));
   }
   window.addEventListener("hashchange", route);
   route();

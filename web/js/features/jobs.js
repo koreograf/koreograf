@@ -8,6 +8,7 @@ import { can, go, handle, needTeam, shell } from "../core/app.js";
 import { chipReadout } from "../core/chips.js";
 import { credentialKindLabel } from "../core/credentials.js";
 import { pill, relativeTime, spanText, statusLabel, verbosityLabel, when } from "../core/format.js";
+import { explainFailure } from "./assistant.js";
 
 export function jobsState(hash = location.hash || "") {
   const params = new URLSearchParams((hash || "").split("?")[1] || "");
@@ -2145,7 +2146,7 @@ async function pageJob(id) {
         </div>
         <div class="row">
           ${actions}
-          ${appState.assistantEnabled && job.status === "failed" ? `<a class="btn" href="#/assistant?explain=${encodeURIComponent(job.id)}">${h("assistant_explain_failure")}</a>` : ""}
+          ${appState.assistantEnabled && job.status === "failed" ? `<button class="btn" type="button" id="assistant-explain">${h("assistant_explain_failure")}</button>` : ""}
           <button class="btn" type="button" id="download-output">${h("download_output")}</button>
           ${job.output_capped ? `<span class="small muted" id="output-capped">${h("output_download_is_incomplete")}</span>` : ""}
         </div>
@@ -2248,6 +2249,8 @@ async function pageJob(id) {
     </div>
     <div id="panel-parameters" hidden>${jobParameters(job)}</div>`);
   const badge = document.querySelector(".pill");
+  const explain = document.querySelector("#assistant-explain");
+  if (explain) explain.addEventListener("click", () => explainFailure(job));
   bindJobLog(document.querySelector("#log"), job);
   showJobExitCode(exitCodeFromEvents(job.events));
   const structured = job.tool === "opentofu"

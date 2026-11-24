@@ -170,7 +170,18 @@ pub struct ChatBody {
     #[serde(default)]
     pub(super) history: Vec<ChatMessage>,
     #[serde(default)]
-    pub(super) job_id: Option<String>,
+    pub(super) context: Option<ChatContext>,
+}
+
+/// A reference to the page the user is looking at. It carries no copied text:
+/// the server loads the object with the caller's credential and team.
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ChatContext {
+    #[serde(rename = "type")]
+    pub(super) kind: String,
+    #[serde(default)]
+    pub(super) id: Option<String>,
 }
 
 #[derive(Serialize)]
