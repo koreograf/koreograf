@@ -177,6 +177,14 @@ fn assert_alpha_15_fixture_rows(conn: &rusqlite::Connection) {
         )
         .expect("fixture template");
     assert_eq!(template, "Fixture check");
+    let prompt_fields: String = conn
+        .query_row(
+            "SELECT prompt_fields FROM templates WHERE name = 'Fixture check'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("fixture prompt fields");
+    assert_eq!(prompt_fields, "[]");
 
     let jobs: i64 = conn
         .query_row(
@@ -393,6 +401,15 @@ async fn assert_alpha_15_postgres_rows(client: &tokio_postgres::Client) {
         .expect("fixture template")
         .get(0);
     assert_eq!(template, "Fixture check");
+    let prompt_fields: String = client
+        .query_one(
+            "SELECT prompt_fields FROM templates WHERE name = 'Fixture check'",
+            &[],
+        )
+        .await
+        .expect("fixture prompt fields")
+        .get(0);
+    assert_eq!(prompt_fields, "[]");
 
     let jobs: i64 = client
         .query_one(

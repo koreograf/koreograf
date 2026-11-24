@@ -292,23 +292,23 @@ where
 pub(crate) const INSERT_TEMPLATE: &str = "INSERT INTO templates (
         id, team_id, name, description, tool, project_id, inventory_id, credential_id,
         environment_id, no_environment, entrypoint, extra_vars, spec, created_at, update_on_launch,
-        admin_saved, prompt_on_launch
-     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)";
+        admin_saved, prompt_on_launch, prompt_fields
+     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)";
 pub(crate) const UPDATE_TEMPLATE: &str =
     "UPDATE templates SET name = ?3, description = ?4, tool = ?5, project_id = ?6,
         inventory_id = ?7, credential_id = ?8, environment_id = ?9, no_environment = ?10,
         entrypoint = ?11, extra_vars = ?12, spec = ?13, update_on_launch = ?14,
-        admin_saved = ?15, prompt_on_launch = ?16
+        admin_saved = ?15, prompt_on_launch = ?16, prompt_fields = ?17
      WHERE id = ?1 AND team_id = ?2";
 pub(crate) const LIST_TEMPLATES: &str =
     "SELECT id, team_id, name, description, tool, project_id, inventory_id, credential_id,
         environment_id, no_environment, entrypoint, extra_vars, spec, created_at, update_on_launch,
-        admin_saved, prompt_on_launch
+        admin_saved, prompt_on_launch, prompt_fields
      FROM templates WHERE team_id = ?1 ORDER BY name";
 pub(crate) const TEMPLATE_BY_ID: &str =
     "SELECT id, team_id, name, description, tool, project_id, inventory_id, credential_id,
         environment_id, no_environment, entrypoint, extra_vars, spec, created_at, update_on_launch,
-        admin_saved, prompt_on_launch
+        admin_saved, prompt_on_launch, prompt_fields
      FROM templates WHERE id = ?1";
 pub(crate) const DELETE_TEMPLATE: &str = "DELETE FROM templates WHERE id = ?1 AND team_id = ?2";
 pub(crate) const DELETE_TEMPLATE_SCHEDULES: &str =
@@ -346,7 +346,8 @@ pub(crate) fn insert_template(c: &Connection, item: &Template) -> AppResult<()> 
             item.created_at,
             item.update_on_launch as i64,
             item.admin_saved as i64,
-            item.prompt_on_launch as i64
+            item.prompt_on_launch as i64,
+            item.prompt_fields
         ],
     )?;
     Ok(())
@@ -371,7 +372,8 @@ pub(crate) fn update_template(c: &Connection, item: &Template) -> AppResult<()> 
             item.spec,
             item.update_on_launch as i64,
             item.admin_saved as i64,
-            item.prompt_on_launch as i64
+            item.prompt_on_launch as i64,
+            item.prompt_fields
         ],
     )?;
     if changed == 0 {
@@ -449,6 +451,7 @@ pub(crate) fn row_template<R: SqlRow>(row: &R) -> AppResult<Template> {
         update_on_launch: row.get(14)?,
         admin_saved: row.get(15)?,
         prompt_on_launch: row.get(16)?,
+        prompt_fields: row.get(17)?,
     })
 }
 

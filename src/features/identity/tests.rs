@@ -168,6 +168,7 @@ mod auth_tests {
             update_on_launch: true,
             admin_saved: true,
             prompt_on_launch: false,
+            prompt_fields: "[]".into(),
         }
     }
 
@@ -235,6 +236,73 @@ mod auth_tests {
             "launch_with_options": true
         });
         assert!(!command_matches_template(&shell, &shell_params));
+    }
+
+    #[test]
+    fn only_the_fields_in_the_prompt_list_can_change_the_command() {
+        let mut template = template(r#"{"job_type":"run","tags":"heal","limit":"web"}"#);
+        template.prompt_fields = r#"["tags"]"#.into();
+
+        let tagged = json!({
+            "tool": "ansible",
+            "entrypoint": "site.yml",
+            "project_id": "project",
+            "inventory_id": "inventory",
+            "spec": {"job_type": "run", "tags": "other", "limit": "web"}
+        });
+        assert!(command_matches_template(&template, &tagged));
+
+        let limited = json!({
+            "tool": "ansible",
+            "entrypoint": "site.yml",
+            "project_id": "project",
+            "inventory_id": "inventory",
+            "spec": {"job_type": "run", "tags": "heal", "limit": "db"}
+        });
+        assert!(
+            command_matches_template(&template, &limited),
+            "a failed-host limit must stay ignored"
+        );
+
+        for params in [
+            json!({
+                "tool": "ansible",
+                "entrypoint": "site.yml",
+                "project_id": "project",
+                "inventory_id": "other",
+                "spec": {"job_type": "run", "tags": "heal"}
+            }),
+            json!({
+                "tool": "ansible",
+                "entrypoint": "site.yml",
+                "project_id": "project",
+                "inventory_id": "inventory",
+                "spec": {"job_type": "check", "tags": "heal"}
+            }),
+            json!({
+                "tool": "ansible",
+                "entrypoint": "site.yml",
+                "project_id": "project",
+                "inventory_id": "inventory",
+                "spec": {"job_type": "run", "tags": "heal", "skip_tags": "slow"}
+            }),
+        ] {
+            assert!(
+                !command_matches_template(&template, &params),
+                "an unprompted field changed the command: {params}"
+            );
+        }
+
+        template.prompt_on_launch = true;
+        template.prompt_fields = "[]".into();
+        let master = json!({
+            "tool": "ansible",
+            "entrypoint": "site.yml",
+            "project_id": "project",
+            "inventory_id": "other",
+            "spec": {"job_type": "check", "tags": "other", "skip_tags": "slow", "verbosity": 2}
+        });
+        assert!(command_matches_template(&template, &master));
     }
 }
 

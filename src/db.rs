@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::error::{ApiError, AppResult};
 
-pub(crate) const SCHEMA_VERSION: u32 = 11;
+pub(crate) const SCHEMA_VERSION: u32 = 12;
 const BASELINE_VERSION: u32 = 1;
 
 /// A session row moves its last-seen time at most once per interval, so a
@@ -126,6 +126,12 @@ pub(crate) const SQLITE_MIGRATIONS: &[Migration] = &[
         sql: include_str!("../migrations/sqlite/0011_service_accounts.sql"),
         legacy_columns: &[("users", "created_by")],
     },
+    Migration {
+        version: 12,
+        name: "0012_prompt_fields",
+        sql: include_str!("../migrations/sqlite/0012_prompt_fields.sql"),
+        legacy_columns: &[("templates", "prompt_fields")],
+    },
 ];
 
 pub(crate) const POSTGRES_MIGRATIONS: &[Migration] = &[
@@ -201,6 +207,12 @@ pub(crate) const POSTGRES_MIGRATIONS: &[Migration] = &[
         name: "0011_service_accounts",
         sql: include_str!("../migrations/postgres/0011_service_accounts.sql"),
         legacy_columns: &[("users", "created_by")],
+    },
+    Migration {
+        version: 12,
+        name: "0012_prompt_fields",
+        sql: include_str!("../migrations/postgres/0012_prompt_fields.sql"),
+        legacy_columns: &[],
     },
 ];
 
@@ -978,6 +990,58 @@ pub struct Template {
     pub admin_saved: bool,
     /// When set, the launch dialog may replace inventory, credentials, and Ansible options.
     pub prompt_on_launch: bool,
+    /// JSON list of the fields the launch dialog may replace for this template.
+    pub prompt_fields: String,
+}
+
+/// Every promptable field, in the order the template form and API responses
+/// use. Forks, diff, the project, the entry path, and the execution
+/// environment stay unprompted.
+pub const PROMPT_FIELDS: &[&str] = &[
+    "inventory",
+    "credentials",
+    "extra_vars",
+    "limit",
+    "tags",
+    "skip_tags",
+    "job_type",
+    "verbosity",
+    "action",
+];
+
+pub fn prompt_field_fits_tool(tool: &str, field: &str) -> bool {
+    match field {
+        "credentials" | "extra_vars" => matches!(tool, "ansible" | "opentofu" | "shell"),
+        "inventory" | "limit" | "tags" | "skip_tags" | "job_type" | "verbosity" => {
+            tool == "ansible"
+        }
+        "action" => tool == "opentofu",
+        _ => false,
+    }
+}
+
+/// Drops unknown keys and keys that do not fit the tool, removes duplicates,
+/// and returns the canonical order.
+pub fn normalize_prompt_fields(tool: &str, fields: &[String]) -> Vec<String> {
+    PROMPT_FIELDS
+        .iter()
+        .filter(|field| {
+            let field = **field;
+            prompt_field_fits_tool(tool, field) && fields.iter().any(|item| item == field)
+        })
+        .map(|field| (**field).to_string())
+        .collect()
+}
+
+impl Template {
+    pub fn prompt_fields(&self) -> Vec<String> {
+        json_list(&self.prompt_fields)
+    }
+
+    /// True when the template's master flag or its own list asks for `field`.
+    pub fn prompts_field(&self, field: &str) -> bool {
+        self.prompt_on_launch || self.prompt_fields().iter().any(|item| item == field)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1184,6 +1248,11 @@ pub struct NewDelivery<'a> {
 
 pub fn json_object(text: &str) -> Value {
     serde_json::from_str(text).unwrap_or_else(|_| Value::Object(Default::default()))
+}
+
+/// A stored string list. A malformed or non-string value behaves like `[]`.
+pub fn json_list(text: &str) -> Vec<String> {
+    serde_json::from_str(text).unwrap_or_default()
 }
 
 #[derive(Clone, Debug)]
@@ -1975,6 +2044,31 @@ mod tests {
         assert!(expires.is_none(), "an existing token was locked out");
         assert_eq!(scope, "write", "an existing token lost write access");
         assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn the_prompt_fields_migration_keeps_a_prompted_template_prompting() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        conn.execute("ALTER TABLE templates DROP COLUMN prompt_fields", [])
+            .unwrap();
+        conn.pragma_update(None, "user_version", 11).unwrap();
+        conn.execute("PRAGMA foreign_keys = OFF", []).unwrap();
+        conn.execute(
+            "INSERT INTO templates (id, team_id, name, tool, created_at, prompt_on_launch)
+             VALUES ('legacy', 'team', 'Legacy prompt', 'ansible', '2020-01-01T00:00:00Z', 1)",
+            [],
+        )
+        .unwrap();
+        ensure_schema(&conn).unwrap();
+        assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
+        let item = crate::features::projects::store::template(&conn, "legacy")
+            .unwrap()
+            .expect("migrated template");
+        assert!(item.prompt_on_launch);
+        assert_eq!(item.prompt_fields(), Vec::<String>::new());
+        assert!(item.prompts_field("limit"));
+        assert!(item.prompts_field("inventory"));
     }
 
     #[test]

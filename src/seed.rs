@@ -648,6 +648,7 @@ fn insert_template<S: SeedStore + ?Sized>(store: &S, item: DemoTemplate<'_>) -> 
         update_on_launch: true,
         admin_saved: true,
         prompt_on_launch: false,
+        prompt_fields: "[]".into(),
     })?;
     Ok(id)
 }

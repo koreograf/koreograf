@@ -25,6 +25,16 @@ fn prompt_spec_replaces_listed_fields_and_clears_blanks() {
 }
 
 #[test]
+fn a_partial_prompt_keeps_the_unmentioned_template_fields() {
+    let base = json!({"job_type": "run", "tags": "ping", "skip_tags": "slow", "limit": "web"});
+    let merged = merge_prompt_spec(&base, &json!({"limit": "db"}), "ansible").expect("merge");
+    assert_eq!(merged["limit"], "db");
+    assert_eq!(merged["tags"], "ping");
+    assert_eq!(merged["skip_tags"], "slow");
+    assert_eq!(merged["job_type"], "run");
+}
+
+#[test]
 fn prompt_spec_action_is_only_for_opentofu() {
     let base = json!({"action": "plan"});
     let merged = merge_prompt_spec(&base, &json!({"action": "apply"}), "opentofu").expect("apply");
@@ -72,6 +82,7 @@ fn template_without_environment() -> db::Template {
         update_on_launch: false,
         admin_saved: true,
         prompt_on_launch: false,
+        prompt_fields: "[]".into(),
     }
 }
 
@@ -514,6 +525,7 @@ fn insert_shell(
             update_on_launch: false,
             admin_saved: true,
             prompt_on_launch: false,
+            prompt_fields: "[]".into(),
         },
     )
     .expect("template");

@@ -26,6 +26,8 @@
   "playbook_from_the_project": "Playbook from the project",
   "playbook_path": "Playbook path",
   "playbooks_cannot_be_read": "Playbooks cannot be read.",
+  "prompt_fields": "Prompt for these fields",
+  "prompt_fields_hint": "Choose single fields. Prompt on launch turns on every field the tool supports.",
   "prompt_on_launch": "Prompt on launch",
   "read_only_template": "{name} (read only)",
   "read_only_template_hint": "This template is read only.",

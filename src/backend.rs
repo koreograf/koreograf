@@ -3367,6 +3367,7 @@ impl Backend for PostgresBackend {
                         &(item.update_on_launch as i32),
                         &(item.admin_saved as i32),
                         &(item.prompt_on_launch as i32),
+                        &item.prompt_fields,
                     ],
                 )
                 .await?;
@@ -3404,6 +3405,7 @@ impl Backend for PostgresBackend {
                         &(item.update_on_launch as i32),
                         &(item.admin_saved as i32),
                         &(item.prompt_on_launch as i32),
+                        &item.prompt_fields,
                     ],
                 )
                 .await?;

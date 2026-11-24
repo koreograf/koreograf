@@ -174,6 +174,7 @@ async fn templates_return_the_documented_shape() {
             "extra_vars": {"answer": 1},
             "update_on_launch": false,
             "prompt_on_launch": true,
+            "prompt_fields": ["credentials"],
         })),
     )
     .await;
@@ -197,6 +198,7 @@ async fn templates_return_the_documented_shape() {
         "created_at": created["created_at"].clone(),
         "update_on_launch": false,
         "prompt_on_launch": true,
+        "prompt_fields": ["credentials"],
     });
     assert_eq!(created, expected);
 
@@ -227,6 +229,7 @@ async fn templates_return_the_documented_shape() {
             "extra_vars": {"answer": 2},
             "update_on_launch": true,
             "prompt_on_launch": true,
+            "prompt_fields": ["credentials"],
         })),
     )
     .await;
