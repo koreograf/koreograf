@@ -240,8 +240,8 @@ mod auth_tests {
 
     #[test]
     fn only_the_fields_in_the_prompt_list_can_change_the_command() {
-        let mut template = template(r#"{"job_type":"run","tags":"heal","limit":"web"}"#);
-        template.prompt_fields = r#"["tags"]"#.into();
+        let mut base = template(r#"{"job_type":"run","tags":"heal","limit":"web"}"#);
+        base.prompt_fields = r#"["tags"]"#.into();
 
         let tagged = json!({
             "tool": "ansible",
@@ -250,7 +250,7 @@ mod auth_tests {
             "inventory_id": "inventory",
             "spec": {"job_type": "run", "tags": "other", "limit": "web"}
         });
-        assert!(command_matches_template(&template, &tagged));
+        assert!(command_matches_template(&base, &tagged));
 
         let limited = json!({
             "tool": "ansible",
@@ -260,7 +260,7 @@ mod auth_tests {
             "spec": {"job_type": "run", "tags": "heal", "limit": "db"}
         });
         assert!(
-            command_matches_template(&template, &limited),
+            command_matches_template(&base, &limited),
             "a failed-host limit must stay ignored"
         );
 
@@ -288,13 +288,13 @@ mod auth_tests {
             }),
         ] {
             assert!(
-                !command_matches_template(&template, &params),
+                !command_matches_template(&base, &params),
                 "an unprompted field changed the command: {params}"
             );
         }
 
-        template.prompt_on_launch = true;
-        template.prompt_fields = "[]".into();
+        base.prompt_on_launch = true;
+        base.prompt_fields = "[]".into();
         let master = json!({
             "tool": "ansible",
             "entrypoint": "site.yml",
@@ -302,7 +302,7 @@ mod auth_tests {
             "inventory_id": "other",
             "spec": {"job_type": "check", "tags": "other", "skip_tags": "slow", "verbosity": 2}
         });
-        assert!(command_matches_template(&template, &master));
+        assert!(command_matches_template(&base, &master));
 
         let mut mismatched = template(r#"{}"#);
         mismatched.prompt_fields = r#"["action"]"#.into();
