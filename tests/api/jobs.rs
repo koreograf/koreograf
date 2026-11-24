@@ -2594,3 +2594,116 @@ async fn a_failed_reconciliation_leaves_the_whole_set_running() {
         );
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shell_jobs_record_the_exit_code_and_keep_the_duration() {
+    let harness = TestApp::boot("exit-code", Options::default());
+    let app = harness.app.clone();
+    let dir = harness.dir.clone();
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let exit_lines = |job: &Value| -> Vec<String> {
+        job["events"]
+            .as_array()
+            .map(|events| {
+                events
+                    .iter()
+                    .filter(|event| event["stream"] == "system")
+                    .filter_map(|event| event["line"].as_str())
+                    .filter(|line| line.starts_with("Exit code: "))
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Exit two",
+            "tool": "shell",
+            "entrypoint": "",
+            "spec": {"script": "printf 'bad\\n' >&2\nexit 2\n"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let failed = launch_and_wait(&app, &cookie, &team, template["id"].as_str().unwrap()).await;
+    assert_eq!(failed["status"], "failed", "{}", failed["events"]);
+    assert!(
+        has_line(&failed, "system", "Exit code: 2"),
+        "{}",
+        failed["events"]
+    );
+    assert_eq!(exit_lines(&failed), vec!["Exit code: 2".to_string()]);
+    let started = failed["started_at"].as_str().expect("started_at");
+    let finished = failed["finished_at"].as_str().expect("finished_at");
+    assert!(
+        finished >= started,
+        "the duration ends before the job starts: {started} -> {finished}"
+    );
+
+    let output_request = Request::builder()
+        .method("GET")
+        .uri(format!(
+            "/api/jobs/{}/output",
+            failed["id"].as_str().unwrap()
+        ))
+        .header("cookie", &cookie)
+        .header("x-team-id", &team)
+        .body(Body::empty())
+        .unwrap();
+    let output = app.clone().oneshot(output_request).await.unwrap();
+    assert_eq!(output.status(), StatusCode::OK);
+    let output_body = output.into_body().collect().await.unwrap().to_bytes();
+    let output_text = String::from_utf8_lossy(&output_body);
+    assert!(output_text.contains("Exit code: 2"), "{output_text}");
+
+    let (status, template, _) = call(
+        &app,
+        "POST",
+        "/api/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Exit zero",
+            "tool": "shell",
+            "entrypoint": "",
+            "spec": {"script": "echo ok\nexit 0\n"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{template}");
+    let successful = launch_and_wait(&app, &cookie, &team, template["id"].as_str().unwrap()).await;
+    assert_eq!(
+        successful["status"], "successful",
+        "{}",
+        successful["events"]
+    );
+    assert!(
+        has_line(&successful, "system", "Exit code: 0"),
+        "{}",
+        successful["events"]
+    );
+    assert_eq!(exit_lines(&successful), vec!["Exit code: 0".to_string()]);
+    assert!(successful["started_at"].is_string(), "{successful}");
+    assert!(successful["finished_at"].is_string(), "{successful}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
