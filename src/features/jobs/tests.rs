@@ -271,7 +271,7 @@ async fn relaunch_copies_parameters_and_limits_failed_hosts() {
         assert!(
             running
                 .to_string()
-                .contains("only_a_finished_job_can_be_relaunched"),
+                .contains("only_a_failed_or_canceled_job_can_be_relaunched"),
             "{status}: {running}"
         );
     }
@@ -419,7 +419,7 @@ async fn relaunch_accepts_a_canceled_job_and_keeps_the_failed_host_limit() {
         assert!(
             rejected
                 .to_string()
-                .contains("only_a_finished_job_can_be_relaunched"),
+                .contains("only_a_failed_or_canceled_job_can_be_relaunched"),
             "{status}: {rejected}"
         );
     }

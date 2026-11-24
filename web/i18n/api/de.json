@@ -127,7 +127,7 @@
   "no_default_execution_environment": "Für {tool} ist keine Standard-Ausführungsumgebung gesetzt. Lege eine unter Einstellungen → Aufträge fest.",
   "no_failed_hosts_are_stored_for_this_job": "Für diesen Auftrag sind keine fehlgeschlagenen Hosts gespeichert.",
   "not_found": "Nicht gefunden.",
-  "only_a_finished_job_can_be_relaunched": "Nur ein beendeter Auftrag kann erneut gestartet werden.",
+  "only_a_failed_or_canceled_job_can_be_relaunched": "Nur ein beendeter Auftrag kann erneut gestartet werden.",
   "only_a_finished_workflow_run_can_be_relaunched": "Nur ein abgeschlossener Workflow-Lauf kann erneut gestartet werden.",
   "only_ansible_jobs_have_failed_hosts": "Nur Ansible-Aufträge haben fehlgeschlagene Hosts.",
   "only_one_credential_of_each_kind_is_allowed": "Pro Art ist nur ein Zugang erlaubt.",

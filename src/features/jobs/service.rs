@@ -247,7 +247,9 @@ pub fn relaunch(
         let db = state.store();
         let job = db.job(source_id)?.ok_or(ApiError::NotFound)?;
         if !matches!(job.status.as_str(), "successful" | "failed" | "canceled") {
-            return Err(ApiError::bad("only_a_finished_job_can_be_relaunched"));
+            return Err(ApiError::bad(
+                "only_a_failed_or_canceled_job_can_be_relaunched",
+            ));
         }
         let template_id = job
             .template_id
@@ -286,8 +288,14 @@ pub fn relaunch(
             refresh_inventory(db, &job.team_id, map)?;
             refresh_credential(db, &job.team_id, map)?;
             apply_relaunch_overrides(state, db, &job, &template, map, &overrides)?;
+            if let Some(requested) = overrides
+                .extra_vars
+                .as_ref()
+                .filter(|extra| extra.as_object().is_some_and(|map| !map.is_empty()))
+            {
+                extra = runner::merge_vars(&extra, requested);
+            }
             map.insert("source_job_id".into(), json!(source_id));
-            extra = map.get("extra_vars").cloned().unwrap_or_else(|| json!({}));
             parameters = parsed.to_string();
         }
         if overrides.only_failed_hosts {

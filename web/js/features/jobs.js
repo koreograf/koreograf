@@ -2185,11 +2185,15 @@ function bindTofuOutput(job, startedAt) {
 async function pageJob(id) {
   const live = appState.generation;
   const startedAt = performance.now();
-  const [job, templates] = await Promise.all([
-    api("GET", `/api/v1/jobs/${encodeURIComponent(id)}`),
-    can("operator") ? api("GET", "/api/v1/templates") : Promise.resolve([]),
-  ]);
-  const template = Array.isArray(templates) ? templates.find((item) => item.id === job.template_id) : null;
+  const job = await api("GET", `/api/v1/jobs/${encodeURIComponent(id)}`);
+  let template = null;
+  if (can("operator") && job.template_id && ["successful", "failed", "canceled"].includes(job.status)) {
+    try {
+      template = await api("GET", `/api/v1/templates/${encodeURIComponent(job.template_id)}`);
+    } catch {
+      template = null;
+    }
+  }
   const running = job.status === "pending" || job.status === "running";
   const actions = jobActions(job, template);
   shell(job.name, `

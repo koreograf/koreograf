@@ -807,6 +807,18 @@ async fn a_successful_job_reuses_its_stored_parameters_and_links_the_source() {
     .await;
     assert_eq!(status, StatusCode::CREATED, "{template}");
     let template_id = template["id"].as_str().unwrap().to_string();
+    let (status, single, _) = call(
+        &app,
+        "GET",
+        &format!("/api/v1/templates/{template_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{single}");
+    assert_eq!(single["id"], template_id);
+    assert_eq!(single["tool"], "shell");
     let (status, inventory, _) = call(
         &app,
         "POST",
@@ -861,6 +873,12 @@ async fn a_successful_job_reuses_its_stored_parameters_and_links_the_source() {
         &json!([]),
     )
     .await;
+    harness
+        .execute_sql(
+            "UPDATE jobs SET extra_vars = '{\"from_launch\":\"yes\"}' \
+             WHERE id = 'successful-source'",
+        )
+        .await;
 
     let (status, copy, _) = call(
         &app,
@@ -878,8 +896,9 @@ async fn a_successful_job_reuses_its_stored_parameters_and_links_the_source() {
     assert_eq!(copy["parameters"]["inventory_id"], inventory_id);
     assert_eq!(copy["parameters"]["credentials"][0]["id"], credential_id);
     assert_eq!(copy["parameters"]["spec"]["script"], "true");
+    assert_eq!(copy["parameters"]["extra_vars"]["keep"], "template");
     assert_eq!(copy["parameters"]["extra_vars"]["from_launch"], "yes");
-    assert_eq!(copy["extra_vars"]["from_launch"], "yes");
+    assert_eq!(copy["extra_vars"], json!({"from_launch": "yes"}));
     assert!(copy["parameters"].get("project_commit").is_none());
     assert!(
         !copy.to_string().contains("kept-pass"),
@@ -1066,7 +1085,10 @@ async fn relaunch_rejects_unfinished_jobs_and_deleted_credentials() {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{status_name}: {denied}");
-        assert_eq!(denied["error"], "only_a_finished_job_can_be_relaunched");
+        assert_eq!(
+            denied["error"],
+            "only_a_failed_or_canceled_job_can_be_relaunched"
+        );
     }
     let (status, denied, _) = call(
         &app,
