@@ -246,7 +246,7 @@ test("an empty overview keeps every glance card compact", async ({ page }) => {
   await selectTeam(page, team.id);
 
   const cards = [
-    ["schedules", "No missed schedules."],
+    ["schedules", "No upcoming or missed schedules."],
     ["hosts", "No problem hosts."],
     ["syncs", "No failed syncs."],
     ["workflows", "No running or failed runs."],

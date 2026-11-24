@@ -40,7 +40,7 @@
   "range": "Range",
   "recent_activity": "Recent activity",
   "runs_all_clear": "No running or failed runs.",
-  "schedules_all_clear": "No missed schedules.",
+  "schedules_all_clear": "No upcoming or missed schedules.",
   "stale_hosts": "Stale",
   "success_rate_24h": "Success rate 24h",
   "success_rate_detail": "{successful} of {finished} finished",

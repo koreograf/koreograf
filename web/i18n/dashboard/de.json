@@ -40,7 +40,7 @@
   "range": "Zeitraum",
   "recent_activity": "Letzte Aktivität",
   "runs_all_clear": "Keine laufenden oder fehlgeschlagenen Läufe.",
-  "schedules_all_clear": "Keine verpassten Zeitpläne.",
+  "schedules_all_clear": "Keine anstehenden oder verpassten Zeitpläne.",
   "stale_hosts": "Lange nicht gelaufen",
   "success_rate_24h": "Erfolgsquote 24 h",
   "success_rate_detail": "{successful} von {finished} abgeschlossen",
