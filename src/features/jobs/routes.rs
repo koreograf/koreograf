@@ -120,13 +120,13 @@ impl JobEventResponse {
 }
 
 #[derive(Serialize)]
-pub(crate) struct AnsibleEventResponse {
+pub(crate) struct StructuredEventResponse {
     id: i64,
     ts: String,
     event: Value,
 }
 
-impl AnsibleEventResponse {
+impl StructuredEventResponse {
     fn new(event: &JobEvent) -> Option<Self> {
         let parsed = serde_json::from_str::<Value>(&event.line).ok()?;
         Some(Self {
@@ -158,7 +158,9 @@ pub struct JobResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     events: Option<Vec<JobEventResponse>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    ansible_events: Option<Vec<AnsibleEventResponse>>,
+    ansible_events: Option<Vec<StructuredEventResponse>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tofu_events: Option<Vec<StructuredEventResponse>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     output_capped: Option<bool>,
 }
@@ -184,6 +186,7 @@ impl JobResponse {
             failed_hosts: runner::failed_host_names(&job.failed_hosts),
             events: events.map(|events| events.iter().map(JobEventResponse::new).collect()),
             ansible_events: None,
+            tofu_events: None,
             output_capped: None,
         }
     }
@@ -193,8 +196,13 @@ impl JobResponse {
         self
     }
 
-    fn with_ansible_events(mut self, events: Vec<AnsibleEventResponse>) -> Self {
+    fn with_ansible_events(mut self, events: Vec<StructuredEventResponse>) -> Self {
         self.ansible_events = Some(events);
+        self
+    }
+
+    fn with_tofu_events(mut self, events: Vec<StructuredEventResponse>) -> Self {
+        self.tofu_events = Some(events);
         self
     }
 }
@@ -250,10 +258,12 @@ pub async fn get_job(
     crate::features::identity::authorize(db, &user, &job.team_id, Role::Viewer)?;
     let events = events_for_page(db, &id)?;
     let ansible = ansible_events_for_job(db, &id)?;
+    let tofu = tofu_events_for_job(db, &id)?;
     let capped = db.events_bytes(&id)? > OUTPUT_LIMIT as i64;
     Ok(Json(
         JobResponse::new(&job, Some(&events))
             .with_ansible_events(ansible)
+            .with_tofu_events(tofu)
             .with_output_capped(capped),
     ))
 }
@@ -305,13 +315,31 @@ const OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
 pub(crate) fn ansible_events_for_job(
     db: &dyn crate::backend::Backend,
     job_id: &str,
-) -> AppResult<Vec<AnsibleEventResponse>> {
+) -> AppResult<Vec<StructuredEventResponse>> {
     // The recap chunks use their own budget and arrive after the per-task
     // stream was capped, so they are part of the page response too.
     let limit =
         (crate::ansible_events::MAX_EVENTS + crate::ansible_events::MAX_STATS_EVENTS + 2) as i64;
     let rows = db.ansible_events_after(job_id, 0, limit)?;
-    Ok(rows.iter().filter_map(AnsibleEventResponse::new).collect())
+    Ok(rows
+        .iter()
+        .filter_map(StructuredEventResponse::new)
+        .collect())
+}
+
+pub(crate) fn tofu_events_for_job(
+    db: &dyn crate::backend::Backend,
+    job_id: &str,
+) -> AppResult<Vec<StructuredEventResponse>> {
+    // A late summary chunk and the final `limit` marker sit beyond the
+    // per-event budget.
+    let limit =
+        (crate::tofu_events::MAX_EVENTS + crate::tofu_events::MAX_SUMMARY_EVENTS + 2) as i64;
+    let rows = db.tofu_events_after(job_id, 0, limit)?;
+    Ok(rows
+        .iter()
+        .filter_map(StructuredEventResponse::new)
+        .collect())
 }
 
 fn output_filename(name: &str, id: &str) -> String {
@@ -524,12 +552,19 @@ pub async fn job_events(
             let count = snapshot.0.len();
             for event in snapshot.0 {
                 last = event.id;
-                if event.stream == crate::ansible_events::STREAM {
+                if event.stream == crate::ansible_events::STREAM
+                    || event.stream == crate::tofu_events::STREAM
+                {
                     let Ok(parsed) = serde_json::from_str::<Value>(&event.line) else {
                         continue;
                     };
+                    let name = if event.stream == crate::tofu_events::STREAM {
+                        "tofu"
+                    } else {
+                        "ansible"
+                    };
                     let data = json!({"id": event.id, "ts": event.ts, "event": parsed});
-                    yield Ok(Event::default().event("ansible").id(event.id.to_string()).data(serde_json::to_string(&data).unwrap_or_default()));
+                    yield Ok(Event::default().event(name).id(event.id.to_string()).data(serde_json::to_string(&data).unwrap_or_default()));
                     continue;
                 }
                 let data = JobEventResponse::new(&event);

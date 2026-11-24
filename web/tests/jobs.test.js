@@ -130,6 +130,55 @@ test("live structured events use every seeded id once", async () => {
   assert.equal(state.events.length, 2);
 });
 
+const tofuEvents = [
+  { id: 1, event: { type: "planned_change", action: "create", addr: "terraform_data.web" } },
+  { id: 2, event: { type: "planned_change", action: "update", addr: "terraform_data.db" } },
+  { id: 3, event: { type: "planned_change", action: "delete", addr: "terraform_data.old" } },
+  { id: 4, event: { type: "apply_start", action: "create", addr: "terraform_data.web" } },
+  { id: 5, event: { type: "apply_complete", action: "create", addr: "terraform_data.web", elapsed_seconds: 1.5 } },
+  { id: 6, event: { type: "change_summary", operation: "plan", add: 1, change: 1, remove: 1 } },
+  { id: 7, event: { type: "diagnostic", severity: "warning", summary: "Deprecated attribute", detail: "Use id instead." } },
+  { id: 8, event: { type: "outputs", outputs: { message: { sensitive: false, value: "hello" }, secret: { sensitive: true } } } },
+];
+
+test("tofu events build the summary, resources, diagnostics and outputs", async () => {
+  const { buildTofuModel, tofuCounts } = await load();
+  const model = buildTofuModel(tofuEvents);
+  assert.deepEqual(tofuCounts(model), { operation: "plan", add: 1, change: 1, remove: 1, import: 0 });
+  assert.equal(model.resources.length, 3);
+  const web = model.resources.find((row) => row.address === "terraform_data.web");
+  assert.equal(web.action, "create");
+  assert.equal(web.status, "applied");
+  assert.equal(web.elapsed, 1.5);
+  assert.equal(model.resources[1].status, "planned");
+  assert.deepEqual(model.diagnostics, [{ severity: "warning", summary: "Deprecated attribute", detail: "Use id instead." }]);
+  assert.deepEqual(model.outputs, [
+    { name: "message", sensitive: false, value: "hello" },
+    { name: "secret", sensitive: true, value: "" },
+  ]);
+});
+
+test("tofu counts fall back to the resources before the summary arrives", async () => {
+  const { buildTofuModel, tofuCounts } = await load();
+  const model = buildTofuModel(tofuEvents.slice(0, 3));
+  assert.deepEqual(tofuCounts(model), { add: 1, change: 1, remove: 1, import: 0 });
+  const failed = buildTofuModel([{ event: { type: "apply_errored", action: "create", addr: "terraform_data.web" } }]);
+  assert.equal(failed.resources[0].status, "failed");
+});
+
+test("tofu events keep the limit marker and overwrite repeated output names", async () => {
+  const { buildTofuModel } = await load();
+  const model = buildTofuModel([
+    { event: { type: "outputs", outputs: { mode: { sensitive: false, value: "one" } } } },
+    { event: { type: "outputs", outputs: { mode: { sensitive: false, value: "two" } } } },
+    { event: { type: "limit", events: 2000 } },
+  ]);
+  assert.equal(model.outputs.length, 1);
+  assert.equal(model.outputs[0].value, "two");
+  assert.equal(model.truncated, true);
+  assert.equal(model.limit, 2000);
+});
+
 const recapRows = [
   { host: "web-1", ok: 3, changed: 1, unreachable: 0, failed: 0, skipped: 1, rescued: 0, ignored: 0 },
   { host: "web-2", ok: 1, changed: 0, unreachable: 0, failed: 1, skipped: 0, rescued: 0, ignored: 0 },
@@ -261,5 +310,7 @@ test("the output view preference falls back to structured", async () => {
   assert.equal(outputViewPreference(), "structured");
   assert.equal(structuredEventsAvailable({ tool: "ansible", ansible_events: structuredEvents }), true);
   assert.equal(structuredEventsAvailable({ tool: "ansible", ansible_events: [] }), false);
-  assert.equal(structuredEventsAvailable({ tool: "shell", ansible_events: structuredEvents }), false);
+  assert.equal(structuredEventsAvailable({ tool: "opentofu", tofu_events: tofuEvents }), true);
+  assert.equal(structuredEventsAvailable({ tool: "opentofu", tofu_events: [] }), false);
+  assert.equal(structuredEventsAvailable({ tool: "shell", ansible_events: structuredEvents, tofu_events: tofuEvents }), false);
 });

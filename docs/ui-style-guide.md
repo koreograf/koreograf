@@ -190,6 +190,8 @@ Use `.log` for job output, `.log-tools` for its search and controls, and `pre.va
 
 A job output with structured Ansible events uses `.output-view` with `.tabs` for the Structured and Raw log switch. The structured view opens with the compact host summary in `.st-recap`: `.st-counts` holds one `.btn.compact.st-count` per status and `.st-count-value` carries the number. The detailed host list is a `.st-host-panel` `details` element with the shared `.filter-bar`, `.search`, and pager pattern; its rows use the normal `.table-wrap` and `.table` markup, and `.st-count-pair` shows a non-zero counter. The plays tree sits below in `.st-tree`; its native collapsible sections use `.st-play`, `.st-task`, and `.st-host`, `.st-badge` carries the status word next to its colour, `.st-pre` holds message, output, and diff text, and `.st-more` opens the next page of hosts inside one task. The raw log, its search, and its wrap controls stay the same.
 
+An OpenTofu job uses the same `.output-view` switch. Its structured view starts with `.tf-summary` and `.tf-counts`, with one `.tf-count` for add, change, and destroy. The resource list is normal `.table` markup inside `.tf-resources`, and `.tf-badge` carries the action or apply status. Long resource addresses use `.tf-address` and wrap. Diagnostics are `.tf-diagnostic` rows with a `.tf-badge` for the severity, and `.tf-output` holds one name and value. `.tf-section` groups the list, diagnostics, and outputs.
+
 ```html
 <div class="log-tools"><input class="search" type="search" aria-label="Search the log"></div>
 <div class="log wrap"></div>

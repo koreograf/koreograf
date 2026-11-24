@@ -13,6 +13,7 @@ use crate::cacheinfo::dir_size;
 use crate::config::{LocalJobs, RunnerMode};
 use crate::db::{self, Environment, Project, Template};
 use crate::features::operations::{job_labels, log_cache, JobMeta, ProxySettings};
+use crate::tofu_events;
 use crate::Shared;
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -1203,6 +1204,8 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), RunnerError
         ansible_events::install(&work).map_err(|e| RunnerError::filesystem(e.to_string()))?;
         let _ = fs::remove_file(work.join(ansible_events::FILE));
     }
+    let tofu_scrub = tofu_events::captures(&template.tool)
+        .then(|| tofu_events::scrub_paths(&work, &state.cfg.data_dir));
 
     let saved = db::json_object(&job.parameters)
         .get("tool")
@@ -1412,6 +1415,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), RunnerError
                     output_lines: settings.job_output_lines,
                     tofu_state: tofu_state.as_deref(),
                     template_id: &template.id,
+                    tofu_scrub: tofu_scrub.clone(),
                 },
             )
             .await
@@ -1485,6 +1489,7 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), RunnerError
                 child,
                 settings.job_timeout_secs,
                 settings.job_output_lines,
+                tofu_scrub.clone(),
             )
             .await
         }
@@ -3154,6 +3159,8 @@ struct ContainerRun<'a> {
     /// Host directory for this template only. Absent for every other tool.
     tofu_state: Option<&'a Path>,
     template_id: &'a str,
+    /// Work and data directories to scrub from OpenTofu events.
+    tofu_scrub: Option<Vec<String>>,
 }
 
 fn container_mounts(
@@ -3564,6 +3571,7 @@ async fn run_container(
         output_lines,
         tofu_state,
         template_id,
+        tofu_scrub,
     } = run;
     ensure_image(bin, &environment.image, &environment.pull_policy).await?;
     write_env_file(&work.join("container.env"), env)?;
@@ -3671,7 +3679,7 @@ async fn run_container(
     if canceled(state, job_id) {
         signal_stop(state, job_id, proc);
     }
-    wait_child(state, job_id, child, timeout_secs, output_lines).await
+    wait_child(state, job_id, child, timeout_secs, output_lines, tofu_scrub).await
 }
 
 fn write_env_file(path: &Path, env: &[(String, String)]) -> Result<(), RunnerError> {
@@ -4008,6 +4016,7 @@ async fn wait_child(
     mut child: tokio::process::Child,
     timeout_secs: u64,
     output_lines: u64,
+    tofu_scrub: Option<Vec<String>>,
 ) -> Result<i32, RunnerError> {
     let stdout = child
         .stdout
@@ -4023,6 +4032,7 @@ async fn wait_child(
         "stdout".to_string(),
         stdout,
         output_lines,
+        tofu_scrub,
     ));
     let err = tokio::spawn(pump(
         state.clone(),
@@ -4030,6 +4040,7 @@ async fn wait_child(
         "stderr".to_string(),
         stderr,
         output_lines,
+        None,
     ));
     let timeout = Duration::from_secs(timeout_secs);
     let status = match tokio::time::timeout(timeout, child.wait()).await {
@@ -4136,13 +4147,20 @@ impl OutputTail {
     }
 }
 
-async fn pump<R>(state: Shared, job_id: String, stream: String, reader: R, output_lines: u64)
-where
+async fn pump<R>(
+    state: Shared,
+    job_id: String,
+    stream: String,
+    reader: R,
+    output_lines: u64,
+    tofu_scrub: Option<Vec<String>>,
+) where
     R: AsyncRead + Unpin,
 {
     let mut lines = BufReader::new(reader);
     let mut buf = Vec::new();
     let mut kept = OutputTail::new(output_lines);
+    let mut tofu = tofu_scrub.map(tofu_events::Capture::new);
     let mut discarded = false;
     loop {
         buf.clear();
@@ -4169,24 +4187,60 @@ where
                     }
                     continue;
                 }
-                let mut line = String::from_utf8_lossy(&buf).to_string();
-                if line.len() > 4_000 {
-                    line.truncate(4_000);
-                    line.push('…');
-                }
-                note_hosts(&state, &job_id, &stream, &line);
-                if stream == "stdout" {
-                    state.metrics.observe(&job_id, &line);
-                }
-                if let Some(line) = kept.accept(line) {
-                    store_event(&state, &job_id, &stream, &line);
-                }
+                let line = String::from_utf8_lossy(&buf).to_string();
+                accept_output_line(&state, &job_id, &stream, &mut kept, tofu.as_mut(), line);
             }
             Err(_) => break,
         }
     }
     if !discarded {
         flush_tail(&state, &job_id, &stream, &mut kept);
+    }
+}
+
+/// Parses one OpenTofu JSON UI line when the job captures them, then stores
+/// the bounded structured event and every human line it replaces. Every other
+/// line, including `tofu init`, keeps the plain raw-log path.
+fn accept_output_line(
+    state: &Shared,
+    job_id: &str,
+    stream: &str,
+    kept: &mut OutputTail,
+    tofu: Option<&mut tofu_events::Capture>,
+    raw: String,
+) {
+    if let Some(capture) = tofu {
+        if let Some(parsed) = capture.accept(&raw) {
+            for event in parsed.structured {
+                store_event(state, job_id, tofu_events::STREAM, &event);
+            }
+            for human in parsed.human {
+                store_human_line(state, job_id, stream, kept, human);
+            }
+            return;
+        }
+    }
+    store_human_line(state, job_id, stream, kept, raw);
+}
+
+fn store_human_line(
+    state: &Shared,
+    job_id: &str,
+    stream: &str,
+    kept: &mut OutputTail,
+    line: String,
+) {
+    let mut line = line;
+    if line.len() > 4_000 {
+        line.truncate(4_000);
+        line.push('…');
+    }
+    note_hosts(state, job_id, stream, &line);
+    if stream == "stdout" {
+        state.metrics.observe(job_id, &line);
+    }
+    if let Some(line) = kept.accept(line) {
+        store_event(state, job_id, stream, &line);
     }
 }
 
@@ -5922,6 +5976,39 @@ exit 0
     }
 
     #[test]
+    fn opentofu_plan_and_apply_use_json_but_init_stays_human() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("koreograf-tofu-json-{nanos}"));
+        let fake = root.join("bin").join("tofu");
+        write_executable(&fake, "#!/bin/sh\nprintf '%s\\n' \"$*\"\n");
+        let module = "terraform {\n  required_version = \">= 1.5.0\"\n}\n";
+        let state = root.join("cache").join("team-a").join("tpl");
+        let plan = run_wrapper(&root, "plan", &state, module);
+        let init = plan
+            .lines()
+            .find(|line| line.starts_with("init "))
+            .unwrap_or_else(|| panic!("no init line in {plan}"));
+        assert!(init.contains("-no-color"), "{init}");
+        assert!(!init.contains("-json"), "{init}");
+        assert!(
+            plan.lines()
+                .any(|line| line == "plan -input=false -no-color -json"),
+            "{plan}"
+        );
+        let apply = run_wrapper(&root, "apply", &state, module);
+        assert!(
+            apply
+                .lines()
+                .any(|line| line == "apply -input=false -auto-approve -no-color -json"),
+            "{apply}"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn container_mounts_the_template_state_only_for_opentofu() {
         let cache = Path::new("/data/cache/team-a");
         let stage = Path::new("/data/jobs/job/project");
@@ -5965,24 +6052,28 @@ exit 0
         let module = "terraform {\n  required_version = \">= 1.5.0\"\n}\nresource \"terraform_data\" \"marker\" {\n  input = \"koreograf\"\n}\n";
         let team_a = root.join("cache").join("team-a").join("tpl");
         let planned = run_wrapper(&root, "plan", &team_a, module);
-        assert!(planned.contains("1 to add"), "{planned}");
+        assert!(planned.contains("\"type\":\"planned_change\""), "{planned}");
+        assert!(planned.contains("\"add\":1"), "{planned}");
         let first = run_wrapper(&root, "apply", &team_a, module);
-        assert!(first.contains("1 added"), "{first}");
+        assert!(first.contains("\"operation\":\"apply\""), "{first}");
+        assert!(first.contains("\"add\":1"), "{first}");
         let second = run_wrapper(&root, "apply", &team_a, module);
         assert!(
-            second.contains("No changes. Your infrastructure matches the configuration."),
+            second.contains("Apply complete! Resources: 0 added, 0 changed, 0 destroyed."),
             "{second}"
         );
-        assert!(second.contains("0 added"), "{second}");
+        assert!(second.contains("\"add\":0"), "{second}");
         let replanned = run_wrapper(&root, "plan", &team_a, module);
         assert!(
-            replanned.contains("No changes. Your infrastructure matches the configuration."),
+            replanned.contains("Plan: 0 to add, 0 to change, 0 to destroy."),
             "{replanned}"
         );
+        assert!(replanned.contains("\"add\":0"), "{replanned}");
         assert!(team_a.join("terraform.tfstate").is_file());
         let team_b = root.join("cache").join("team-b").join("tpl");
         let other = run_wrapper(&root, "apply", &team_b, module);
-        assert!(other.contains("1 added"), "{other}");
+        assert!(other.contains("\"operation\":\"apply\""), "{other}");
+        assert!(other.contains("\"add\":1"), "{other}");
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -6077,6 +6168,7 @@ exit 0
             "stdout".into(),
             std::io::Cursor::new(body.into_bytes()),
             8_000,
+            None,
         )
         .await;
         let text = event_text(&state, "job-1");
@@ -6154,6 +6246,68 @@ exit 0
     }
 
     #[tokio::test]
+    async fn structured_tofu_events_stay_on_their_own_stream_and_keep_a_human_log() {
+        let state = output_state(8_000);
+        insert_output_job(&state, "job-tofu");
+        let work = state.cfg.data_dir.join("jobs").join("job-tofu");
+        let body = concat!(
+            "OpenTofu was initialized.\n",
+            "{\"type\":\"version\",\"@message\":\"OpenTofu v1.8.0\"}\n",
+            "{\"type\":\"planned_change\",\"@message\":\"terraform_data.web: Plan to create\",\"change\":{\"resource\":{\"addr\":\"terraform_data.web\"},\"action\":\"create\"}}\n",
+            "{\"type\":\"change_summary\",\"changes\":{\"add\":1,\"change\":0,\"remove\":0,\"operation\":\"plan\"}}\n",
+            "{\"type\":\"diagnostic\",\"diagnostic\":{\"severity\":\"warning\",\"summary\":\"failed in ",
+        );
+        let body = format!(
+            "{body}{}/project\"}}}}\n{{\"type\":\"outputs\",\"outputs\":{{\"message\":{{\"sensitive\":false,\"value\":\"hello\"}},\"secret\":{{\"sensitive\":true,\"value\":\"hunter2\"}}}}}}\nWRAPPER MARKER\n",
+            work.display()
+        );
+        pump(
+            state.clone(),
+            "job-tofu".into(),
+            "stdout".into(),
+            std::io::Cursor::new(body.into_bytes()),
+            8_000,
+            Some(crate::tofu_events::scrub_paths(&work, &state.cfg.data_dir)),
+        )
+        .await;
+        let text = event_text(&state, "job-tofu");
+        assert!(text.contains("OpenTofu was initialized."), "{text}");
+        assert!(text.contains("OpenTofu v1.8.0"), "{text}");
+        assert!(
+            text.contains("terraform_data.web: Plan to create"),
+            "{text}"
+        );
+        assert!(text.contains("1 to add"), "{text}");
+        assert!(text.contains("[work]/project"), "{text}");
+        assert!(
+            !text.contains(work.display().to_string().as_str()),
+            "{text}"
+        );
+        assert!(!text.contains("hunter2"), "{text}");
+        assert!(!text.contains("\"@level\""), "{text}");
+        assert!(!text.contains("\"type\":"), "{text}");
+        assert!(text.contains("Output message: hello"), "{text}");
+        assert!(text.contains("Output secret: (sensitive value)"), "{text}");
+        assert!(text.contains("WRAPPER MARKER"), "{text}");
+        let db = state.db().unwrap();
+        let events =
+            crate::features::jobs::store::tofu_events_after(&db, "job-tofu", 0, 20).unwrap();
+        assert_eq!(events.len(), 4, "events: {events:?}");
+        assert!(events
+            .iter()
+            .all(|event| event.stream == crate::tofu_events::STREAM));
+        assert!(!events.iter().any(|event| event.line.contains("hunter2")));
+        assert!(
+            crate::features::jobs::store::events_after(&db, "job-tofu", 0, 20)
+                .unwrap()
+                .iter()
+                .all(|event| event.stream == "stdout")
+        );
+        drop(db);
+        let _ = std::fs::remove_dir_all(&state.cfg.data_dir);
+    }
+
+    #[tokio::test]
     async fn a_short_log_is_stored_without_an_omission_line() {
         let state = output_state(8_000);
         insert_output_job(&state, "job-short");
@@ -6163,6 +6317,7 @@ exit 0
             "stdout".into(),
             std::io::Cursor::new(b"one\ntwo\nthree\n".to_vec()),
             8_000,
+            None,
         )
         .await;
         let text = event_text(&state, "job-short");
@@ -6229,6 +6384,7 @@ exit 0
             output_lines: 8_000,
             tofu_state: None,
             template_id: "tpl",
+            tofu_scrub: None,
         };
         run_container(&state, "job-host-path", run)
             .await
@@ -6260,6 +6416,7 @@ exit 0
             "stdout".into(),
             std::io::Cursor::new(body.as_bytes().to_vec()),
             8_000,
+            None,
         )
         .await;
         let text = event_text(&state, "job-cancel");

@@ -275,6 +275,7 @@ pub(crate) trait Backend: Send + Sync {
         after: i64,
         limit: i64,
     ) -> AppResult<Vec<JobEvent>>;
+    fn tofu_events_after(&self, job_id: &str, after: i64, limit: i64) -> AppResult<Vec<JobEvent>>;
     fn events_count_between(&self, job_id: &str, after: i64, before: i64) -> AppResult<i64>;
     fn events_bytes(&self, job_id: &str) -> AppResult<i64>;
     fn events_last(&self, job_id: &str, limit: i64) -> AppResult<Vec<JobEvent>>;
@@ -1230,6 +1231,11 @@ impl Backend for SqliteBackend {
     ) -> AppResult<Vec<JobEvent>> {
         let conn = lock(&self.conn)?;
         jobs::store::ansible_events_after(&conn, job_id, after, limit)
+    }
+
+    fn tofu_events_after(&self, job_id: &str, after: i64, limit: i64) -> AppResult<Vec<JobEvent>> {
+        let conn = lock(&self.conn)?;
+        jobs::store::tofu_events_after(&conn, job_id, after, limit)
     }
 
     fn events_count_between(&self, job_id: &str, after: i64, before: i64) -> AppResult<i64> {
@@ -4062,6 +4068,18 @@ impl Backend for PostgresBackend {
             let rows = client
                 .query(
                     &store::sql::postgres(jobs::store::ANSIBLE_EVENTS_AFTER),
+                    &[&job_id, &after, &limit],
+                )
+                .await?;
+            rows.iter().map(jobs::store::row_job_event).collect()
+        })
+    }
+
+    fn tofu_events_after(&self, job_id: &str, after: i64, limit: i64) -> AppResult<Vec<JobEvent>> {
+        self.with_client(|client| async move {
+            let rows = client
+                .query(
+                    &store::sql::postgres(jobs::store::TOFU_EVENTS_AFTER),
                     &[&job_id, &after, &limit],
                 )
                 .await?;
