@@ -247,6 +247,8 @@ pub fn relaunch(
         let db = state.store();
         let job = db.job(source_id)?.ok_or(ApiError::NotFound)?;
         if !matches!(job.status.as_str(), "successful" | "failed" | "canceled") {
+            // Keep the old key for clients that match on it even though a
+            // successful job now passes; the catalog text names a finished job.
             return Err(ApiError::bad(
                 "only_a_failed_or_canceled_job_can_be_relaunched",
             ));
