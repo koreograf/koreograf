@@ -400,6 +400,35 @@ test("the onboarding card marks completed steps and one next action", async () =
   assert.doesNotMatch(viewer, /class="btn/, "a viewer gets an onboarding action");
 });
 
+test("an empty team overview renders only onboarding", async () => {
+  const state = await load("core/state.js");
+  const { overviewBody } = await load("features/dashboard.js");
+  state.setMe({
+    is_admin: false,
+    display_name: "Operator",
+    auth_source: "local",
+    teams: [{ id: "t1", name: "Team", role: "operator" }],
+  });
+  state.setTeamId("t1");
+
+  const empty = overviewBody({
+    jobs: [],
+    counts: { projects: 0, inventories: 0, templates: 0 },
+  });
+  assert.match(empty, /data-onboarding/);
+  assert.doesNotMatch(empty, /data-glance-card/);
+  assert.doesNotMatch(empty, /data-webhook-deliveries/);
+  assert.doesNotMatch(empty, /recent_jobs/);
+
+  const filled = overviewBody({
+    jobs: [{ id: "job-1", name: "Job", status: "successful" }],
+    counts: { projects: 1, inventories: 1, templates: 1 },
+  });
+  assert.doesNotMatch(filled, /data-onboarding/);
+  assert.match(filled, /data-glance-card/);
+  assert.match(filled, /data-webhook-deliveries/);
+});
+
 test("the overview picker and a quick launch start open the shared launch dialog", async () => {
   const state = await load("core/state.js");
   const { overviewActions, quickLaunchHtml, bindOverviewActions, bindQuickLaunch } = await load("features/dashboard.js");

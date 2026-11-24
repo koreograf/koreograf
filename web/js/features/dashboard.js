@@ -674,17 +674,22 @@ async function pageDashboardTab() {
   bindDashboard("dashboard", range);
 }
 
-async function pageDashboard() {
-  if (!needTeam()) return;
-  if (dashboardTab() === "dashboard") return pageDashboardTab();
-  const data = await api("GET", "/api/v1/overview");
+export function overviewBody(data) {
   const hasJobs = (data.jobs || []).length > 0;
-  const body = hasJobs
+  return hasJobs
     ? `<div class="stack">
         ${overviewGlanceHtml(data)}
         ${webhookDeliveriesCard(data)}
       </div>`
     : onboardingCard(data.counts);
+}
+
+async function pageDashboard() {
+  if (!needTeam()) return;
+  if (dashboardTab() === "dashboard") return pageDashboardTab();
+  const data = await api("GET", "/api/v1/overview");
+  const hasJobs = (data.jobs || []).length > 0;
+  const body = overviewBody(data);
   shell(t("overview"), `
     ${dashboardTabs("overview")}
     <div id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
