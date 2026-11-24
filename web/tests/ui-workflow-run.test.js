@@ -177,6 +177,6 @@ test("a failed output collapses the setup and starts at the first error", async 
   const setup = log.querySelector(".log-setup");
   assert.ok(setup, "the runner preamble is not collapsed into a setup section");
   assert.ok(!setup.contains(log.querySelector(".fail")), "the first error is inside the setup section");
-  assert.match(log.querySelector(".fail").textContent, /fatal:/);
+  assert.match(log.querySelector(".fail").koreografRaw, /fatal:/);
   assert.equal(log.scrollTop, 0, "the log did not start at the first error");
 });

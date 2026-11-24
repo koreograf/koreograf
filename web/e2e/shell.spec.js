@@ -54,7 +54,7 @@ test("a shell job renders ansi colours, a distinct stderr line, and the exit cod
   await signIn(page);
   const script = [
     "#!/bin/sh",
-    "printf '\\033[32mansi-ok\\033[0m\\n'",
+    "printf '\\033[32mansi-ok\\033[0m done\\n'",
     "printf 'ansi-err\\n' >&2",
     "exit 2",
     "",
@@ -86,6 +86,12 @@ test("a shell job renders ansi colours, a distinct stderr line, and the exit cod
   await page.locator("#log-search").fill("ansi-ok");
   await expect(page.locator("#log-search-count")).toHaveText("1 of 1");
   await expect(page.locator("#log mark.log-hit").first()).toHaveText("ansi-ok");
+
+  // A hit that crosses the colour boundary still highlights every part.
+  await page.locator("#log-search").fill("ansi-ok done");
+  await expect(page.locator("#log-search-count")).toHaveText("1 of 2");
+  await expect(page.locator("#log mark.log-hit")).toHaveCount(2);
+  await expect(page.locator("#log mark.log-hit").first()).toHaveClass(/ansi-fg-green/);
 
   await noHorizontalScroll(page);
   await page.locator("#log-search").fill("");

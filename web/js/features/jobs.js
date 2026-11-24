@@ -368,11 +368,11 @@ function ansiEscape(input, start) {
 /**
  * One log line split into text runs with an allowlisted class list. SGR
  * colours, bold, dim, italic, and underline survive; OSC, CSI, and every other
- * escape sequence is dropped. The text is never parsed as markup.
+ * escape sequence is dropped. The text is never parsed as markup. A caller can
+ * pass the state of the previous line so an open colour spans line breaks.
  */
-export function ansiRuns(text) {
+export function ansiRuns(text, state = ansiState()) {
   const input = String(text ?? "");
-  const state = ansiState();
   const runs = [];
   let buffer = "";
   const flush = () => {
@@ -632,6 +632,7 @@ function logState(log) {
       current: -1,
       atBottom: true,
       onRecap: null,
+      sgr: new Map(),
     };
   }
   return log.koreografLog;
@@ -1019,25 +1020,39 @@ function paintLogLine(line, query) {
   const runs = Array.isArray(line.koreografRuns)
     ? line.koreografRuns
     : [{ text: line.koreografRaw ?? "", classes: [] }];
+  const raw = runs.map((run) => run.text).join("");
+  let offset = 0;
+  const segments = searchSegments(raw, query).map((segment) => {
+    const start = offset;
+    offset += segment.text.length;
+    return { ...segment, start, end: offset };
+  });
+  let runStart = 0;
   runs.forEach((run) => {
-    searchSegments(run.text, query).forEach((segment) => {
+    const runEnd = runStart + run.text.length;
+    segments.forEach((segment) => {
+      const from = Math.max(runStart, segment.start);
+      const to = Math.min(runEnd, segment.end);
+      if (to <= from) return;
+      const text = run.text.slice(from - runStart, to - runStart);
       if (segment.hit) {
         const mark = document.createElement("mark");
-        mark.className = "log-hit";
-        mark.textContent = segment.text;
+        mark.className = run.classes && run.classes.length
+          ? `log-hit ${run.classes.join(" ")}`
+          : "log-hit";
+        mark.textContent = text;
         line.appendChild(mark);
         marks.push(mark);
-      } else if (segment.text) {
-        if (run.classes && run.classes.length) {
-          const span = document.createElement("span");
-          span.className = run.classes.join(" ");
-          span.textContent = segment.text;
-          line.appendChild(span);
-        } else {
-          line.appendChild(document.createTextNode(segment.text));
-        }
+      } else if (run.classes && run.classes.length) {
+        const span = document.createElement("span");
+        span.className = run.classes.join(" ");
+        span.textContent = text;
+        line.appendChild(span);
+      } else {
+        line.appendChild(document.createTextNode(text));
       }
     });
+    runStart = runEnd;
   });
   return marks;
 }
@@ -1111,6 +1126,7 @@ function bindJobLog(log, job) {
   state.current = -1;
   state.atBottom = true;
   state.onRecap = null;
+  state.sgr.clear();
   const search = document.querySelector("#log-search");
   const count = document.querySelector("#log-search-count");
   const first = document.querySelector("#log-first-failure");
@@ -1253,9 +1269,10 @@ export function appendLog(row) {
   const kind = classifyLogLine(log, row);
   if (tagFilterNote(row)) showTagFilterBanner();
   if (kind) line.className = kind;
-  line.koreografRuns = ansiRuns(row.line);
+  const sgr = state.sgr.get(row.stream) || ansiState();
+  line.koreografRuns = ansiRuns(row.line, sgr);
+  state.sgr.set(row.stream, sgr);
   line.koreografRaw = ansiText(line.koreografRuns);
-  line.textContent = line.koreografRaw;
   paintLogLine(line, "");
   log.appendChild(line);
   if (kind === "fail") {

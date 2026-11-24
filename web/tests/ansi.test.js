@@ -16,6 +16,10 @@ function mountLog() {
   return log;
 }
 
+function textOf(element) {
+  return element.children.map((child) => child.textContent).join("");
+}
+
 test("sgr colour, bold, italic, underline, and background become allowlisted classes", async () => {
   const { ansiRuns } = await load("features/jobs.js");
   assert.deepEqual(ansiRuns("\u001b[1;4;31mwarn\u001b[0m plain"), [
@@ -62,18 +66,43 @@ test("the log renders safe spans and keeps markup literal", async () => {
 
   const lines = log.children;
   assert.equal(lines.length, 3);
-  assert.equal(lines[0].textContent, "<script>alert(1)</script>");
+  assert.equal(textOf(lines[0]), "<script>alert(1)</script>");
   assert.equal(lines[0].querySelector("script"), null, "markup in the payload became an element");
   assert.equal(lines[0].children[0].className, "ansi-fg-green");
   assert.equal(lines[0].children[0].textContent, "<script>alert(1)</script>");
 
-  assert.equal(lines[1].textContent, "red solid");
+  assert.equal(textOf(lines[1]), "red solid");
   assert.deepEqual(lines[1].children.map((child) => child.textContent), ["red", " ", "solid"]);
   assert.equal(lines[1].children[0].className, "ansi-fg-red");
   assert.equal(lines[1].children[2].className, "ansi-bold");
 
   assert.equal(lines[2].className, "stderr");
-  assert.equal(lines[2].textContent, "ansi-err");
+  assert.equal(textOf(lines[2]), "ansi-err");
+});
+
+test("an open sgr colour spans the next line of the same stream", async () => {
+  const { appendLog } = await load("features/jobs.js");
+  const log = mountLog();
+  appendLog({ stream: "stdout", line: "\u001b[32mopen" });
+  appendLog({ stream: "stdout", line: "still green" });
+  appendLog({ stream: "stderr", line: "other stream" });
+  assert.equal(log.children[0].children[0].className, "ansi-fg-green");
+  assert.equal(log.children[1].children[0].className, "ansi-fg-green");
+  assert.equal(log.children[1].children[0].textContent, "still green");
+  assert.equal(log.children[2].className, "stderr");
+  assert.equal(log.children[2].querySelector(".ansi-fg-green"), null, "the colour leaked into stderr");
+});
+
+test("search crosses an ansi boundary and keeps the run classes", async () => {
+  const { appendLog } = await load("features/jobs.js");
+  const log = mountLog();
+  appendLog({ stream: "stdout", line: "first" });
+  log.koreografLog.query = "ansi-ok done";
+  appendLog({ stream: "stdout", line: "\u001b[32mansi-ok\u001b[0m done" });
+  const marks = log.children[1].querySelectorAll("mark.log-hit");
+  assert.deepEqual(marks.map((mark) => mark.textContent), ["ansi-ok", " done"]);
+  assert.match(marks[0].className, /ansi-fg-green/);
+  assert.equal(log.koreografLog.matches.length, 2);
 });
 
 test("the exit code comes from the system line and fills the header", async () => {

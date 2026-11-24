@@ -1499,11 +1499,11 @@ async fn prepare_and_run(state: &Shared, job_id: &str) -> Result<(), RunnerError
         tail.finish().await;
     }
     let exit = outcome?;
-    log(state, job_id, "system", &format!("Exit code: {exit}"));
 
     if canceled(state, job_id) {
         return Err(RunnerError::Cancelled);
     }
+    log(state, job_id, "system", &format!("Exit code: {exit}"));
     let cache_after = dir_size(&cache);
     log(
         state,
