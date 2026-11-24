@@ -218,6 +218,7 @@ test("an administrator navigates every route, launches the demo shell job and sw
   await expect(page.getByText("Successful", { exact: true })).toBeVisible({ timeout: 30000 });
 
   await nav.getByRole("link", { name: "Workflows", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Workflows" })).toBeVisible();
   await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
   const source = page.locator('.wf-node[data-id="check"]');
   await source.scrollIntoViewIfNeeded();
@@ -291,6 +292,7 @@ test("an administrator navigates every route, launches the demo shell job and sw
   await expect(page.getByRole("dialog")).toHaveCount(0);
 
   await nav.getByRole("link", { name: "Workflows", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Workflows" })).toBeVisible();
   await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
   const saved = page.locator(".wf-node", { hasText: "Extra check edited" });
   await expect(saved).toBeVisible();
@@ -584,6 +586,7 @@ test("the launch dialog keeps tags and limit visible at 1440 px", async ({ page 
 test("a node card shows its template and limit override", async ({ page }) => {
   await signInInEnglish(page);
   await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Workflows" })).toBeVisible();
   await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
 
   await focusCanvas(page);
@@ -611,6 +614,7 @@ test("a node card shows its template and limit override", async ({ page }) => {
 test("the workflow editor connects, retypes and removes an edge with the keyboard", async ({ page }) => {
   await signInInEnglish(page);
   await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Workflows" })).toBeVisible();
   await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
   await expect(page).toHaveTitle(/Self-Heal Ablauf/);
   await expect(page).toHaveTitle(/Workflow/);
@@ -673,6 +677,7 @@ test("the workflow editor connects, retypes and removes an edge with the keyboar
 test("keeps the workflow inspector key/value pairs in two columns on a desktop", async ({ page }) => {
   await signInInEnglish(page);
   await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Workflows" })).toBeVisible();
   await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
   await page.locator('.wf-node[data-id="check"]').click();
   const list = page.locator("#inspector .readonly-kv").first();
@@ -695,6 +700,7 @@ test("keeps the workflow inspector key/value pairs in two columns on a desktop",
 test("the workflow edge hit area selects a failure edge and names its nodes", async ({ page }) => {
   await signInInEnglish(page);
   await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Workflows" })).toBeVisible();
   await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
   await page.locator('.wf-node[data-id="check"]').click();
   const inspector = page.locator("#inspector");
@@ -721,6 +727,7 @@ test("the workflow edge hit area selects a failure edge and names its nodes", as
 test("the workflow canvas fits, zooms and pans", async ({ page }) => {
   await signInInEnglish(page);
   await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Workflows" })).toBeVisible();
   await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
   const canvas = page.locator("#canvas");
   await expect(canvas).toBeVisible();
@@ -762,6 +769,7 @@ test("a left click shows a read-only summary and right-click Edit opens the over
   await page.setViewportSize({ width: 1024, height: 900 });
   await signInInEnglish(page);
   await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Workflows" })).toBeVisible();
   await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
 
   const node = page.locator('.wf-node[data-id="check"]');
@@ -871,6 +879,7 @@ test("an empty workflow builds a success chain without the context menu", async 
 test("Delete removes a connected node and Ctrl+Z restores it with its edge", async ({ page }) => {
   await signInInEnglish(page);
   await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Workflows" })).toBeVisible();
   await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
   const source = page.locator('.wf-node[data-id="check"]');
   await expect(source).toBeVisible();
@@ -902,6 +911,7 @@ test("a finished workflow run shows its path, closes output on Escape and is rea
   test.setTimeout(120000);
   await signInInEnglish(page);
   await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Workflows" })).toBeVisible();
   await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
   await page.locator("#wf-launch").click();
   await expect(page).toHaveURL(/#\/runs\/[0-9a-f-]+$/);
@@ -939,6 +949,7 @@ test("the workflow editor turns view-only when the window becomes a phone", asyn
   await page.setViewportSize({ width: 1024, height: 900 });
   await signInInEnglish(page);
   await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Workflows" })).toBeVisible();
   await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
   await expect(page.getByRole("button", { name: "Save", exact: true })).toBeVisible();
 
@@ -977,6 +988,7 @@ test("a viewer inspects a workflow node without edit controls", async ({ page })
   await page.locator("#team-select").selectOption(team.id);
 
   await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Workflows" })).toBeVisible();
   await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
   await expect(page.locator(".top .pill.read-only")).toHaveText("Read-only");
   await expect(page.locator("#wf-hint")).toHaveText(`Read-only. Operators of team ${team.name} can edit.`);
@@ -1024,6 +1036,7 @@ test("a viewer inspects a workflow node without edit controls", async ({ page })
 test("a dragged workflow node snaps to the grid and tidy up avoids overlaps", async ({ page }) => {
   await signInInEnglish(page);
   await page.getByRole("navigation").getByRole("link", { name: "Workflows", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Workflows" })).toBeVisible();
   await page.getByRole("link", { name: "Self-Heal Ablauf", exact: true }).click();
 
   const node = page.locator('.wf-node[data-id="check"]');

@@ -799,7 +799,7 @@ test("keeps the remove checkbox beside its label and hides the vault hint off An
   await noHorizontalScroll(page);
 });
 
-test("the overview shows the queue, schedules, hosts, syncs and workflow cards on a phone", async ({ page }) => {
+test("the overview shows kpis, attention and recent activity on a phone", async ({ page }) => {
   test.setTimeout(60000);
   const suffix = `${test.info().project.name}-${Date.now()}`.replace(/\s+/g, "-");
   await signIn(page);
@@ -808,25 +808,24 @@ test("the overview shows the queue, schedules, hosts, syncs and workflow cards o
   await page.reload();
   await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
 
-  const queue = page.locator('[data-glance-card="queue"]');
-  const concurrency = page.locator('[data-glance-card="concurrency"]');
-  const schedules = page.locator('[data-glance-card="schedules"]');
-  await expect(queue).toBeVisible();
-  await expect(queue.locator('[data-glance="queue-running"]')).toBeVisible();
-  await expect(queue.locator('[data-glance="queue-pending"]')).toBeVisible();
-  await expect(concurrency).toContainText("Team slots");
-  await expect(concurrency).toContainText("Global slots");
-  await expect(schedules).toContainText(schedule.name);
+  const kpis = page.locator("[data-kpi-row] [data-kpi]");
+  await expect(kpis).toHaveCount(5);
+  await expect(page.locator('[data-kpi="running"]')).toHaveAttribute("href", "#/jobs?status=running");
+  await expect(page.locator('[data-kpi="pending"]')).toHaveAttribute("href", "#/jobs?status=pending");
+  await expect(page.locator('[data-kpi="failed-24h"]')).toHaveAttribute("href", "#/jobs?status=failed");
+  await expectTouchTarget(page.locator('[data-kpi="running"]'), "the running kpi", { square: false });
+
+  const attention = page.locator("[data-attention]");
+  await expect(attention).toBeVisible();
+  await expect(page.locator("[data-recent-activity]")).toBeVisible();
+  await expect(page.locator('[data-glance-card="cache"]')).toHaveCount(0);
+  await expect(page.locator('[data-glance-card="schedules"]')).toContainText(schedule.name);
   await expect(page.locator('[data-glance-card="hosts"]')).toContainText("Failed and unreachable");
   await expect(page.locator('[data-glance-card="syncs"]')).toContainText("Failed syncs");
   await expect(page.locator('[data-glance-card="workflows"]')).toContainText("Workflow runs");
-  await expect(page.locator('[data-glance-card="cache"]')).toBeVisible();
 
-  const pending = queue.getByRole("link", { name: "Pending", exact: true });
-  await expect(pending).toHaveAttribute("href", "#/jobs?status=pending");
-  await expectTouchTarget(pending, "the pending jobs link");
-  const columns = await queue.evaluate((card) => getComputedStyle(card.parentElement).gridTemplateColumns);
-  expect(columns.trim().split(/\s+/), "the glance cards keep a desktop grid on a phone").toHaveLength(1);
+  const columns = await page.locator(".overview-main").evaluate((node) => getComputedStyle(node).gridTemplateColumns);
+  expect(columns.trim().split(/\s+/), "the overview keeps two columns on a phone").toHaveLength(1);
   await noHorizontalScroll(page);
 
   for (const lang of ["de", "en"]) {
@@ -837,12 +836,12 @@ test("the overview shows the queue, schedules, hosts, syncs and workflow cards o
       }, [lang, theme]);
       await page.reload();
       await expect(page.getByRole("heading", { level: 1, name: lang === "de" ? "Übersicht" : "Overview" })).toBeVisible();
-      await expect(page.locator('[data-glance-card="queue"]')).toBeVisible();
+      await expect(page.locator('[data-kpi="failed-24h"]')).toBeVisible();
       await noHorizontalScroll(page);
     }
   }
 
-  await schedules.getByRole("link", { name: "Schedules", exact: true }).first().click();
+  await page.locator('[data-glance-card="schedules"]').getByRole("link", { name: "Schedules", exact: true }).first().click();
   await expect(page.getByRole("heading", { level: 1, name: "Schedules" })).toBeVisible();
   await noHorizontalScroll(page);
 });

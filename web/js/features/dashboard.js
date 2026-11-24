@@ -3,9 +3,10 @@ import { api } from "../core/api.js";
 import { can, go, handle, markSaved, needTeam, route, shell } from "../core/app.js";
 import { confirmDialog } from "../core/dialog.js";
 import { esc, h, table } from "../core/dom.js";
-import { bytes, pill, preflightNoticeHtml, spanText, when } from "../core/format.js";
+import { bytes, pill, preflightNoticeHtml, relativeTime, when } from "../core/format.js";
 import { currentLanguage, t } from "../core/i18n.js";
 import { registerRoute } from "../core/router.js";
+import { relaunchJob } from "./jobs.js";
 
 function onboardingCard() {
   const steps = [
@@ -97,25 +98,137 @@ function glanceCard(id, title, { links = [], body = "" } = {}) {
   </section>`;
 }
 
-function queueCard(item) {
-  const jobs = item || {};
-  const rows = (jobs.items || []).map((job) => `<tr>
-    <td><a href="#/jobs/${encodeURIComponent(job.id)}">${esc(job.name)}</a></td>
-    <td>${pill(job.status)}</td>
-    <td class="small muted">${esc(when(job.created_at))}</td>
-  </tr>`);
-  const oldest = jobs.oldest_pending_at
-    ? `<p class="small muted">${h("oldest_pending_waited", { duration: waitedText(jobs.oldest_pending_at) })}</p>`
-    : `<p class="small muted">${h("no_pending_job")}</p>`;
-  return glanceCard("queue", "queue", {
-    links: [
-      { href: "#/jobs?status=pending", label: "pending" },
-      { href: "#/jobs?status=running", label: "running" },
-    ],
-    body: `<div class="row">${glanceStat(Number(jobs.running) || 0, "running", "queue-running")}${glanceStat(Number(jobs.pending) || 0, "pending", "queue-pending")}</div>
-      ${oldest}
-      ${rows.length ? table([t("name"), t("status"), t("created")], rows) : `<p class="small muted">${h("no_open_jobs")}</p>`}`,
-  });
+const PENDING_ATTENTION_MINUTES = 30;
+
+export function kpiTile(id, label, value, { href, tone = "", hint = "" } = {}) {
+  return `<a class="kpi${tone ? ` ${tone}` : ""}" data-kpi="${esc(id)}" href="${esc(href)}">
+    <span class="kpi-label">${h(label)}</span>
+    <strong class="kpi-value">${esc(value)}</strong>
+    ${hint ? `<span class="kpi-hint">${hint}</span>` : ""}
+  </a>`;
+}
+
+export function kpiRow(data) {
+  const glance = (data && data.glance) || {};
+  const jobs = glance.jobs || {};
+  const use = glance.concurrency || {};
+  const hosts = glance.hosts || {};
+  const running = Number(use.team_running) || 0;
+  const limit = Number(use.team_limit) || 0;
+  const pending = Number(jobs.pending) || 0;
+  const failed = Number(jobs.failed_24h) || 0;
+  const successful = Number(jobs.successful_24h) || 0;
+  const finished = Number(jobs.finished_24h) || 0;
+  const hostFailed = Number(hosts.failed) || 0;
+  const hostStale = Number(hosts.stale) || 0;
+  const hostTotal = hostFailed + hostStale;
+  const full = limit > 0 && running >= limit;
+  const pendingHint = pending && jobs.oldest_pending_at
+    ? h("oldest_pending_waited", { duration: waitedText(jobs.oldest_pending_at) })
+    : h("no_pending_job");
+  const rate = finished ? `${Math.round((successful / finished) * 100)}%` : "—";
+  return `<div class="kpi-row" data-kpi-row>
+    ${kpiTile("running", "running", `${running} / ${limit}`, { href: "#/jobs?status=running", tone: full ? "warn" : "", hint: h("team_slots") })}
+    ${kpiTile("pending", "pending", String(pending), { href: "#/jobs?status=pending", hint: pendingHint })}
+    ${kpiTile("failed-24h", "failed_24h", String(failed), { href: "#/jobs?status=failed", tone: failed ? "bad" : "", hint: h("last_24_hours") })}
+    ${kpiTile("success-rate", "success_rate_24h", rate, { href: "#/jobs?status=successful", hint: h("success_rate_detail", { successful, finished }) })}
+    ${kpiTile("problem-hosts", "problem_hosts_tile", String(hostTotal), { href: "#/inventories", tone: hostTotal ? "bad" : "", hint: h("problem_hosts_detail", { failed: hostFailed, stale: hostStale }) })}
+  </div>`;
+}
+
+function attentionRow(kind, badge, name, href, time, actions) {
+  return `<li class="attention-item" data-attention-kind="${esc(kind)}">
+    ${badge}
+    <div class="attention-body">
+      <a href="${esc(href)}">${esc(name)}</a>
+      <span class="small muted">${esc(time)}</span>
+    </div>
+    <div class="row attention-actions">${actions}</div>
+  </li>`;
+}
+
+function syncRow(kind, entry) {
+  const base = kind === "project" ? "projects" : "inventories";
+  const href = `#/${base}/${encodeURIComponent(entry.id)}`;
+  const syncable = kind === "project"
+    ? entry.kind === "git"
+    : ["project", "netbox"].includes(entry.kind);
+  const open = `<a class="btn compact" href="${href}">${h("open")}</a>`;
+  const sync = syncable && can("operator")
+    ? `<button class="btn compact" type="button" data-attention-sync="/api/v1/${base}/${encodeURIComponent(entry.id)}/sync">${h("sync_again")}</button>`
+    : "";
+  return attentionRow(kind, pill("failed"), entry.name, href, relativeTime(entry.last_sync_at), `${open}${sync}`);
+}
+
+export function attentionItems(data) {
+  const glance = (data && data.glance) || {};
+  const jobs = glance.jobs || {};
+  const items = [];
+  for (const job of jobs.failed_items || []) {
+    const href = `#/jobs/${encodeURIComponent(job.id)}`;
+    const relaunch = can("operator")
+      ? `<button class="btn compact" type="button" data-attention-relaunch="${esc(job.id)}">${h("relaunch")}</button>`
+      : "";
+    items.push(attentionRow("job", pill(job.status), job.name, href, relativeTime(job.finished_at || job.created_at), `<a class="btn compact" href="${href}">${h("open_log")}</a>${relaunch}`));
+  }
+  for (const run of (glance.workflows || {}).items || []) {
+    if (run.status !== "failed") continue;
+    const href = `#/runs/${encodeURIComponent(run.id)}`;
+    items.push(attentionRow("workflow", pill(run.status), run.name, href, relativeTime(run.finished_at || run.created_at), `<a class="btn compact" href="${href}">${h("open")}</a>`));
+  }
+  for (const schedule of (glance.schedules || {}).items || []) {
+    if (!schedule.missed_at) continue;
+    const href = `#/schedules?edit=${encodeURIComponent(schedule.id)}`;
+    items.push(attentionRow("schedule", `<span class="pill warn">${h("schedule_missed_state")}</span>`, schedule.name, href, relativeTime(schedule.missed_at), `<a class="btn compact" href="${href}">${h("edit")}</a>`));
+  }
+  const syncs = glance.syncs || {};
+  for (const entry of syncs.projects || []) items.push(syncRow("project", entry));
+  for (const entry of syncs.inventories || []) items.push(syncRow("inventory", entry));
+  for (const host of (glance.hosts || {}).items || []) {
+    const href = `#/inventories/${encodeURIComponent(host.inventory_id)}/hosts/${encodeURIComponent(host.host)}`;
+    const badge = host.result === "failed" || host.result === "unreachable"
+      ? pill(host.result)
+      : `<span class="pill warn">${h("stale_hosts")}</span>`;
+    items.push(attentionRow("host", badge, host.host, href, relativeTime(host.ts), `<a class="btn compact" href="${href}">${h("open")}</a>`));
+  }
+  const threshold = Date.now() - PENDING_ATTENTION_MINUTES * 60 * 1000;
+  let pendingListed = false;
+  for (const job of jobs.items || []) {
+    if (job.status !== "pending") continue;
+    const created = Date.parse(job.created_at);
+    if (Number.isNaN(created) || created > threshold) continue;
+    const href = `#/jobs/${encodeURIComponent(job.id)}`;
+    items.push(attentionRow("pending", pill(job.status), job.name, href, relativeTime(job.created_at), `<a class="btn compact" href="${href}">${h("open_log")}</a>`));
+    pendingListed = true;
+  }
+  // Eight running jobs can fill the busy list before an old pending job
+  // appears. Fall back to the team-wide oldest wait so it still shows.
+  const oldestPending = jobs.oldest_pending_at ? Date.parse(jobs.oldest_pending_at) : NaN;
+  if (!pendingListed && (Number(jobs.pending) || 0) > 0 && !Number.isNaN(oldestPending) && oldestPending <= threshold) {
+    const href = "#/jobs?status=pending";
+    items.push(attentionRow("pending", pill("pending"), t("oldest_pending_job"), href, relativeTime(jobs.oldest_pending_at), `<a class="btn compact" href="${href}">${h("open")}</a>`));
+  }
+  return items;
+}
+
+export function attentionHtml(data) {
+  const items = attentionItems(data);
+  return `<section class="card" data-attention aria-labelledby="attention-title">
+    <h2 id="attention-title">${h("needs_attention")}</h2>
+    ${items.length
+      ? `<ul class="attention-list">${items.join("")}</ul>`
+      : `<p class="small muted attention-clear" data-attention-clear>${h("attention_all_clear")}</p>`}
+  </section>`;
+}
+
+export function recentActivityCard(jobs) {
+  const rows = (jobs || []).slice(0, 5).map((job) =>
+    `<tr><td><a href="#/jobs/${esc(job.id)}">${esc(job.name)}</a></td><td>${pill(job.status)}</td><td class="small muted">${esc(relativeTime(job.created_at))}</td></tr>`
+  );
+  return `<section class="card" data-recent-activity>
+    <div class="spread"><h2>${h("recent_activity")}</h2><a href="#/jobs">${h("all")}</a></div>
+    ${table([t("name"), t("status"), t("created")], rows)}
+  </section>`;
 }
 
 function concurrencyCard(item) {
@@ -199,10 +312,6 @@ function workflowsCard(item) {
   });
 }
 
-function cacheCard(data) {
-  return `<article class="card stat" data-glance-card="cache"><span class="small muted">${h("dependency_cache")}</span><strong>${esc(bytes(data.cache_bytes))}</strong><p class="small muted">${h("collections_roles_and_opentofu_providers_stay_between_runs")}</p></article>`;
-}
-
 export function overviewSystemLine(data) {
   const runner = data && data.runner_mode ? esc(data.runner_mode) : "—";
   const runtime = data && data.runtime ? esc(data.runtime) : h("no_container_runtime");
@@ -212,9 +321,13 @@ export function overviewSystemLine(data) {
 
 export function overviewGlanceHtml(data) {
   const glance = (data && data.glance) || {};
-  return `<div class="grid-3">${cacheCard(data || {})}${queueCard(glance.jobs)}${concurrencyCard(glance.concurrency)}</div>
-    <div class="grid-3">${schedulesCard(glance.schedules)}${hostsCard(glance.hosts)}${syncsCard(glance.syncs)}</div>
-    ${workflowsCard(glance.workflows)}`;
+  return `${kpiRow(data)}
+    <div class="overview-main">
+      ${attentionHtml(data)}
+      ${recentActivityCard(data && data.jobs)}
+    </div>
+    <div class="grid-3">${concurrencyCard(glance.concurrency)}${schedulesCard(glance.schedules)}${hostsCard(glance.hosts)}</div>
+    <div class="grid-3">${syncsCard(glance.syncs)}${workflowsCard(glance.workflows)}</div>`;
 }
 
 let chartSerial = 0;
@@ -303,6 +416,39 @@ async function clearCache(button) {
   }
 }
 
+function bindAttention() {
+  document.querySelectorAll("[data-attention-relaunch]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (button.disabled) return;
+      button.disabled = true;
+      try {
+        const job = await api("GET", `/api/v1/jobs/${encodeURIComponent(button.dataset.attentionRelaunch)}`);
+        const relaunched = await relaunchJob(job);
+        if (!relaunched) button.disabled = false;
+      } catch (error) {
+        button.disabled = false;
+        handle(error);
+      }
+    });
+  });
+  document.querySelectorAll("[data-attention-sync]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (button.disabled) return;
+      button.disabled = true;
+      button.setAttribute("aria-busy", "true");
+      try {
+        await api("POST", button.dataset.attentionSync, {});
+        markSaved();
+        await route();
+      } catch (error) {
+        button.disabled = false;
+        button.removeAttribute("aria-busy");
+        handle(error);
+      }
+    });
+  });
+}
+
 function bindDashboard(tab, range) {
   const tabs = [...document.querySelectorAll("[data-page-tab]")];
   const selectTab = async (next) => {
@@ -357,9 +503,7 @@ async function pageDashboard() {
   if (!needTeam()) return;
   if (dashboardTab() === "dashboard") return pageDashboardTab();
   const data = await api("GET", "/api/v1/overview");
-  const jobs = (data.jobs || []).map((job) =>
-    `<tr><td><a href="#/jobs/${esc(job.id)}">${esc(job.name)}</a></td><td class="tool">${esc(job.tool)}</td><td>${pill(job.status)}</td><td class="small muted">${esc(when(job.created_at))}</td><td class="small muted">${esc(spanText(job.started_at, job.finished_at, job.status))}</td></tr>`
-  );
+  const hasJobs = (data.jobs || []).length > 0;
   const deliveries = (data.deliveries || []).map((item) =>
     `<tr><td>${esc(item.hook_name)}</td><td>${pill(item.status)}</td><td>${esc(item.summary)}</td></tr>`
   );
@@ -369,13 +513,9 @@ async function pageDashboard() {
       ${data.preflight ? preflightNoticeHtml(data.preflight) : ""}
       ${appState.me.is_admin && data.import ? importNoticeHtml(data.import) : ""}
       ${overviewSystemLine(data)}
-      ${jobs.length ? "" : onboardingCard()}
+      ${hasJobs ? "" : onboardingCard()}
       <div class="stack">
         ${overviewGlanceHtml(data)}
-        <section class="card">
-          <div class="spread"><h2>${h("recent_jobs")}</h2><a href="#/jobs">${h("all")}</a></div>
-          ${table([t("name"), t("tool"), t("status"), t("created"), t("duration")], jobs)}
-        </section>
         <section class="card">
           <div class="spread">
             <h2>${h("webhook_deliveries")}</h2>
@@ -386,6 +526,7 @@ async function pageDashboard() {
       </div>
     </div>`);
   bindDashboard("overview", dashboardRange());
+  bindAttention();
   const test = document.querySelector("#test-alert");
   if (test) {
     test.addEventListener("click", async () => {

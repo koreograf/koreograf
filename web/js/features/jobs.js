@@ -225,13 +225,10 @@ async function pageJobs() {
     if (!button) return;
     const job = current.find((item) => item.id === button.dataset.relaunch);
     if (!job) return;
-    if (!(await confirmDialog({ title: t("relaunch"), body: relaunchPrompt(job, button.dataset.failed === "1"), confirmLabel: t("relaunch") }))) return;
     button.disabled = true;
     try {
-      const copy = await api("POST", `/api/v1/jobs/${encodeURIComponent(button.dataset.relaunch)}/relaunch`, {
-        only_failed_hosts: button.dataset.failed === "1",
-      });
-      go(`#/jobs/${copy.id}`);
+      const relaunched = await relaunchJob(job, button.dataset.failed === "1");
+      if (!relaunched) button.disabled = false;
     } catch (error) {
       button.disabled = false;
       handle(error);
@@ -1392,6 +1389,17 @@ function relaunchPrompt(job, onlyFailed) {
   const spec = (job.parameters && job.parameters.spec) || {};
   const limit = spec.limit ? String(spec.limit) : t("all_hosts");
   return t(onlyFailed ? "relaunch_this_job_on_failed_hosts" : "relaunch_this_job", { name: job.name, limit });
+}
+
+// Shared with the overview attention list: confirm, copy the job on the server,
+// and open the copy. Returns false when the user cancels the dialog.
+export async function relaunchJob(job, onlyFailedHosts = false) {
+  if (!(await confirmDialog({ title: t("relaunch"), body: relaunchPrompt(job, onlyFailedHosts), confirmLabel: t("relaunch") }))) return false;
+  const copy = await api("POST", `/api/v1/jobs/${encodeURIComponent(job.id)}/relaunch`, {
+    only_failed_hosts: onlyFailedHosts,
+  });
+  go(`#/jobs/${copy.id}`);
+  return true;
 }
 
 export function templatePrompts(template) {

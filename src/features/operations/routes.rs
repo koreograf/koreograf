@@ -385,7 +385,11 @@ struct GlanceJobSummary {
     running: u64,
     pending: u64,
     oldest_pending_at: Option<String>,
+    failed_24h: u64,
+    successful_24h: u64,
+    finished_24h: u64,
     items: Vec<GlanceJob>,
+    failed_items: Vec<GlanceJob>,
 }
 
 #[derive(Serialize)]
@@ -395,6 +399,7 @@ struct GlanceJob {
     status: String,
     tool: String,
     created_at: String,
+    finished_at: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -448,6 +453,7 @@ struct GlanceSyncSummary {
 struct GlanceSync {
     id: String,
     name: String,
+    kind: String,
     last_sync_at: String,
 }
 
@@ -618,22 +624,43 @@ const HOST_STALE_AFTER_DAYS: i64 = 7;
 /// A failed workflow run counts as recent for this long after it finished.
 const WORKFLOW_FAILED_WINDOW_HOURS: i64 = 24;
 
+/// Failed, canceled, and successful jobs count toward the overview tiles and
+/// the attention list for this long after they finished.
+const JOB_ATTENTION_WINDOW_HOURS: i64 = 24;
+
 fn rows(value: i64) -> u64 {
     u64::try_from(value).unwrap_or(0)
 }
 
+fn glance_job(job: db::Job) -> GlanceJob {
+    GlanceJob {
+        id: job.id,
+        name: job.name,
+        status: job.status,
+        tool: job.tool,
+        created_at: job.created_at,
+        finished_at: job.finished_at,
+    }
+}
+
 fn overview_glance(state: &Shared, team: &str) -> AppResult<OverviewGlance> {
+    let cutoff = (Utc::now() - ChronoDuration::days(HOST_STALE_AFTER_DAYS))
+        .to_rfc3339_opts(SecondsFormat::Secs, true);
+    let failed_cutoff = (Utc::now() - ChronoDuration::hours(WORKFLOW_FAILED_WINDOW_HOURS))
+        .to_rfc3339_opts(SecondsFormat::Secs, true);
+    let job_cutoff = (Utc::now() - ChronoDuration::hours(JOB_ATTENTION_WINDOW_HOURS))
+        .to_rfc3339_opts(SecondsFormat::Secs, true);
     let crate::features::jobs::store::GlanceJobs {
         running,
         pending,
         global_running,
         oldest_pending_at,
+        failed_24h,
+        successful_24h,
+        finished_24h,
         items: busy_jobs,
-    } = state.store().glance_jobs(team, 8)?;
-    let cutoff = (Utc::now() - ChronoDuration::days(HOST_STALE_AFTER_DAYS))
-        .to_rfc3339_opts(SecondsFormat::Secs, true);
-    let failed_cutoff = (Utc::now() - ChronoDuration::hours(WORKFLOW_FAILED_WINDOW_HOURS))
-        .to_rfc3339_opts(SecondsFormat::Secs, true);
+        failed_items,
+    } = state.store().glance_jobs(team, &job_cutoff, 8)?;
     let hosts = state.store().glance_hosts(team, &cutoff, 8)?;
     let schedules = state.store().list_team_schedules(team)?;
     let projects = state.store().list_projects(team)?;
@@ -682,6 +709,7 @@ fn overview_glance(state: &Shared, team: &str) -> AppResult<OverviewGlance> {
         .map(|item| GlanceSync {
             id: item.id,
             name: item.name,
+            kind: item.source_type,
             last_sync_at: item.last_sync_at,
         })
         .collect();
@@ -691,6 +719,7 @@ fn overview_glance(state: &Shared, team: &str) -> AppResult<OverviewGlance> {
         .map(|item| GlanceSync {
             id: item.id,
             name: item.name,
+            kind: item.source_kind,
             last_sync_at: item.last_sync_at,
         })
         .collect();
@@ -713,16 +742,11 @@ fn overview_glance(state: &Shared, team: &str) -> AppResult<OverviewGlance> {
             running: rows(running),
             pending: rows(pending),
             oldest_pending_at,
-            items: busy_jobs
-                .into_iter()
-                .map(|job| GlanceJob {
-                    id: job.id,
-                    name: job.name,
-                    status: job.status,
-                    tool: job.tool,
-                    created_at: job.created_at,
-                })
-                .collect(),
+            failed_24h: rows(failed_24h),
+            successful_24h: rows(successful_24h),
+            finished_24h: rows(finished_24h),
+            items: busy_jobs.into_iter().map(glance_job).collect(),
+            failed_items: failed_items.into_iter().map(glance_job).collect(),
         },
         concurrency: GlanceConcurrency {
             team_running: rows(running),

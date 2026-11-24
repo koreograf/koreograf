@@ -247,7 +247,12 @@ pub(crate) trait Backend: Send + Sync {
     fn prune_activity(&self, team_id: &str, keep: i64) -> AppResult<()>;
     fn job(&self, id: &str) -> AppResult<Option<Job>>;
     fn list_jobs(&self, team_id: &str, query: &JobQuery) -> AppResult<(Vec<Job>, i64)>;
-    fn glance_jobs(&self, team_id: &str, limit: i64) -> AppResult<jobs::store::GlanceJobs>;
+    fn glance_jobs(
+        &self,
+        team_id: &str,
+        cutoff: &str,
+        limit: i64,
+    ) -> AppResult<jobs::store::GlanceJobs>;
     fn glance_hosts(
         &self,
         team_id: &str,
@@ -1149,9 +1154,14 @@ impl Backend for SqliteBackend {
         jobs::store::list_jobs(&conn, team_id, query)
     }
 
-    fn glance_jobs(&self, team_id: &str, limit: i64) -> AppResult<jobs::store::GlanceJobs> {
+    fn glance_jobs(
+        &self,
+        team_id: &str,
+        cutoff: &str,
+        limit: i64,
+    ) -> AppResult<jobs::store::GlanceJobs> {
         let conn = lock(&self.conn)?;
-        jobs::store::glance_jobs(&conn, team_id, limit)
+        jobs::store::glance_jobs(&conn, team_id, cutoff, limit)
     }
 
     fn glance_hosts(
@@ -3764,7 +3774,12 @@ impl Backend for PostgresBackend {
         })
     }
 
-    fn glance_jobs(&self, team_id: &str, limit: i64) -> AppResult<jobs::store::GlanceJobs> {
+    fn glance_jobs(
+        &self,
+        team_id: &str,
+        cutoff: &str,
+        limit: i64,
+    ) -> AppResult<jobs::store::GlanceJobs> {
         let limit = limit.clamp(1, 100);
         self.with_client(|client| async move {
             let counts = client
@@ -3781,6 +3796,25 @@ impl Backend for PostgresBackend {
                 match status.as_str() {
                     "running" => running = count,
                     "pending" => pending = count,
+                    _ => {}
+                }
+            }
+            let finished = client
+                .query(
+                    &store::sql::postgres(jobs::store::FINISHED_JOB_COUNTS),
+                    &[&team_id, &cutoff],
+                )
+                .await?;
+            let mut failed_24h = 0;
+            let mut successful_24h = 0;
+            let mut finished_24h = 0;
+            for row in &finished {
+                let status: String = row.get(0);
+                let count: i64 = row.get(1);
+                finished_24h += count;
+                match status.as_str() {
+                    "failed" => failed_24h = count,
+                    "successful" => successful_24h = count,
                     _ => {}
                 }
             }
@@ -3805,12 +3839,26 @@ impl Backend for PostgresBackend {
                 .iter()
                 .map(jobs::store::row_job)
                 .collect::<AppResult<Vec<_>>>()?;
+            let failed_rows = client
+                .query(
+                    &store::sql::postgres(&jobs::store::failed_jobs_sql()),
+                    &[&team_id, &cutoff, &jobs::store::FAILED_JOB_ITEMS_LIMIT],
+                )
+                .await?;
+            let failed_items = failed_rows
+                .iter()
+                .map(jobs::store::row_job)
+                .collect::<AppResult<Vec<_>>>()?;
             Ok(jobs::store::GlanceJobs {
                 running,
                 pending,
                 global_running,
                 oldest_pending_at,
+                failed_24h,
+                successful_24h,
+                finished_24h,
                 items,
+                failed_items,
             })
         })
     }
