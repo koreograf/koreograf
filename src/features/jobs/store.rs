@@ -200,12 +200,16 @@ pub(crate) fn host_glance_sql() -> String {
     )
 }
 
+/// A running job must stay visible when the queue is longer than the limit.
+/// Running jobs come first, newest first; pending jobs follow, oldest first.
 pub(crate) fn busy_jobs_sql() -> String {
     format!(
         "SELECT {JOB_COLUMNS} FROM jobs
          WHERE team_id = ?1 AND status IN ('pending', 'running')
-         ORDER BY CASE WHEN status = 'pending' THEN 0 ELSE 1 END,
-                  created_at ASC, id ASC LIMIT ?2"
+         ORDER BY CASE WHEN status = 'running' THEN 0 ELSE 1 END,
+                  CASE WHEN status = 'running' THEN created_at END DESC,
+                  CASE WHEN status = 'pending' THEN created_at END ASC,
+                  id ASC LIMIT ?2"
     )
 }
 
