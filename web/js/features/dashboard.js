@@ -674,8 +674,7 @@ async function pageDashboardTab() {
   bindDashboard("dashboard", range);
 }
 
-export function overviewBody(data) {
-  const hasJobs = (data.jobs || []).length > 0;
+export function overviewBody(data, hasJobs = (data.jobs || []).length > 0) {
   return hasJobs
     ? `<div class="stack">
         ${overviewGlanceHtml(data)}
@@ -689,7 +688,7 @@ async function pageDashboard() {
   if (dashboardTab() === "dashboard") return pageDashboardTab();
   const data = await api("GET", "/api/v1/overview");
   const hasJobs = (data.jobs || []).length > 0;
-  const body = overviewBody(data);
+  const body = overviewBody(data, hasJobs);
   shell(t("overview"), `
     ${dashboardTabs("overview")}
     <div id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
