@@ -342,6 +342,8 @@ h2 { font-size: 18px; margin: 0 0 10px; }
 }
 .onboarding-steps li:first-child { padding-top: 0; border-top: 0; }
 .onboarding-steps p { margin: 0; }
+.onboarding-steps li.done p { color: var(--muted); text-decoration: line-through; }
+.onboarding-done { white-space: nowrap; }
 
 .table { width: 100%; border-collapse: collapse; }
 .table th { text-align: left; font-size: 13px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); font-weight: 600; }

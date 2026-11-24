@@ -32,6 +32,7 @@
   "no_pending_job": "No pending job.",
   "oldest_pending_job": "Oldest pending job",
   "oldest_pending_waited": "Oldest pending job has waited {duration}.",
+  "onboarding_done": "Done",
   "open": "Open",
   "open_log": "Open log",
   "problem_hosts_detail": "{failed} failed · {stale} stale",

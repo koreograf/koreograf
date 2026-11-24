@@ -365,6 +365,41 @@ test("the overview gives operators one primary launch action and a quiet test al
   assert.doesNotMatch(webhookDeliveriesCard({ hook_id: "hook-1", deliveries: [] }), /test-alert/);
 });
 
+test("the onboarding card marks completed steps and one next action", async () => {
+  const state = await load("core/state.js");
+  const { onboardingCard } = await load("features/dashboard.js");
+  state.setMe({
+    is_admin: false,
+    display_name: "Operator",
+    auth_source: "local",
+    teams: [{ id: "t1", name: "Team", role: "operator" }],
+  });
+  state.setTeamId("t1");
+
+  const zero = onboardingCard({ projects: 0, inventories: 0, templates: 0 });
+  assert.match(zero, /data-onboarding/);
+  assert.equal((zero.match(/class="btn primary"/g) || []).length, 1);
+  assert.match(zero, /data-onboarding-step="projects"[\s\S]*class="btn primary"/);
+  assert.doesNotMatch(zero, /onboarding-done/);
+
+  const mixed = onboardingCard({ projects: 1, inventories: 1, templates: 0 });
+  assert.equal((mixed.match(/class="btn primary"/g) || []).length, 1);
+  assert.match(mixed, /data-onboarding-step="templates"[\s\S]*class="btn primary"/);
+  assert.equal((mixed.match(/onboarding-done/g) || []).length, 2);
+
+  const all = onboardingCard({ projects: 1, inventories: 1, templates: 1 });
+  assert.match(all, /data-onboarding-step="jobs"[\s\S]*class="btn primary"/);
+
+  state.setMe({
+    is_admin: false,
+    display_name: "Viewer",
+    auth_source: "local",
+    teams: [{ id: "t1", name: "Team", role: "viewer" }],
+  });
+  const viewer = onboardingCard({ projects: 0, inventories: 0, templates: 0 });
+  assert.doesNotMatch(viewer, /class="btn/, "a viewer gets an onboarding action");
+});
+
 test("the overview picker and a quick launch start open the shared launch dialog", async () => {
   const state = await load("core/state.js");
   const { overviewActions, quickLaunchHtml, bindOverviewActions, bindQuickLaunch } = await load("features/dashboard.js");

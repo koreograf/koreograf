@@ -32,6 +32,7 @@
   "no_pending_job": "Kein wartender Auftrag.",
   "oldest_pending_job": "Ältester wartender Auftrag",
   "oldest_pending_waited": "Ältester wartender Auftrag wartet seit {duration}.",
+  "onboarding_done": "Erledigt",
   "open": "Öffnen",
   "open_log": "Protokoll öffnen",
   "problem_hosts_detail": "{failed} fehlgeschlagen · {stale} lange nicht gelaufen",
