@@ -42,7 +42,7 @@ pub(crate) fn scrub_paths(work: &Path, data_dir: &Path) -> Vec<String> {
 /// One accepted JSON UI line: the bounded structured event and the human
 /// lines the raw log should show instead of the JSON object.
 pub(crate) struct Parsed {
-    pub structured: Option<String>,
+    pub structured: Vec<String>,
     pub human: Vec<String>,
 }
 
@@ -196,7 +196,7 @@ impl Capture {
                     push_human(&mut human, message);
                 }
                 return Some(Parsed {
-                    structured: None,
+                    structured: Vec::new(),
                     human,
                 });
             }
@@ -209,29 +209,36 @@ impl Capture {
     }
 
     /// Stores one bounded event or one final limit marker. A late
-    /// `change_summary` uses its own budget so the summary survives the cap.
-    fn reserve(&mut self, line: String, kind: &str) -> Option<String> {
+    /// `change_summary` uses its own budget so the summary survives the cap,
+    /// including the summary that itself crosses the main budget.
+    fn reserve(&mut self, line: String, kind: &str) -> Vec<String> {
         if self.limited {
-            if kind != "change_summary" {
-                return None;
-            }
-            if self.summary_count >= MAX_SUMMARY_EVENTS
-                || self.summary_bytes.saturating_add(line.len()) > MAX_SUMMARY_BYTES
-            {
-                return None;
-            }
-            self.summary_count += 1;
-            self.summary_bytes = self.summary_bytes.saturating_add(line.len());
-            return Some(line);
+            return self.reserve_summary(line, kind).into_iter().collect();
         }
         if self.count >= MAX_EVENTS || self.bytes.saturating_add(line.len()) > MAX_BYTES {
             self.limited = true;
-            return Some(format!(
+            let mut events = vec![format!(
                 "{{\"type\":\"limit\",\"events\":{MAX_EVENTS},\"bytes\":{MAX_BYTES}}}"
-            ));
+            )];
+            events.extend(self.reserve_summary(line, kind));
+            return events;
         }
         self.count += 1;
         self.bytes = self.bytes.saturating_add(line.len());
+        vec![line]
+    }
+
+    fn reserve_summary(&mut self, line: String, kind: &str) -> Option<String> {
+        if kind != "change_summary" {
+            return None;
+        }
+        if self.summary_count >= MAX_SUMMARY_EVENTS
+            || self.summary_bytes.saturating_add(line.len()) > MAX_SUMMARY_BYTES
+        {
+            return None;
+        }
+        self.summary_count += 1;
+        self.summary_bytes = self.summary_bytes.saturating_add(line.len());
         Some(line)
     }
 }
@@ -331,7 +338,13 @@ mod tests {
                 r#"{"@level":"info","@message":"terraform_data.web: Plan to create","type":"planned_change","change":{"resource":{"addr":"terraform_data.web","resource_type":"terraform_data","resource_name":"web"},"action":"create"}}"#,
             )
             .expect("planned change");
-        let value = event(parsed.structured.as_deref().expect("structured"));
+        let value = event(
+            parsed
+                .structured
+                .first()
+                .map(String::as_str)
+                .expect("structured"),
+        );
         assert_eq!(value["type"], "planned_change");
         assert_eq!(value["action"], "create");
         assert_eq!(value["addr"], "terraform_data.web");
@@ -350,7 +363,13 @@ mod tests {
                 r#"{"type":"change_summary","changes":{"add":2,"change":1,"remove":3,"import":0,"operation":"plan"}}"#,
             )
             .expect("summary");
-        let value = event(parsed.structured.as_deref().expect("structured"));
+        let value = event(
+            parsed
+                .structured
+                .first()
+                .map(String::as_str)
+                .expect("structured"),
+        );
         assert_eq!(value["operation"], "plan");
         assert_eq!(value["add"], 2);
         assert_eq!(value["change"], 1);
@@ -366,7 +385,13 @@ mod tests {
                 r#"{"type":"apply_complete","hook":{"resource":{"addr":"terraform_data.web"},"action":"update"},"elapsed_seconds":1.5}"#,
             )
             .expect("apply complete");
-        let value = event(parsed.structured.as_deref().expect("structured"));
+        let value = event(
+            parsed
+                .structured
+                .first()
+                .map(String::as_str)
+                .expect("structured"),
+        );
         assert_eq!(value["type"], "apply_complete");
         assert_eq!(value["elapsed_seconds"], 1.5);
         assert_eq!(value["addr"], "terraform_data.web");
@@ -381,7 +406,13 @@ mod tests {
                 r#"{"type":"diagnostic","diagnostic":{"severity":"warning","summary":"Deprecated attribute","detail":"Use id instead."}}"#,
             )
             .expect("diagnostic");
-        let value = event(parsed.structured.as_deref().expect("structured"));
+        let value = event(
+            parsed
+                .structured
+                .first()
+                .map(String::as_str)
+                .expect("structured"),
+        );
         assert_eq!(value["severity"], "warning");
         assert_eq!(value["summary"], "Deprecated attribute");
         assert_eq!(value["detail"], "Use id instead.");
@@ -395,7 +426,11 @@ mod tests {
                 r#"{"type":"outputs","@message":"Outputs:\n\nmessage = \"hello\"\nsecret = \"hunter2\"\n","outputs":{"message":{"sensitive":false,"type":"string","value":"hello"},"secret":{"sensitive":true,"type":"string","value":"hunter2"}}}"#,
             )
             .expect("outputs");
-        let line = parsed.structured.as_deref().expect("structured");
+        let line = parsed
+            .structured
+            .first()
+            .map(String::as_str)
+            .expect("structured");
         assert!(!line.contains("hunter2"));
         let value = event(line);
         assert_eq!(value["outputs"]["secret"]["sensitive"], true);
@@ -415,7 +450,11 @@ mod tests {
                 r#"{"type":"diagnostic","diagnostic":{"severity":"error","summary":"boom","detail":"detail","token":"hunter2","extra":{"secret":"hunter2"}},"extra":{"secret":"hunter2"}}"#,
             )
             .expect("diagnostic");
-        let line = parsed.structured.as_deref().expect("structured");
+        let line = parsed
+            .structured
+            .first()
+            .map(String::as_str)
+            .expect("structured");
         assert!(!line.contains("hunter2"));
         assert!(!line.contains("extra"));
         assert!(!line.contains("token"));
@@ -431,7 +470,13 @@ mod tests {
                 r#"{{"type":"diagnostic","diagnostic":{{"severity":"error","summary":"{text}","detail":"{text}"}}}}"#
             ))
             .expect("diagnostic");
-        let value = event(parsed.structured.as_deref().expect("structured"));
+        let value = event(
+            parsed
+                .structured
+                .first()
+                .map(String::as_str)
+                .expect("structured"),
+        );
         let summary = value["summary"].as_str().expect("summary");
         assert_eq!(summary.chars().count(), MAX_FIELD_CHARS);
         assert!(summary.ends_with('…'));
@@ -446,7 +491,11 @@ mod tests {
                 r#"{"type":"diagnostic","diagnostic":{"severity":"error","summary":"failed in /srv/koreograf/jobs/job-1/project"}}"#,
             )
             .expect("diagnostic");
-        let line = parsed.structured.as_deref().expect("structured");
+        let line = parsed
+            .structured
+            .first()
+            .map(String::as_str)
+            .expect("structured");
         assert!(!line.contains("/srv/koreograf/jobs/job-1"));
         assert!(line.contains("[work]/project"));
         assert!(!parsed.human[0].contains("/srv/koreograf/jobs/job-1"));
@@ -459,7 +508,7 @@ mod tests {
         let parsed = capture
             .accept(r#"{"type":"version","@message":"OpenTofu v1.8.0","terraform":"1.8.0"}"#)
             .expect("version");
-        assert!(parsed.structured.is_none());
+        assert!(parsed.structured.is_empty());
         assert_eq!(parsed.human, vec!["OpenTofu v1.8.0".to_string()]);
         assert!(capture.accept("not json").is_none());
         assert!(capture
@@ -486,12 +535,12 @@ mod tests {
         let marker = marker.expect("marker");
         assert!(marker
             .structured
-            .as_deref()
-            .is_some_and(|line| line.contains("\"type\":\"limit\"")));
+            .iter()
+            .any(|line| line.contains("\"type\":\"limit\"")));
         let later = capture.accept(
             r#"{"type":"planned_change","change":{"resource":{"addr":"terraform_data.later"},"action":"create"}}"#,
         );
-        assert!(later.expect("later").structured.is_none());
+        assert!(later.expect("later").structured.is_empty());
         let summary = capture
             .accept(
                 r#"{"type":"change_summary","changes":{"add":7,"change":0,"remove":0,"operation":"apply"}}"#,
@@ -499,8 +548,8 @@ mod tests {
             .expect("summary after limit");
         assert!(summary
             .structured
-            .as_deref()
-            .is_some_and(|line| line.contains("\"add\":7")));
+            .iter()
+            .any(|line| line.contains("\"add\":7")));
         for _ in 0..MAX_SUMMARY_EVENTS {
             let _ = capture.accept(
                 r#"{"type":"change_summary","changes":{"add":1,"change":0,"remove":0,"operation":"apply"}}"#,
@@ -512,7 +561,34 @@ mod tests {
             )
             .expect("summary")
             .structured
-            .is_none());
+            .is_empty());
+    }
+
+    #[test]
+    fn the_summary_that_crosses_the_budget_keeps_the_marker_and_itself() {
+        let mut capture = capture();
+        for index in 0..MAX_EVENTS {
+            assert!(capture
+                .accept(&format!(
+                    r#"{{"type":"planned_change","change":{{"resource":{{"addr":"terraform_data.r{index}"}},"action":"create"}}}}"#
+                ))
+                .is_some());
+        }
+        let crossing = capture
+            .accept(
+                r#"{"type":"change_summary","changes":{"add":3,"change":0,"remove":0,"operation":"apply"}}"#,
+            )
+            .expect("crossing summary");
+        assert_eq!(crossing.structured.len(), 2);
+        assert!(crossing.structured[0].contains("\"type\":\"limit\""));
+        assert!(crossing.structured[1].contains("\"add\":3"));
+        let later = capture
+            .accept(
+                r#"{"type":"change_summary","changes":{"add":4,"change":0,"remove":0,"operation":"apply"}}"#,
+            )
+            .expect("later summary");
+        assert_eq!(later.structured.len(), 1);
+        assert!(later.structured[0].contains("\"add\":4"));
     }
 
     #[test]

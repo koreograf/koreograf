@@ -4211,7 +4211,7 @@ fn accept_output_line(
 ) {
     if let Some(capture) = tofu {
         if let Some(parsed) = capture.accept(&raw) {
-            if let Some(event) = parsed.structured {
+            for event in parsed.structured {
                 store_event(state, job_id, tofu_events::STREAM, &event);
             }
             for human in parsed.human {
