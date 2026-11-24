@@ -85,6 +85,22 @@ test("a viewer without a team sees one empty state and no team navigation", asyn
   if (testInfo.project.name.includes("Pixel")) expect(viewport).toEqual({ width: 412, height: 923 });
   else expect(viewport).toEqual({ width: 1440, height: 900 });
 
+  const german = "Diesem Konto ist kein Team zugeordnet. Ein Administrator muss dieses Konto einem Team hinzufügen.";
+  for (const language of ["de", "en"]) {
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate(([lang, mode]) => {
+        localStorage.setItem("koreograf.lang", lang);
+        localStorage.setItem("koreograf.theme", mode);
+      }, [language, theme]);
+      await page.reload();
+      await expect(page.getByRole("heading", { level: 1, name: language === "de" ? "Übersicht" : "Overview" })).toBeVisible();
+      await expect(page.getByText(language === "de" ? german : emptyState, { exact: true })).toBeVisible();
+      await expect(page.locator('a[href="#/team"]')).toHaveCount(0);
+      await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+      await noHorizontalScroll(page);
+    }
+  }
+
   for (const [hash, title] of [["#/jobs", "Jobs"], ["#/templates", "Templates"]]) {
     await page.goto(`/${hash}`);
     await expect(page.getByRole("heading", { level: 1, name: title })).toBeVisible();
