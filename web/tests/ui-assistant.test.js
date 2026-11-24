@@ -128,6 +128,7 @@ test("the context chip follows the page, clears the next message, and maps every
   assert.deepEqual(assistant.assistantContextForHash("#/projects/p1"), { type: "project", id: "p1" });
   assert.deepEqual(assistant.assistantContextForHash("#/environments/e1"), { type: "environment", id: "e1" });
   assert.deepEqual(assistant.assistantContextForHash("#/jobs"), { type: "job" });
+  assert.deepEqual(assistant.assistantContextForHash("#/jobs/%E0"), { type: "job", id: "%E0" });
   assert.equal(assistant.assistantContextForHash("#/settings"), null);
 
   location.hash = "#/inventories/i1";

@@ -151,16 +151,21 @@ async fn job_workflow_and_inventory_context_are_loaded_with_the_callers_rights()
             "/api/inventories",
             Some(&admin),
             Some(&team),
-            Some(json!({"name": "Context inventory", "body": "[web]\nweb-1\n"})),
+            Some(json!({"name": "Context inventory", "body": "[web]\nweb-1 ansible_become_pass=host-secret-123\n"})),
         )
         .await;
     assert_eq!(status, StatusCode::CREATED, "{inventory}");
     let inventory_id = inventory["id"].as_str().unwrap().to_string();
 
     for (kind, id, expected) in [
-        ("job", "context-job", "Context job"),
-        ("workflow", workflow_id.as_str(), "Context workflow"),
-        ("inventory", inventory_id.as_str(), "Context inventory"),
+        ("job".to_string(), "context-job".to_string(), "Context job"),
+        ("workflow".to_string(), workflow_id, "Context workflow"),
+        (
+            "inventory".to_string(),
+            inventory_id.clone(),
+            "Context inventory",
+        ),
+        ("host".to_string(), format!("{inventory_id}/web-1"), "web-1"),
     ] {
         let (endpoint, server) = stub().await;
         save_assistant(&app, &admin, &endpoint).await;
@@ -199,6 +204,16 @@ async fn job_workflow_and_inventory_context_are_loaded_with_the_callers_rights()
             assert!(
                 prompt.contains("[redacted]"),
                 "the job metadata is not redacted: {prompt}"
+            );
+        }
+        if kind == "host" {
+            assert!(
+                !prompt.contains("host-secret-123"),
+                "the host variables leak into the prompt: {prompt}"
+            );
+            assert!(
+                prompt.contains("[redacted]"),
+                "the host variables are not redacted: {prompt}"
             );
         }
     }

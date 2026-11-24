@@ -69,7 +69,12 @@ export function assistantContextForHash(hash) {
   const params = new URLSearchParams(rawQuery || "");
   const segment = (index) => {
     const value = parts[index];
-    return value ? decodeURIComponent(value) : "";
+    if (!value) return "";
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
   };
   switch (parts[0]) {
     case "jobs":
