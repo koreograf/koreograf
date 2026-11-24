@@ -30,6 +30,7 @@
   "no_jobs_in_this_range": "Keine Aufträge in diesem Zeitraum.",
   "no_pending_job": "Kein wartender Auftrag.",
   "no_upcoming_schedules": "Keine geplanten Zeitpläne.",
+  "oldest_pending_job": "Ältester wartender Auftrag",
   "oldest_pending_waited": "Ältester wartender Auftrag wartet seit {duration}.",
   "open": "Öffnen",
   "open_log": "Protokoll öffnen",

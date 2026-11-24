@@ -4249,6 +4249,127 @@ async fn overview_glance_survives_a_restart_with_an_empty_metrics_book() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn overview_glance_counts_finished_jobs_on_postgres() {
+    let Some(mut harness) = TestApp::boot_postgres("overview-postgres", Options::default()).await
+    else {
+        return;
+    };
+    let app = harness.app.clone();
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("admin cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+    let other_team = create_glance_other_team(&app, &cookie).await;
+
+    let now = chrono::Utc::now();
+    let stamp = |offset: chrono::Duration| (now + offset).format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let insert = |id: &str, team: &str, status: &str, created: &str, finished: &str| {
+        format!(
+            "INSERT INTO jobs (
+                id, team_id, name, tool, status, extra_vars, launched_by, trigger,
+                started_at, finished_at, created_at
+             ) VALUES ('{id}', '{team}', '{id}', 'shell', '{status}', '{{}}', 'admin',
+                       'manual', '{finished}', '{finished}', '{created}');"
+        )
+    };
+    let mut sql = String::new();
+    for index in 0..2 {
+        let at = stamp(chrono::Duration::hours(-2 - index));
+        sql.push_str(&insert(
+            &format!("pg-success-{index}"),
+            &team,
+            "successful",
+            &at,
+            &at,
+        ));
+    }
+    sql.push_str(&insert(
+        "pg-failed-a",
+        &team,
+        "failed",
+        &stamp(chrono::Duration::hours(-5)),
+        &stamp(chrono::Duration::hours(-4)),
+    ));
+    sql.push_str(&insert(
+        "pg-canceled-a",
+        &team,
+        "canceled",
+        &stamp(chrono::Duration::hours(-7)),
+        &stamp(chrono::Duration::hours(-6)),
+    ));
+    sql.push_str(&insert(
+        "pg-failed-old-a",
+        &team,
+        "failed",
+        &stamp(chrono::Duration::days(-2)),
+        &stamp(chrono::Duration::days(-2)),
+    ));
+    sql.push_str(&insert(
+        "pg-failed-b",
+        &other_team,
+        "failed",
+        &stamp(chrono::Duration::hours(-1)),
+        &stamp(chrono::Duration::hours(-1)),
+    ));
+    harness.execute_sql(&sql).await;
+
+    let glance = |overview: &Value| overview["glance"]["jobs"].clone();
+    let (status, first, _) = call(
+        &harness.app,
+        "GET",
+        "/api/v1/overview",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(glance(&first)["failed_24h"], 1);
+    assert_eq!(glance(&first)["successful_24h"], 2);
+    assert_eq!(glance(&first)["finished_24h"], 4);
+    let failed: Vec<String> = glance(&first)["failed_items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(failed, vec!["pg-failed-a", "pg-canceled-a"]);
+    assert_eq!(glance(&first)["failed_24h"], 1, "another team leaked in");
+
+    harness.reboot();
+    let (status, _, cookie) = call(
+        &harness.app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let cookie = cookie.expect("admin cookie after restart");
+    let (status, second, _) = call(
+        &harness.app,
+        "GET",
+        "/api/v1/overview",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(glance(&second), glance(&first));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn mcp_tools_call_the_http_api() {
     let harness = TestApp::boot("mcp", Options::default());
     let app = harness.app.clone();

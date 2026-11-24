@@ -125,6 +125,7 @@ test("the overview kpi tiles are links with warning tones", async () => {
   assert.match(busy, /class="kpi bad" data-kpi="problem-hosts"/, "problem hosts have no bad tone");
   assert.match(busy, /<strong class="kpi-value">2 \/ 2<\/strong>/);
   assert.match(busy, /<strong class="kpi-value">60%<\/strong>/);
+  assert.match(busy.slice(busy.indexOf('data-kpi="problem-hosts"')), /<strong class="kpi-value">3<\/strong>/, "stale hosts are missing from the problem count");
   assert.match(busy, /oldest_pending_waited/);
   assert.match(busy, /problem_hosts_detail/);
 });
@@ -210,6 +211,30 @@ test("the overview shares one attention list and drops the cache card", async ()
   assert.match(empty, /data-attention-clear/);
   assert.match(empty, /attention_all_clear/);
   assert.doesNotMatch(empty, /attention-item/, "an empty attention list still renders rows");
+});
+
+test("the attention list falls back to the oldest wait when the queue is full", async () => {
+  const state = await load("core/state.js");
+  const { attentionItems } = await load("features/dashboard.js");
+  state.setMe({ is_admin: false, display_name: "Operator", auth_source: "local", teams: [{ id: "t1", name: "Team", role: "operator" }] });
+  state.setTeamId("t1");
+  const old = new Date(Date.now() - 90 * 60 * 1000).toISOString();
+  const recent = new Date().toISOString();
+  const running = Array.from({ length: 8 }, (_, index) => ({
+    id: `running-${index}`,
+    name: `Running ${index}`,
+    status: "running",
+    created_at: recent,
+  }));
+  const items = attentionItems({
+    glance: {
+      jobs: { running: 8, pending: 2, oldest_pending_at: old, items: running },
+    },
+  });
+  assert.equal(items.length, 1, "the full queue hid the waiting job");
+  assert.match(items[0], /data-attention-kind="pending"/);
+  assert.match(items[0], /href="#\/jobs\?status=pending"/);
+  assert.match(items[0], /oldest_pending_job/);
 });
 
 test("the overview detail cards keep an empty state", async () => {

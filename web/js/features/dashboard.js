@@ -121,6 +121,7 @@ export function kpiRow(data) {
   const finished = Number(jobs.finished_24h) || 0;
   const hostFailed = Number(hosts.failed) || 0;
   const hostStale = Number(hosts.stale) || 0;
+  const hostTotal = hostFailed + hostStale;
   const full = limit > 0 && running >= limit;
   const pendingHint = pending && jobs.oldest_pending_at
     ? h("oldest_pending_waited", { duration: waitedText(jobs.oldest_pending_at) })
@@ -131,7 +132,7 @@ export function kpiRow(data) {
     ${kpiTile("pending", "pending", String(pending), { href: "#/jobs?status=pending", hint: pendingHint })}
     ${kpiTile("failed-24h", "failed_24h", String(failed), { href: "#/jobs?status=failed", tone: failed ? "bad" : "", hint: h("last_24_hours") })}
     ${kpiTile("success-rate", "success_rate_24h", rate, { href: "#/jobs?status=successful", hint: h("success_rate_detail", { successful, finished }) })}
-    ${kpiTile("problem-hosts", "problem_hosts_tile", String(hostFailed), { href: "#/inventories", tone: hostFailed ? "bad" : "", hint: h("problem_hosts_detail", { failed: hostFailed, stale: hostStale }) })}
+    ${kpiTile("problem-hosts", "problem_hosts_tile", String(hostTotal), { href: "#/inventories", tone: hostTotal ? "bad" : "", hint: h("problem_hosts_detail", { failed: hostFailed, stale: hostStale }) })}
   </div>`;
 }
 
@@ -191,12 +192,21 @@ export function attentionItems(data) {
     items.push(attentionRow("host", badge, host.host, href, relativeTime(host.ts), `<a class="btn compact" href="${href}">${h("open")}</a>`));
   }
   const threshold = Date.now() - PENDING_ATTENTION_MINUTES * 60 * 1000;
+  let pendingListed = false;
   for (const job of jobs.items || []) {
     if (job.status !== "pending") continue;
     const created = Date.parse(job.created_at);
     if (Number.isNaN(created) || created > threshold) continue;
     const href = `#/jobs/${encodeURIComponent(job.id)}`;
     items.push(attentionRow("pending", pill(job.status), job.name, href, relativeTime(job.created_at), `<a class="btn compact" href="${href}">${h("open_log")}</a>`));
+    pendingListed = true;
+  }
+  // Eight running jobs can fill the busy list before an old pending job
+  // appears. Fall back to the team-wide oldest wait so it still shows.
+  const oldestPending = jobs.oldest_pending_at ? Date.parse(jobs.oldest_pending_at) : NaN;
+  if (!pendingListed && (Number(jobs.pending) || 0) > 0 && !Number.isNaN(oldestPending) && oldestPending <= threshold) {
+    const href = "#/jobs?status=pending";
+    items.push(attentionRow("pending", pill("pending"), t("oldest_pending_job"), href, relativeTime(jobs.oldest_pending_at), `<a class="btn compact" href="${href}">${h("open")}</a>`));
   }
   return items;
 }

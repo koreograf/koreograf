@@ -30,6 +30,7 @@
   "no_jobs_in_this_range": "No jobs in this range.",
   "no_pending_job": "No pending job.",
   "no_upcoming_schedules": "No upcoming schedules.",
+  "oldest_pending_job": "Oldest pending job",
   "oldest_pending_waited": "Oldest pending job has waited {duration}.",
   "open": "Open",
   "open_log": "Open log",
