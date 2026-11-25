@@ -26,7 +26,7 @@ async function signIn(page) {
   await page.getByLabel("Username").fill(username);
   await page.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Operations" })).toBeVisible();
   await noHorizontalScroll(page);
 }
 
@@ -36,7 +36,7 @@ async function signInGerman(page) {
   await page.getByLabel("Benutzername").fill(username);
   await page.getByLabel("Passwort").fill(password);
   await page.getByRole("button", { name: "Anmelden", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Übersicht" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Betrieb" })).toBeVisible();
   await noHorizontalScroll(page);
 }
 
@@ -401,9 +401,13 @@ test("keeps every phone touch target at least 44 px", async ({ page }) => {
     await expectTouchTarget(page.locator("label:has(#log-wrap)"), `${where} log wrap checkbox`);
     await noHorizontalScroll(page);
 
-    await goTo(page, "Overview");
+    await openMenu(page);
+    await page.getByRole("navigation").getByRole("link", { name: "Overview", exact: true }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Operations" })).toBeVisible();
+    await expectTouchTarget(page.getByRole("tab", { name: "Overview", exact: true }), `${where} overview tab`);
     await page.getByRole("tab", { name: "Dashboard", exact: true }).click();
     await expect(page.getByRole("heading", { level: 2, name: "Jobs per hour" })).toBeVisible();
+    await expectTouchTarget(page.getByRole("button", { name: "Today", exact: true }), `${where} range segment`);
     await page.getByRole("button", { name: "14 days", exact: true }).click();
     await expect(page.getByRole("heading", { level: 2, name: "Jobs per day" })).toBeVisible();
     const days = page.locator("[data-chart-day]");
@@ -434,7 +438,7 @@ test("keeps every phone touch target at least 44 px", async ({ page }) => {
     await expect(page).toHaveURL(/#\/jobs\?.*since=/);
     await noHorizontalScroll(page);
     await page.goto("/#/");
-    await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Operations" })).toBeVisible();
 
     await openMenu(page);
     await page.getByRole("button", { name: "Language" }).click();
@@ -813,7 +817,7 @@ test("the overview shows kpis, attention and recent activity on a phone", async 
   const schedule = await createSchedule(page, `Glance schedule ${suffix}`);
   await page.goto("/#/");
   await page.reload();
-  await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Operations" })).toBeVisible();
 
   const kpis = page.locator("[data-kpi-row] [data-kpi]");
   await expect(kpis).toHaveCount(5);
@@ -827,7 +831,7 @@ test("the overview shows kpis, attention and recent activity on a phone", async 
   await expect(page.locator("[data-recent-activity]")).toBeVisible();
   await expect(page.locator('[data-glance-card="cache"]')).toHaveCount(0);
   await expect(page.locator('[data-glance-card="schedules"]')).toContainText(schedule.name);
-  await expect(page.locator('[data-glance-card="hosts"]')).toContainText("Failed and unreachable");
+  await expect(page.locator('[data-glance-card="hosts"]')).toContainText("Problem hosts");
   await expect(page.locator('[data-glance-card="syncs"]')).toContainText("Failed syncs");
   await expect(page.locator('[data-glance-card="workflows"]')).toContainText("Workflow runs");
 
@@ -842,13 +846,13 @@ test("the overview shows kpis, attention and recent activity on a phone", async 
         localStorage.setItem("koreograf.theme", mode);
       }, [lang, theme]);
       await page.reload();
-      await expect(page.getByRole("heading", { level: 1, name: lang === "de" ? "Übersicht" : "Overview" })).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: lang === "de" ? "Betrieb" : "Operations" })).toBeVisible();
       await expect(page.locator('[data-kpi="failed-24h"]')).toBeVisible();
       await noHorizontalScroll(page);
     }
   }
 
-  await page.locator('[data-glance-card="schedules"]').getByRole("link", { name: "Schedules", exact: true }).first().click();
+  await page.locator('[data-glance-card="schedules"]').getByRole("link", { name: "View schedules", exact: true }).first().click();
   await expect(page.getByRole("heading", { level: 1, name: "Schedules" })).toBeVisible();
   await noHorizontalScroll(page);
 });

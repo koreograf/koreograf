@@ -12,6 +12,14 @@ async function noHorizontalScroll(page) {
   ).toBe(true);
 }
 
+async function textLines(locator) {
+  return locator.evaluate((node) => {
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    return new Set([...range.getClientRects()].map((rect) => Math.round(rect.top))).size;
+  });
+}
+
 async function signInAs(page, user, secret) {
   await page.goto("/");
   await expect(page.getByRole("button", { name: /^(Sprache|Language)$/ })).toBeVisible();
@@ -23,7 +31,7 @@ async function signInAs(page, user, secret) {
   await page.getByLabel("Username").fill(user);
   await page.getByLabel("Password").fill(secret);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Operations" })).toBeVisible();
   await noHorizontalScroll(page);
 }
 
@@ -89,7 +97,7 @@ async function createTeam(page, name) {
 async function selectTeam(page, teamId) {
   await page.evaluate((id) => localStorage.setItem("koreograf.team", id), teamId);
   await page.reload();
-  await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Operations" })).toBeVisible();
 }
 
 async function createSchedule(page, teamId, templateId, name) {
@@ -128,7 +136,7 @@ test("the 1440 overview keeps kpis and five recent jobs in the first viewport", 
 
   await page.goto("/#/");
   await page.reload();
-  await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Operations" })).toBeVisible();
 
   const kpis = page.locator("[data-kpi-row]");
   await expect(kpis).toBeVisible();
@@ -199,7 +207,7 @@ test("the 1440 overview launches from the header picker and quick launch", async
 
   await page.goto("/#/");
   await page.reload();
-  await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Operations" })).toBeVisible();
 
   const header = page.locator("[data-launch-template]");
   await expect(header).toBeVisible();
@@ -254,7 +262,7 @@ test("the 412 overview keeps the header action and a quick start usable", async 
 
   await page.goto("/#/");
   await page.reload();
-  await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Operations" })).toBeVisible();
   const header = page.locator("[data-launch-template]");
   await expect(header).toBeVisible();
   const box = await header.boundingBox();
@@ -272,20 +280,69 @@ test("the 412 overview keeps the header action and a quick start usable", async 
   await noHorizontalScroll(page);
 });
 
-test("the 1280 overview keeps two columns in German and dark", async ({ page }, testInfo) => {
+test("the 1280 overview keeps one-line names and distinct tabs in German and dark", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "overview", "the desktop viewport project only");
-  test.setTimeout(60000);
+  test.setTimeout(90000);
   await signIn(page);
-  await page.setViewportSize({ width: 1280, height: 900 });
+  const slow = await createShellTemplate(page, "H Slow", "echo slow");
+  await launchAndWait(page, slow);
+  await page.setViewportSize({ width: 1280, height: 800 });
   await page.evaluate(() => {
     localStorage.setItem("koreograf.lang", "de");
     localStorage.setItem("koreograf.theme", "dark");
   });
   await page.reload();
-  await expect(page.getByRole("heading", { level: 1, name: "Übersicht" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Betrieb" })).toBeVisible();
   await expect(page.locator("[data-kpi-row] [data-kpi]")).toHaveCount(5);
   const columns = await page.locator(".overview-main").evaluate((node) => getComputedStyle(node).gridTemplateColumns);
   expect(columns.trim().split(/\s+/), "the overview does not use two columns at 1280").toHaveLength(2);
+
+  const overviewTab = page.getByRole("tab", { name: "Übersicht", exact: true });
+  await expect(overviewTab).toHaveClass(/page-tab/);
+  await expect(overviewTab).not.toHaveClass(/btn/);
+  const tabStyle = await overviewTab.evaluate((node) => ({
+    background: getComputedStyle(node).backgroundColor,
+    border: getComputedStyle(node).borderBottomColor,
+  }));
+  expect(tabStyle.background, "the selected page tab still looks like a pill").toBe("rgba(0, 0, 0, 0)");
+  expect(tabStyle.border, "the selected page tab has no underline").not.toBe("rgba(0, 0, 0, 0)");
+
+  const nameCell = page.locator("[data-recent-activity] tbody tr").filter({ hasText: "H Slow" }).first().locator("td").first();
+  await expect(nameCell).toHaveCSS("white-space", "nowrap");
+  expect(await textLines(nameCell.locator("a")), "H Slow wraps at 1280").toBe(1);
+
+  await page.getByRole("tab", { name: "Dashboard", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Betrieb" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Dashboard", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".page-tabs .btn")).toHaveCount(0);
+  const range = page.getByRole("group", { name: "Zeitraum", exact: true });
+  await expect(range).toBeVisible();
+  const today = range.getByRole("button", { name: "Heute", exact: true });
+  await expect(today).toHaveAttribute("aria-pressed", "true");
+  const rangeStyle = await today.evaluate((node) => getComputedStyle(node).backgroundColor);
+  expect(rangeStyle, "the range control still looks like the page tabs").not.toBe("rgba(0, 0, 0, 0)");
+  await noHorizontalScroll(page);
+});
+
+test("the 1280 inventory host list keeps a short host name on one line", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "overview", "the desktop viewport project only");
+  test.setTimeout(60000);
+  await signIn(page);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const headers = await teamHeaders(page);
+  const created = await post(page.request, "/api/v1/inventories", {
+    headers,
+    data: { name: `Ghost hosts ${Date.now().toString(36)}`, body: "[all]\nghost\n" },
+  });
+  expect(created.status()).toBe(201);
+  const inventory = await created.json();
+  await page.goto(`/#/inventories/${inventory.id}`);
+  await expect(page.getByRole("heading", { level: 1, name: inventory.name })).toBeVisible();
+  const host = page.locator("#host-table tbody tr").filter({ hasText: "ghost" }).first();
+  const link = host.locator("a.host-name");
+  await expect(link).toHaveCSS("white-space", "nowrap");
+  await expect(link).toHaveCSS("word-break", "normal");
+  expect(await textLines(link), "ghost wraps at 1280").toBe(1);
   await noHorizontalScroll(page);
 });
 
@@ -365,7 +422,7 @@ test("the 412 overview and its dark theme keep one column without sideways scrol
 
   await page.evaluate(() => localStorage.setItem("koreograf.theme", "dark"));
   await page.reload();
-  await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Operations" })).toBeVisible();
 
   await expect(page.locator("[data-kpi-row] [data-kpi]")).toHaveCount(5);
   const failed = page.locator('[data-kpi="failed-24h"]');

@@ -185,7 +185,8 @@ test("an administrator navigates every route, launches the demo shell job and sw
 
   for (const label of labels) {
     await nav.getByRole("link", { name: label, exact: true }).click();
-    await expect(page.getByRole("heading", { level: 1, name: label })).toBeVisible();
+    const heading = label === "Overview" ? "Operations" : label;
+    await expect(page.getByRole("heading", { level: 1, name: heading })).toBeVisible();
     await expect(page.getByRole("heading", { name: catalog.en.routeError })).toHaveCount(0);
     await expect(page.getByText(catalog.en.missingPage, { exact: true })).toHaveCount(0);
     expect(new URL(page.url()).hash).not.toBe("");
@@ -319,16 +320,16 @@ test("an administrator navigates every route, launches the demo shell job and sw
 
 test("a route change focuses the heading without a ring and keeps keyboard rings", async ({ page }) => {
   await signInInEnglish(page);
-  await expectSilentHeading(page, "Overview");
+  await expectSilentHeading(page, "Operations");
 
   await page.reload();
-  await expectSilentHeading(page, "Overview");
+  await expectSilentHeading(page, "Operations");
 
   const nav = page.getByRole("navigation");
   await nav.getByRole("link", { name: "Templates", exact: true }).click();
   await expectSilentHeading(page, "Templates");
   await nav.getByRole("link", { name: "Overview", exact: true }).click();
-  await expectSilentHeading(page, "Overview");
+  await expectSilentHeading(page, "Operations");
 
   await page.keyboard.press("Shift+Tab");
   await expectVisibleRing(page.getByRole("button", { name: "Sign out", exact: true }), "the sidebar button");

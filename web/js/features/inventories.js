@@ -547,8 +547,8 @@ export function inventoryHostTable(hosts, state, id) {
   };
   const rows = hosts.map((host) => {
     const link = id
-      ? `<a class="mono" href="#/inventories/${encodeURIComponent(id)}/hosts/${encodeURIComponent(host.name)}">${esc(host.name)}</a>`
-      : `<span class="mono">${esc(host.name)}</span>`;
+      ? `<a class="mono host-name" href="#/inventories/${encodeURIComponent(id)}/hosts/${encodeURIComponent(host.name)}">${esc(host.name)}</a>`
+      : `<span class="mono host-name">${esc(host.name)}</span>`;
     return `<tr><td data-label="${esc(t("name"))}">${link}</td><td class="mono" data-label="${esc(t("address"))}">${esc((host.vars || {}).ansible_host || "")}</td><td data-label="${esc(t("groups"))}">${esc((host.groups || []).join(", "))}</td></tr>`;
   });
   return `<div class="table-wrap inventory-hosts-table"><table class="table"><thead><tr>${head("name", "name")}${head("address", "address")}${head("groups", "groups")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
