@@ -403,8 +403,9 @@ test("keeps every phone touch target at least 44 px", async ({ page }) => {
 
     await goTo(page, "Overview");
     await page.getByRole("tab", { name: "Dashboard", exact: true }).click();
-    await expect(page.getByRole("heading", { level: 2, name: "Jobs per day" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 2, name: "Jobs per hour" })).toBeVisible();
     await page.getByRole("button", { name: "14 days", exact: true }).click();
+    await expect(page.getByRole("heading", { level: 2, name: "Jobs per day" })).toBeVisible();
     const days = page.locator("[data-chart-day]");
     await expect(days).toHaveCount(14);
     const boxes = await days.evaluateAll((elements) => elements.map((element) => {

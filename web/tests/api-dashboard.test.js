@@ -108,6 +108,26 @@ test("the dashboard omits zero totals and uses the short day in the detail", asy
   assert.doesNotMatch(titles[1], /2026-11-06/, "the detail still shows the ISO date");
 });
 
+test("a chart day opens the jobs list for its range", async () => {
+  const { bindDashboardCharts, dashboardBody } = await load("features/dashboard.js");
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  host.innerHTML = dashboardBody({
+    series: [{ date: "2026-11-25", started: 2, successful: 1, failed: 1, canceled: 0 }],
+    cache: {},
+  }, "1");
+  bindDashboardCharts();
+  const day = host.querySelector("[data-chart-day]");
+  location.hash = "#/";
+  day.dispatchEvent({ type: "click", target: day });
+  assert.match(location.hash, /^#\/jobs\?since=/, "a whole-day click lost its range");
+  assert.doesNotMatch(location.hash, /status=/, "a whole-day click filters a status");
+  location.hash = "#/";
+  day.dispatchEvent({ type: "click", target: host.querySelector(".chart-seg.failed") });
+  assert.match(location.hash, /^#\/jobs\?status=failed&since=/, "a failed segment does not filter failures");
+  host.remove();
+});
+
 test("canceled has its own colour and the legend uses swatches", async () => {
   const { dashboardBody } = await load("features/dashboard.js");
   const { rule, stylesheet } = require("./css.js");

@@ -538,12 +538,12 @@ function jobsAddress(status, since, until) {
 }
 
 function bucketRange(data) {
-  const date = String(data.date || "");
+  const date = String(data.chartDate || "");
   if (!date) return null;
   const start = new Date(`${date}T00:00:00`);
   if (Number.isNaN(start.getTime())) return null;
-  if (data.hour !== undefined && data.hour !== "") {
-    start.setHours(Number(data.hour), 0, 0, 0);
+  if (data.chartHour !== undefined && data.chartHour !== "") {
+    start.setHours(Number(data.chartHour), 0, 0, 0);
     return {
       since: start.toISOString(),
       until: new Date(start.getTime() + 60 * 60 * 1000).toISOString(),
@@ -688,7 +688,7 @@ export function dashboardBody(data, range) {
     </div>`;
 }
 
-function bindDashboardCharts() {
+export function bindDashboardCharts() {
   const details = [...document.querySelectorAll("[data-chart-detail]")];
   // A phone shows fewer than 14 days at once; keep the newest day in view.
   document.querySelectorAll(".chart").forEach((chart) => {
