@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.1.0-alpha.17](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.16...v0.1.0-alpha.17) (2026-11-25)
+
+
+### Features
+
+* add a primary launch action and recent templates to the overview ([#664](https://github.com/koreograf/koreograf/issues/664)) ([9fd41ab](https://github.com/koreograf/koreograf/commit/9fd41ab5a1769f8d4d09512d993d4c5bf3da83e1))
+* add rates and drill-down to the dashboard ([#670](https://github.com/koreograf/koreograf/issues/670)) ([757df94](https://github.com/koreograf/koreograf/commit/757df9467e87f0787cc872b2c58c59c301ce3a28))
+* allow relaunching successful jobs ([#660](https://github.com/koreograf/koreograf/issues/660)) ([bd7c378](https://github.com/koreograf/koreograf/commit/bd7c378da9a964c8154af009450f3220d45e3043))
+* let templates mark single fields as prompt on launch ([#657](https://github.com/koreograf/koreograf/issues/657)) ([9d03352](https://github.com/koreograf/koreograf/commit/9d033527b66e3b00c75f55efbdc96a16ea185737))
+* restructure the overview around kpis and attention items ([#662](https://github.com/koreograf/koreograf/issues/662)) ([0d2ad51](https://github.com/koreograf/koreograf/commit/0d2ad510db2d124ac249a67d60c742cc92329023))
+
+
+### Bug Fixes
+
+* clarify overview navigation and labels ([#671](https://github.com/koreograf/koreograf/issues/671)) ([d865373](https://github.com/koreograf/koreograf/commit/d86537333294faabe552d06b2abb0fc68b838a3f))
+* collapse empty glance cards into a compact healthy state ([#666](https://github.com/koreograf/koreograf/issues/666)) ([aa978c4](https://github.com/koreograf/koreograf/commit/aa978c4575e06223af97d194eb8ff57313a9ad86))
+* land users without a team on a lean empty state ([#663](https://github.com/koreograf/koreograf/issues/663)) ([27fe44a](https://github.com/koreograf/koreograf/commit/27fe44a7143681e2d8aa7b1303da4ef36d6af6d5))
+* list running jobs before pending ones in the overview queue ([#661](https://github.com/koreograf/koreograf/issues/661)) ([2876751](https://github.com/koreograf/koreograf/commit/2876751937646786e2fa2834a259809d28deb4c1))
+* refresh galaxy caches when requirements change ([#669](https://github.com/koreograf/koreograf/issues/669)) ([3942e1e](https://github.com/koreograf/koreograf/commit/3942e1e81561ef280cbd60178a8b04d90e79b130))
+* show only onboarding on an empty team overview ([#668](https://github.com/koreograf/koreograf/issues/668)) ([3b03083](https://github.com/koreograf/koreograf/commit/3b030831dd06d26ad5c8f5154da853dec1be89e8))
+
 ## [0.1.0-alpha.16](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.15...v0.1.0-alpha.16) (2026-11-24)
 
 
