@@ -433,6 +433,8 @@ test("keeps every phone touch target at least 44 px", async ({ page }) => {
     await chart.locator("[data-chart-day]").last().click();
     await expect(page).toHaveURL(/#\/jobs\?.*since=/);
     await noHorizontalScroll(page);
+    await page.goto("/#/");
+    await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
 
     await openMenu(page);
     await page.getByRole("button", { name: "Language" }).click();
