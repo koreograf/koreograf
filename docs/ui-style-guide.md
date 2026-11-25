@@ -137,6 +137,8 @@ A list page puts its search in `.search`, optional filters in `.filter-row`, and
 
 A file path in a cell uses `td.entry` with a `span.entry-path` inside. The span stays on one line, ends in an ellipsis when the column is narrow, and carries the full path in `title`; the templates list shows the pattern.
 
+A name column uses `td.cell-name`: the cell stays on one line and ends in an ellipsis when the column is narrow. A host name uses `.host-name` so it stays on one line and never breaks inside the word. The 640 px card layout restores normal wrapping for both.
+
 ### Status pills
 
 `pill(status)` renders a `.pill` span with the translated label. The status is also the class: `.pending`, `.running`, `.successful`, `.failed`, `.canceled`, `.skipped`, and `.warn`. The label carries the meaning; the color is a second signal.
@@ -162,20 +164,22 @@ The overview starts with `.kpi-row`, one `.kpi` link per number. The tile holds 
 
 `Needs attention` is one `.attention-list` inside a card. Each `.attention-item` carries a status pill, an `.attention-body` with the object link and its relative time, and `.attention-actions` with the action links or buttons. An empty list renders one `.attention-clear` line instead of empty cards.
 
-The glance cards below the main row use `.glance-grid` so every card keeps its natural height. A card with nothing to show collapses to one `.glance-healthy` line instead of a stat pair, help text, and an empty table. A populated card keeps its counts, help text, and list, so a mixed row shows a short healthy card next to a tall list.
+The glance cards below the main row use `.glance-grid` so every card keeps its natural height. A card with nothing to show collapses to one `.glance-healthy` line instead of a stat pair, help text, and an empty table. A populated card keeps its counts, help text, and list, so a mixed row shows a short healthy card next to a tall list. A glance card links to its list with a `.glance-link` text link and an arrow, not a `.btn.compact` that looks like a toggle. The host card counts failed, unreachable, and stale hosts, so its title uses the dashboard key `dashboard.problem_hosts`; `jobs.problem_hosts` stays the filter title on the job page.
 
 The overview header carries its one primary action, `Launch template`, in the `shell` actions slot. A Quick launch card lists the team's recent templates in `.quick-launch-list`; each `.quick-launch-item` keeps the name and its Start button on one row. The header action opens a picker whose `.picker-list` holds one `.picker-option` button per template. Both a picker option and a Start button open the same launch dialog as the templates page. Test alert stays a secondary `.btn`.
 
 ### Tabs
 
-Page-level tabs use `.tabs` and `.tab-bar` above the panels. Tabs inside an overlay use `.dialog-tabs`, `.dialog-tab`, and `.dialog-panel`. The overlay helper sets `role="tablist"`, `role="tab"`, `role="tabpanel"`, `aria-selected`, and `tabindex`.
+Page-level tabs use `.page-tabs` and `.page-tab` above the panels. The selected tab carries an accent underline instead of a pill, so it never looks like a range control. A range or view switch inside a page uses `.segmented` with one `.segment` button per choice and `aria-pressed` on the selected one. Tabs inside an overlay use `.dialog-tabs`, `.dialog-tab`, and `.dialog-panel`. The overlay helper sets `role="tablist"`, `role="tab"`, `role="tabpanel"`, `aria-selected`, and `tabindex`.
 
 ```html
-<div class="spread tab-bar">
-  <div class="tabs">
-    <button class="btn pill primary" type="button">Output</button>
-    <button class="btn pill" type="button">Parameters</button>
-  </div>
+<div class="page-tabs" role="tablist">
+  <button class="page-tab" type="button" role="tab" aria-selected="true">Overview</button>
+  <button class="page-tab" type="button" role="tab" aria-selected="false">Dashboard</button>
+</div>
+<div class="segmented" role="group" aria-label="Range">
+  <button class="segment" type="button" aria-pressed="true">Today</button>
+  <button class="segment" type="button" aria-pressed="false">7 days</button>
 </div>
 ```
 

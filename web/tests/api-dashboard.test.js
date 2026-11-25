@@ -26,17 +26,23 @@ test("the dashboard page shows the empty state and the cache numbers", async () 
 
   const tabs = dashboardTabs("overview");
   assert.match(tabs, /role="tablist"/);
+  assert.match(tabs, /class="page-tabs"/);
   assert.match(tabs, /id="tab-overview" aria-selected="true"/);
   assert.match(tabs, /id="tab-dashboard" aria-selected="false"/);
+  assert.doesNotMatch(tabs, /btn pill/, "the page tabs still look like buttons");
+  assert.match(tabs, /id="tab-overview" aria-selected="true" aria-controls="panel-overview" tabindex="0"/);
+  assert.match(tabs, /id="tab-dashboard" aria-selected="false" aria-controls="panel-dashboard" tabindex="-1"/);
 
   const empty = dashboardBody(
     { series: [{ date: "2026-11-05", started: 0, successful: 0, failed: 0, canceled: 0 }], cache: { collections: 0, roles: 0, tofu_bytes: 0 } },
     "1",
   );
   assert.match(empty, /no_jobs_in_this_range/);
+  assert.match(empty, /class="segmented" role="group" aria-label="range"/);
   assert.match(empty, /data-dashboard-range="1" aria-pressed="true"/);
   assert.match(empty, /data-dashboard-range="7" aria-pressed="false"/);
   assert.match(empty, /data-dashboard-range="14" aria-pressed="false"/);
+  assert.doesNotMatch(empty, /class="btn pill[^"]*"[^>]*data-dashboard-range/, "the range control still looks like a tab bar");
 
   const filled = dashboardBody(
     { series: [{ date: "2026-11-05", started: 3, successful: 1, failed: 1, canceled: 1 }], cache: { collections: 2, roles: 4, tofu_bytes: 2048 } },
@@ -51,6 +57,33 @@ test("the dashboard page shows the empty state and the cache numbers", async () 
   assert.match(filled, /<span class="small muted">roles<\/span><strong>4<\/strong>/);
   assert.match(filled, /<span class="small muted">opentofu<\/span><strong>2\.0 KiB<\/strong>/);
   assert.doesNotMatch(filled.slice(filled.indexOf("dependency_cache")), /class="chart"/);
+});
+
+test("the page tabs and the range control use different shapes", () => {
+  const { stylesheet, rule } = require("./css.js");
+  const tab = rule(stylesheet(), ".page-tab");
+  const selected = rule(stylesheet(), '.page-tab[aria-selected="true"]');
+  const segment = rule(stylesheet(), ".segmented");
+  assert.ok(tab, "the underline tab rule is missing");
+  assert.match(tab[1], /background:\s*transparent/);
+  assert.ok(selected, "the selected page tab rule is missing");
+  assert.match(selected[1], /border-bottom-color:\s*var\(--accent\)/);
+  assert.ok(segment, "the segmented range rule is missing");
+  assert.match(segment[1], /border-radius:\s*10px/);
+  assert.match(rule(stylesheet(), '.segment[aria-pressed="true"]')[1], /background:\s*var\(--accent-soft\)/);
+});
+
+test("dashboard name cells and host names stay on one line", () => {
+  const { stylesheet, rule } = require("./css.js");
+  const name = rule(stylesheet(), ".table .cell-name");
+  const host = rule(stylesheet(), ".table .host-name");
+  assert.ok(name, "the name cell rule is missing");
+  assert.match(name[1], /white-space:\s*nowrap/);
+  assert.match(name[1], /text-overflow:\s*ellipsis/);
+  assert.ok(host, "the host name rule is missing");
+  assert.match(host[1], /white-space:\s*nowrap/);
+  assert.match(host[1], /overflow-wrap:\s*normal/);
+  assert.match(host[1], /word-break:\s*normal/);
 });
 
 test("a one-day series keeps the column narrow and the failed segment visible", async () => {
@@ -285,7 +318,16 @@ test("the overview shares one attention list and drops the cache card", async ()
   for (const id of ["schedules", "hosts", "syncs", "workflows"]) {
     assert.match(card(id), /<table/, `the populated ${id} card lost its list`);
     assert.doesNotMatch(card(id), /data-glance-healthy/, `the populated ${id} card shows a healthy line`);
+    assert.match(card(id), /class="glance-link"/, `the ${id} card has no text link`);
+    assert.doesNotMatch(card(id), /class="btn compact"/, `the ${id} card link still looks like a button`);
   }
+  assert.match(card("hosts"), /dashboard\.problem_hosts/, "the host card uses the jobs title");
+  const { catalog } = require("./catalog.js");
+  const en = catalog("en");
+  const de = catalog("de");
+  assert.equal(en["dashboard.problem_hosts"], "Problem hosts");
+  assert.equal(de["dashboard.problem_hosts"], "Problem-Hosts");
+  assert.equal(en.problem_hosts, "Failed and unreachable", "the jobs title changed");
   assert.doesNotMatch(html, /data-glance-card="cache"/, "the overview still shows the dependency cache");
   assert.doesNotMatch(html, /cache_bytes/, "the overview renders the cache number");
   assert.match(html, /class="kpi-row"/);
@@ -394,14 +436,20 @@ test("empty glance cards collapse into one healthy line", async () => {
   assert.match(grid[1], /align-items:\s*start;/, "a healthy card can stretch to a tall neighbour");
 });
 
-test("the overview keeps the runner, runtime and directory line", async () => {
-  const { overviewSystemLine } = await load("features/dashboard.js");
+test("only an administrator sees the runner, runtime and directory line", async () => {
+  const state = await load("core/state.js");
+  const { overviewSystemLine, overviewSystemHtml } = await load("features/dashboard.js");
   const line = overviewSystemLine({ runner_mode: "local", runtime: null, ldap: false });
   assert.match(line, /data-overview-system/);
   assert.match(line, /runner/);
   assert.match(line, /no_container_runtime/);
   assert.match(line, /local_accounts/);
   assert.match(overviewSystemLine({ runner_mode: "docker", runtime: "podman", ldap: true }), /ldap_is_configured/);
+
+  state.setMe({ is_admin: false, display_name: "Operator", auth_source: "local", teams: [{ id: "t1", name: "Team", role: "operator" }] });
+  assert.equal(overviewSystemHtml({ runner_mode: "local" }), "", "an operator still sees the system line");
+  state.setMe({ is_admin: true, display_name: "Admin", auth_source: "local", teams: [{ id: "t1", name: "Team", role: "owner" }] });
+  assert.match(overviewSystemHtml({ runner_mode: "local" }), /data-overview-system/);
 });
 
 test("the preflight notice names the missing tool and runtime", async () => {

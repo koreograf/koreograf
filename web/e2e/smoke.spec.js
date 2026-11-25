@@ -319,16 +319,16 @@ test("an administrator navigates every route, launches the demo shell job and sw
 
 test("a route change focuses the heading without a ring and keeps keyboard rings", async ({ page }) => {
   await signInInEnglish(page);
-  await expectSilentHeading(page, "Overview");
+  await expectSilentHeading(page, "Operations");
 
   await page.reload();
-  await expectSilentHeading(page, "Overview");
+  await expectSilentHeading(page, "Operations");
 
   const nav = page.getByRole("navigation");
   await nav.getByRole("link", { name: "Templates", exact: true }).click();
   await expectSilentHeading(page, "Templates");
   await nav.getByRole("link", { name: "Overview", exact: true }).click();
-  await expectSilentHeading(page, "Overview");
+  await expectSilentHeading(page, "Operations");
 
   await page.keyboard.press("Shift+Tab");
   await expectVisibleRing(page.getByRole("button", { name: "Sign out", exact: true }), "the sidebar button");

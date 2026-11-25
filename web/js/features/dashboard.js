@@ -80,8 +80,8 @@ function shortDay(value) {
 }
 
 export function dashboardTabs(tab) {
-  const item = (id) => `<button class="btn pill${tab === id ? " primary" : ""}" type="button" role="tab" id="tab-${id}" aria-selected="${tab === id}" data-page-tab="${id}">${h(id)}</button>`;
-  return `<div class="spread tab-bar"><div class="tabs" role="tablist" aria-label="${h("overview")} / ${h("dashboard")}">${item("overview")}${item("dashboard")}</div></div>`;
+  const item = (id) => `<button class="page-tab" type="button" role="tab" id="tab-${id}" aria-selected="${tab === id}" aria-controls="panel-${id}" tabindex="${tab === id ? "0" : "-1"}" data-page-tab="${id}">${h(id)}</button>`;
+  return `<div class="page-tabs" role="tablist" aria-label="${h("overview_heading")}">${item("overview")}${item("dashboard")}</div>`;
 }
 
 export function cacheClearButton(owner) {
@@ -111,7 +111,7 @@ function healthyLine(id, label) {
 
 function glanceCard(id, title, { links = [], body = "" } = {}) {
   const actions = links
-    .map((link) => `<a class="btn compact" href="${esc(link.href)}">${h(link.label)}</a>`)
+    .map((link) => `<a class="glance-link" href="${esc(link.href)}">${h(link.label)} <span aria-hidden="true">→</span></a>`)
     .join("");
   return `<section class="card" data-glance-card="${esc(id)}">
     <div class="spread"><h2>${h(title)}</h2>${actions ? `<div class="row">${actions}</div>` : ""}</div>
@@ -244,7 +244,7 @@ export function attentionHtml(data) {
 
 export function recentActivityCard(jobs) {
   const rows = (jobs || []).slice(0, 5).map((job) =>
-    `<tr><td><a href="#/jobs/${esc(job.id)}">${esc(job.name)}</a></td><td>${pill(job.status)}</td><td class="small muted">${esc(relativeTime(job.created_at))}</td></tr>`
+    `<tr><td class="cell-name"><a href="#/jobs/${esc(job.id)}">${esc(job.name)}</a></td><td>${pill(job.status)}</td><td class="small muted">${esc(relativeTime(job.created_at))}</td></tr>`
   );
   return `<section class="card" data-recent-activity>
     <div class="spread"><h2>${h("recent_activity")}</h2><a href="#/jobs">${h("all")}</a></div>
@@ -384,12 +384,12 @@ function concurrencyCard(item) {
 function schedulesCard(item) {
   const schedules = item || {};
   const rows = (schedules.items || []).map((entry) => `<tr>
-    <td><a href="#/schedules?edit=${encodeURIComponent(entry.id)}">${esc(entry.name)}</a></td>
+    <td class="cell-name"><a href="#/schedules?edit=${encodeURIComponent(entry.id)}">${esc(entry.name)}</a></td>
     <td>${esc(entry.target_name || "—")}</td>
     <td class="small muted">${entry.next_run_at ? esc(when(entry.next_run_at)) : "—"}</td>
     <td>${entry.missed_at ? `<span class="pill warn">${h("schedule_missed_state")}</span>` : ""}</td>
   </tr>`);
-  const links = [{ href: "#/schedules", label: "schedules" }];
+  const links = [{ href: "#/schedules", label: "view_schedules" }];
   const missed = Number(schedules.missed_count) || 0;
   if (!rows.length && !missed) {
     return glanceCard("schedules", "upcoming_schedules", {
@@ -409,21 +409,21 @@ function schedulesCard(item) {
 function hostsCard(item) {
   const hosts = item || {};
   const rows = (hosts.items || []).map((entry) => `<tr>
-    <td><a class="mono" href="#/inventories/${encodeURIComponent(entry.inventory_id)}/hosts/${encodeURIComponent(entry.host)}">${esc(entry.host)}</a></td>
-    <td>${esc(entry.inventory_name || "—")}</td>
+    <td class="cell-name"><a class="mono host-name" href="#/inventories/${encodeURIComponent(entry.inventory_id)}/hosts/${encodeURIComponent(entry.host)}">${esc(entry.host)}</a></td>
+    <td class="cell-name">${esc(entry.inventory_name || "—")}</td>
     <td>${pill(entry.result)}</td>
     <td class="small muted">${esc(when(entry.ts))}</td>
   </tr>`);
-  const links = [{ href: "#/inventories", label: "inventories" }];
+  const links = [{ href: "#/inventories", label: "view_inventories" }];
   const failed = Number(hosts.failed) || 0;
   const stale = Number(hosts.stale) || 0;
   if (!rows.length && !failed && !stale) {
-    return glanceCard("hosts", "problem_hosts", {
+    return glanceCard("hosts", "dashboard.problem_hosts", {
       links,
       body: healthyLine("hosts", "hosts_all_clear"),
     });
   }
-  return glanceCard("hosts", "problem_hosts", {
+  return glanceCard("hosts", "dashboard.problem_hosts", {
     links,
     body: `<div class="row">${glanceStat(failed, "failed_hosts", "failed-hosts")}${glanceStat(stale, "stale_hosts", "stale-hosts")}</div>
       <p class="small muted">${h("hosts_stale_after_days", { days: Number(hosts.stale_after_days) || 7 })}</p>
@@ -436,7 +436,7 @@ function syncsCard(item) {
   const projects = syncs.projects || [];
   const inventories = syncs.inventories || [];
   const row = (entry, kind, href) => `<tr>
-    <td><a href="${href}">${esc(entry.name)}</a></td>
+    <td class="cell-name"><a href="${href}">${esc(entry.name)}</a></td>
     <td>${h(kind)}</td>
     <td class="small muted">${entry.last_sync_at ? esc(when(entry.last_sync_at)) : h("never")}</td>
   </tr>`;
@@ -445,8 +445,8 @@ function syncsCard(item) {
     ...inventories.slice(0, 5).map((entry) => row(entry, "inventory", `#/inventories/${encodeURIComponent(entry.id)}`)),
   ];
   const links = [
-    { href: "#/projects", label: "projects" },
-    { href: "#/inventories", label: "inventories" },
+    { href: "#/projects", label: "view_projects" },
+    { href: "#/inventories", label: "view_inventories" },
   ];
   if (!rows.length) {
     return glanceCard("syncs", "failed_syncs", {
@@ -465,12 +465,12 @@ function syncsCard(item) {
 function workflowsCard(item) {
   const workflows = item || {};
   const rows = (workflows.items || []).map((entry) => `<tr>
-    <td><a href="#/runs/${encodeURIComponent(entry.id)}">${esc(entry.name)}</a></td>
+    <td class="cell-name"><a href="#/runs/${encodeURIComponent(entry.id)}">${esc(entry.name)}</a></td>
     <td>${entry.workflow_id ? `<a href="#/workflows/${encodeURIComponent(entry.workflow_id)}">${h("workflow")}</a>` : "—"}</td>
     <td>${pill(entry.status)}</td>
     <td class="small muted">${esc(when(entry.created_at))}</td>
   </tr>`);
-  const links = [{ href: "#/workflows", label: "workflows" }];
+  const links = [{ href: "#/workflows", label: "view_workflows" }];
   const running = Number(workflows.running) || 0;
   const failed = Number(workflows.failed) || 0;
   if (!rows.length && !running && !failed) {
@@ -492,6 +492,10 @@ export function overviewSystemLine(data) {
   const runtime = data && data.runtime ? esc(data.runtime) : h("no_container_runtime");
   const directory = data && data.ldap ? h("ldap_is_configured") : h("local_accounts");
   return `<p class="small muted" data-overview-system>${h("runner")}: ${runner} · ${runtime} · ${directory}</p>`;
+}
+
+export function overviewSystemHtml(data) {
+  return appState.me && appState.me.is_admin ? overviewSystemLine(data) : "";
 }
 
 export function overviewGlanceHtml(data) {
@@ -630,7 +634,7 @@ function templateTable(id, title, items, compare, filter) {
     .sort(compare)
     .slice(0, 5)
     .map((item) => `<tr>
-      <td>${esc(item.name)}</td>
+      <td class="cell-name">${esc(item.name)}</td>
       <td class="num">${esc(Number(item.runs) || 0)}</td>
       <td class="num">${esc(Number(item.failed) || 0)}</td>
       <td class="num">${Number(item.avg_duration) > 0 ? esc(formatDuration(item.avg_duration)) : "—"}</td>
@@ -646,7 +650,7 @@ export function dashboardBody(data, range) {
   const totals = dashboardTotals(data);
   const empty = totals.started + totals.finished === 0;
   const ranges = [["1", "today"], ["7", "last_7_days"], ["14", "last_14_days"]].map(([value, key]) =>
-    `<button class="btn pill${range === value ? " primary" : ""}" type="button" data-dashboard-range="${value}" aria-pressed="${range === value}">${h(key)}</button>`
+    `<button class="segment" type="button" data-dashboard-range="${value}" aria-pressed="${range === value}">${h(key)}</button>`
   ).join("");
   const heading = range === "1" ? "jobs_per_hour" : "jobs_per_day";
   const charts = empty
@@ -672,7 +676,7 @@ export function dashboardBody(data, range) {
     (item) => (Number(item.runs) || 0) > 0,
   );
   const cache = data.cache || {};
-  return `<div class="spread tab-bar"><div class="row" role="group" aria-label="${h("range")}">${ranges}</div></div>
+  return `<div class="dashboard-range"><div class="segmented" role="group" aria-label="${h("range")}">${ranges}</div></div>
     <div class="stack">
       ${dashboardKpiRow(data, totals)}
       ${charts}
@@ -809,7 +813,7 @@ async function pageDashboardTab() {
   const range = dashboardRange();
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   const data = await api("GET", `/api/v1/dashboard?days=${encodeURIComponent(range)}&tz=${encodeURIComponent(timezone)}`);
-  shell(t("dashboard"), `
+  shell(t("overview_heading"), `
     ${dashboardTabs("dashboard")}
     <div id="panel-dashboard" role="tabpanel" aria-labelledby="tab-dashboard">
       ${dashboardBody(data, range)}
@@ -832,12 +836,12 @@ async function pageDashboard() {
   const data = await api("GET", "/api/v1/overview");
   const hasJobs = (data.jobs || []).length > 0;
   const body = overviewBody(data, hasJobs);
-  shell(t("overview"), `
+  shell(t("overview_heading"), `
     ${dashboardTabs("overview")}
     <div id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
       ${data.preflight ? preflightNoticeHtml(data.preflight) : ""}
       ${appState.me.is_admin && data.import ? importNoticeHtml(data.import) : ""}
-      ${overviewSystemLine(data)}
+      ${overviewSystemHtml(data)}
       ${body}
     </div>`, hasJobs ? overviewActions() : "");
   bindDashboard("overview", dashboardRange());
