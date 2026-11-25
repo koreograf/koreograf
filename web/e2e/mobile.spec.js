@@ -403,10 +403,11 @@ test("keeps every phone touch target at least 44 px", async ({ page }) => {
 
     await goTo(page, "Overview");
     await page.getByRole("tab", { name: "Dashboard", exact: true }).click();
-    await expect(page.getByRole("heading", { level: 2, name: "Jobs finished per day" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 2, name: "Jobs per hour" })).toBeVisible();
     await page.getByRole("button", { name: "14 days", exact: true }).click();
+    await expect(page.getByRole("heading", { level: 2, name: "Jobs per day" })).toBeVisible();
     const days = page.locator("[data-chart-day]");
-    await expect(days).toHaveCount(28);
+    await expect(days).toHaveCount(14);
     const boxes = await days.evaluateAll((elements) => elements.map((element) => {
       const rect = element.getBoundingClientRect();
       return { height: rect.height, width: rect.width };
@@ -426,10 +427,14 @@ test("keeps every phone touch target at least 44 px", async ({ page }) => {
       expect(scroll.left, `${where} the chart opens on the newest day`).toBe(scroll.max);
     }
     const detail = page.locator("[data-chart-detail]").first();
-    await page.locator(".chart").first().locator("[data-chart-day]").last().click();
-    await expect(detail).toContainText(/successful|failed|canceled/i);
-    expect(await page.locator(".chart-day-total").allTextContents()).not.toHaveLength(0);
+    const chart = page.locator(".chart").first();
+    await chart.locator("[data-chart-day]").last().focus();
+    await expect(detail).toContainText(/started|successful|failed|canceled/i);
+    await chart.locator("[data-chart-day]").last().click();
+    await expect(page).toHaveURL(/#\/jobs\?.*since=/);
     await noHorizontalScroll(page);
+    await page.goto("/#/");
+    await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
 
     await openMenu(page);
     await page.getByRole("button", { name: "Language" }).click();
@@ -536,17 +541,19 @@ test("shows the dashboard chart counts without a hover", async ({ page }) => {
   }, { timeout: 30000 }).toMatch(/^(successful|failed|canceled)$/);
 
   await page.getByRole("tab", { name: "Dashboard", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 2, name: "Jobs finished per day" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "Jobs per hour" })).toBeVisible();
   const counts = page.locator(".chart-day-total");
   await expect(counts.first()).toBeVisible();
-  expect(await counts.allTextContents()).not.toHaveLength(0);
-  expect((await counts.allTextContents()).every((text) => /^\d+$/.test(text.trim()))).toBe(true);
+  const texts = (await counts.allTextContents()).map((text) => text.trim());
+  expect(texts).not.toHaveLength(0);
+  expect(texts.every((text) => text === "" || /^\d+$/.test(text))).toBe(true);
+  expect(texts.some((text) => Number(text) > 0)).toBe(true);
   const day = page.locator("[data-chart-day]").first();
-  await day.click();
   const detail = page.locator("[data-chart-detail]").first();
-  await expect(detail).toContainText(/successful|failed|canceled/i);
   await day.focus();
-  await expect(detail).toContainText(/successful|failed|canceled/i);
+  await expect(detail).toContainText(/started|successful|failed|canceled/i);
+  await day.click();
+  await expect(page).toHaveURL(/#\/jobs\?.*since=/);
   await noHorizontalScroll(page);
 });
 

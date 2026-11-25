@@ -1233,6 +1233,7 @@ pub fn environment_visible(item: &Environment, team: &Team) -> bool {
 #[derive(Clone, Debug)]
 pub struct JobActivity {
     pub status: String,
+    pub template_name: Option<String>,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
 }

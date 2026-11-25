@@ -112,10 +112,12 @@ pub(crate) const HOST_HISTORY_COUNT: &str = "SELECT COUNT(*) FROM host_results h
      JOIN jobs j ON j.id = h.job_id
      WHERE h.team_id = ?1 AND h.inventory_id = ?2 AND h.host = ?3";
 
-pub(crate) const JOB_ACTIVITY: &str = "SELECT status, started_at, finished_at FROM jobs
-     WHERE team_id = ?1
-       AND ((finished_at IS NOT NULL AND finished_at >= ?2 AND finished_at <= ?3)
-         OR (started_at IS NOT NULL AND started_at >= ?2 AND started_at <= ?3))";
+pub(crate) const JOB_ACTIVITY: &str = "SELECT j.status, t.name, j.started_at, j.finished_at
+     FROM jobs j
+     LEFT JOIN templates t ON t.id = j.template_id AND t.team_id = j.team_id
+     WHERE j.team_id = ?1
+       AND ((j.finished_at IS NOT NULL AND j.finished_at >= ?2 AND j.finished_at <= ?3)
+         OR (j.started_at IS NOT NULL AND j.started_at >= ?2 AND j.started_at <= ?3))";
 
 pub(crate) const JOBS_BUSY: &str =
     "SELECT COUNT(*) FROM jobs WHERE status IN ('pending', 'running')";
@@ -308,8 +310,12 @@ fn job_filter(dialect: Dialect) -> &'static str {
   AND (?4 = '' OR tool = ?4)
   AND (?5 = '' OR trigger = ?5)
   AND (?6 = '' OR template_id = ?6)
-  AND (?7 = '' OR created_at >= ?7)
-  AND (?8 = '' OR created_at <= ?8)"
+  AND (
+    (?7 = '' AND ?8 = '')
+    OR ((created_at >= ?7 OR ?7 = '') AND (created_at <= ?8 OR ?8 = ''))
+    OR (started_at IS NOT NULL AND (started_at >= ?7 OR ?7 = '') AND (started_at <= ?8 OR ?8 = ''))
+    OR (finished_at IS NOT NULL AND (finished_at >= ?7 OR ?7 = '') AND (finished_at <= ?8 OR ?8 = ''))
+  )"
         }
         Dialect::Postgres => {
             "team_id = ?1
@@ -322,8 +328,12 @@ fn job_filter(dialect: Dialect) -> &'static str {
   AND (?4 = '' OR tool = ?4)
   AND (?5 = '' OR trigger = ?5)
   AND (?6 = '' OR template_id = ?6)
-  AND (?7 = '' OR created_at >= ?7)
-  AND (?8 = '' OR created_at <= ?8)"
+  AND (
+    (?7 = '' AND ?8 = '')
+    OR ((created_at >= ?7 OR ?7 = '') AND (created_at <= ?8 OR ?8 = ''))
+    OR (started_at IS NOT NULL AND (started_at >= ?7 OR ?7 = '') AND (started_at <= ?8 OR ?8 = ''))
+    OR (finished_at IS NOT NULL AND (finished_at >= ?7 OR ?7 = '') AND (finished_at <= ?8 OR ?8 = ''))
+  )"
         }
     }
 }
@@ -839,8 +849,9 @@ pub(crate) fn row_job<R: SqlRow>(row: &R) -> AppResult<Job> {
 pub(crate) fn row_job_activity<R: SqlRow>(row: &R) -> AppResult<JobActivity> {
     Ok(JobActivity {
         status: row.get(0)?,
-        started_at: row.get(1)?,
-        finished_at: row.get(2)?,
+        template_name: row.get(1)?,
+        started_at: row.get(2)?,
+        finished_at: row.get(3)?,
     })
 }
 

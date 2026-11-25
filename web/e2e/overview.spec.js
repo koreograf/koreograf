@@ -153,6 +153,40 @@ test("the 1440 overview keeps kpis and five recent jobs in the first viewport", 
   await noHorizontalScroll(page);
 });
 
+test("the dashboard shows range rates and drills into a failed day", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "overview", "the desktop viewport project only");
+  test.setTimeout(120000);
+  await signIn(page);
+  const failing = await createShellTemplate(page, `Dashboard failing ${Date.now().toString(36)}`, "exit 1");
+  await launchAndWait(page, failing);
+
+  await page.goto("/#/?tab=dashboard");
+  await page.reload();
+  await expect(page.getByRole("heading", { level: 2, name: "Jobs per hour" })).toBeVisible();
+  await expect(page.locator("[data-chart-day]")).toHaveCount(24);
+  for (const id of ["range-success-rate", "range-failed", "range-mean-duration", "range-jobs"]) {
+    await expect(page.locator(`[data-kpi="${id}"]`)).toBeVisible();
+  }
+  const failed = page.locator(".chart-seg.failed").first();
+  await expect(failed).toBeVisible();
+  await failed.click();
+  await expect(page).toHaveURL(/#\/jobs\?status=failed&since=/);
+  await expect(page.locator("#job-status")).toHaveValue("failed");
+  await expect(page.locator("[data-job-window]")).toContainText(/Date window/);
+  await page.locator("[data-job-window-clear]").click();
+  await expect(page).not.toHaveURL(/since=/);
+  await expect(page.locator("#job-status")).toHaveValue("");
+
+  await page.goto("/#/?tab=dashboard&days=14");
+  await page.reload();
+  await expect(page.getByRole("heading", { level: 2, name: "Jobs per day" })).toBeVisible();
+  await expect(page.locator("[data-chart-day]")).toHaveCount(14);
+  await page.locator("[data-chart-day]").last().locator(".chart-day-label").click();
+  await expect(page).toHaveURL(/#\/jobs\?since=/);
+  await expect(page.locator("#job-status")).toHaveValue("");
+  await noHorizontalScroll(page);
+});
+
 test("the 1440 overview launches from the header picker and quick launch", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "overview", "the desktop viewport project only");
   test.setTimeout(120000);

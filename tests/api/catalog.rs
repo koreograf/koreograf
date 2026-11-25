@@ -1211,22 +1211,35 @@ async fn system_catalog_endpoints_return_the_documented_shape() {
     .await;
     assert_eq!(status, StatusCode::OK, "{dashboard}");
     assert_eq!(
-        dashboard,
+        dashboard["cache"],
+        json!({"collections": 0, "roles": 0, "tofu_bytes": 0})
+    );
+    assert_eq!(dashboard["range_days"], 1);
+    assert_eq!(dashboard["timezone"], "UTC");
+    assert!(dashboard["from"].is_string());
+    assert!(dashboard["to"].is_string());
+    assert_eq!(
+        dashboard["totals"],
         json!({
-            "cache": {"collections": 0, "roles": 0, "tofu_bytes": 0},
-            "from": dashboard["from"].clone(),
-            "range_days": 1,
-            "series": [{
-                "canceled": 0,
-                "date": dashboard["series"][0]["date"].clone(),
-                "failed": 0,
-                "started": 0,
-                "successful": 0
-            }],
-            "timezone": "UTC",
-            "to": dashboard["to"].clone()
+            "canceled": 0,
+            "failed": 0,
+            "finished": 0,
+            "mean_duration": 0,
+            "started": 0,
+            "successful": 0
         })
     );
+    assert_eq!(dashboard["by_template"], json!([]));
+    let series = dashboard["series"].as_array().expect("hourly series");
+    assert_eq!(series.len(), 24);
+    for (hour, entry) in series.iter().enumerate() {
+        assert_eq!(entry["hour"], hour as u64);
+        assert_eq!(entry["started"], 0);
+        assert_eq!(entry["successful"], 0);
+        assert_eq!(entry["failed"], 0);
+        assert_eq!(entry["canceled"], 0);
+        assert_eq!(entry["date"], dashboard["series"][0]["date"].clone());
+    }
 
     let (status, preflight, _) = call(
         &app,

@@ -4,6 +4,7 @@
   "assistant_explain_failure": "Fehler erklären",
   "changed": "Geändert",
   "counters": "Zähler",
+  "date_window": "Zeitfenster: {from} – {to}",
   "download_output": "Ausgabe herunterladen",
   "exit_code": "Exit-Code {code}",
   "failed_first": "Fehlgeschlagene zuerst",
