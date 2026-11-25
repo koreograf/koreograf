@@ -5422,7 +5422,7 @@ git clone "$src" "$dest/role"
         write_executable(
             &root.join("bin").join("ansible-galaxy"),
             r#"#!/bin/sh
-printf '%s\n' "$*" >> "$KOREOGRAF_TEST_GALAXY_ARGS"
+printf '%s\n' "$*" >> "$GALAXY_TEST_ARGS"
 exit 0
 "#,
         );
@@ -5442,10 +5442,7 @@ exit 0
             "roles:\n  - src: https://example.invalid/demo.git\n    version: 1.1.0\n",
         )
         .unwrap();
-        let env = vec![(
-            "KOREOGRAF_TEST_GALAXY_ARGS".to_string(),
-            args.display().to_string(),
-        )];
+        let env = vec![("GALAXY_TEST_ARGS".to_string(), args.display().to_string())];
 
         let output = test_ansible_wrapper(&root, &work, &project, &env);
         let text = format!(
@@ -5501,7 +5498,7 @@ exit 0
         write_executable(
             &root.join("bin").join("ansible-galaxy"),
             r#"#!/bin/sh
-printf '%s\n' "$*" >> "$KOREOGRAF_TEST_GALAXY_ARGS"
+printf '%s\n' "$*" >> "$GALAXY_TEST_ARGS"
 exit 0
 "#,
         );
@@ -5509,10 +5506,7 @@ exit 0
             &root.join("bin").join("ansible-playbook"),
             "#!/bin/sh\nexit 0\n",
         );
-        let env = vec![(
-            "KOREOGRAF_TEST_GALAXY_ARGS".to_string(),
-            args.display().to_string(),
-        )];
+        let env = vec![("GALAXY_TEST_ARGS".to_string(), args.display().to_string())];
         for requirement in [
             "collections:\n  - name: ns.demo\n    version: \">=1.0.0\"\n",
             "collections:\n  - name: ns.demo\n    version: \"*\"\n",
@@ -5649,11 +5643,11 @@ exit 1
         write_executable(
             &root.join("bin").join("ansible-galaxy"),
             r#"#!/bin/sh
-if ! mkdir "$KOREOGRAF_TEST_GATE" 2>/dev/null; then
-  printf 'overlap\n' >> "$KOREOGRAF_TEST_OVERLAP"
+if ! mkdir "$GALAXY_TEST_GATE" 2>/dev/null; then
+  printf 'overlap\n' >> "$GALAXY_TEST_OVERLAP"
 fi
 sleep 1
-rmdir "$KOREOGRAF_TEST_GATE" 2>/dev/null || true
+rmdir "$GALAXY_TEST_GATE" 2>/dev/null || true
 exit 0
 "#,
         );
@@ -5662,12 +5656,9 @@ exit 0
             "#!/bin/sh\nexit 0\n",
         );
         let env = vec![
+            ("GALAXY_TEST_GATE".to_string(), gate.display().to_string()),
             (
-                "KOREOGRAF_TEST_GATE".to_string(),
-                gate.display().to_string(),
-            ),
-            (
-                "KOREOGRAF_TEST_OVERLAP".to_string(),
+                "GALAXY_TEST_OVERLAP".to_string(),
                 overlap.display().to_string(),
             ),
         ];
