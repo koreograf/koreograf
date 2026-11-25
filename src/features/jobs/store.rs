@@ -310,8 +310,8 @@ fn job_filter(dialect: Dialect) -> &'static str {
   AND (?4 = '' OR tool = ?4)
   AND (?5 = '' OR trigger = ?5)
   AND (?6 = '' OR template_id = ?6)
-  AND (?7 = '' OR created_at >= ?7)
-  AND (?8 = '' OR created_at <= ?8)"
+  AND (?7 = '' OR created_at >= ?7 OR started_at >= ?7 OR finished_at >= ?7)
+  AND (?8 = '' OR created_at <= ?8 OR started_at <= ?8 OR finished_at <= ?8)"
         }
         Dialect::Postgres => {
             "team_id = ?1
@@ -324,8 +324,8 @@ fn job_filter(dialect: Dialect) -> &'static str {
   AND (?4 = '' OR tool = ?4)
   AND (?5 = '' OR trigger = ?5)
   AND (?6 = '' OR template_id = ?6)
-  AND (?7 = '' OR created_at >= ?7)
-  AND (?8 = '' OR created_at <= ?8)"
+  AND (?7 = '' OR created_at >= ?7 OR started_at >= ?7 OR finished_at >= ?7)
+  AND (?8 = '' OR created_at <= ?8 OR started_at <= ?8 OR finished_at <= ?8)"
         }
     }
 }

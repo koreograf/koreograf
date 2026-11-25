@@ -172,6 +172,10 @@ test("the dashboard shows range rates and drills into a failed day", async ({ pa
   await failed.click();
   await expect(page).toHaveURL(/#\/jobs\?status=failed&since=/);
   await expect(page.locator("#job-status")).toHaveValue("failed");
+  await expect(page.locator("[data-job-window]")).toContainText(/Date window/);
+  await page.locator("[data-job-window-clear]").click();
+  await expect(page).not.toHaveURL(/since=/);
+  await expect(page.locator("#job-status")).toHaveValue("");
 
   await page.goto("/#/?tab=dashboard&days=14");
   await page.reload();

@@ -79,6 +79,7 @@ async function pageJobs() {
         <label class="field"><span>${h("page_size")}</span><select id="job-size" aria-label="${h("page_size")}">${[25, 50, 100].map((size) => `<option value="${size}"${size === view.size ? " selected" : ""}>${size}</option>`).join("")}</select></label>
         <button class="btn pill${view.status === "failed" ? " primary" : ""}" id="job-only-failed" type="button">${h("only_failed")}</button>
       </div>
+      <div id="job-window"></div>
       <p class="small muted" id="job-total" tabindex="-1" aria-live="polite"></p>
       <div id="job-table"></div>
       <div class="row" id="job-pager" tabindex="-1"></div>
@@ -91,6 +92,7 @@ async function pageJobs() {
   const size = document.querySelector("#job-size");
   const failed = document.querySelector("#job-only-failed");
   const jobTable = document.querySelector("#job-table");
+  const jobWindow = document.querySelector("#job-window");
   const jobTotal = document.querySelector("#job-total");
   const jobPager = document.querySelector("#job-pager");
   let current = [];
@@ -121,7 +123,10 @@ async function pageJobs() {
   const draw = (data) => {
     current = data.items || [];
     const total = Number(data.total) || 0;
-    const filters = view.q || view.status || view.tool || view.trigger || view.template;
+    const filters = view.q || view.status || view.tool || view.trigger || view.template || view.since || view.until;
+    jobWindow.innerHTML = view.since || view.until
+      ? `<div class="row"><span class="small muted" data-job-window>${h("date_window", { from: view.since ? when(view.since) : "—", to: view.until ? when(view.until) : "—" })}</span><button class="btn compact" type="button" data-job-window-clear>${h("clear_filter")}</button></div>`
+      : "";
     if (!current.length) {
       jobTable.innerHTML = filters
         ? `<p class="small muted">${h("no_jobs_match")}</p><button class="btn" id="clear-job-filter" type="button">${h("clear_filter")}</button>`
@@ -149,6 +154,8 @@ async function pageJobs() {
     view.tool = "";
     view.trigger = "";
     view.template = "";
+    view.since = "";
+    view.until = "";
     view.page = 1;
     search.value = "";
     status.value = "";
@@ -206,6 +213,9 @@ async function pageJobs() {
     failed.classList.toggle("primary", view.status === "failed");
     rememberHash(true);
     load("#job-only-failed");
+  });
+  jobWindow.addEventListener("click", (event) => {
+    if (event.target.closest("[data-job-window-clear]")) resetFilters();
   });
   jobTable.addEventListener("click", async (event) => {
     if (event.target.closest("#clear-job-filter")) {

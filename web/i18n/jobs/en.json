@@ -4,6 +4,7 @@
   "assistant_explain_failure": "Explain this failure",
   "changed": "Changed",
   "counters": "Counters",
+  "date_window": "Date window: {from} – {to}",
   "download_output": "Download output",
   "exit_code": "Exit code {code}",
   "failed_first": "Failed first",

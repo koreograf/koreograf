@@ -2216,6 +2216,32 @@ async fn job_list_pages_searches_filters_and_reloads_the_hash() {
     assert_eq!(bad["error"], "invalid_query_parameter");
     assert_eq!(bad["vars"]["field"], "since");
 
+    {
+        let db = state.db().expect("database");
+        db.execute(
+            "INSERT INTO jobs (
+                id, team_id, name, tool, status, extra_vars, launched_by, trigger,
+                started_at, finished_at, created_at
+             ) VALUES ('job-window', ?1, 'Window job', 'shell', 'successful',
+                '{}', 'admin', 'manual', '2026-02-02T23:00:00Z',
+                '2026-02-03T12:00:00Z', '2026-01-31T00:00:00Z')",
+            (team.as_str(),),
+        )
+        .unwrap();
+    }
+    let (status, window, _) = call(
+        &app,
+        "GET",
+        "/api/jobs?since=2026-02-03T00:00:00Z&until=2026-02-04T00:00:00Z",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{window}");
+    assert_eq!(window["total"], 1);
+    assert_eq!(window["items"][0]["id"], "job-window");
+
     let _ = std::fs::remove_dir_all(&dir);
 }
 
