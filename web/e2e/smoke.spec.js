@@ -185,7 +185,8 @@ test("an administrator navigates every route, launches the demo shell job and sw
 
   for (const label of labels) {
     await nav.getByRole("link", { name: label, exact: true }).click();
-    await expect(page.getByRole("heading", { level: 1, name: label })).toBeVisible();
+    const heading = label === "Overview" ? "Operations" : label;
+    await expect(page.getByRole("heading", { level: 1, name: heading })).toBeVisible();
     await expect(page.getByRole("heading", { name: catalog.en.routeError })).toHaveCount(0);
     await expect(page.getByText(catalog.en.missingPage, { exact: true })).toHaveCount(0);
     expect(new URL(page.url()).hash).not.toBe("");

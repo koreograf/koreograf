@@ -77,7 +77,7 @@ test("a viewer without a team sees one empty state and no team navigation", asyn
   const suffix = Date.now().toString(36);
   const viewer = `no-team-viewer-${suffix}`;
   await signIn(page, username, password);
-  await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Operations" })).toBeVisible();
   await createViewer(page, viewer);
   await signOut(page);
   await signIn(page, viewer, viewerPassword);
@@ -117,7 +117,7 @@ test("an administrator still reaches Team, Organizations and Users", async ({ pa
   test.skip(testInfo.project.name !== "no-team", "the desktop viewport project only");
   test.setTimeout(90000);
   await signIn(page, username, password);
-  await expect(page.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Operations" })).toBeVisible();
 
   const nav = page.getByRole("navigation");
   await expect(nav.getByRole("link", { name: "Team", exact: true })).toBeVisible();
