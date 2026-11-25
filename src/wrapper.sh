@@ -209,7 +209,16 @@ collections_need_upgrade() {
       seen = 1
       line = $0
       sub(/^[[:space:]]*-[[:space:]]*/, "", line)
-      if (line ~ /^version:/) version = trim(line)
+      sub(/[[:space:]]+$/, "", line)
+      gsub(/^["'"'"']|["'"'"']$/, "", line)
+      if (line ~ /^version:/) {
+        version = trim(line)
+      } else if (line ~ /^(name|source|src):/) {
+        next
+      } else if (line ~ /^[^:]+:/) {
+        version = line
+        sub(/^[^:]+:[[:space:]]*/, "", version)
+      }
       next
     }
     /^[[:space:]]*version:/ { version = trim($0); next }
@@ -218,10 +227,14 @@ collections_need_upgrade() {
 }
 
 cache_lock() {
-  lock_file="$(dirname "$KOREOGRAF_COLLECTIONS")/.galaxy.lock"
+  lock_file="$KOREOGRAF_COLLECTIONS/.galaxy.lock"
   galaxy_locked=0
   command -v flock >/dev/null 2>&1 || return 0
-  exec 9>>"$lock_file" || return 0
+  if ! : >>"$lock_file" 2>/dev/null; then
+    log "Galaxy cache lock file cannot be opened. The install continues without it."
+    return 0
+  fi
+  exec 9>>"$lock_file"
   if flock 9; then
     galaxy_locked=1
   else

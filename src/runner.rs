@@ -5529,26 +5529,28 @@ exit 0
                 "{requirement}: {recorded}"
             );
         }
-        std::fs::write(
-            project.join("requirements.yml"),
+        for requirement in [
             "collections:\n  - name: ns.demo\n    version: 1.1.0\n",
-        )
-        .unwrap();
-        std::fs::write(&args, "").unwrap();
-        let output = test_ansible_wrapper(&root, &work, &project, &env);
-        let text = format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(output.status.success(), "{text}");
-        let recorded = std::fs::read_to_string(&args).unwrap();
-        assert!(
-            recorded
-                .lines()
-                .any(|line| line.starts_with("collection install") && !line.contains("--upgrade")),
-            "{recorded}"
-        );
+            "collections:\n  - ns.demo:1.1.0\n",
+        ] {
+            std::fs::write(project.join("requirements.yml"), requirement).unwrap();
+            std::fs::write(&args, "").unwrap();
+            let output = test_ansible_wrapper(&root, &work, &project, &env);
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(output.status.success(), "{text}");
+            let recorded = std::fs::read_to_string(&args).unwrap();
+            assert!(
+                recorded
+                    .lines()
+                    .any(|line| line.starts_with("collection install")
+                        && !line.contains("--upgrade")),
+                "{requirement}: {recorded}"
+            );
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -5684,6 +5686,7 @@ exit 0
         for mut child in children {
             assert!(child.wait().unwrap().success());
         }
+        assert!(root.join("collections").join(".galaxy.lock").is_file());
         assert!(!overlap.exists(), "{}", overlap.display());
         let _ = std::fs::remove_dir_all(root);
     }
