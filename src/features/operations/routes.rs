@@ -365,6 +365,16 @@ pub(super) struct OverviewResponse {
     hook_id: Option<String>,
     hook_name: Option<String>,
     glance: OverviewGlance,
+    counts: OverviewCounts,
+}
+
+/// Team-scoped totals the browser needs for the onboarding steps. They count
+/// the rows the overview already reads; no list endpoint is called again.
+#[derive(Serialize)]
+struct OverviewCounts {
+    projects: u64,
+    inventories: u64,
+    templates: u64,
 }
 
 /// Rows the dashboard reads from the database. `jobs`, `glance-*` and
@@ -605,7 +615,7 @@ pub async fn overview(
     } else {
         None
     };
-    let glance = overview_glance(&state, &team)?;
+    let (glance, counts) = overview_glance(&state, &team)?;
     Ok(Json(OverviewResponse {
         runner_mode: effective.runner.as_str(),
         runtime,
@@ -623,6 +633,7 @@ pub async fn overview(
         hook_id: hook.as_ref().map(|item| item.id.clone()),
         hook_name: hook.as_ref().map(|item| item.name.clone()),
         glance,
+        counts,
     }))
 }
 
@@ -649,7 +660,11 @@ const RECENT_TEMPLATE_WINDOW_DAYS: i64 = 30;
 
 /// Distinct templates from the team's recent finished jobs, newest launch
 /// first. When those are fewer than three, fresh team templates fill the card.
-fn overview_recent_templates(state: &Shared, team: &str) -> AppResult<Vec<GlanceTemplate>> {
+fn overview_recent_templates(
+    state: &Shared,
+    team: &str,
+    templates: &[db::Template],
+) -> AppResult<Vec<GlanceTemplate>> {
     let cutoff = (Utc::now() - ChronoDuration::days(RECENT_TEMPLATE_WINDOW_DAYS))
         .to_rfc3339_opts(SecondsFormat::Secs, true);
     let mut items: Vec<GlanceTemplate> = state
@@ -666,9 +681,9 @@ fn overview_recent_templates(state: &Shared, team: &str) -> AppResult<Vec<Glance
     if items.len() >= RECENT_TEMPLATE_MIN {
         return Ok(items);
     }
-    let mut templates = state.store().list_templates(team)?;
-    templates.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-    for template in templates {
+    let mut fresh: Vec<&db::Template> = templates.iter().collect();
+    fresh.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    for template in fresh {
         if items.len() >= RECENT_TEMPLATE_LIMIT {
             break;
         }
@@ -676,9 +691,9 @@ fn overview_recent_templates(state: &Shared, team: &str) -> AppResult<Vec<Glance
             continue;
         }
         items.push(GlanceTemplate {
-            id: template.id,
-            name: template.name,
-            tool: template.tool,
+            id: template.id.clone(),
+            name: template.name.clone(),
+            tool: template.tool.clone(),
             last_launched_at: None,
         });
     }
@@ -700,7 +715,7 @@ fn glance_job(job: db::Job) -> GlanceJob {
     }
 }
 
-fn overview_glance(state: &Shared, team: &str) -> AppResult<OverviewGlance> {
+fn overview_glance(state: &Shared, team: &str) -> AppResult<(OverviewGlance, OverviewCounts)> {
     let cutoff = (Utc::now() - ChronoDuration::days(HOST_STALE_AFTER_DAYS))
         .to_rfc3339_opts(SecondsFormat::Secs, true);
     let failed_cutoff = (Utc::now() - ChronoDuration::hours(WORKFLOW_FAILED_WINDOW_HOURS))
@@ -722,6 +737,12 @@ fn overview_glance(state: &Shared, team: &str) -> AppResult<OverviewGlance> {
     let schedules = state.store().list_team_schedules(team)?;
     let projects = state.store().list_projects(team)?;
     let inventories = state.store().list_inventories(team)?;
+    let templates = state.store().list_templates(team)?;
+    let counts = OverviewCounts {
+        projects: rows(i64::try_from(projects.len()).unwrap_or(i64::MAX)),
+        inventories: rows(i64::try_from(inventories.len()).unwrap_or(i64::MAX)),
+        templates: rows(i64::try_from(templates.len()).unwrap_or(i64::MAX)),
+    };
     let workflows = state
         .store()
         .glance_workflow_runs(team, &failed_cutoff, 10)?;
@@ -781,7 +802,7 @@ fn overview_glance(state: &Shared, team: &str) -> AppResult<OverviewGlance> {
         })
         .collect();
 
-    let recent_templates = overview_recent_templates(state, team)?;
+    let recent_templates = overview_recent_templates(state, team, &templates)?;
 
     let workflow_items = workflows
         .items
@@ -796,56 +817,59 @@ fn overview_glance(state: &Shared, team: &str) -> AppResult<OverviewGlance> {
         })
         .collect();
 
-    Ok(OverviewGlance {
-        jobs: GlanceJobSummary {
-            running: rows(running),
-            pending: rows(pending),
-            oldest_pending_at,
-            failed_24h: rows(failed_24h),
-            successful_24h: rows(successful_24h),
-            finished_24h: rows(finished_24h),
-            items: busy_jobs.into_iter().map(glance_job).collect(),
-            failed_items: failed_items.into_iter().map(glance_job).collect(),
+    Ok((
+        OverviewGlance {
+            jobs: GlanceJobSummary {
+                running: rows(running),
+                pending: rows(pending),
+                oldest_pending_at,
+                failed_24h: rows(failed_24h),
+                successful_24h: rows(successful_24h),
+                finished_24h: rows(finished_24h),
+                items: busy_jobs.into_iter().map(glance_job).collect(),
+                failed_items: failed_items.into_iter().map(glance_job).collect(),
+            },
+            concurrency: GlanceConcurrency {
+                team_running: rows(running),
+                team_limit: rows(i64::try_from(team_limit).unwrap_or(i64::MAX)),
+                global_running: rows(global_running),
+                global_limit: rows(i64::try_from(global_limit).unwrap_or(i64::MAX)),
+            },
+            schedules: GlanceScheduleSummary {
+                next_run_at,
+                missed_count,
+                items: schedule_items,
+            },
+            hosts: GlanceHostSummary {
+                failed: rows(hosts.failed),
+                stale: rows(hosts.stale),
+                stale_after_days: rows(HOST_STALE_AFTER_DAYS),
+                items: hosts
+                    .items
+                    .into_iter()
+                    .map(|host| GlanceHost {
+                        inventory_id: host.inventory_id,
+                        inventory_name: host.inventory_name,
+                        host: host.host,
+                        result: host.result,
+                        ts: host.ts,
+                    })
+                    .collect(),
+            },
+            syncs: GlanceSyncSummary {
+                projects: project_items,
+                inventories: inventory_items,
+            },
+            workflows: GlanceWorkflowSummary {
+                running: rows(workflows.running),
+                failed: rows(workflows.failed),
+                failed_window_hours: rows(WORKFLOW_FAILED_WINDOW_HOURS),
+                items: workflow_items,
+            },
+            recent_templates,
         },
-        concurrency: GlanceConcurrency {
-            team_running: rows(running),
-            team_limit: rows(i64::try_from(team_limit).unwrap_or(i64::MAX)),
-            global_running: rows(global_running),
-            global_limit: rows(i64::try_from(global_limit).unwrap_or(i64::MAX)),
-        },
-        schedules: GlanceScheduleSummary {
-            next_run_at,
-            missed_count,
-            items: schedule_items,
-        },
-        hosts: GlanceHostSummary {
-            failed: rows(hosts.failed),
-            stale: rows(hosts.stale),
-            stale_after_days: rows(HOST_STALE_AFTER_DAYS),
-            items: hosts
-                .items
-                .into_iter()
-                .map(|host| GlanceHost {
-                    inventory_id: host.inventory_id,
-                    inventory_name: host.inventory_name,
-                    host: host.host,
-                    result: host.result,
-                    ts: host.ts,
-                })
-                .collect(),
-        },
-        syncs: GlanceSyncSummary {
-            projects: project_items,
-            inventories: inventory_items,
-        },
-        workflows: GlanceWorkflowSummary {
-            running: rows(workflows.running),
-            failed: rows(workflows.failed),
-            failed_window_hours: rows(WORKFLOW_FAILED_WINDOW_HOURS),
-            items: workflow_items,
-        },
-        recent_templates,
-    })
+        counts,
+    ))
 }
 
 #[derive(Clone, Default)]

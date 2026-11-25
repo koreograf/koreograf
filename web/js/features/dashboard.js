@@ -9,18 +9,34 @@ import { registerRoute } from "../core/router.js";
 import { relaunchJob } from "./jobs.js";
 import { filterTemplates, openLaunchPrompt } from "./templates.js";
 
-function onboardingCard() {
+export function onboardingCard(counts = {}) {
+  const done = {
+    projects: Number(counts.projects) > 0,
+    inventories: Number(counts.inventories) > 0,
+    templates: Number(counts.templates) > 0,
+    jobs: false,
+  };
   const steps = [
-    ["empty_projects", "#/projects?new=1", "new_project"],
-    ["empty_inventories", "#/inventories?new=1", "new_inventory"],
-    ["empty_templates", "#/templates?new=1", "new_template"],
-    ["empty_jobs", "#/templates", "launch_a_template"],
+    ["projects", "empty_projects", "#/projects?new=1", "new_project"],
+    ["inventories", "empty_inventories", "#/inventories?new=1", "new_inventory"],
+    ["templates", "empty_templates", "#/templates?new=1", "new_template"],
+    ["jobs", "empty_jobs", "#/templates", "launch_a_template"],
   ];
-  const items = steps.map(([text, href, label]) => `<li>
-    <div><p>${h(text)}</p></div>
-    ${can("operator") ? `<a class="btn" href="${href}">${h(label)}</a>` : ""}
-  </li>`).join("");
-  return `<section class="card onboarding" aria-labelledby="onboarding-title">
+  const next = steps.find(([id]) => !done[id])[0];
+  const operator = can("operator");
+  const items = steps.map(([id, text, href, label]) => {
+    const complete = done[id];
+    const marker = complete
+      ? `<span class="pill successful onboarding-done"><span aria-hidden="true">✓</span> ${h("onboarding_done")}</span>`
+      : operator
+        ? `<a class="btn${id === next ? " primary" : ""}" href="${href}">${h(label)}</a>`
+        : "";
+    return `<li class="${complete ? "done" : ""}" data-onboarding-step="${id}">
+      <div><p>${h(text)}</p></div>
+      ${marker}
+    </li>`;
+  }).join("");
+  return `<section class="card onboarding" data-onboarding aria-labelledby="onboarding-title">
     <h2 id="onboarding-title">${h("get_started")}</h2>
     <p class="muted">${h("get_started_help")}</p>
     <ol class="onboarding-steps">${items}</ol>
@@ -271,7 +287,7 @@ export function webhookDeliveriesCard(data) {
   const test = can("operator") && data && data.hook_id
     ? `<button class="btn" id="test-alert" type="button">${h("test_alert")}</button>`
     : "";
-  return `<section class="card">
+  return `<section class="card" data-webhook-deliveries>
     <div class="spread">
       <h2>${h("webhook_deliveries")}</h2>
       ${test}
@@ -658,23 +674,29 @@ async function pageDashboardTab() {
   bindDashboard("dashboard", range);
 }
 
+export function overviewBody(data, hasJobs = (data.jobs || []).length > 0) {
+  return hasJobs
+    ? `<div class="stack">
+        ${overviewGlanceHtml(data)}
+        ${webhookDeliveriesCard(data)}
+      </div>`
+    : onboardingCard(data.counts);
+}
+
 async function pageDashboard() {
   if (!needTeam()) return;
   if (dashboardTab() === "dashboard") return pageDashboardTab();
   const data = await api("GET", "/api/v1/overview");
   const hasJobs = (data.jobs || []).length > 0;
+  const body = overviewBody(data, hasJobs);
   shell(t("overview"), `
     ${dashboardTabs("overview")}
     <div id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
       ${data.preflight ? preflightNoticeHtml(data.preflight) : ""}
       ${appState.me.is_admin && data.import ? importNoticeHtml(data.import) : ""}
       ${overviewSystemLine(data)}
-      ${hasJobs ? "" : onboardingCard()}
-      <div class="stack">
-        ${overviewGlanceHtml(data)}
-        ${webhookDeliveriesCard(data)}
-      </div>
-    </div>`, overviewActions());
+      ${body}
+    </div>`, hasJobs ? overviewActions() : "");
   bindDashboard("overview", dashboardRange());
   bindOverviewActions();
   bindQuickLaunch();

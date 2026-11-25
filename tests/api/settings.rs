@@ -3895,6 +3895,27 @@ async fn overview_glance_is_team_scoped_and_viewer_readable() {
             .collect()
     };
 
+    assert_eq!(
+        overview["counts"],
+        json!({"projects": 2, "inventories": 2, "templates": 4}),
+        "the onboarding counts are not scoped to the request team"
+    );
+    let (status, other, _) = call(
+        &app,
+        "GET",
+        "/api/v1/overview",
+        Some(&cookie),
+        Some(&other_team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{other}");
+    assert_eq!(
+        other["counts"],
+        json!({"projects": 1, "inventories": 1, "templates": 0}),
+        "another team sees this team's onboarding counts"
+    );
+
     assert_eq!(glance["jobs"]["running"], 1);
     assert_eq!(glance["jobs"]["pending"], 2);
     assert_eq!(glance["jobs"]["oldest_pending_at"], oldest);

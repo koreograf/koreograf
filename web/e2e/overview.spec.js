@@ -1,7 +1,8 @@
 "use strict";
 
+const { join } = require("node:path");
 const { expect, test } = require("@playwright/test");
-const { password, username } = require("./env");
+const { password, root, username } = require("./env");
 const { post } = require("./api");
 
 async function noHorizontalScroll(page) {
@@ -35,14 +36,29 @@ async function teamHeaders(page) {
   return { "X-Team-Id": profile.teams[0].id };
 }
 
-async function createShellTemplate(page, name, script, prompt = false) {
-  const headers = await teamHeaders(page);
+async function createShellTemplate(page, name, script, prompt = false, teamId = null) {
+  const headers = teamId ? { "X-Team-Id": teamId } : await teamHeaders(page);
   const created = await post(page.request, "/api/v1/templates", {
     headers,
     data: { name, description: "", tool: "shell", spec: { script }, prompt_on_launch: prompt },
   });
   expect(created.status()).toBe(201);
   return created.json();
+}
+
+async function launchAndWaitForTeam(page, teamId, template) {
+  const headers = { "X-Team-Id": teamId };
+  const launched = await post(page.request, `/api/v1/templates/${template.id}/launch`, {
+    headers,
+    data: { extra_vars: {} },
+  });
+  expect(launched.status()).toBe(202);
+  const job = await launched.json();
+  await expect.poll(async () => {
+    const response = await page.request.get(`/api/v1/jobs/${job.id}`, { headers });
+    return (await response.json()).status;
+  }, { timeout: 30000 }).toMatch(/^(successful|failed|canceled)$/);
+  return job;
 }
 
 async function createViewer(page) {
@@ -243,6 +259,8 @@ test("an empty overview keeps every glance card compact", async ({ page }) => {
   test.setTimeout(60000);
   await signIn(page);
   const team = await createTeam(page, `Zz overview healthy ${Date.now().toString(36)}`);
+  const template = await createShellTemplate(page, `Overview healthy ${Date.now().toString(36)}`, "echo ok", false, team.id);
+  await launchAndWaitForTeam(page, team.id, template);
   await selectTeam(page, team.id);
 
   const cards = [
@@ -286,6 +304,7 @@ test("a mixed glance row keeps the healthy card short", async ({ page }, testInf
   expect(created.status()).toBe(201);
   const template = await created.json();
   await createSchedule(page, team.id, template.id, "Nightly check");
+  await launchAndWaitForTeam(page, team.id, template);
   await selectTeam(page, team.id);
 
   const schedules = page.locator('[data-glance-card="schedules"]');
@@ -323,5 +342,33 @@ test("the 412 overview and its dark theme keep one column without sideways scrol
   const columns = await page.locator(".overview-main").evaluate((node) => getComputedStyle(node).gridTemplateColumns);
   expect(columns.trim().split(/\s+/), "the overview keeps two columns on a phone").toHaveLength(1);
   await expect(page.locator('[data-glance-card="cache"]')).toHaveCount(0);
+  await noHorizontalScroll(page);
+});
+
+test("an empty team shows only onboarding and advances the next step", async ({ page }) => {
+  test.setTimeout(60000);
+  await signIn(page);
+  const suffix = Date.now().toString(36);
+  const team = await createTeam(page, `Zz onboarding ${suffix}`);
+  await selectTeam(page, team.id);
+
+  await expect(page.locator("[data-onboarding]")).toBeVisible();
+  await expect(page.locator("[data-glance-card]")).toHaveCount(0);
+  await expect(page.locator("[data-webhook-deliveries]")).toHaveCount(0);
+  await expect(page.locator('[data-onboarding-step="projects"] .btn.primary')).toBeVisible();
+
+  const created = await post(page.request, "/api/v1/projects", {
+    headers: { "X-Team-Id": team.id },
+    data: {
+      name: `Onboarding project ${suffix}`,
+      source_type: "path",
+      source: join(root, "examples/demo"),
+    },
+  });
+  expect(created.status()).toBe(201);
+
+  await page.reload();
+  await expect(page.locator('[data-onboarding-step="projects"]')).toHaveClass(/done/);
+  await expect(page.locator('[data-onboarding-step="inventories"] .btn.primary')).toBeVisible();
   await noHorizontalScroll(page);
 });

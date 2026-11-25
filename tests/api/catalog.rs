@@ -1131,6 +1131,7 @@ async fn system_catalog_endpoints_return_the_documented_shape() {
         overview,
         json!({
             "cache_bytes": 0,
+            "counts": {"inventories": 1, "projects": 1, "templates": 4},
             "deliveries": [],
             "glance": {
                 "concurrency": {
