@@ -42,8 +42,11 @@ test("the dashboard page shows the empty state and the cache numbers", async () 
     { series: [{ date: "2026-11-05", started: 3, successful: 1, failed: 1, canceled: 1 }], cache: { collections: 2, roles: 4, tofu_bytes: 2048 } },
     "7",
   );
-  assert.match(filled, /jobs_finished_per_day/);
-  assert.match(filled, /jobs_started_per_day/);
+  assert.match(filled, /jobs_per_day/);
+  assert.match(filled, /data-kpi="range-success-rate"/);
+  assert.match(filled, /data-kpi="range-failed"/);
+  assert.match(filled, /data-kpi="range-mean-duration"/);
+  assert.match(filled, /data-kpi="range-jobs"/);
   assert.match(filled, /<span class="small muted">collections<\/span><strong>2<\/strong>/);
   assert.match(filled, /<span class="small muted">roles<\/span><strong>4<\/strong>/);
   assert.match(filled, /<span class="small muted">opentofu<\/span><strong>2\.0 KiB<\/strong>/);
@@ -60,7 +63,8 @@ test("a one-day series keeps the column narrow and the failed segment visible", 
   const chart = html.slice(html.indexOf('class="chart"'));
   assert.match(chart, /class="chart-seg successful" style="flex-grow:15"/);
   assert.match(chart, /class="chart-seg failed" style="flex-grow:1"/);
-  assert.match(chart, /<div class="chart-bar" style="height:100%">/);
+  assert.match(chart, /class="chart-seg started" style="flex-grow:16"/);
+  assert.match(chart, /<div class="chart-pair" style="height:100%">/);
 
   const css = stylesheet();
   const day = rule(css, ".chart-day");
@@ -83,11 +87,80 @@ test("the seven and fourteen day series keep every day and the empty ones", asyn
   for (const count of [7, 14]) {
     const html = dashboardBody({ series: series(count), cache: {} }, String(count));
     const charts = html.slice(html.indexOf('class="chart"'), html.indexOf("dependency_cache"));
-    assert.equal((charts.match(/class="chart-day"/g) || []).length, count * 2, `the ${count} day view lost a day`);
-    assert.equal((charts.match(/<div class="chart-bars"><\/div>/g) || []).length, 2, `the ${count} day view filled an empty day`);
+    assert.equal((charts.match(/class="chart-day"/g) || []).length, count, `the ${count} day view lost a day`);
+    assert.equal((charts.match(/<div class="chart-bars"><\/div>/g) || []).length, 1, `the ${count} day view filled an empty day`);
     assert.match(charts, /class="chart-seg failed"/, `the ${count} day view lost the failed segment`);
-    assert.match(charts, /class="chart-bar" style="height:\d+%"/);
+    assert.match(charts, /class="chart-pair" style="height:\d+%"/);
   }
+});
+
+test("the dashboard omits zero totals and uses the short day in the detail", async () => {
+  const { dashboardChart } = await load("features/dashboard.js");
+  const html = dashboardChart([
+    { date: "2026-11-05", started: 0, successful: 0, failed: 0, canceled: 0 },
+    { date: "2026-11-06", started: 2, successful: 2, failed: 0, canceled: 0 },
+  ], "jobs_per_day");
+  assert.doesNotMatch(html, /class="chart-day-total">0</, "an empty day prints a zero total");
+  assert.equal((html.match(/class="chart-day-total" aria-hidden="true"><\/span>/g) || []).length, 1, "the empty day lost its quiet slot");
+  const titles = [...html.matchAll(/data-chart-title="([^"]*)"/g)].map((match) => match[1]);
+  assert.equal(titles.length, 2);
+  assert.match(titles[1], /^06\.11\./, "the detail does not use the axis date");
+  assert.doesNotMatch(titles[1], /2026-11-06/, "the detail still shows the ISO date");
+});
+
+test("canceled has its own colour and the legend uses swatches", async () => {
+  const { dashboardBody } = await load("features/dashboard.js");
+  const { rule, stylesheet } = require("./css.js");
+  const canceled = rule(stylesheet(), ".chart-seg.canceled");
+  assert.ok(canceled, "the canceled chart segment rule is missing");
+  assert.match(canceled[1], /background:\s*var\(--muted\)/, "canceled is not muted");
+  assert.doesNotMatch(canceled[1], /var\(--bad\)/, "canceled shares the failed red");
+  assert.doesNotMatch(canceled[1], /opacity/, "canceled is a faded failed bar");
+  const html = dashboardBody({
+    series: [{ date: "2026-11-05", started: 3, successful: 1, failed: 1, canceled: 1 }],
+    cache: {},
+  }, "1");
+  assert.match(html, /class="chart-swatch canceled"/);
+  assert.match(html, /class="chart-swatch failed"/);
+  assert.doesNotMatch(html, /class="pill canceled"/, "the legend still uses status pills");
+});
+
+test("the dashboard kpi row reads the range totals", async () => {
+  const { dashboardBody } = await load("features/dashboard.js");
+  const html = dashboardBody({
+    from: "2026-11-01T00:00:00Z",
+    to: "2026-11-08T00:00:00Z",
+    totals: { started: 10, finished: 8, successful: 6, failed: 2, canceled: 0, mean_duration: 65 },
+    series: [{ date: "2026-11-05", started: 10, successful: 6, failed: 2, canceled: 0 }],
+    cache: {},
+  }, "7");
+  assert.match(html, /class="kpi bad" data-kpi="range-failed"/, "failures have no bad tone");
+  assert.match(html, /<strong class="kpi-value">75%<\/strong>/);
+  assert.match(html, /<strong class="kpi-value">2<\/strong>/);
+  assert.match(html, /<strong class="kpi-value">1m 5s<\/strong>/);
+  assert.match(html, /<strong class="kpi-value">10 \/ 8<\/strong>/);
+  assert.match(html, /data-kpi="range-failed"[^>]*href="#\/jobs\?status=failed&amp;since=2026-11-01T00%3A00%3A00Z&amp;until=2026-11-08T00%3A00%3A00Z"/);
+});
+
+test("the dashboard ranks failing and slow templates", async () => {
+  const { dashboardBody } = await load("features/dashboard.js");
+  const html = dashboardBody({
+    series: [{ date: "2026-11-05", started: 1, successful: 1, failed: 0, canceled: 0 }],
+    by_template: [
+      { name: "Deploy", runs: 5, failed: 3, avg_duration: 120 },
+      { name: "Fast", runs: 4, failed: 0, avg_duration: 10 },
+      { name: "Slow", runs: 2, failed: 0, avg_duration: 300 },
+    ],
+    cache: {},
+  }, "7");
+  const failing = html.slice(html.indexOf('data-dashboard-table="failing"'), html.indexOf('data-dashboard-table="slowest"'));
+  const slowest = html.slice(html.indexOf('data-dashboard-table="slowest"'));
+  assert.match(failing, /top_failing_templates/);
+  assert.match(failing, /Deploy/);
+  assert.doesNotMatch(failing, /Fast/, "a template without failures is in the failing table");
+  assert.match(slowest, /slowest_templates/);
+  assert.match(slowest, /5m 0s/);
+  assert.match(slowest, /2m 0s/);
 });
 
 test("the overview kpi tiles are links with warning tones", async () => {

@@ -3335,12 +3335,20 @@ async fn dashboard_series_comes_from_stored_jobs_and_is_team_scoped() {
     .await;
     assert_eq!(status, StatusCode::OK, "{day}");
     assert_eq!(day["range_days"], 1);
-    assert_eq!(day["series"].as_array().unwrap().len(), 1);
+    assert_eq!(day["series"].as_array().unwrap().len(), 24);
     assert_eq!(day["series"][0]["date"], day["to"].as_str().unwrap()[..10]);
-    assert_eq!(day["series"][0]["successful"], 1);
-    assert_eq!(day["series"][0]["failed"], 1);
-    assert_eq!(day["series"][0]["canceled"], 1);
-    assert_eq!(day["series"][0]["started"], 4);
+    assert_eq!(day["series"][0]["hour"], 0);
+    assert_eq!(day["series"][23]["hour"], 23);
+    assert_eq!(total(&day["series"], "successful"), 1);
+    assert_eq!(total(&day["series"], "failed"), 1);
+    assert_eq!(total(&day["series"], "canceled"), 1);
+    assert_eq!(total(&day["series"], "started"), 4);
+    assert_eq!(day["totals"]["finished"], 3);
+    assert_eq!(day["totals"]["started"], 4);
+    assert_eq!(day["totals"]["successful"], 1);
+    assert_eq!(day["totals"]["failed"], 1);
+    assert_eq!(day["totals"]["canceled"], 1);
+    assert_eq!(day["by_template"], json!([]));
     assert_eq!(day["cache"]["collections"], 1);
     assert_eq!(day["cache"]["roles"], 1);
     assert_eq!(day["cache"]["tofu_bytes"], 123);
@@ -3387,7 +3395,7 @@ async fn dashboard_series_comes_from_stored_jobs_and_is_team_scoped() {
     .await;
     assert_eq!(status, StatusCode::OK, "{defaulted}");
     assert_eq!(defaulted["range_days"], 1);
-    assert_eq!(defaulted["series"].as_array().unwrap().len(), 1);
+    assert_eq!(defaulted["series"].as_array().unwrap().len(), 24);
 
     let (status, isolated, _) = call(
         &app,
@@ -3465,6 +3473,154 @@ async fn dashboard_series_comes_from_stored_jobs_and_is_team_scoped() {
     .await;
     assert_eq!(status, StatusCode::OK, "{viewer}");
     assert_eq!(total(&viewer["series"], "successful"), 3);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dashboard_by_template_and_hourly_series_are_team_scoped() {
+    let harness = TestApp::boot_sqlite("dashboard-templates", Options::default());
+    let state = harness.state.clone();
+    let app = harness.app.clone();
+    let dir = harness.dir.clone();
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("admin cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, other, _) = call(
+        &app,
+        "POST",
+        "/api/teams",
+        Some(&cookie),
+        None,
+        Some(json!({"name": "Dashboard Templates Other", "description": ""})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{other}");
+    let other_team = other["id"].as_str().unwrap().to_string();
+
+    let now = chrono::Utc::now();
+    let stamp = |ago: chrono::Duration| (now - ago).format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let finished = stamp(chrono::Duration::zero());
+    {
+        let db = state.db().expect("database");
+        let template = |id: &str, team_id: &str, name: &str| {
+            db.execute(
+                "INSERT INTO templates (id, team_id, name, tool, created_at)
+                 VALUES (?1, ?2, ?3, 'shell', ?4)",
+                (id, team_id, name, finished.as_str()),
+            )
+            .unwrap();
+        };
+        template("tpl-deploy", &team, "Deploy");
+        template("tpl-migrate", &team, "Migrate");
+        template("tpl-other", &other_team, "Other deploy");
+        let add = |id: &str, team_id: &str, template_id: &str, status: &str, seconds: i64| {
+            let started = stamp(chrono::Duration::seconds(seconds));
+            db.execute(
+                "INSERT INTO jobs (
+                    id, team_id, template_id, name, tool, status, extra_vars, launched_by,
+                    trigger, started_at, finished_at, created_at
+                 ) VALUES (?1, ?2, ?3, ?1, 'shell', ?4, '{}', 'admin', 'manual', ?5, ?6, ?6)",
+                (
+                    id,
+                    team_id,
+                    template_id,
+                    status,
+                    started.as_str(),
+                    finished.as_str(),
+                ),
+            )
+            .unwrap();
+        };
+        add("deploy-ok", &team, "tpl-deploy", "successful", 30);
+        add("deploy-failed", &team, "tpl-deploy", "failed", 90);
+        add("migrate-ok", &team, "tpl-migrate", "successful", 10);
+        add("other-failed", &other_team, "tpl-other", "failed", 20);
+    }
+
+    let (status, day, _) = call(
+        &app,
+        "GET",
+        "/api/dashboard?days=1&tz=UTC",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{day}");
+    assert_eq!(day["series"].as_array().unwrap().len(), 24);
+    let hours: Vec<u64> = day["series"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["hour"].as_u64().unwrap())
+        .collect();
+    assert_eq!(hours, (0..24).collect::<Vec<_>>());
+    assert_eq!(day["totals"]["finished"], 3);
+    assert_eq!(day["totals"]["successful"], 2);
+    assert_eq!(day["totals"]["failed"], 1);
+    assert_eq!(day["totals"]["mean_duration"], 43);
+    let templates = day["by_template"].as_array().unwrap();
+    assert_eq!(templates.len(), 2);
+    let deploy = templates
+        .iter()
+        .find(|item| item["name"] == "Deploy")
+        .expect("deploy template");
+    assert_eq!(deploy["runs"], 2);
+    assert_eq!(deploy["failed"], 1);
+    assert_eq!(deploy["avg_duration"], 60);
+    let migrate = templates
+        .iter()
+        .find(|item| item["name"] == "Migrate")
+        .expect("migrate template");
+    assert_eq!(migrate["runs"], 1);
+    assert_eq!(migrate["failed"], 0);
+    assert_eq!(migrate["avg_duration"], 10);
+
+    let (status, week, _) = call(
+        &app,
+        "GET",
+        "/api/dashboard?days=7&tz=UTC",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{week}");
+    assert_eq!(week["series"].as_array().unwrap().len(), 7);
+    assert!(week["series"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|entry| entry["hour"].is_null()));
+    assert_eq!(week["by_template"], day["by_template"]);
+
+    let (status, other_day, _) = call(
+        &app,
+        "GET",
+        "/api/dashboard?days=1&tz=UTC",
+        Some(&cookie),
+        Some(&other_team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{other_day}");
+    assert_eq!(other_day["totals"]["finished"], 1);
+    let other_templates = other_day["by_template"].as_array().unwrap();
+    assert_eq!(other_templates.len(), 1);
+    assert_eq!(other_templates[0]["name"], "Other deploy");
+    assert_eq!(other_templates[0]["failed"], 1);
 
     let _ = std::fs::remove_dir_all(&dir);
 }

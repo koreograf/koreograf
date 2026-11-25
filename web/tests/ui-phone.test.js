@@ -167,14 +167,17 @@ test("the assistant sheet is fullscreen at 640 px and keeps the safe area", () =
 });
 
 test("the dashboard writes the chart count into the visible day", async () => {
+  const i18n = await load("core/i18n.js");
+  i18n.setCatalog("de", catalog("de"));
+  i18n.setCatalog("en", catalog("en"));
+  await i18n.setLang("en");
   const { dashboardBody } = await load("features/dashboard.js");
   const en = catalog("en");
   const html = dashboardBody({ series: [{ date: "2026-11-20", started: 9, successful: 3, failed: 1, canceled: 0 }], cache: {} }, "1");
-  const finished = html.slice(html.indexOf(en.jobs_finished_per_day), html.indexOf(en.jobs_started_per_day));
-  const started = html.slice(html.indexOf(en.jobs_started_per_day));
-  assert.match(finished, /class="chart-day-total"[^>]*>4</, "the finished day total is not visible");
-  assert.match(started, /class="chart-day-total"[^>]*>9</, "the started day total is not visible");
+  assert.match(html, new RegExp(en.jobs_per_hour));
+  assert.match(html, /class="chart-day-total"[^>]*>13</, "the combined day total is not visible");
   assert.match(html, /data-chart-day data-chart-target="[^"]+" data-chart-title="[^"]*Failed 1[^"]*"/, "the status split is not reachable on tap");
+  assert.match(html, /class="chart-swatch canceled"/, "the legend lost its swatches");
   assert.match(stylesheet(), /\.chart-day-total\s*\{[^}]*font-size:\s*11px/, "the day total does not fit a narrow chart");
   assert.match(rule(stylesheet(), ".chart-day")[1], /cursor:\s*pointer/, "the day detail has no tap affordance");
 });

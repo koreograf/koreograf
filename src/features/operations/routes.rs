@@ -1,10 +1,14 @@
+use std::collections::HashMap;
+
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use chrono::{DateTime, Duration as ChronoDuration, NaiveDate, SecondsFormat, TimeZone, Utc};
+use chrono::{
+    DateTime, Duration as ChronoDuration, NaiveDate, SecondsFormat, TimeZone, Timelike, Utc,
+};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -501,16 +505,38 @@ pub(super) struct DashboardResponse {
     from: String,
     to: String,
     series: Vec<DashboardSeriesResponse>,
+    totals: DashboardTotalsResponse,
+    by_template: Vec<DashboardTemplateResponse>,
     cache: DashboardCacheResponse,
 }
 
 #[derive(Serialize)]
 struct DashboardSeriesResponse {
     date: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hour: Option<u32>,
     started: u64,
     successful: u64,
     failed: u64,
     canceled: u64,
+}
+
+#[derive(Serialize)]
+struct DashboardTotalsResponse {
+    started: u64,
+    finished: u64,
+    successful: u64,
+    failed: u64,
+    canceled: u64,
+    mean_duration: u64,
+}
+
+#[derive(Serialize)]
+struct DashboardTemplateResponse {
+    name: String,
+    runs: u64,
+    failed: u64,
+    avg_duration: u64,
 }
 
 #[derive(Serialize)]
@@ -880,6 +906,14 @@ struct DashboardDay {
     canceled: u64,
 }
 
+#[derive(Default)]
+struct DashboardTemplate {
+    runs: u64,
+    failed: u64,
+    duration_secs: u64,
+    timed: u64,
+}
+
 fn parse_utc(value: Option<&str>) -> Option<DateTime<Utc>> {
     value
         .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
@@ -892,6 +926,34 @@ fn day_offset(first: NaiveDate, date: NaiveDate, days: i64) -> Option<usize> {
         Some(offset as usize)
     } else {
         None
+    }
+}
+
+fn bucket_offset(
+    hourly: bool,
+    first: NaiveDate,
+    today: NaiveDate,
+    days: i64,
+    timezone: Tz,
+    stamp: DateTime<Utc>,
+) -> Option<usize> {
+    let local = stamp.with_timezone(&timezone);
+    if hourly {
+        if local.date_naive() == today {
+            Some(local.hour() as usize)
+        } else {
+            None
+        }
+    } else {
+        day_offset(first, local.date_naive(), days)
+    }
+}
+
+fn average(total: u64, count: u64) -> u64 {
+    if count == 0 {
+        0
+    } else {
+        ((total as f64) / (count as f64)).round() as u64
     }
 }
 
@@ -922,31 +984,98 @@ pub async fn dashboard(
     let to = now.to_rfc3339_opts(SecondsFormat::Secs, true);
     let activity = state.store().job_activity(&team, &from, &to)?;
     let cache = cacheinfo::team_cache(&state.cfg.data_dir, &team);
-    let mut buckets = vec![DashboardDay::default(); days as usize];
+    let hourly = days == 1;
+    let bucket_count = if hourly { 24 } else { days as usize };
+    let mut buckets = vec![DashboardDay::default(); bucket_count];
+    let mut totals = DashboardTotalsResponse {
+        started: 0,
+        finished: 0,
+        successful: 0,
+        failed: 0,
+        canceled: 0,
+        mean_duration: 0,
+    };
+    let mut templates: HashMap<String, DashboardTemplate> = HashMap::new();
+    let mut duration_sum = 0_u64;
+    let mut duration_count = 0_u64;
     for item in activity {
-        if let Some(started) = parse_utc(item.started_at.as_deref()) {
-            let date = started.with_timezone(&timezone).date_naive();
-            if let Some(index) = day_offset(first, date, days) {
+        let started = parse_utc(item.started_at.as_deref());
+        let finished = parse_utc(item.finished_at.as_deref());
+        let elapsed = match (started, finished) {
+            (Some(start), Some(end)) => {
+                let secs = (end - start).num_seconds();
+                (secs >= 0).then_some(secs as u64)
+            }
+            _ => None,
+        };
+        if let Some(stamp) = started {
+            if let Some(index) = bucket_offset(hourly, first, today, days, timezone, stamp) {
                 buckets[index].started += 1;
+                totals.started += 1;
             }
         }
-        if let Some(finished) = parse_utc(item.finished_at.as_deref()) {
-            let date = finished.with_timezone(&timezone).date_naive();
-            if let Some(index) = day_offset(first, date, days) {
+        if let Some(stamp) = finished {
+            if let Some(index) = bucket_offset(hourly, first, today, days, timezone, stamp) {
                 match item.status.as_str() {
-                    "successful" => buckets[index].successful += 1,
-                    "failed" => buckets[index].failed += 1,
-                    "canceled" => buckets[index].canceled += 1,
+                    "successful" => {
+                        buckets[index].successful += 1;
+                        totals.successful += 1;
+                    }
+                    "failed" => {
+                        buckets[index].failed += 1;
+                        totals.failed += 1;
+                    }
+                    "canceled" => {
+                        buckets[index].canceled += 1;
+                        totals.canceled += 1;
+                    }
                     _ => {}
+                }
+                totals.finished += 1;
+                if let Some(elapsed) = elapsed {
+                    duration_sum += elapsed;
+                    duration_count += 1;
+                }
+                if let Some(name) = item.template_name {
+                    let entry = templates.entry(name).or_default();
+                    entry.runs += 1;
+                    if item.status == "failed" {
+                        entry.failed += 1;
+                    }
+                    if let Some(elapsed) = elapsed {
+                        entry.duration_secs += elapsed;
+                        entry.timed += 1;
+                    }
                 }
             }
         }
     }
+    totals.mean_duration = average(duration_sum, duration_count);
+    let mut by_template: Vec<DashboardTemplateResponse> = templates
+        .into_iter()
+        .map(|(name, entry)| DashboardTemplateResponse {
+            name,
+            runs: entry.runs,
+            failed: entry.failed,
+            avg_duration: average(entry.duration_secs, entry.timed),
+        })
+        .collect();
+    by_template.sort_by(|a, b| {
+        b.failed
+            .cmp(&a.failed)
+            .then(b.runs.cmp(&a.runs))
+            .then(a.name.cmp(&b.name))
+    });
     let series = buckets
         .iter()
         .enumerate()
         .map(|(offset, day)| DashboardSeriesResponse {
-            date: (first + ChronoDuration::days(offset as i64)).to_string(),
+            date: if hourly {
+                today.to_string()
+            } else {
+                (first + ChronoDuration::days(offset as i64)).to_string()
+            },
+            hour: hourly.then_some(offset as u32),
             started: day.started,
             successful: day.successful,
             failed: day.failed,
@@ -959,6 +1088,8 @@ pub async fn dashboard(
         from,
         to,
         series,
+        totals,
+        by_template,
         cache: DashboardCacheResponse {
             collections: cache.collections.len(),
             roles: cache.roles.len(),

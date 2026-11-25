@@ -22,6 +22,8 @@ export function jobsState(hash = location.hash || "") {
     tool: params.get("tool") || "",
     trigger: params.get("trigger") || "",
     template: params.get("template") || "",
+    since: params.get("since") || "",
+    until: params.get("until") || "",
   };
 }
 
@@ -34,6 +36,8 @@ export function jobsHash(state) {
   if (state.tool) params.set("tool", state.tool);
   if (state.trigger) params.set("trigger", state.trigger);
   if (state.template) params.set("template", state.template);
+  if (state.since) params.set("since", state.since);
+  if (state.until) params.set("until", state.until);
   const query = params.toString();
   return `#/jobs${query ? `?${query}` : ""}`;
 }
@@ -47,6 +51,8 @@ export function jobsUrl(state) {
   if (state.tool) params.set("tool", state.tool);
   if (state.trigger) params.set("trigger", state.trigger);
   if (state.template) params.set("template_id", state.template);
+  if (state.since) params.set("since", state.since);
+  if (state.until) params.set("until", state.until);
   return `/api/v1/jobs?${params.toString()}`;
 }
 

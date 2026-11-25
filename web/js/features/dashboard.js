@@ -6,7 +6,7 @@ import { esc, h, table } from "../core/dom.js";
 import { bytes, pill, preflightNoticeHtml, relativeTime, when } from "../core/format.js";
 import { currentLanguage, t } from "../core/i18n.js";
 import { registerRoute } from "../core/router.js";
-import { relaunchJob } from "./jobs.js";
+import { formatDuration, relaunchJob } from "./jobs.js";
 import { filterTemplates, openLaunchPrompt } from "./templates.js";
 
 export function onboardingCard(counts = {}) {
@@ -507,40 +507,177 @@ export function overviewGlanceHtml(data) {
 
 let chartSerial = 0;
 
-function dashboardChart(series, values, heading, legend) {
+function dashboardTotals(data) {
+  const series = Array.isArray(data.series) ? data.series : [];
+  const sum = (key) => series.reduce((total, day) => total + (Number(day[key]) || 0), 0);
+  const fallback = {
+    started: sum("started"),
+    successful: sum("successful"),
+    failed: sum("failed"),
+    canceled: sum("canceled"),
+  };
+  fallback.finished = fallback.successful + fallback.failed + fallback.canceled;
+  const totals = data.totals || {};
+  return {
+    started: Number(totals.started ?? fallback.started) || 0,
+    finished: Number(totals.finished ?? fallback.finished) || 0,
+    successful: Number(totals.successful ?? fallback.successful) || 0,
+    failed: Number(totals.failed ?? fallback.failed) || 0,
+    canceled: Number(totals.canceled ?? fallback.canceled) || 0,
+    mean_duration: Number(totals.mean_duration) || 0,
+  };
+}
+
+function jobsAddress(status, since, until) {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  if (since) params.set("since", since);
+  if (until) params.set("until", until);
+  const query = params.toString();
+  return `#/jobs${query ? `?${query}` : ""}`;
+}
+
+function bucketRange(data) {
+  const date = String(data.date || "");
+  if (!date) return null;
+  const start = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(start.getTime())) return null;
+  if (data.hour !== undefined && data.hour !== "") {
+    start.setHours(Number(data.hour), 0, 0, 0);
+    return {
+      since: start.toISOString(),
+      until: new Date(start.getTime() + 60 * 60 * 1000).toISOString(),
+    };
+  }
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  return { since: start.toISOString(), until: end.toISOString() };
+}
+
+function dashboardKpiRow(data, totals) {
+  const rate = totals.finished ? `${Math.round((totals.successful / totals.finished) * 100)}%` : "—";
+  const mean = totals.mean_duration > 0 ? formatDuration(totals.mean_duration) : "—";
+  const since = data.from || "";
+  const until = data.to || "";
+  return `<div class="kpi-row" data-kpi-row data-dashboard-kpis>
+    ${kpiTile("range-success-rate", "success_rate", rate, {
+      href: jobsAddress("successful", since, until),
+      hint: h("success_rate_detail", { successful: totals.successful, finished: totals.finished }),
+    })}
+    ${kpiTile("range-failed", "failed_jobs", String(totals.failed), {
+      href: jobsAddress("failed", since, until),
+      tone: totals.failed ? "bad" : "",
+    })}
+    ${kpiTile("range-mean-duration", "mean_duration", mean, {
+      href: jobsAddress("", since, until),
+    })}
+    ${kpiTile("range-jobs", "jobs_started_finished", `${totals.started} / ${totals.finished}`, {
+      href: jobsAddress("", since, until),
+    })}
+  </div>`;
+}
+
+export function dashboardChart(series, heading = "jobs_per_day") {
   const chartId = `chart-${chartSerial += 1}`;
-  const totals = series.map((day) => values.reduce((sum, key) => sum + (Number(day[key]) || 0), 0));
-  const max = Math.max(1, ...totals);
-  const days = series.map((day, index) => {
-    const title = `${day.date} · ${values.map((key) => `${key === "started" ? "" : `${t(key)} `}${Number(day[key]) || 0}`).join(" · ")}`;
-    const bars = values.map((key) => {
-      const value = Number(day[key]) || 0;
-      if (!value) return "";
-      return `<span class="chart-seg ${esc(key)}" style="flex-grow:${value}"></span>`;
-    }).join("");
-    const height = Math.max(4, Math.round((totals[index] / max) * 100));
-    const bar = bars ? `<div class="chart-bar" style="height:${height}%">${bars}</div>` : "";
-    return `<button class="chart-day" type="button" data-chart-day data-chart-target="${chartId}" data-chart-title="${esc(title)}" aria-label="${esc(title)}"><span class="chart-day-total">${totals[index]}</span><div class="chart-bars">${bar}</div><span class="chart-day-label">${esc(shortDay(day.date))}</span></button>`;
+  const rows = (Array.isArray(series) ? series : []).map((day) => {
+    const started = Number(day.started) || 0;
+    const successful = Number(day.successful) || 0;
+    const failed = Number(day.failed) || 0;
+    const canceled = Number(day.canceled) || 0;
+    const finished = successful + failed + canceled;
+    return { day, started, successful, failed, canceled, finished, total: started + finished };
+  });
+  const max = Math.max(1, ...rows.map((row) => Math.max(row.started, row.finished)));
+  const segment = (status, value) => value
+    ? `<span class="chart-seg ${status}" style="flex-grow:${value}"></span>`
+    : "";
+  const days = rows.map((row) => {
+    const hourly = row.day.hour !== undefined && row.day.hour !== null;
+    const label = hourly ? `${String(row.day.hour).padStart(2, "0")}:00` : shortDay(row.day.date);
+    const time = hourly ? `${shortDay(row.day.date)} ${label}` : label;
+    const title = `${time} · ${t("started")} ${row.started} · ${t("successful")} ${row.successful} · ${t("failed")} ${row.failed} · ${t("canceled")} ${row.canceled}`;
+    const height = Math.max(4, Math.round((Math.max(row.started, row.finished) / max) * 100));
+    const pair = row.total
+      ? `<div class="chart-pair" style="height:${height}%">
+          <div class="chart-bar started" aria-hidden="true">${segment("started", row.started)}</div>
+          <div class="chart-bar finished" aria-hidden="true">${segment("successful", row.successful)}${segment("failed", row.failed)}${segment("canceled", row.canceled)}</div>
+        </div>`
+      : "";
+    const hour = hourly ? ` data-chart-hour="${esc(row.day.hour)}"` : "";
+    return `<button class="chart-day" type="button" data-chart-day data-chart-target="${chartId}" data-chart-title="${esc(title)}" data-chart-date="${esc(row.day.date)}"${hour} aria-label="${esc(title)}">
+      ${row.total ? `<span class="chart-day-total">${row.total}</span>` : `<span class="chart-day-total" aria-hidden="true"></span>`}
+      <div class="chart-bars">${pair}</div>
+      <span class="chart-day-label">${esc(label)}</span>
+    </button>`;
   }).join("");
-  return `<section class="card"><div class="spread"><h2>${h(heading)}</h2>${legend ? `<div class="row">${legend}</div>` : ""}</div><div class="chart" role="group" aria-label="${h(heading)}">${days}</div><p class="small muted chart-detail" data-chart-detail="${chartId}" aria-live="polite">${h("chart_day_hint")}</p></section>`;
+  const legend = [
+    ["started", "started"],
+    ["successful", "successful"],
+    ["failed", "failed"],
+    ["canceled", "canceled"],
+  ].map(([status, key]) => `<span class="chart-legend-item"><span class="chart-swatch ${status}" aria-hidden="true"></span>${h(key)}</span>`).join("");
+  return `<section class="card" data-dashboard-chart>
+    <div class="spread"><h2>${h(heading)}</h2><div class="chart-legend">${legend}</div></div>
+    <div class="chart" role="group" aria-label="${h(heading)}">${days}</div>
+    <p class="small muted chart-detail" data-chart-detail="${chartId}" aria-live="polite">${h("chart_day_hint")}</p>
+  </section>`;
+}
+
+function templateTable(id, title, items, compare, filter) {
+  const rows = (Array.isArray(items) ? items : [])
+    .filter(filter)
+    .slice()
+    .sort(compare)
+    .slice(0, 5)
+    .map((item) => `<tr>
+      <td>${esc(item.name)}</td>
+      <td class="num">${esc(Number(item.runs) || 0)}</td>
+      <td class="num">${esc(Number(item.failed) || 0)}</td>
+      <td class="num">${Number(item.avg_duration) > 0 ? esc(formatDuration(item.avg_duration)) : "—"}</td>
+    </tr>`);
+  return `<section class="card" data-dashboard-table="${esc(id)}">
+    <h2>${h(title)}</h2>
+    ${table([t("template"), t("template_runs"), t("failed"), t("mean_duration")], rows)}
+  </section>`;
 }
 
 export function dashboardBody(data, range) {
   const series = Array.isArray(data.series) ? data.series : [];
-  const started = series.reduce((sum, day) => sum + (Number(day.started) || 0), 0);
-  const finished = series.reduce((sum, day) => sum + (Number(day.successful) || 0) + (Number(day.failed) || 0) + (Number(day.canceled) || 0), 0);
-  const empty = started + finished === 0;
+  const totals = dashboardTotals(data);
+  const empty = totals.started + totals.finished === 0;
   const ranges = [["1", "today"], ["7", "last_7_days"], ["14", "last_14_days"]].map(([value, key]) =>
     `<button class="btn pill${range === value ? " primary" : ""}" type="button" data-dashboard-range="${value}" aria-pressed="${range === value}">${h(key)}</button>`
   ).join("");
+  const heading = range === "1" ? "jobs_per_hour" : "jobs_per_day";
   const charts = empty
     ? `<section class="card"><p class="muted chart-empty">${h("no_jobs_in_this_range")}</p></section>`
-    : `<div class="charts">${dashboardChart(series, ["successful", "failed", "canceled"], "jobs_finished_per_day", `${pill("successful")}${pill("failed")}${pill("canceled")}`)}${dashboardChart(series, ["started"], "jobs_started_per_day", "")}</div>`;
+    : dashboardChart(series, heading);
+  const templates = Array.isArray(data.by_template) ? data.by_template : [];
+  const failing = templateTable(
+    "failing",
+    "top_failing_templates",
+    templates,
+    (left, right) => (Number(right.failed) || 0) - (Number(left.failed) || 0)
+      || (Number(right.runs) || 0) - (Number(left.runs) || 0)
+      || String(left.name).localeCompare(String(right.name)),
+    (item) => (Number(item.failed) || 0) > 0,
+  );
+  const slowest = templateTable(
+    "slowest",
+    "slowest_templates",
+    templates,
+    (left, right) => (Number(right.avg_duration) || 0) - (Number(left.avg_duration) || 0)
+      || (Number(right.runs) || 0) - (Number(left.runs) || 0)
+      || String(left.name).localeCompare(String(right.name)),
+    (item) => (Number(item.runs) || 0) > 0,
+  );
   const cache = data.cache || {};
   return `<div class="spread tab-bar"><div class="row" role="group" aria-label="${h("range")}">${ranges}</div></div>
     <div class="stack">
+      ${dashboardKpiRow(data, totals)}
       ${charts}
-      <section>
+      <div class="grid-2">${failing}${slowest}</div>
+      <section data-dashboard-cache>
         <div class="spread"><h2>${h("dependency_cache")}</h2>${cacheClearButton(can("owner"))}</div>
         <div class="grid-3">
           <article class="card stat"><span class="small muted">${h("collections")}</span><strong>${esc(Number(cache.collections) || 0)}</strong></article>
@@ -559,12 +696,18 @@ function bindDashboardCharts() {
   });
   document.querySelectorAll("[data-chart-day]").forEach((button) => {
     const detail = details.find((node) => node.dataset.chartDetail === button.dataset.chartTarget);
-    if (!detail) return;
     const show = () => {
-      detail.textContent = button.dataset.chartTitle || "";
+      if (detail) detail.textContent = button.dataset.chartTitle || "";
     };
-    button.addEventListener("click", show);
     button.addEventListener("focus", show);
+    button.addEventListener("mouseenter", show);
+    button.addEventListener("click", (event) => {
+      const range = bucketRange(button.dataset);
+      if (!range) return;
+      const target = event.target;
+      const failed = target && target.closest && target.closest(".chart-seg.failed");
+      go(jobsAddress(failed ? "failed" : "", range.since, range.until));
+    });
   });
 }
 
