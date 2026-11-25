@@ -111,24 +111,142 @@ list_cols() {
   fi
 }
 
-cache_roles() {
-  src="$KOREOGRAF_PROJECT/roles"
-  if [ ! -d "$src" ]; then
-    return 0
+role_requirements() {
+  awk '
+    function trim(value) {
+      sub(/^[^:]*:[[:space:]]*/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      gsub(/^["'"'"']|["'"'"']$/, "", value)
+      return value
+    }
+    function flush() {
+      if (name == "" && src != "") {
+        name = src
+        sub(/\/+$/, "", name)
+        sub(/\.git$/, "", name)
+        sub(/.*\//, "", name)
+      }
+      if (name != "") printf "%s\t%s\n", name, version
+      name = ""
+      src = ""
+      version = ""
+    }
+    /^[[:space:]]*#/ { next }
+    /^[^[:space:]]/ {
+      if (in_roles) flush()
+      in_roles = ($0 ~ /^roles:[[:space:]]*(#.*)?$/)
+      next
+    }
+    !in_roles { next }
+    /^[[:space:]]*-[[:space:]]*/ {
+      flush()
+      line = $0
+      sub(/^[[:space:]]*-[[:space:]]*/, "", line)
+      if (line ~ /^name:/) name = trim(line)
+      else if (line ~ /^src:/) src = trim(line)
+      else if (line ~ /^version:/) version = trim(line)
+      else if (line !~ /:/) name = line
+      next
+    }
+    /^[[:space:]]*name:/ { name = trim($0); next }
+    /^[[:space:]]*src:/ { src = trim($0); next }
+    /^[[:space:]]*version:/ { version = trim($0); next }
+    END { if (in_roles) flush() }
+  ' "$1"
+}
+
+installed_role_version() {
+  info="$1/meta/.galaxy_install_info"
+  [ -f "$info" ] || return 0
+  version=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$info" | head -n 1)
+  if [ -z "$version" ]; then
+    version=$(sed -n 's/^[[:space:]]*version[[:space:]]*[=:][[:space:]]*//p' "$info" | head -n 1 | tr -d '"'"'"'')
   fi
-  for d in "$src"/*; do
-    if [ ! -d "$d" ]; then
-      continue
-    fi
-    name=$(basename "$d")
-    dest="$KOREOGRAF_ROLES/$name"
-    if [ -d "$dest" ]; then
-      log "Role from cache: $name"
-    else
-      cp -a "$d" "$dest"
-      log "Role added to the cache: $name"
+  printf '%s\n' "$version"
+}
+
+roles_need_force() {
+  requested=$(role_requirements "$1")
+  [ -n "$requested" ] || return 1
+  for dir in "$KOREOGRAF_ROLES"/*; do
+    [ -d "$dir" ] || continue
+    name=$(basename "$dir")
+    wanted=$(printf '%s\n' "$requested" | awk -F '\t' -v name="$name" '$1 == name { print $2; exit }')
+    [ -n "$wanted" ] || continue
+    installed=$(installed_role_version "$dir")
+    [ -n "$installed" ] || continue
+    if [ "$wanted" != "$installed" ]; then
+      log "Role $name is at $installed in the cache, requirements ask for $wanted."
+      return 0
     fi
   done
+  return 1
+}
+
+collections_need_upgrade() {
+  awk '
+    function trim(value) {
+      sub(/^[^:]*:[[:space:]]*/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      gsub(/^["'"'"']|["'"'"']$/, "", value)
+      return value
+    }
+    function decide() {
+      if (!seen) return
+      if (version == "" || version == "*" || version ~ /[<>=!~,]/) found = 1
+      version = ""
+      seen = 0
+    }
+    /^[[:space:]]*#/ { next }
+    /^[^[:space:]]/ {
+      if (in_collections) decide()
+      in_collections = ($0 ~ /^collections:[[:space:]]*(#.*)?$/)
+      next
+    }
+    !in_collections { next }
+    /^[[:space:]]*-[[:space:]]*/ {
+      decide()
+      seen = 1
+      line = $0
+      sub(/^[[:space:]]*-[[:space:]]*/, "", line)
+      sub(/[[:space:]]+$/, "", line)
+      gsub(/^["'"'"']|["'"'"']$/, "", line)
+      if (line ~ /^version:/) {
+        version = trim(line)
+      } else if (line ~ /^(name|source|src):/) {
+        next
+      } else if (line ~ /^[^:]+:/) {
+        version = line
+        sub(/^[^:]+:[[:space:]]*/, "", version)
+      }
+      next
+    }
+    /^[[:space:]]*version:/ { version = trim($0); next }
+    END { if (in_collections) decide(); exit found ? 0 : 1 }
+  ' "$1"
+}
+
+cache_lock() {
+  lock_file="$KOREOGRAF_COLLECTIONS/.galaxy.lock"
+  galaxy_locked=0
+  command -v flock >/dev/null 2>&1 || return 0
+  if ! : >>"$lock_file" 2>/dev/null; then
+    log "Galaxy cache lock file cannot be opened. The install continues without it."
+    return 0
+  fi
+  exec 9>>"$lock_file"
+  if flock 9; then
+    galaxy_locked=1
+  else
+    log "Galaxy cache lock failed. The install continues without it."
+  fi
+}
+
+cache_unlock() {
+  if [ "$galaxy_locked" -eq 1 ]; then
+    flock -u 9
+    galaxy_locked=0
+  fi
 }
 
 # The effective callback plugin path from ansible.cfg, plus the environment and
@@ -166,7 +284,7 @@ run_ansible() {
       log "  $line"
     done
   fi
-  cache_roles
+  cache_lock
   req=""
   if [ -f requirements.yml ]; then
     req="requirements.yml"
@@ -174,19 +292,30 @@ run_ansible() {
     req="collections/requirements.yml"
   fi
   if [ -n "$req" ]; then
-    log "ansible-galaxy collection install -r $req"
-    if ! ansible-galaxy collection install -r "$req" -p "$KOREOGRAF_COLLECTIONS"; then
+    if collections_need_upgrade "$req"; then
+      set -- collection install -r "$req" -p "$KOREOGRAF_COLLECTIONS" --upgrade
+    else
+      set -- collection install -r "$req" -p "$KOREOGRAF_COLLECTIONS"
+    fi
+    log "ansible-galaxy $*"
+    if ! ansible-galaxy "$@"; then
       log "Galaxy install failed. The existing cache is used anyway."
     fi
     if grep -q '^roles:' "$req"; then
-      log "ansible-galaxy role install -r $req"
-      if ! ansible-galaxy role install -r "$req" -p "$KOREOGRAF_ROLES"; then
+      if roles_need_force "$req"; then
+        set -- role install -r "$req" -p "$KOREOGRAF_ROLES" --force
+      else
+        set -- role install -r "$req" -p "$KOREOGRAF_ROLES"
+      fi
+      log "ansible-galaxy $*"
+      if ! ansible-galaxy "$@"; then
         log "Role install failed. The existing cache is used anyway."
       fi
     fi
   else
     log "No requirements.yml, Galaxy step skipped."
   fi
+  cache_unlock
   clear_git_auth
   log "Collection cache after the run:"
   after=$(list_cols || true)
@@ -198,7 +327,7 @@ run_ansible() {
     done
   fi
   export ANSIBLE_COLLECTIONS_PATH="$KOREOGRAF_COLLECTIONS"
-  export ANSIBLE_ROLES_PATH="$KOREOGRAF_ROLES:$KOREOGRAF_PROJECT/roles"
+  export ANSIBLE_ROLES_PATH="$KOREOGRAF_PROJECT/roles:$KOREOGRAF_ROLES"
   export ANSIBLE_HOST_KEY_CHECKING=False
   export ANSIBLE_FORCE_COLOR=0
   export ANSIBLE_RETRY_FILES_ENABLED=0

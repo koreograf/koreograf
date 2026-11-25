@@ -10,7 +10,7 @@ The lines contain no credentials, no tokens, and no extra variables.
 | `koreograf::cache` | when a job starts | collection and role counts, bytes for collections, roles, and OpenTofu |
 | `koreograf::role` | Ansible role finished, and immediately on `failed` or `unreachable` | `playbook`, `role`, `result`, or the counters `ok`, `changed`, `failed`, `unreachable`, `skipped` |
 
-For Ansible, `playbook` is the playbook path. For shell and OpenTofu it is the entry path. Koreograf reads roles from Ansible's default callback output (`TASK [role : task]`, `RUNNING HANDLER`, `ok:`, `changed:`, `fatal:`, `unreachable:`, `skipping:`). `KOREOGRAF Role from cache` means the role was already in the cache. A task name that contains ` : ` outside a role can look like a role.
+For Ansible, `playbook` is the playbook path. For shell and OpenTofu it is the entry path. Koreograf reads roles from Ansible's default callback output (`TASK [role : task]`, `RUNNING HANDLER`, `ok:`, `changed:`, `fatal:`, `unreachable:`, `skipping:`). Koreograf's own `KOREOGRAF …` cache lines are not read as role results. A task name that contains ` : ` outside a role can look like a role.
 
 The dashboard reads the stored jobs in SQLite for its daily series; it does not scrape `/metrics`. The overview glance reads the team's pending and running jobs, concurrency use, schedules, failed project and inventory syncs, workflow runs, and the latest `host_results` rows from the database, plus the cache from disk. All of it survives a restart; a host counts as stale after seven days without a new `host_results` row, and a host only appears while its inventory still exists. Failed workflow runs count for 24 hours. `/metrics` stays a separate, process-local source for Prometheus.
 

@@ -5288,12 +5288,12 @@ mod tests {
         test_git_http_server(www)
     }
 
-    fn test_ansible_wrapper(
+    fn test_ansible_command(
         root: &Path,
         work: &Path,
         project: &Path,
         galaxy_env: &[(String, String)],
-    ) -> std::process::Output {
+    ) -> std::process::Command {
         let bin = root.join("bin");
         let path = format!("{}:/usr/bin:/bin", bin.display());
         let mut cmd = std::process::Command::new("sh");
@@ -5314,7 +5314,18 @@ mod tests {
         for (key, value) in galaxy_env {
             cmd.env(key, value);
         }
-        cmd.output().expect("wrapper")
+        cmd
+    }
+
+    fn test_ansible_wrapper(
+        root: &Path,
+        work: &Path,
+        project: &Path,
+        galaxy_env: &[(String, String)],
+    ) -> std::process::Output {
+        test_ansible_command(root, work, project, galaxy_env)
+            .output()
+            .expect("wrapper")
     }
 
     fn test_galaxy_bin(root: &Path) {
@@ -5393,6 +5404,290 @@ git clone "$src" "$dest/role"
             "{text}"
         );
         assert!(!root.join("roles").join("role").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn galaxy_role_pin_change_forces_the_install() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("koreograf-galaxy-role-pin-{nanos}"));
+        let work = root.join("work");
+        let project = root.join("project");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        let args = root.join("galaxy-args");
+        write_executable(
+            &root.join("bin").join("ansible-galaxy"),
+            r#"#!/bin/sh
+printf '%s\n' "$*" >> "$GALAXY_TEST_ARGS"
+exit 0
+"#,
+        );
+        write_executable(
+            &root.join("bin").join("ansible-playbook"),
+            "#!/bin/sh\nexit 0\n",
+        );
+        let role = root.join("roles").join("demo");
+        std::fs::create_dir_all(role.join("meta")).unwrap();
+        std::fs::write(
+            role.join("meta").join(".galaxy_install_info"),
+            "{\"version\": \"1.0.0\"}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            project.join("requirements.yml"),
+            "roles:\n  - src: https://example.invalid/demo.git\n    version: 1.1.0\n",
+        )
+        .unwrap();
+        let env = vec![("GALAXY_TEST_ARGS".to_string(), args.display().to_string())];
+
+        let output = test_ansible_wrapper(&root, &work, &project, &env);
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.status.success(), "{text}");
+        let first = std::fs::read_to_string(&args).unwrap();
+        assert!(
+            first
+                .lines()
+                .any(|line| line.starts_with("role install") && line.contains("--force")),
+            "{first}"
+        );
+        assert!(text.contains("requirements ask for 1.1.0"), "{text}");
+
+        std::fs::write(
+            role.join("meta").join(".galaxy_install_info"),
+            "{\"version\": \"1.1.0\"}\n",
+        )
+        .unwrap();
+        std::fs::write(&args, "").unwrap();
+        let output = test_ansible_wrapper(&root, &work, &project, &env);
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.status.success(), "{text}");
+        let second = std::fs::read_to_string(&args).unwrap();
+        assert!(
+            second
+                .lines()
+                .any(|line| line.starts_with("role install") && !line.contains("--force")),
+            "{second}"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn galaxy_collection_ranges_upgrade_and_exact_pins_do_not() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("koreograf-galaxy-collection-{nanos}"));
+        let work = root.join("work");
+        let project = root.join("project");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        let args = root.join("galaxy-args");
+        write_executable(
+            &root.join("bin").join("ansible-galaxy"),
+            r#"#!/bin/sh
+printf '%s\n' "$*" >> "$GALAXY_TEST_ARGS"
+exit 0
+"#,
+        );
+        write_executable(
+            &root.join("bin").join("ansible-playbook"),
+            "#!/bin/sh\nexit 0\n",
+        );
+        let env = vec![("GALAXY_TEST_ARGS".to_string(), args.display().to_string())];
+        for requirement in [
+            "collections:\n  - name: ns.demo\n    version: \">=1.0.0\"\n",
+            "collections:\n  - name: ns.demo\n    version: \"*\"\n",
+            "collections:\n  - ns.demo\n",
+        ] {
+            std::fs::write(project.join("requirements.yml"), requirement).unwrap();
+            std::fs::write(&args, "").unwrap();
+            let output = test_ansible_wrapper(&root, &work, &project, &env);
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(output.status.success(), "{text}");
+            let recorded = std::fs::read_to_string(&args).unwrap();
+            assert!(
+                recorded.lines().any(
+                    |line| line.starts_with("collection install") && line.contains("--upgrade")
+                ),
+                "{requirement}: {recorded}"
+            );
+        }
+        for requirement in [
+            "collections:\n  - name: ns.demo\n    version: 1.1.0\n",
+            "collections:\n  - ns.demo:1.1.0\n",
+        ] {
+            std::fs::write(project.join("requirements.yml"), requirement).unwrap();
+            std::fs::write(&args, "").unwrap();
+            let output = test_ansible_wrapper(&root, &work, &project, &env);
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(output.status.success(), "{text}");
+            let recorded = std::fs::read_to_string(&args).unwrap();
+            assert!(
+                recorded
+                    .lines()
+                    .any(|line| line.starts_with("collection install")
+                        && !line.contains("--upgrade")),
+                "{requirement}: {recorded}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn project_roles_run_from_the_checkout() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("koreograf-project-roles-{nanos}"));
+        let work = root.join("work");
+        let project = root.join("project");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(project.join("roles").join("demo").join("tasks")).unwrap();
+        std::fs::create_dir_all(root.join("roles").join("demo").join("tasks")).unwrap();
+        std::fs::write(
+            project
+                .join("roles")
+                .join("demo")
+                .join("tasks")
+                .join("main.yml"),
+            "project-one\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("roles")
+                .join("demo")
+                .join("tasks")
+                .join("main.yml"),
+            "cached-old\n",
+        )
+        .unwrap();
+        write_executable(
+            &root.join("bin").join("ansible-playbook"),
+            r#"#!/bin/sh
+old_ifs=$IFS
+IFS=:
+for dir in $ANSIBLE_ROLES_PATH; do
+  if [ -f "$dir/demo/tasks/main.yml" ]; then
+    cat "$dir/demo/tasks/main.yml"
+    IFS=$old_ifs
+    exit 0
+  fi
+done
+IFS=$old_ifs
+exit 1
+"#,
+        );
+
+        let output = test_ansible_wrapper(&root, &work, &project, &[]);
+        let text = String::from_utf8_lossy(&output.stdout).to_string();
+        assert!(output.status.success(), "{text}");
+        assert!(text.contains("project-one"), "{text}");
+        assert!(!text.contains("cached-old"), "{text}");
+
+        std::fs::write(
+            project
+                .join("roles")
+                .join("demo")
+                .join("tasks")
+                .join("main.yml"),
+            "project-two\n",
+        )
+        .unwrap();
+        let output = test_ansible_wrapper(&root, &work, &project, &[]);
+        let text = String::from_utf8_lossy(&output.stdout).to_string();
+        assert!(output.status.success(), "{text}");
+        assert!(text.contains("project-two"), "{text}");
+        assert!(!text.contains("project-one"), "{text}");
+        assert_eq!(
+            std::fs::read_to_string(
+                root.join("roles")
+                    .join("demo")
+                    .join("tasks")
+                    .join("main.yml")
+            )
+            .unwrap(),
+            "cached-old\n"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn overlapping_galaxy_installs_serialize_on_the_team_cache() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("koreograf-galaxy-lock-{nanos}"));
+        let gate = root.join("gate");
+        let overlap = root.join("overlap");
+        write_executable(
+            &root.join("bin").join("ansible-galaxy"),
+            r#"#!/bin/sh
+if ! mkdir "$GALAXY_TEST_GATE" 2>/dev/null; then
+  printf 'overlap\n' >> "$GALAXY_TEST_OVERLAP"
+fi
+sleep 1
+rmdir "$GALAXY_TEST_GATE" 2>/dev/null || true
+exit 0
+"#,
+        );
+        write_executable(
+            &root.join("bin").join("ansible-playbook"),
+            "#!/bin/sh\nexit 0\n",
+        );
+        let env = vec![
+            ("GALAXY_TEST_GATE".to_string(), gate.display().to_string()),
+            (
+                "GALAXY_TEST_OVERLAP".to_string(),
+                overlap.display().to_string(),
+            ),
+        ];
+        let mut children = Vec::new();
+        for index in 0..2 {
+            let work = root.join(format!("work-{index}"));
+            let project = root.join(format!("project-{index}"));
+            std::fs::create_dir_all(&work).unwrap();
+            std::fs::create_dir_all(&project).unwrap();
+            std::fs::write(
+                project.join("requirements.yml"),
+                "collections:\n  - name: ns.demo\n",
+            )
+            .unwrap();
+            children.push(
+                test_ansible_command(&root, &work, &project, &env)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .expect("wrapper"),
+            );
+        }
+        for mut child in children {
+            assert!(child.wait().unwrap().success());
+        }
+        assert!(root.join("collections").join(".galaxy.lock").is_file());
+        assert!(!overlap.exists(), "{}", overlap.display());
         let _ = std::fs::remove_dir_all(root);
     }
 
