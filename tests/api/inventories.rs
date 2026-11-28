@@ -1,4 +1,4 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::http::StatusCode;
 use serde_json::{json, Value};
@@ -3269,6 +3269,175 @@ async fn inventory_syncs_roll_up_the_operator_and_the_result() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_static_inventory_over_the_size_limit_is_rejected() {
+    let harness = TestApp::boot("inventory-limit", Options::default());
+    let app = harness.app.clone();
+    let dir = harness.dir.clone();
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let too_many_hosts = format!(
+        "[all]\n{}",
+        (1..=10_001)
+            .map(|index| format!("host-{index}\n"))
+            .collect::<String>()
+    );
+    let (status, rejected, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Too many hosts", "body": too_many_hosts})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+    assert_eq!(rejected["error"], "inventory_has_too_many_hosts");
+    assert_eq!(rejected["vars"]["max"], "10000");
+
+    let too_large = format!("[all]\n{}", "h".repeat(1_000_000));
+    let (status, rejected, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Too large", "body": too_large})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+    assert_eq!(rejected["error"], "inventory_body_is_too_large");
+    assert_eq!(rejected["vars"]["max_bytes"], "1000000");
+
+    let too_many_groups = (1..=55_618)
+        .map(|index| format!("[g{index}:vars]\na=1\n"))
+        .collect::<String>();
+    let group_started = Instant::now();
+    let (status, rejected, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Too many groups", "body": too_many_groups})),
+    )
+    .await;
+    let group_elapsed = group_started.elapsed();
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+    assert_eq!(rejected["error"], "inventory_has_too_many_groups");
+    assert_eq!(rejected["vars"]["max"], "10000");
+    assert!(
+        group_elapsed < Duration::from_secs(5),
+        "group rejection took {group_elapsed:?}"
+    );
+
+    let body = format!(
+        "[web]\n{}",
+        (1..=3_000)
+            .map(|index| format!(
+                "web-{index} ansible_host=10.0.{}.{}\n",
+                index / 256,
+                index % 256
+            ))
+            .collect::<String>()
+    );
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Bounded hosts", "body": body})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["host_count"], 3_000);
+    let id = created["id"].as_str().unwrap().to_string();
+
+    let started = Instant::now();
+    let (status, listed, _) = call(
+        &app,
+        "GET",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    let elapsed = started.elapsed();
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert!(elapsed < Duration::from_secs(5), "list took {elapsed:?}");
+    let rows = listed.as_array().unwrap();
+    assert!(rows.iter().all(|item| item["name"] != "Too many hosts"
+        && item["name"] != "Too many groups"
+        && item["name"] != "Too large"));
+    let summary = rows.iter().find(|item| item["id"] == id).unwrap();
+    assert_eq!(summary["host_count"], 3_000);
+    assert_eq!(summary["group_count"], 1);
+
+    let at_limit = format!(
+        "[all]\n{}",
+        (1..=10_000)
+            .map(|index| format!("host-{index}\n"))
+            .collect::<String>()
+    );
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/inventories",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "At the host limit", "body": at_limit})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["host_count"], 10_000);
+
+    let over_update = format!(
+        "[all]\n{}",
+        (1..=10_001)
+            .map(|index| format!("host-{index}\n"))
+            .collect::<String>()
+    );
+    let (status, rejected, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/inventories/{id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Bounded hosts", "body": over_update})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+    assert_eq!(rejected["error"], "inventory_has_too_many_hosts");
+
+    let (status, detail, _) = call(
+        &app,
+        "GET",
+        &format!("/api/inventories/{id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["host_count"], 3_000);
 
     let _ = std::fs::remove_dir_all(&dir);
 }

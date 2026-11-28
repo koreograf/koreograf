@@ -1879,12 +1879,17 @@ pub async fn list_inventory_groups(
     let item = visible_inventory(db, &id, &team)?;
     let sources = db.list_inventory_sources(&item.id)?;
     let data = inventory_data(&item, &sources);
+    let counts = group_host_counts(&data);
     let groups: Vec<InventoryGroupEntryResponse> = data
         .groups
         .iter()
         .map(|group| InventoryGroupEntryResponse {
             name: group.name.clone(),
-            host_count: inventory::group_hosts(&data, &group.name).len(),
+            host_count: if group.name == "all" {
+                data.hosts.len()
+            } else {
+                counts.get(&group.name).copied().unwrap_or(0)
+            },
             children: group.children.clone(),
             vars: group.vars.clone(),
         })
@@ -1975,12 +1980,63 @@ fn group_names(data: &InventoryData) -> Vec<String> {
         .collect()
 }
 
+fn group_parents(data: &InventoryData) -> BTreeMap<&str, Vec<&str>> {
+    let mut parents: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for group in &data.groups {
+        for child in &group.children {
+            parents
+                .entry(child.as_str())
+                .or_default()
+                .push(group.name.as_str());
+        }
+    }
+    parents
+}
+
 fn group_count(data: &InventoryData) -> usize {
+    let parents = group_parents(data);
+    let mut with_hosts: BTreeSet<&str> = BTreeSet::new();
+    for host in &data.hosts {
+        for group in &host.groups {
+            with_hosts.insert(group.as_str());
+        }
+    }
+    let mut pending: Vec<&str> = with_hosts.iter().copied().collect();
+    while let Some(name) = pending.pop() {
+        if let Some(items) = parents.get(name) {
+            for parent in items {
+                if with_hosts.insert(*parent) {
+                    pending.push(*parent);
+                }
+            }
+        }
+    }
     data.groups
         .iter()
         .filter(|group| group.name != "all" && group.name != "ungrouped")
-        .filter(|group| !inventory::group_hosts(data, &group.name).is_empty())
+        .filter(|group| with_hosts.contains(group.name.as_str()))
         .count()
+}
+
+fn group_host_counts(data: &InventoryData) -> BTreeMap<String, usize> {
+    let parents = group_parents(data);
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for host in &data.hosts {
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        let mut pending: Vec<&str> = host.groups.iter().map(String::as_str).collect();
+        while let Some(name) = pending.pop() {
+            if !seen.insert(name) {
+                continue;
+            }
+            if let Some(items) = parents.get(name) {
+                pending.extend(items.iter().copied());
+            }
+        }
+        for name in seen {
+            *counts.entry(name.to_string()).or_default() += 1;
+        }
+    }
+    counts
 }
 
 fn host_source<'a>(sources: &'a [InventorySource], name: &str) -> Option<&'a InventorySource> {
