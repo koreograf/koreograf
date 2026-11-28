@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.1.0-alpha.18](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.17...v0.1.0-alpha.18) (2026-11-28)
+
+
+### Features
+
+* group templates into collapsible groups ([#695](https://github.com/koreograf/koreograf/issues/695)) ([97a9abf](https://github.com/koreograf/koreograf/commit/97a9abf9af025dd659c58d36832c7e63331d3011))
+
+
+### Bug Fixes
+
+* address template group review notes ([#700](https://github.com/koreograf/koreograf/issues/700)) ([3238b02](https://github.com/koreograf/koreograf/commit/3238b02564bd5bb0407db70504ee19de0bcd0ac5))
+* default the job host filter to all hosts ([#684](https://github.com/koreograf/koreograf/issues/684)) ([e70e18f](https://github.com/koreograf/koreograf/commit/e70e18f691c8931bb8265184a2df705c99c2c3e6))
+* end other sessions when the password changes ([#692](https://github.com/koreograf/koreograf/issues/692)) ([3c72f79](https://github.com/koreograf/koreograf/commit/3c72f791ba6dff8c8bb19e7eb81c29321aeafa7a))
+* keep default environments after a settings reset ([#690](https://github.com/koreograf/koreograf/issues/690)) ([6ec504d](https://github.com/koreograf/koreograf/commit/6ec504d7f1dc8a45e04e5fac3eb1d9084357b13b))
+* keep one group per template ([#698](https://github.com/koreograf/koreograf/issues/698)) ([80a8f41](https://github.com/koreograf/koreograf/commit/80a8f415abf9611f0820fa4ce15d124316976c62))
+* limit the inventory size ([#686](https://github.com/koreograf/koreograf/issues/686)) ([2421495](https://github.com/koreograf/koreograf/commit/2421495ddebb2b9ccf8a926a7e83e45d03773033))
+* redirect the environments list to runtime ([#683](https://github.com/koreograf/koreograf/issues/683)) ([1e35db9](https://github.com/koreograf/koreograf/commit/1e35db987324a049bedd97a9ab30bea728cbe30c))
+* refuse tokens for a disabled service account ([#694](https://github.com/koreograf/koreograf/issues/694)) ([ab3d9c0](https://github.com/koreograf/koreograf/commit/ab3d9c0b0e51ba227be5708ffba2f7a489eeb8d3))
+* return 409 when canceling a finished job ([#693](https://github.com/koreograf/koreograf/issues/693)) ([36bb33e](https://github.com/koreograf/koreograf/commit/36bb33e157d5bb36c57dab7f46c995183a784c56))
+* stop admins removing their own team membership ([#688](https://github.com/koreograf/koreograf/issues/688)) ([961e8bb](https://github.com/koreograf/koreograf/commit/961e8bbc788055443e39c37e9f8f6d39a1206fbd))
+* stop double-counting dashboard day totals ([#685](https://github.com/koreograf/koreograf/issues/685)) ([36f950e](https://github.com/koreograf/koreograf/commit/36f950ede3b370226f0d0f6feeab7490dd136492))
+
 ## [0.1.0-alpha.17](https://github.com/koreograf/koreograf/compare/v0.1.0-alpha.16...v0.1.0-alpha.17) (2026-11-25)
 
 

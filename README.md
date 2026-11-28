@@ -6,7 +6,7 @@ Koreograf runs team-scoped automation. One Rust binary serves the API, the brows
 
 ## Status
 
-Release [0.1.0-alpha.17](CHANGELOG.md). <!-- x-release-please-version -->
+Release [0.1.0-alpha.18](CHANGELOG.md). <!-- x-release-please-version -->
 `Cargo.toml` uses the same pre-release version.
 
 The beta starts at `0.1.0-beta.1`. From that tag, `/api/v1` is stable, `/api` stays a deprecated alias until `1.0.0`, database and backup upgrades are forward-only, and the documented environment variables and Helm values keep their meaning. [Beta contract](docs/beta.md) states that and what stays out of scope: a trusted network, no high-availability setup, and one replica.
@@ -26,7 +26,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-Compose pulls `ghcr.io/koreograf/koreograf:0.1.0-alpha.17`. <!-- x-release-please-version -->
+Compose pulls `ghcr.io/koreograf/koreograf:0.1.0-alpha.18`. <!-- x-release-please-version -->
 It does not compile. This quick start describes that release. Features merged into `main` after it are not in the published image until the next release; use the build path below for those. Build this checkout without replacing that published tag:
 
 ```bash
