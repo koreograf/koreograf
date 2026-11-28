@@ -164,6 +164,13 @@ fn current_session_id(state: &Shared, headers: &HeaderMap) -> AppResult<Option<S
     }
 }
 
+fn end_other_sessions(state: &Shared, headers: &HeaderMap, user_id: &str) -> AppResult<()> {
+    match current_session_id(state, headers)? {
+        Some(id) => state.store().delete_other_user_sessions(user_id, &id),
+        None => state.store().delete_user_sessions(user_id),
+    }
+}
+
 pub async fn list_sessions(
     State(state): State<Shared>,
     headers: HeaderMap,
@@ -211,6 +218,7 @@ pub async fn me(
 
 pub async fn update_me(
     State(state): State<Shared>,
+    headers: HeaderMap,
     user: AuthUser,
     ApiJson(body): ApiJson<MeUpdate>,
 ) -> AppResult<Json<ProfileResponse>> {
@@ -236,6 +244,9 @@ pub async fn update_me(
         email.as_deref(),
         password_hash.as_deref(),
     )?;
+    if password_hash.is_some() {
+        end_other_sessions(&state, &headers, &user.id)?;
+    }
     let updated = state
         .store()
         .user_by_id(&user.id)?
@@ -364,6 +375,7 @@ pub async fn create_user(
 
 pub async fn update_user(
     State(state): State<Shared>,
+    headers: HeaderMap,
     user: AuthUser,
     Path(id): Path<String>,
     ApiJson(body): ApiJson<UserUpdate>,
@@ -396,8 +408,12 @@ pub async fn update_user(
         body.disabled,
         password_hash.as_deref(),
     )?;
-    if id != user.id && (password_hash.is_some() || (body.disabled && !existing.disabled)) {
-        state.store().delete_user_sessions(&id)?;
+    if password_hash.is_some() || (body.disabled && !existing.disabled) {
+        if id == user.id {
+            end_other_sessions(&state, &headers, &id)?;
+        } else {
+            state.store().delete_user_sessions(&id)?;
+        }
     }
     let updated = state.store().user_by_id(&id)?.ok_or(ApiError::NotFound)?;
     let memberships = state.store().list_user_memberships(&id)?;

@@ -36,6 +36,8 @@ pub(crate) const SERVICE_ACCOUNT_BY_ID: &str = "SELECT u.id, u.username, u.displ
  FROM users u LEFT JOIN users c ON c.id = u.created_by
  WHERE u.id = ?1 AND u.auth_source = 'service'";
 pub(crate) const DELETE_USER_SESSIONS: &str = "DELETE FROM sessions WHERE user_id = ?1";
+pub(crate) const DELETE_OTHER_USER_SESSIONS: &str =
+    "DELETE FROM sessions WHERE user_id = ?1 AND id != ?2";
 pub(crate) const DELETE_USER: &str = "DELETE FROM users WHERE id = ?1";
 pub(crate) const OTHER_ACTIVE_ADMINS: &str =
     "SELECT COUNT(*) FROM users WHERE is_admin != 0 AND disabled = 0 AND id != ?1";
@@ -247,6 +249,18 @@ pub(crate) fn update_user(
 
 pub(crate) fn delete_user_sessions(c: &Connection, user_id: &str) -> AppResult<()> {
     c.execute(DELETE_USER_SESSIONS, [user_id])?;
+    Ok(())
+}
+
+pub(crate) fn delete_other_user_sessions(
+    c: &Connection,
+    user_id: &str,
+    keep_session_id: &str,
+) -> AppResult<()> {
+    c.execute(
+        DELETE_OTHER_USER_SESSIONS,
+        params![user_id, keep_session_id],
+    )?;
     Ok(())
 }
 
