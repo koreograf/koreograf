@@ -762,3 +762,41 @@ async fn a_template_keeps_its_group_until_the_field_replaces_it() {
     assert!(kept["group_id"].is_null());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_old_group_ids_field_is_rejected() {
+    let harness = TestApp::boot("template-group-array", Options::default());
+    let app = harness.app.clone();
+    let dir = harness.dir.clone();
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, rejected, _) = call(
+        &app,
+        "POST",
+        "/api/v1/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Old group field",
+            "tool": "shell",
+            "entrypoint": "",
+            "spec": {"script": "true"},
+            "group_ids": [],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
