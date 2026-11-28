@@ -116,6 +116,18 @@ pub(super) fn visible_account(
     Ok(account)
 }
 
+pub(super) fn enabled_account(
+    state: &Shared,
+    user: &AuthUser,
+    id: &str,
+) -> AppResult<ServiceAccount> {
+    let account = visible_account(state, user, id)?;
+    if account.disabled {
+        return Err(ApiError::bad("the_service_account_is_disabled"));
+    }
+    Ok(account)
+}
+
 pub(super) fn list(state: &Shared, user: &AuthUser) -> AppResult<Vec<ServiceAccount>> {
     reject_service_principal(user)?;
     state.store().list_service_accounts(&user.id, user.is_admin)

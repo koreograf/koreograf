@@ -96,7 +96,7 @@ pub async fn create_token(
     Path(id): Path<String>,
     ApiJson(body): ApiJson<TokenBody>,
 ) -> AppResult<(StatusCode, Json<CreatedTokenResponse>)> {
-    let account = service::visible_account(&state, &user, &id)?;
+    let account = service::enabled_account(&state, &user, &id)?;
     let token = prepare_token(&body)?;
     let times = db::ApiTokenTimes {
         created_at: token.created_at.clone(),

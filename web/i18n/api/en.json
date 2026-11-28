@@ -259,6 +259,7 @@
   "the_saved_setting_cannot_be_read": "The saved setting cannot be read.",
   "the_secret_is_too_large": "The secret is too large.",
   "the_secret_must_be_a_json_object": "The secret must be a JSON object.",
+  "the_service_account_is_disabled": "This service account is disabled.",
   "the_service_account_is_missing": "The service account is missing.",
   "the_service_account_is_not_a_json_object": "The service account is not a JSON object.",
   "the_settings_body_is_incomplete": "The settings body is incomplete. Missing fields: {fields}.",

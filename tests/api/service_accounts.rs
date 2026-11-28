@@ -829,3 +829,74 @@ async fn disabling_and_deleting_a_service_account_stops_its_tokens() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_disabled_service_account_mints_no_token() {
+    let harness = TestApp::boot("service-account-disabled-token", Options::default());
+    let app = harness.app.clone();
+    let dir = harness.dir.clone();
+    let (admin_cookie, team) = admin_login(&app).await;
+    let account = create_service_account(&app, &admin_cookie, "ci-idle", &team, "operator").await;
+    let account_id = account["id"].as_str().unwrap().to_string();
+
+    let (status, _, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/users/{account_id}"),
+        Some(&admin_cookie),
+        None,
+        Some(json!({"display_name": "ci-idle", "is_admin": false, "disabled": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, refused, _) = call(
+        &app,
+        "POST",
+        &format!("/api/service-accounts/{account_id}/tokens"),
+        Some(&admin_cookie),
+        None,
+        Some(json!({"name": "idle", "scope": "write"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["error"], "the_service_account_is_disabled");
+    assert_eq!(
+        harness
+            .sql_i64(&format!(
+                "SELECT COUNT(*) FROM api_tokens WHERE user_id = '{account_id}'"
+            ))
+            .await,
+        0
+    );
+
+    let (status, _, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/users/{account_id}"),
+        Some(&admin_cookie),
+        None,
+        Some(json!({"display_name": "ci-idle", "is_admin": false, "disabled": false})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, secret) = mint_token(&app, &admin_cookie, &account_id, "live", "write").await;
+    let (status, me) = call_bearer(&app, "GET", "/api/me", &secret, None, None).await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    assert_eq!(me["username"], "ci-idle");
+
+    let (status, _, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/users/{account_id}"),
+        Some(&admin_cookie),
+        None,
+        Some(json!({"display_name": "ci-idle", "is_admin": false, "disabled": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, denied) = call_bearer(&app, "GET", "/api/me", &secret, None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{denied}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
