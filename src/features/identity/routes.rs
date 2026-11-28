@@ -647,7 +647,7 @@ pub async fn remove_member(
     Path((id, user_id)): Path<(String, String)>,
 ) -> AppResult<axum::response::Response> {
     gate(&state, &user, &id, Role::Owner)?;
-    if user_id == user.id && !user.is_admin {
+    if user_id == user.id {
         return Err(ApiError::bad("you_cannot_remove_yourself_from_the_team"));
     }
     let db = state.store();
