@@ -5,7 +5,7 @@ UPDATE templates SET group_id = (
   SELECT m.group_id FROM template_group_members m
   JOIN template_groups g ON g.id = m.group_id
   WHERE m.template_id = templates.id
-  ORDER BY g.position, g.id
+  ORDER BY g.position, g.name, g.id
   LIMIT 1
 );
 DROP TABLE template_group_members;

@@ -142,7 +142,7 @@ pub(crate) const SQLITE_MIGRATIONS: &[Migration] = &[
         version: 14,
         name: "0014_template_single_group",
         sql: include_str!("../migrations/sqlite/0014_template_single_group.sql"),
-        legacy_columns: &[("templates", "group_id")],
+        legacy_columns: &[],
     },
 ];
 
@@ -1359,6 +1359,8 @@ mod tests {
     fn rewind_to_legacy(conn: &Connection) {
         conn.execute("ALTER TABLE workflows DROP COLUMN version", [])
             .unwrap();
+        conn.execute("ALTER TABLE templates DROP COLUMN group_id", [])
+            .unwrap();
         conn.pragma_update(None, "user_version", BASELINE_VERSION)
             .unwrap();
     }
@@ -2068,6 +2070,8 @@ mod tests {
             [],
         )
         .unwrap();
+        conn.execute("ALTER TABLE templates DROP COLUMN group_id", [])
+            .unwrap();
         conn.pragma_update(None, "user_version", 5).unwrap();
         ensure_schema(&conn).unwrap();
         let (expires, scope): (Option<String>, String) = conn
@@ -2087,6 +2091,8 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         ensure_schema(&conn).unwrap();
         conn.execute("ALTER TABLE templates DROP COLUMN prompt_fields", [])
+            .unwrap();
+        conn.execute("ALTER TABLE templates DROP COLUMN group_id", [])
             .unwrap();
         conn.pragma_update(None, "user_version", 11).unwrap();
         conn.execute("PRAGMA foreign_keys = OFF", []).unwrap();
@@ -2124,8 +2130,8 @@ mod tests {
              INSERT INTO template_groups (id, team_id, name, position) VALUES
                 ('late', 'group-team', 'Late', 5),
                 ('early', 'group-team', 'Early', 1),
-                ('tie-a', 'group-team', 'Tie A', 1),
-                ('tie-b', 'group-team', 'Tie B', 1);
+                ('z-tie', 'group-team', 'Tie A', 1),
+                ('a-tie', 'group-team', 'Tie B', 1);
              INSERT INTO templates (id, team_id, name, tool, created_at) VALUES
                 ('multi', 'group-team', 'Multi', 'shell', '2020-01-01T00:00:00Z'),
                 ('tie', 'group-team', 'Tie', 'shell', '2020-01-01T00:00:00Z'),
@@ -2134,8 +2140,8 @@ mod tests {
              INSERT INTO template_group_members (template_id, group_id) VALUES
                 ('multi', 'late'),
                 ('multi', 'early'),
-                ('tie', 'tie-b'),
-                ('tie', 'tie-a'),
+                ('tie', 'a-tie'),
+                ('tie', 'z-tie'),
                 ('one', 'late');",
         )
         .unwrap();
@@ -2151,7 +2157,7 @@ mod tests {
             .unwrap()
         };
         assert_eq!(group("multi").as_deref(), Some("early"));
-        assert_eq!(group("tie").as_deref(), Some("tie-a"));
+        assert_eq!(group("tie").as_deref(), Some("z-tie"));
         assert_eq!(group("one").as_deref(), Some("late"));
         assert!(group("none").is_none());
         let members: i64 = conn

@@ -51,6 +51,7 @@
   "search_vaults": "Search vaults",
   "skip": "skip",
   "template_2": "+ Template",
+  "template_group": "Group",
   "template_groups": "Groups",
   "template_groups_hint": "A template can be in one group.",
   "template_schedules_hint": "Schedules start this template automatically.",
