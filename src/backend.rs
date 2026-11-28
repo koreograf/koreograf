@@ -87,6 +87,7 @@ pub(crate) trait Backend: Send + Sync {
         password_hash: Option<&str>,
     ) -> AppResult<()>;
     fn delete_user_sessions(&self, user_id: &str) -> AppResult<()>;
+    fn delete_other_user_sessions(&self, user_id: &str, keep_session_id: &str) -> AppResult<()>;
     fn delete_user(&self, id: &str) -> AppResult<bool>;
     fn other_active_admins(&self, user_id: &str) -> AppResult<i64>;
     fn create_api_token(
@@ -597,6 +598,11 @@ impl Backend for SqliteBackend {
     fn delete_user_sessions(&self, user_id: &str) -> AppResult<()> {
         let conn = lock(&self.conn)?;
         identity_store::delete_user_sessions(&conn, user_id)
+    }
+
+    fn delete_other_user_sessions(&self, user_id: &str, keep_session_id: &str) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        identity_store::delete_other_user_sessions(&conn, user_id, keep_session_id)
     }
 
     fn delete_user(&self, id: &str) -> AppResult<bool> {
@@ -2175,6 +2181,18 @@ impl Backend for PostgresBackend {
                 .execute(
                     &store::sql::postgres(identity_store::DELETE_USER_SESSIONS),
                     &[&user_id],
+                )
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn delete_other_user_sessions(&self, user_id: &str, keep_session_id: &str) -> AppResult<()> {
+        self.with_client(|client| async move {
+            client
+                .execute(
+                    &store::sql::postgres(identity_store::DELETE_OTHER_USER_SESSIONS),
+                    &[&user_id, &keep_session_id],
                 )
                 .await?;
             Ok(())

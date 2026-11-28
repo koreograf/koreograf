@@ -2127,3 +2127,153 @@ async fn browser_sessions_list_current_flags_and_revoke_one_owner_at_a_time() {
     let (status, gone, _) = call(&app, "GET", "/api/v1/me", Some(&other_cookie), None, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{gone}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_password_change_ends_the_other_sessions_but_keeps_the_current_one() {
+    let harness = TestApp::boot("password-sessions", Options::default());
+    let app = harness.app.clone();
+    let (status, _, admin_cookie) = call(
+        &app,
+        "POST",
+        "/api/v1/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let admin_cookie = admin_cookie.expect("admin cookie");
+
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/v1/users",
+        Some(&admin_cookie),
+        None,
+        Some(json!({
+            "username": "password-user",
+            "display_name": "Password User",
+            "password": "password-user-1",
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let user_id = created["id"].as_str().expect("user id").to_string();
+
+    let login = json!({"username": "password-user", "password": "password-user-1"});
+    let (status, _, first_cookie) = call(
+        &app,
+        "POST",
+        "/api/v1/login",
+        None,
+        None,
+        Some(login.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let first_cookie = first_cookie.expect("first cookie");
+    let (status, _, second_cookie) =
+        call(&app, "POST", "/api/v1/login", None, None, Some(login)).await;
+    assert_eq!(status, StatusCode::OK);
+    let second_cookie = second_cookie.expect("second cookie");
+    assert_ne!(first_cookie, second_cookie);
+
+    let (status, saved, _) = call(
+        &app,
+        "PUT",
+        "/api/v1/me",
+        Some(&first_cookie),
+        None,
+        Some(json!({
+            "display_name": "Password User",
+            "password": "password-user-2"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+
+    let (status, ended, _) =
+        call(&app, "GET", "/api/v1/me", Some(&second_cookie), None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{ended}");
+    let (status, kept, _) = call(&app, "GET", "/api/v1/me", Some(&first_cookie), None, None).await;
+    assert_eq!(status, StatusCode::OK, "{kept}");
+    let (status, remaining, _) = call(
+        &app,
+        "GET",
+        "/api/v1/me/sessions",
+        Some(&first_cookie),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{remaining}");
+    let remaining = remaining.as_array().expect("session array");
+    assert_eq!(remaining.len(), 1, "{remaining:?}");
+    assert_eq!(remaining[0]["current"], true);
+
+    let (status, _, third_cookie) = call(
+        &app,
+        "POST",
+        "/api/v1/login",
+        None,
+        None,
+        Some(json!({"username": "password-user", "password": "password-user-2"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let third_cookie = third_cookie.expect("third cookie");
+    let (status, _, fourth_cookie) = call(
+        &app,
+        "POST",
+        "/api/v1/login",
+        None,
+        None,
+        Some(json!({"username": "password-user", "password": "password-user-2"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let fourth_cookie = fourth_cookie.expect("fourth cookie");
+
+    let (status, changed, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/v1/users/{user_id}"),
+        Some(&admin_cookie),
+        None,
+        Some(json!({
+            "display_name": "Password User",
+            "is_admin": false,
+            "disabled": false,
+            "password": "password-user-3"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{changed}");
+    for cookie in [&third_cookie, &fourth_cookie, &first_cookie] {
+        let (status, gone, _) = call(&app, "GET", "/api/v1/me", Some(cookie), None, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{gone}");
+    }
+    let (status, admin_kept, _) =
+        call(&app, "GET", "/api/v1/me", Some(&admin_cookie), None, None).await;
+    assert_eq!(status, StatusCode::OK, "{admin_kept}");
+    let (status, old_body, _) = call(
+        &app,
+        "POST",
+        "/api/v1/login",
+        None,
+        None,
+        Some(json!({"username": "password-user", "password": "password-user-2"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{old_body}");
+    let (status, new_body, _) = call(
+        &app,
+        "POST",
+        "/api/v1/login",
+        None,
+        None,
+        Some(json!({"username": "password-user", "password": "password-user-3"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{new_body}");
+}
