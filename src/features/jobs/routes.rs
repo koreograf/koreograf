@@ -497,7 +497,15 @@ pub async fn cancel_job(
         crate::features::identity::authorize(db, &user, &job.team_id, Role::Operator)?;
         job
     };
+    if matches!(job.status.as_str(), "successful" | "failed" | "canceled") {
+        return Err(ApiError::conflict("job_is_not_running"));
+    }
     cancel(&state, &id)?;
+    let db = state.store();
+    let job = db.job(&id)?.ok_or(ApiError::NotFound)?;
+    if job.status != "canceled" {
+        return Err(ApiError::conflict("job_is_not_running"));
+    }
     activity::note(
         &state,
         &job.team_id,
@@ -508,8 +516,6 @@ pub async fn cancel_job(
         &job.name,
         "success",
     );
-    let db = state.store();
-    let job = db.job(&id)?.ok_or(ApiError::NotFound)?;
     Ok(Json(JobResponse::new(&job, None)))
 }
 

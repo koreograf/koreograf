@@ -623,6 +623,157 @@ async fn a_running_workflow_run_can_be_canceled() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_workflow_cancel_keeps_going_past_a_finished_node() {
+    let harness = TestApp::boot("workflow-cancel-finished-node", Options::default());
+    let app = harness.app.clone();
+    let dir = harness.dir.clone();
+    let (cookie, team) = harness.sign_in().await;
+
+    let mut template_ids = Vec::new();
+    for (name, script) in [("Fast", "true"), ("Slow", "sleep 30")] {
+        let (status, template, _) = call(
+            &app,
+            "POST",
+            "/api/templates",
+            Some(&cookie),
+            Some(&team),
+            Some(json!({
+                "name": name,
+                "tool": "shell",
+                "entrypoint": "",
+                "spec": {"script": script}
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{template}");
+        template_ids.push(template["id"].as_str().unwrap().to_string());
+    }
+
+    let (status, workflow, _) = call(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Workflow finished node",
+            "description": "",
+            "graph": {
+                "nodes": [
+                    {"id": "fast", "template_id": template_ids[0], "name": "fast"},
+                    {"id": "slow", "template_id": template_ids[1], "name": "slow"}
+                ],
+                "edges": []
+            }
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{workflow}");
+    let workflow_id = workflow["id"].as_str().unwrap().to_string();
+
+    let (status, run, _) = call(
+        &app,
+        "POST",
+        &format!("/api/workflows/{workflow_id}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"extra_vars": {}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{run}");
+    let run_id = run["id"].as_str().unwrap().to_string();
+
+    let mut job_ids = std::collections::BTreeMap::new();
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let (status, live, _) = call(
+            &app,
+            "GET",
+            &format!("/api/workflow-jobs/{run_id}"),
+            Some(&cookie),
+            Some(&team),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{live}");
+        job_ids.clear();
+        for node in live["nodes"].as_array().expect("nodes") {
+            if let Some(job_id) = node["job_id"].as_str() {
+                job_ids.insert(
+                    node["node_id"].as_str().unwrap().to_string(),
+                    job_id.to_string(),
+                );
+            }
+        }
+        if job_ids.contains_key("fast") && job_ids.contains_key("slow") {
+            break;
+        }
+    }
+    let fast_id = job_ids.get("fast").expect("fast node job").clone();
+    let slow_id = job_ids.get("slow").expect("slow node job").clone();
+    let fast = wait_for_job(&app, &cookie, &team, &fast_id).await;
+    assert_eq!(fast["status"], "successful", "{fast}");
+    let mut slow = serde_json::Value::Null;
+    for _ in 0..40 {
+        let (status, current, _) = call(
+            &app,
+            "GET",
+            &format!("/api/jobs/{slow_id}"),
+            Some(&cookie),
+            Some(&team),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{current}");
+        slow = current;
+        if slow["status"] == "running" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(slow["status"], "running", "{slow}");
+
+    let (status, canceled, _) = call(
+        &app,
+        "POST",
+        &format!("/api/workflow-jobs/{run_id}/cancel"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{canceled}");
+    assert_eq!(canceled["status"], "canceled", "{canceled}");
+
+    let (status, child, _) = call(
+        &app,
+        "GET",
+        &format!("/api/jobs/{slow_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{child}");
+    assert_eq!(child["status"], "canceled", "{child}");
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (status, settled, _) = call(
+        &app,
+        "GET",
+        &format!("/api/workflow-jobs/{run_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{settled}");
+    assert_eq!(settled["status"], "canceled", "{settled}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_finished_workflow_run_can_be_listed_and_relaunched() {
     let harness = TestApp::boot("workflow-relaunch", Options::default());
     let app = harness.app.clone();

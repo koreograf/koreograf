@@ -1183,7 +1183,7 @@ pub fn cancel(state: &Shared, job_id: &str) -> AppResult<()> {
         let db = state.store();
         let job = db.job(job_id)?.ok_or(ApiError::NotFound)?;
         if matches!(job.status.as_str(), "successful" | "failed" | "canceled") {
-            return Err(ApiError::conflict("job_is_not_running"));
+            return Ok(());
         }
         let changed = db.finish_job(job_id, "canceled")?;
         db.insert_event(job_id, "system", "Cancel requested.")?;
