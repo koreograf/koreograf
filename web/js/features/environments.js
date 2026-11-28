@@ -175,6 +175,7 @@ async function pageEnvironment(id) {
   });
 }
 
+registerRedirect("#/environments", "#/runtime");
 registerRedirect("#/environments/new", "#/runtime?new=1");
 registerRoute("#/environments/:id", (params) => pageEnvironment(params.id));
 registerRoute("#/runtime", pageRuntime);

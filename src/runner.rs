@@ -7575,12 +7575,14 @@ $ANSIBLE_VAULT;1.1;AES256
             work.join("playbook.yml"),
             "\
 - hosts: all
+  connection: local
   gather_facts: false
   tasks:
     - debug: var=level
-    - assert:
-        that:
-          - vaulted_secret == 's3cr3t-from-vault'
+    - copy:
+        content: \"{{ vaulted_secret }}\"
+        dest: \"{{ playbook_dir }}/decrypted.txt\"
+        mode: \"0600\"
 ",
         )
         .unwrap();
@@ -7605,6 +7607,12 @@ $ANSIBLE_VAULT;1.1;AES256
             String::from_utf8_lossy(&with_vault.stderr)
         );
         assert!(text.contains("\"level\": \"host\""), "{text}");
+        assert_eq!(
+            fs::read_to_string(work.join("decrypted.txt"))
+                .unwrap()
+                .trim(),
+            "s3cr3t-from-vault"
+        );
 
         let without_vault = std::process::Command::new("ansible-playbook")
             .current_dir(&work)

@@ -589,9 +589,9 @@ export function dashboardChart(series, heading = "jobs_per_day") {
     const failed = Number(day.failed) || 0;
     const canceled = Number(day.canceled) || 0;
     const finished = successful + failed + canceled;
-    return { day, started, successful, failed, canceled, finished, total: started + finished };
+    return { day, started, successful, failed, canceled, finished, total: Math.max(started, finished) };
   });
-  const max = Math.max(1, ...rows.map((row) => Math.max(row.started, row.finished)));
+  const max = Math.max(1, ...rows.map((row) => row.total));
   const segment = (status, value) => value
     ? `<span class="chart-seg ${status}" style="flex-grow:${value}"></span>`
     : "";
@@ -600,7 +600,7 @@ export function dashboardChart(series, heading = "jobs_per_day") {
     const label = hourly ? `${String(row.day.hour).padStart(2, "0")}:00` : shortDay(row.day.date);
     const time = hourly ? `${shortDay(row.day.date)} ${label}` : label;
     const title = `${time} · ${t("started")} ${row.started} · ${t("successful")} ${row.successful} · ${t("failed")} ${row.failed} · ${t("canceled")} ${row.canceled}`;
-    const height = Math.max(4, Math.round((Math.max(row.started, row.finished) / max) * 100));
+    const height = Math.max(4, Math.round((row.total / max) * 100));
     const pair = row.total
       ? `<div class="chart-pair" style="height:${height}%">
           <div class="chart-bar started" aria-hidden="true">${segment("started", row.started)}</div>

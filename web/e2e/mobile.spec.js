@@ -552,6 +552,16 @@ test("shows the dashboard chart counts without a hover", async ({ page }) => {
   expect(texts).not.toHaveLength(0);
   expect(texts.every((text) => text === "" || /^\d+$/.test(text))).toBe(true);
   expect(texts.some((text) => Number(text) > 0)).toBe(true);
+  const series = await page.evaluate(async () => {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    const team = localStorage.getItem("koreograf.team");
+    const response = await fetch(`/api/v1/dashboard?days=1&tz=${encodeURIComponent(tz)}`, {
+      headers: team ? { "X-Team-Id": team } : {},
+    });
+    return (await response.json()).series;
+  });
+  const totals = series.map((row) => Math.max(row.started, row.successful + row.failed + row.canceled));
+  expect(texts.map((text) => (text === "" ? 0 : Number(text)))).toEqual(totals);
   const day = page.locator("[data-chart-day]").first();
   const detail = page.locator("[data-chart-detail]").first();
   await day.focus();

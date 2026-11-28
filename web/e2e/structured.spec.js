@@ -78,6 +78,53 @@ async function launchBulkJob(page, hosts) {
   return job.id;
 }
 
+async function launchOkJob(page, hosts = 2) {
+  const me = await page.request.get("/api/v1/me");
+  const team = (await me.json()).teams[0].id;
+  const headers = { "X-Team-Id": team };
+  const templates = await (await page.request.get("/api/v1/templates", { headers })).json();
+  const demo = templates.find((item) => item.name === "Self-Heal");
+  expect(demo).toBeTruthy();
+  const lines = [];
+  for (let index = 1; index <= hosts; index += 1) {
+    lines.push(`ok-${index} ansible_connection=local`);
+  }
+  const inventoryResponse = await post(page.request, "/api/v1/inventories", {
+    headers,
+    data: { name: `OK hosts ${Date.now()}`, body: `[all]\n${lines.join("\n")}\n` },
+  });
+  expect(inventoryResponse.ok()).toBeTruthy();
+  const inventory = await inventoryResponse.json();
+  const templateResponse = await post(page.request, "/api/v1/templates", {
+    headers,
+    data: {
+      name: `OK hosts ${Date.now()}`,
+      tool: "ansible",
+      project_id: demo.project_id,
+      inventory_id: inventory.id,
+      entrypoint: demo.entrypoint,
+      no_environment: true,
+      extra_vars: { fixture_success: true },
+    },
+  });
+  expect(templateResponse.ok()).toBeTruthy();
+  const template = await templateResponse.json();
+  const launchResponse = await post(page.request, `/api/v1/templates/${template.id}/launch`, {
+    headers,
+    data: {},
+  });
+  expect(launchResponse.ok()).toBeTruthy();
+  const launched = await launchResponse.json();
+  let job = launched;
+  for (let attempt = 0; attempt < 240; attempt += 1) {
+    if (["successful", "failed", "canceled"].includes(job.status)) break;
+    await page.waitForTimeout(250);
+    job = await (await page.request.get(`/api/v1/jobs/${launched.id}`, { headers })).json();
+  }
+  expect(job.status).toBe("successful");
+  return job.id;
+}
+
 test("an Ansible job shows a structured tree, the recap, and the unchanged raw log", async ({ page }) => {
   test.setTimeout(120000);
   await page.setViewportSize({ width: 1280, height: 900 });
@@ -100,6 +147,7 @@ test("an Ansible job shows a structured tree, the recap, and the unchanged raw l
   await expect(page.locator(".st-count.failed .st-count-value")).toHaveText("1");
   await expect(page.locator('[data-st-select-host="localhost"]')).toBeVisible();
   await expect(page.locator("#host-table tbody tr")).toHaveCount(1);
+  await expect(page.locator("#host-status")).toHaveValue("problems");
 
   const failedHost = page.locator('.st-host[data-status="failed"]').first();
   await failedHost.locator("summary").click();
@@ -143,6 +191,30 @@ test("an Ansible job shows a structured tree, the recap, and the unchanged raw l
   await page.reload();
   await expect(page.getByRole("button", { name: "Structured", exact: true })).toHaveClass(/primary/);
   await expect(page.locator(".st-play-name")).toHaveText("Structured demo");
+});
+
+test("a successful job opens the host list on all hosts", async ({ page }) => {
+  test.setTimeout(120000);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await signIn(page);
+  const id = await launchOkJob(page);
+  await page.evaluate(() => localStorage.setItem("koreograf.job-output-view", "structured"));
+  await page.goto(`/#/jobs/${id}`);
+
+  const structured = page.locator("#structured-output");
+  await expect(structured).toBeVisible({ timeout: 60000 });
+  await expect(page.locator("#host-status")).toHaveValue("all");
+  const rows = page.locator("#host-table tbody tr");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0)).toHaveAttribute("data-status", "ok");
+  await expect(rows.nth(1)).toHaveAttribute("data-status", "ok");
+  await expect(page.locator("#host-total")).toContainText("2 of 2");
+
+  await page.locator("#host-status").selectOption("problems");
+  await expect(rows).toHaveCount(0);
+  await expect(page.locator("#host-table")).toContainText("No failed or unreachable hosts.");
+  await page.locator("#host-status").selectOption("all");
+  await expect(rows).toHaveCount(2);
 });
 
 test("the structured job page reflows at phone and desktop widths", async ({ page }) => {
