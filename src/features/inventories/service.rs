@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::Path;
@@ -12,7 +12,7 @@ use crate::error::{ApiError, AppResult};
 use super::model::{
     EffectiveVar, FoundInventory, InventoryData, InventoryGroup, InventoryHost, InventoryVarFile,
     NetboxPreview, NetboxResult, NetboxSource, ProjectContents, DEFAULT_MAX_HOSTS, MASKED_VALUE,
-    MAX_HOSTS_LIMIT, MAX_STATIC_BYTES, MAX_STATIC_HOSTS,
+    MAX_HOSTS_LIMIT, MAX_STATIC_BYTES, MAX_STATIC_GROUPS, MAX_STATIC_HOSTS,
 };
 
 const PAGE_SIZE: usize = 100;
@@ -359,17 +359,41 @@ pub fn parse_inventory(body: &str) -> InventoryData {
     parse_ini(body)
 }
 
-pub fn check_inventory_size(body: &str) -> AppResult<()> {
+pub fn validate_static_inventory(body: &str) -> AppResult<()> {
     if body.len() > MAX_STATIC_BYTES {
         return Err(ApiError::bad_vars(
             "inventory_body_is_too_large",
             [("max_bytes", MAX_STATIC_BYTES.to_string())],
         ));
     }
-    if parse_inventory(body).hosts.len() > MAX_STATIC_HOSTS {
+    if is_plugin_file(body) {
+        return Ok(());
+    }
+    if is_yaml_inventory(body) {
+        let data = parse_yaml_inventory(body);
+        return check_static_counts(data.hosts.len(), data.groups.len());
+    }
+    let scan = scan_ini(body);
+    if let Some(line) = scan.error {
+        return Err(ApiError::bad_vars(
+            "inventory_ini_is_invalid",
+            [("line", line.to_string())],
+        ));
+    }
+    check_static_counts(scan.hosts, scan.groups)
+}
+
+fn check_static_counts(hosts: usize, groups: usize) -> AppResult<()> {
+    if hosts > MAX_STATIC_HOSTS {
         return Err(ApiError::bad_vars(
             "inventory_has_too_many_hosts",
             [("max", MAX_STATIC_HOSTS.to_string())],
+        ));
+    }
+    if groups > MAX_STATIC_GROUPS {
+        return Err(ApiError::bad_vars(
+            "inventory_has_too_many_groups",
+            [("max", MAX_STATIC_GROUPS.to_string())],
         ));
     }
     Ok(())
@@ -565,11 +589,42 @@ fn depth_of(
 ///
 /// Returns the 1-based line number. Plugin files and YAML inventories are
 /// not INI, so they have no line to report.
+#[cfg(test)]
 pub fn find_ini_error(body: &str) -> Option<usize> {
     if is_plugin_file(body) || is_yaml_inventory(body) {
         return None;
     }
-    let mut listing_hosts = true;
+    scan_ini(body).error
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IniSection {
+    Hosts,
+    Vars,
+    Children,
+}
+
+struct IniScan {
+    error: Option<usize>,
+    hosts: usize,
+    groups: usize,
+}
+
+impl IniScan {
+    fn error(line: usize) -> Self {
+        Self {
+            error: Some(line),
+            hosts: 0,
+            groups: 0,
+        }
+    }
+}
+
+fn scan_ini(body: &str) -> IniScan {
+    let mut section = IniSection::Hosts;
+    let mut saw_section = false;
+    let mut hosts: HashSet<String> = HashSet::new();
+    let mut groups: HashSet<String> = HashSet::new();
     for (index, raw) in body.lines().enumerate() {
         let line = strip_comment(raw).trim();
         if line.is_empty() {
@@ -580,47 +635,63 @@ pub fn find_ini_error(body: &str) -> Option<usize> {
                 .strip_prefix('[')
                 .and_then(|rest| rest.strip_suffix(']'))
             else {
-                return Some(index + 1);
+                return IniScan::error(index + 1);
             };
-            let (name, hosts_follow) = if let Some(name) = inner.strip_suffix(":vars") {
-                (name, false)
+            let (name, next) = if let Some(name) = inner.strip_suffix(":vars") {
+                (name, IniSection::Vars)
             } else if let Some(name) = inner.strip_suffix(":children") {
-                (name, false)
+                (name, IniSection::Children)
             } else {
-                (inner, true)
+                (inner, IniSection::Hosts)
             };
-            if name.trim().is_empty() {
-                return Some(index + 1);
+            let name = name.trim();
+            if name.is_empty() {
+                return IniScan::error(index + 1);
             }
-            listing_hosts = hosts_follow;
+            groups.insert(name.to_string());
+            section = next;
+            saw_section = true;
             continue;
         }
-        if !listing_hosts {
-            continue;
-        }
-        let mut parts = host_line_tokens(line).into_iter();
-        let Some(name) = parts.next() else {
-            continue;
-        };
-        if name.contains('=') {
-            return Some(index + 1);
-        }
-        for part in parts {
-            if let Some((key, _)) = part.split_once('=') {
-                if key.is_empty() {
-                    return Some(index + 1);
+        match section {
+            IniSection::Vars => {}
+            IniSection::Children => {
+                for part in host_line_tokens(line) {
+                    for child in part.split(',') {
+                        let child = child.trim();
+                        if !child.is_empty() {
+                            groups.insert(child.to_string());
+                        }
+                    }
                 }
+            }
+            IniSection::Hosts => {
+                let mut parts = host_line_tokens(line).into_iter();
+                let Some(name) = parts.next() else {
+                    continue;
+                };
+                if name.contains('=') {
+                    return IniScan::error(index + 1);
+                }
+                for part in parts {
+                    if let Some((key, _)) = part.split_once('=') {
+                        if key.is_empty() {
+                            return IniScan::error(index + 1);
+                        }
+                    }
+                }
+                if !saw_section {
+                    groups.insert("ungrouped".to_string());
+                }
+                hosts.insert(name);
             }
         }
     }
-    None
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum IniSection {
-    Hosts,
-    Vars,
-    Children,
+    IniScan {
+        error: None,
+        hosts: hosts.len(),
+        groups: groups.len(),
+    }
 }
 
 fn parse_ini(body: &str) -> InventoryData {
@@ -656,7 +727,7 @@ fn parse_ini(body: &str) -> InventoryData {
                 for part in host_line_tokens(line) {
                     if let Some((key, value)) = part.split_once('=') {
                         if !key.is_empty() {
-                            set_group_var(&mut data.groups, &group, key, value);
+                            set_group_var(&mut data.groups, &group_index, &group, key, value);
                         }
                     }
                 }
@@ -667,7 +738,7 @@ fn parse_ini(body: &str) -> InventoryData {
                         let child = child.trim();
                         if !child.is_empty() {
                             ensure_group_at(&mut data.groups, &mut group_index, child);
-                            add_child(&mut data.groups, &group, child);
+                            add_child(&mut data.groups, &group_index, &group, child);
                         }
                     }
                 }
@@ -734,14 +805,28 @@ fn ensure_group_at(
     });
 }
 
-fn set_group_var(groups: &mut [InventoryGroup], name: &str, key: &str, value: &str) {
-    if let Some(group) = groups.iter_mut().find(|group| group.name == name) {
-        group.vars.insert(key.to_string(), value.to_string());
+fn set_group_var(
+    groups: &mut [InventoryGroup],
+    index: &HashMap<String, usize>,
+    name: &str,
+    key: &str,
+    value: &str,
+) {
+    if let Some(&position) = index.get(name) {
+        groups[position]
+            .vars
+            .insert(key.to_string(), value.to_string());
     }
 }
 
-fn add_child(groups: &mut [InventoryGroup], name: &str, child: &str) {
-    if let Some(group) = groups.iter_mut().find(|group| group.name == name) {
+fn add_child(
+    groups: &mut [InventoryGroup],
+    index: &HashMap<String, usize>,
+    name: &str,
+    child: &str,
+) {
+    if let Some(&position) = index.get(name) {
+        let group = &mut groups[position];
         if !group.children.iter().any(|item| item == child) {
             group.children.push(child.to_string());
         }
@@ -868,7 +953,7 @@ fn parse_yaml_inventory(body: &str) -> InventoryData {
                     host = Some(key.to_string());
                     host_indent = Some(indent);
                     var_stack.clear();
-                    remember_host(&mut data, &mut host_index, key, &group);
+                    remember_host(&mut data, &mut group_index, &mut host_index, key, &group);
                 }
             } else if let Some(name) = &host {
                 let mut full = String::new();
@@ -883,14 +968,14 @@ fn parse_yaml_inventory(body: &str) -> InventoryData {
         }
         if vars_indent.is_some() {
             if !value.is_empty() {
-                set_group_var(&mut data.groups, &group, key, value);
+                set_group_var(&mut data.groups, &group_index, &group, key, value);
             }
             continue;
         }
         if children_indent.is_some() {
             if value.is_empty() {
                 ensure_group_at(&mut data.groups, &mut group_index, key);
-                add_child(&mut data.groups, &group, key);
+                add_child(&mut data.groups, &group_index, &group, key);
                 group_stack.push((indent, key.to_string()));
             }
             continue;
@@ -1139,18 +1224,19 @@ fn parse_var_scalar(text: &str) -> String {
 
 fn remember_host(
     data: &mut InventoryData,
-    index: &mut HashMap<String, usize>,
+    group_index: &mut HashMap<String, usize>,
+    host_index: &mut HashMap<String, usize>,
     name: &str,
     group: &str,
 ) {
-    ensure_group(&mut data.groups, group);
-    if let Some(&position) = index.get(name) {
+    ensure_group_at(&mut data.groups, group_index, group);
+    if let Some(&position) = host_index.get(name) {
         let existing = &mut data.hosts[position];
         if !existing.groups.iter().any(|item| item == group) {
             existing.groups.push(group.to_string());
         }
     } else {
-        index.insert(name.to_string(), data.hosts.len());
+        host_index.insert(name.to_string(), data.hosts.len());
         data.hosts.push(InventoryHost {
             name: name.to_string(),
             groups: vec![group.to_string()],

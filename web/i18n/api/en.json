@@ -95,6 +95,7 @@
   "host_not_in_ansible_events": "No task detail was recorded for this host.",
   "invalid_query_parameter": "The value of {field} is invalid.",
   "inventory_body_is_too_large": "The inventory body is larger than {max_bytes} bytes.",
+  "inventory_has_too_many_groups": "The inventory has more groups than the limit of {max}.",
   "inventory_has_too_many_hosts": "The inventory has more hosts than the limit of {max}.",
   "inventory_ini_is_invalid": "The INI inventory has a syntax error on line {line}.",
   "inventory_is_in_use": "This inventory is still used by: {names}.",

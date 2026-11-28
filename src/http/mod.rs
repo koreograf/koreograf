@@ -568,14 +568,7 @@ fn has_bidi_control(value: &str) -> bool {
 
 /// A static INI body with a broken line is rejected before it is stored.
 pub fn check_static_ini(body: &str) -> AppResult<()> {
-    crate::features::inventories::check_inventory_size(body)?;
-    if let Some(line) = crate::features::inventories::find_ini_error(body) {
-        return Err(ApiError::bad_vars(
-            "inventory_ini_is_invalid",
-            [("line", line.to_string())],
-        ));
-    }
-    Ok(())
+    crate::features::inventories::validate_static_inventory(body)
 }
 
 pub fn require_description(description: &str) -> AppResult<String> {

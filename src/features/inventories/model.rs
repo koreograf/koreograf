@@ -63,6 +63,7 @@ pub const DEFAULT_MAX_HOSTS: usize = 2_000;
 pub const MAX_HOSTS_LIMIT: usize = 10_000;
 
 pub const MAX_STATIC_HOSTS: usize = 10_000;
+pub const MAX_STATIC_GROUPS: usize = 10_000;
 pub const MAX_STATIC_BYTES: usize = 1_000_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
