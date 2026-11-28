@@ -339,24 +339,7 @@ async fn jobs_return_the_documented_shape() {
         })
     );
 
-    let mut canceled_expected = finished.clone();
-    canceled_expected
-        .as_object_mut()
-        .expect("job object")
-        .remove("events");
-    canceled_expected
-        .as_object_mut()
-        .expect("job object")
-        .remove("ansible_events");
-    canceled_expected
-        .as_object_mut()
-        .expect("job object")
-        .remove("tofu_events");
-    canceled_expected
-        .as_object_mut()
-        .expect("job object")
-        .remove("output_capped");
-    let (status, canceled, _) = call(
+    let (status, refused, _) = call(
         &app,
         "POST",
         &format!("/api/v1/jobs/{job_id}/cancel"),
@@ -365,8 +348,55 @@ async fn jobs_return_the_documented_shape() {
         None,
     )
     .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["error"], "job_is_not_running", "{refused}");
+    let (status, unchanged, _) = call(
+        &app,
+        "GET",
+        &format!("/api/v1/jobs/{job_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{unchanged}");
+    assert_eq!(unchanged["status"], "successful", "{unchanged}");
+
+    let slow_template = shell_template(&app, &cookie, &team, "Shape Cancel", "sleep 5").await;
+    let (status, slow, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/templates/{slow_template}/launch"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"extra_vars": {}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{slow}");
+    let slow_id = slow["id"].as_str().expect("slow job id");
+    let (status, canceled, _) = call(
+        &app,
+        "POST",
+        &format!("/api/v1/jobs/{slow_id}/cancel"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{canceled}");
-    assert_eq!(canceled, canceled_expected);
+    assert_eq!(canceled["status"], "canceled", "{canceled}");
+    let slow_parameters = job_parameters(&slow_template, "Shape Cancel", "sleep 5");
+    assert_eq!(
+        canceled,
+        job_shape(
+            &canceled,
+            &team,
+            &slow_template,
+            "Shape Cancel",
+            "manual",
+            &slow_parameters
+        )
+    );
 
     let (status, output, _) = call(
         &app,

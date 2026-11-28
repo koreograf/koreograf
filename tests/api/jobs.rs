@@ -1002,6 +1002,92 @@ async fn relaunch_with_changes_only_accepts_prompted_fields() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn cancel_refuses_a_finished_job_and_still_cancels_a_pending_one() {
+    let harness = TestApp::boot("cancel-finished", Options::default());
+    let app = harness.app.clone();
+    let (cookie, team) = harness.sign_in().await;
+
+    for status_name in ["successful", "failed", "canceled"] {
+        let id = format!("cancel-{status_name}");
+        seed_finished_job(
+            &harness,
+            &id,
+            &team,
+            None,
+            "shell",
+            status_name,
+            &json!({}),
+            &json!([]),
+        )
+        .await;
+        let (status, refused, _) = call(
+            &app,
+            "POST",
+            &format!("/api/jobs/{id}/cancel"),
+            Some(&cookie),
+            Some(&team),
+            Some(json!({})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+        assert_eq!(refused["error"], "job_is_not_running", "{refused}");
+        let (status, job, _) = call(
+            &app,
+            "GET",
+            &format!("/api/jobs/{id}"),
+            Some(&cookie),
+            Some(&team),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{job}");
+        assert_eq!(job["status"], status_name, "{job}");
+    }
+
+    seed_finished_job(
+        &harness,
+        "cancel-pending",
+        &team,
+        None,
+        "shell",
+        "pending",
+        &json!({}),
+        &json!([]),
+    )
+    .await;
+    let (status, canceled, _) = call(
+        &app,
+        "POST",
+        "/api/jobs/cancel-pending/cancel",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{canceled}");
+    assert_eq!(canceled["status"], "canceled", "{canceled}");
+    let (status, job, _) = call(
+        &app,
+        "GET",
+        "/api/jobs/cancel-pending",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{job}");
+    assert_eq!(job["status"], "canceled", "{job}");
+    assert!(
+        job["events"]
+            .as_array()
+            .expect("events")
+            .iter()
+            .any(|event| event["line"] == "Cancel requested."),
+        "{job}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn relaunch_rejects_unfinished_jobs_and_deleted_credentials() {
     let harness = TestApp::boot("relaunch-gates", Options::default());
     let app = harness.app.clone();

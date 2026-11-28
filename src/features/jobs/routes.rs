@@ -498,18 +498,16 @@ pub async fn cancel_job(
         job
     };
     cancel(&state, &id)?;
-    if !matches!(job.status.as_str(), "successful" | "failed" | "canceled") {
-        activity::note(
-            &state,
-            &job.team_id,
-            &user.username,
-            "cancel",
-            "job",
-            &job.id,
-            &job.name,
-            "success",
-        );
-    }
+    activity::note(
+        &state,
+        &job.team_id,
+        &user.username,
+        "cancel",
+        "job",
+        &job.id,
+        &job.name,
+        "success",
+    );
     let db = state.store();
     let job = db.job(&id)?.ok_or(ApiError::NotFound)?;
     Ok(Json(JobResponse::new(&job, None)))
