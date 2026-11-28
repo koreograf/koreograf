@@ -22,7 +22,7 @@
   "default_environment_opentofu": "Default execution environment: OpenTofu",
   "default_environment_shell": "Default execution environment: Shell",
   "directory": "Directory",
-  "discard_the_saved_settings_and_use_the_environment": "Discard the saved settings and use the environment variables from startup again?",
+  "discard_the_saved_settings_and_use_the_environment": "Discard the saved settings and use the environment variables from startup again? The default execution environments are restored to the existing global environment for each tool.",
   "exceptions": "Exceptions",
   "group_attribute": "Group attribute",
   "group_base": "Group base",

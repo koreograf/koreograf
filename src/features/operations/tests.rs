@@ -145,6 +145,39 @@ mod settings_tests {
         assert!(reset.ldap.url.is_empty());
         assert_eq!(reset.runner.as_str(), "local");
         assert_eq!(reset.job_output_lines, 8_000);
+        assert_eq!(reset.default_environment_ansible, "seeded-ansible");
+        assert_eq!(reset.default_environment_opentofu, "seeded-opentofu");
+        assert_eq!(reset.default_environment_shell, "seeded-shell");
+        let restored = load(&state).unwrap();
+        assert_eq!(restored.default_environment_ansible, "seeded-ansible");
+        assert_eq!(restored.default_environment_opentofu, "seeded-opentofu");
+        assert_eq!(restored.default_environment_shell, "seeded-shell");
+    }
+
+    #[test]
+    fn a_reset_uses_another_global_environment_when_the_seeded_one_is_gone() {
+        let state = state();
+        {
+            let db = state.db().unwrap();
+            crate::store::environments::delete_environment(&db, "seeded-ansible").unwrap();
+            crate::store::environments::insert_environment(
+                &db,
+                &environment("custom-ansible", "ansible", "global"),
+            )
+            .unwrap();
+        }
+        let reset = save(
+            &state,
+            &SettingsWrite {
+                reset: true,
+                ..sample("")
+            },
+        )
+        .unwrap();
+        assert_eq!(reset.default_environment_ansible, "custom-ansible");
+        assert_eq!(reset.default_environment_opentofu, "seeded-opentofu");
+        assert_eq!(reset.default_environment_shell, "seeded-shell");
+        let _ = std::fs::remove_dir_all(&state.cfg.data_dir);
     }
 
     #[test]

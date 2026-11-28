@@ -29,6 +29,15 @@ pub(crate) const LIST_ENVIRONMENTS: &str =
          ELSE 0
        END,
        e.name";
+pub(crate) const GLOBAL_ENVIRONMENTS: &str =
+    "SELECT e.id, e.team_id, e.organization_id, e.name, e.image, e.pull_policy, \
+     e.network, e.description, e.created_at, COALESCE(o.name, ''), COALESCE(t.name, ''), e.tool
+     FROM environments e
+     LEFT JOIN organizations o ON o.id = e.organization_id
+     LEFT JOIN teams t ON t.id = e.team_id
+     WHERE (e.team_id IS NULL OR e.team_id = '')
+       AND (e.organization_id IS NULL OR e.organization_id = '')
+     ORDER BY e.name";
 pub(crate) const ENVIRONMENT_BY_ID: &str =
     "SELECT e.id, e.team_id, e.organization_id, e.name, e.image, e.pull_policy, \
      e.network, e.description, e.created_at, COALESCE(o.name, ''), COALESCE(t.name, ''), e.tool
@@ -77,6 +86,10 @@ pub(crate) fn list_environments(
 
 pub(crate) fn environment(c: &Connection, id: &str) -> AppResult<Option<Environment>> {
     sql::sqlite_opt(c, ENVIRONMENT_BY_ID, [id], |row| row_environment(row))
+}
+
+pub(crate) fn global_environments(c: &Connection) -> AppResult<Vec<Environment>> {
+    sql::sqlite_all(c, GLOBAL_ENVIRONMENTS, [], |row| row_environment(row))
 }
 
 pub(crate) fn update_environment(c: &Connection, item: &Environment) -> AppResult<()> {

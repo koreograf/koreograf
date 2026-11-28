@@ -639,6 +639,78 @@ async fn a_job_without_a_default_environment_fails_before_it_starts() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_settings_reset_keeps_the_default_execution_environments() {
+    let dir = temp_dir("reset-default-ee");
+    let mut cfg = config(&dir, &Options::default());
+    cfg.container_image = true;
+    let state = koreograf::boot(cfg).unwrap();
+    let app = koreograf::router(state);
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap();
+
+    let (status, templates, _) = call(
+        &app,
+        "GET",
+        "/api/templates",
+        Some(&cookie),
+        Some(team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{templates}");
+    let template_id = templates
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "Self-Heal")
+        .and_then(|row| row["id"].as_str())
+        .expect("the demo Ansible template")
+        .to_string();
+
+    let (status, reset, _) = call(
+        &app,
+        "PUT",
+        "/api/settings",
+        Some(&cookie),
+        None,
+        Some(json!({"reset": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reset}");
+    for tool in ["ansible", "opentofu", "shell"] {
+        let id = reset
+            .get(format!("default_environment_{tool}"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        assert_eq!(id, format!("seeded-{tool}"), "{reset}");
+    }
+
+    let (status, launched, _) = call(
+        &app,
+        "POST",
+        &format!("/api/templates/{template_id}/launch"),
+        Some(&cookie),
+        Some(team),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{launched}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_changed_environment_tool_fails_the_job_before_the_container_starts() {
     let dir = temp_dir("env-tool-job");
     let mut cfg = config(&dir, &Options::default());
