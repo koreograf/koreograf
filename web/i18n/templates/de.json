@@ -51,6 +51,7 @@
   "search_vaults": "Vaults suchen",
   "skip": "ohne",
   "template_2": "+ Vorlage",
+  "template_group": "Gruppe",
   "template_groups": "Gruppen",
   "template_groups_hint": "Eine Vorlage kann in einer Gruppe sein.",
   "template_schedules_hint": "Zeitpläne starten diese Vorlage automatisch.",
