@@ -329,8 +329,15 @@ pub struct TemplateBody {
     /// are ignored.
     #[serde(default)]
     prompt_fields: Vec<String>,
-    /// Group ids that replace the memberships when the field is sent.
-    group_ids: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    group_id: Option<Option<String>>,
+}
+
+fn deserialize_present<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(Option::<String>::deserialize(deserializer)?))
 }
 
 fn default_true() -> bool {
@@ -387,11 +394,11 @@ pub(super) struct TemplateResponse {
     update_on_launch: bool,
     prompt_on_launch: bool,
     prompt_fields: Vec<String>,
-    group_ids: Vec<String>,
+    group_id: Option<String>,
 }
 
 impl TemplateResponse {
-    fn new(template: &Template, credential_ids: &[String], group_ids: &[String]) -> Self {
+    fn new(template: &Template, credential_ids: &[String]) -> Self {
         let credential_ids = if credential_ids.is_empty() {
             template
                 .credential_id
@@ -420,7 +427,7 @@ impl TemplateResponse {
             update_on_launch: template.update_on_launch,
             prompt_on_launch: template.prompt_on_launch,
             prompt_fields: template.prompt_fields(),
-            group_ids: group_ids.to_vec(),
+            group_id: template.group_id.clone(),
         }
     }
 }
@@ -446,24 +453,12 @@ pub async fn list_templates(
             .or_default()
             .push(credential_id);
     }
-    let group_links = db.list_template_group_links(&team)?;
-    let mut groups_by_template: HashMap<String, Vec<String>> = HashMap::new();
-    for (template_id, group_id) in group_links {
-        groups_by_template
-            .entry(template_id)
-            .or_default()
-            .push(group_id);
-    }
     Ok(Json(TemplateListResponse(
         items
             .iter()
             .map(|item| {
                 let ids = by_template.get(&item.id).map(Vec::as_slice).unwrap_or(&[]);
-                let groups = groups_by_template
-                    .get(&item.id)
-                    .map(Vec::as_slice)
-                    .unwrap_or(&[]);
-                TemplateResponse::new(item, ids, groups)
+                TemplateResponse::new(item, ids)
             })
             .collect(),
     )))
@@ -483,12 +478,7 @@ pub async fn get_template(
         .filter(|template| template.team_id == team)
         .ok_or(ApiError::NotFound)?;
     let credential_ids = db.template_credential_ids(&template.id)?;
-    let group_ids = db.template_group_ids(&template.id)?;
-    Ok(Json(TemplateResponse::new(
-        &template,
-        &credential_ids,
-        &group_ids,
-    )))
+    Ok(Json(TemplateResponse::new(&template, &credential_ids)))
 }
 
 pub async fn create_template(
@@ -499,10 +489,10 @@ pub async fn create_template(
 ) -> AppResult<(StatusCode, Json<TemplateResponse>)> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let (mut template, credential_ids, group_ids) = build_template(&state, &team, None, body)?;
+    let (mut template, credential_ids) = build_template(&state, &team, None, body)?;
     template.admin_saved = user.is_admin;
     let db = state.store();
-    db.insert_template(&template, &credential_ids, group_ids.as_deref())?;
+    db.insert_template(&template, &credential_ids)?;
     activity::note(
         &state,
         &template.team_id,
@@ -515,11 +505,7 @@ pub async fn create_template(
     );
     Ok((
         StatusCode::CREATED,
-        Json(TemplateResponse::new(
-            &template,
-            &credential_ids,
-            group_ids.as_deref().unwrap_or(&[]),
-        )),
+        Json(TemplateResponse::new(&template, &credential_ids)),
     ))
 }
 
@@ -532,14 +518,10 @@ pub async fn update_template(
 ) -> AppResult<Json<TemplateResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let (mut template, credential_ids, group_ids) = build_template(&state, &team, Some(id), body)?;
+    let (mut template, credential_ids) = build_template(&state, &team, Some(id), body)?;
     template.admin_saved = user.is_admin;
     let db = state.store();
-    db.update_template(&template, &credential_ids, group_ids.as_deref())?;
-    let group_ids = match group_ids {
-        Some(group_ids) => group_ids,
-        None => db.template_group_ids(&template.id)?,
-    };
+    db.update_template(&template, &credential_ids)?;
     activity::note(
         &state,
         &template.team_id,
@@ -550,11 +532,7 @@ pub async fn update_template(
         &template.name,
         "success",
     );
-    Ok(Json(TemplateResponse::new(
-        &template,
-        &credential_ids,
-        &group_ids,
-    )))
+    Ok(Json(TemplateResponse::new(&template, &credential_ids)))
 }
 
 pub async fn delete_template(
@@ -722,7 +700,7 @@ fn build_template(
     team: &str,
     id: Option<String>,
     body: TemplateBody,
-) -> AppResult<(Template, Vec<String>, Option<Vec<String>>)> {
+) -> AppResult<(Template, Vec<String>)> {
     let requested_ids = requested_credential_ids(&body);
     if !runner::known_tool(&body.tool) {
         return Err(ApiError::bad("tool_is_ansible_opentofu_or_shell"));
@@ -756,7 +734,7 @@ fn build_template(
     let inventory_id = blank(body.inventory_id);
     let environment_id = blank(body.environment_id);
     let no_environment = environment_id.is_none() && body.no_environment;
-    let (created_at, loaded, previous_ids, group_ids) = {
+    let (created_at, loaded, previous_ids, group_id) = {
         let db = state.store();
         if let Some(project_id) = &project_id {
             db.project(project_id)?
@@ -787,13 +765,14 @@ fn build_template(
                 ));
             }
         }
-        let created_at = if let Some(id) = &id {
-            db.template(id)?
-                .map(|item| item.created_at)
-                .unwrap_or_else(db::now)
-        } else {
-            db::now()
+        let current = match &id {
+            Some(id) => db.template(id)?,
+            None => None,
         };
+        let created_at = current
+            .as_ref()
+            .map(|item| item.created_at.clone())
+            .unwrap_or_else(db::now);
         let mut loaded = Vec::with_capacity(requested_ids.len());
         for credential_id in &requested_ids {
             let credential = db.credential(credential_id)?.ok_or(ApiError::NotFound)?;
@@ -803,25 +782,20 @@ fn build_template(
             Some(id) => db.template_credential_ids(id)?,
             None => Vec::new(),
         };
-        let group_ids = match &body.group_ids {
-            Some(ids) => {
-                let mut chosen: Vec<String> = Vec::new();
-                for id in ids {
-                    let id = id.trim();
-                    if id.is_empty() || chosen.iter().any(|item| item == id) {
-                        continue;
-                    }
+        let group_id = match &body.group_id {
+            Some(value) => match value.as_deref().map(str::trim) {
+                Some("") | None => None,
+                Some(raw) => {
                     let group = db
-                        .template_group(id)?
+                        .template_group(raw)?
                         .filter(|group| group.team_id == team)
                         .ok_or_else(|| ApiError::bad("template_group_is_missing"))?;
-                    chosen.push(group.id);
+                    Some(group.id)
                 }
-                Some(chosen)
-            }
-            None => None,
+            },
+            None => current.and_then(|item| item.group_id),
         };
-        (created_at, loaded, previous_ids, group_ids)
+        (created_at, loaded, previous_ids, group_id)
     };
     let chosen = credentials::assign_loaded(state, team, &loaded)?;
     for credential in &loaded {
@@ -855,9 +829,9 @@ fn build_template(
             prompt_on_launch: body.prompt_on_launch,
             prompt_fields: serde_json::to_string(&prompt_fields)
                 .unwrap_or_else(|_| "[]".to_string()),
+            group_id,
         },
         credential_ids,
-        group_ids,
     ))
 }
 

@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::error::{ApiError, AppResult};
 
-pub(crate) const SCHEMA_VERSION: u32 = 13;
+pub(crate) const SCHEMA_VERSION: u32 = 14;
 const BASELINE_VERSION: u32 = 1;
 
 /// A session row moves its last-seen time at most once per interval, so a
@@ -138,6 +138,12 @@ pub(crate) const SQLITE_MIGRATIONS: &[Migration] = &[
         sql: include_str!("../migrations/sqlite/0013_template_groups.sql"),
         legacy_columns: &[],
     },
+    Migration {
+        version: 14,
+        name: "0014_template_single_group",
+        sql: include_str!("../migrations/sqlite/0014_template_single_group.sql"),
+        legacy_columns: &[("templates", "group_id")],
+    },
 ];
 
 pub(crate) const POSTGRES_MIGRATIONS: &[Migration] = &[
@@ -224,6 +230,12 @@ pub(crate) const POSTGRES_MIGRATIONS: &[Migration] = &[
         version: 13,
         name: "0013_template_groups",
         sql: include_str!("../migrations/postgres/0013_template_groups.sql"),
+        legacy_columns: &[],
+    },
+    Migration {
+        version: 14,
+        name: "0014_template_single_group",
+        sql: include_str!("../migrations/postgres/0014_template_single_group.sql"),
         legacy_columns: &[],
     },
 ];
@@ -1004,6 +1016,7 @@ pub struct Template {
     pub prompt_on_launch: bool,
     /// JSON list of the fields the launch dialog may replace for this template.
     pub prompt_fields: String,
+    pub group_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -2092,6 +2105,64 @@ mod tests {
         assert_eq!(item.prompt_fields(), Vec::<String>::new());
         assert!(item.prompts_field("limit"));
         assert!(item.prompts_field("inventory"));
+    }
+
+    #[test]
+    fn the_single_group_migration_keeps_one_group_per_template() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        conn.execute("ALTER TABLE templates DROP COLUMN group_id", [])
+            .unwrap();
+        conn.execute_batch(
+            "CREATE TABLE template_group_members (
+                template_id TEXT NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+                group_id TEXT NOT NULL REFERENCES template_groups(id) ON DELETE CASCADE,
+                PRIMARY KEY (template_id, group_id)
+             );
+             INSERT INTO teams (id, name, description, created_at)
+                VALUES ('group-team', 'Group team', '', '2020-01-01T00:00:00Z');
+             INSERT INTO template_groups (id, team_id, name, position) VALUES
+                ('late', 'group-team', 'Late', 5),
+                ('early', 'group-team', 'Early', 1),
+                ('tie-a', 'group-team', 'Tie A', 1),
+                ('tie-b', 'group-team', 'Tie B', 1);
+             INSERT INTO templates (id, team_id, name, tool, created_at) VALUES
+                ('multi', 'group-team', 'Multi', 'shell', '2020-01-01T00:00:00Z'),
+                ('tie', 'group-team', 'Tie', 'shell', '2020-01-01T00:00:00Z'),
+                ('one', 'group-team', 'One', 'shell', '2020-01-01T00:00:00Z'),
+                ('none', 'group-team', 'None', 'shell', '2020-01-01T00:00:00Z');
+             INSERT INTO template_group_members (template_id, group_id) VALUES
+                ('multi', 'late'),
+                ('multi', 'early'),
+                ('tie', 'tie-b'),
+                ('tie', 'tie-a'),
+                ('one', 'late');",
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 13).unwrap();
+        ensure_schema(&conn).unwrap();
+        assert_eq!(schema_version(&conn).unwrap(), SCHEMA_VERSION);
+        let group = |id: &str| -> Option<String> {
+            conn.query_row(
+                "SELECT group_id FROM templates WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(group("multi").as_deref(), Some("early"));
+        assert_eq!(group("tie").as_deref(), Some("tie-a"));
+        assert_eq!(group("one").as_deref(), Some("late"));
+        assert!(group("none").is_none());
+        let members: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name = 'template_group_members'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(members, 0);
     }
 
     #[test]

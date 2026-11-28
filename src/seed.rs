@@ -284,7 +284,7 @@ impl<T: Backend + ?Sized> SeedStore for T {
     }
 
     fn insert_template(&self, item: &Template) -> AppResult<()> {
-        Backend::insert_template(self, item, &[], None)
+        Backend::insert_template(self, item, &[])
     }
 
     fn insert_workflow(&self, item: &Workflow) -> AppResult<()> {
@@ -656,6 +656,7 @@ fn insert_template<S: SeedStore + ?Sized>(store: &S, item: DemoTemplate<'_>) -> 
         admin_saved: true,
         prompt_on_launch: false,
         prompt_fields: "[]".into(),
+        group_id: None,
     })?;
     Ok(id)
 }

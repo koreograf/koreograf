@@ -111,10 +111,10 @@ export function templateSpec(form) {
 export function filterTemplates(items, tool, query, group = "all") {
   const needle = String(query || "").trim().toLowerCase();
   return items.filter((item) => {
-    const groups = item.group_ids || [];
+    const groupId = item.group_id || "";
     if (tool !== "all" && item.tool !== tool) return false;
-    if (group === "ungrouped" && groups.length) return false;
-    if (group !== "all" && group !== "ungrouped" && !groups.includes(group)) return false;
+    if (group === "ungrouped" && groupId) return false;
+    if (group !== "all" && group !== "ungrouped" && groupId !== group) return false;
     if (!needle) return true;
     const spec = item.spec || {};
     return [item.name, item.description, item.tool, item.entrypoint, spec.tags, spec.skip_tags, spec.limit]
@@ -132,9 +132,9 @@ export function groupTemplates(items, groups) {
     id: group.id,
     name: group.name,
     ungrouped: false,
-    templates: items.filter((item) => (item.group_ids || []).includes(group.id)),
+    templates: items.filter((item) => item.group_id === group.id),
   }));
-  const ungrouped = items.filter((item) => !(item.group_ids || []).length);
+  const ungrouped = items.filter((item) => !item.group_id);
   if (ungrouped.length) {
     sections.push({ id: "__ungrouped__", name: "", ungrouped: true, templates: ungrouped });
   }
@@ -590,7 +590,7 @@ async function openTemplateDialog(existing, initialTab = "") {
   const item = existing || {
     name: "", description: "", tool: "ansible", project_id: "", inventory_id: "",
     credential_id: "", credential_ids: [], environment_id: "", entrypoint: "", extra_vars: {}, spec: {},
-    prompt_fields: [], group_ids: [],
+    prompt_fields: [], group_id: null,
   };
   const environmentsForTool = (tool) => environmentsFor(environments, tool);
   const environmentDefault = (tool) => runner[`default_environment_${tool}`] || "";
@@ -614,16 +614,16 @@ async function openTemplateDialog(existing, initialTab = "") {
   };
   const verbosity = Number(spec.verbosity) || 0;
   const promptFieldSelected = normalizePromptFields(item.tool, item.prompt_fields || []);
-  const groupChoices = groups.length
-    ? groups.map((group) => `<label class="check-row"><input type="checkbox" name="group_id" value="${esc(group.id)}"${(item.group_ids || []).includes(group.id) ? " checked" : ""}${readOnly ? " disabled" : ""}><span>${esc(group.name)}</span></label>`).join("")
-    : `<p class="small muted">${h("no_template_groups")}</p>`;
+  const groupChoices = [`<option value="">${h("ungrouped")}</option>`]
+    .concat(groups.map((group) => `<option value="${esc(group.id)}"${item.group_id === group.id ? " selected" : ""}>${esc(group.name)}</option>`))
+    .join("");
   const general = `
     <label class="field required"><span>${h("name")}</span><input name="name" required value="${esc(item.name)}"></label>
     ${descriptionField(item.description)}
     <div class="form-section">
       <h2>${h("template_groups")}</h2>
       <p class="small muted">${h("template_groups_hint")}</p>
-      <div class="check-grid" id="template-groups-field">${groupChoices}</div>
+      <label class="field"><span>${h("group_filter")}</span><select class="fit" name="group_id"${readOnly ? " disabled" : ""}>${groupChoices}</select></label>
     </div>
     <div class="form-section">
       <h2>${h("prompt_fields")}</h2>
@@ -723,7 +723,7 @@ async function openTemplateDialog(existing, initialTab = "") {
           prompt_fields: form.prompt_on_launch.checked
             ? []
             : normalizePromptFields(form.tool.value, selectedPromptFields(form)),
-          group_ids: [...form.querySelectorAll('input[name="group_id"]:checked')].map((input) => input.value),
+          group_id: form.group_id.value || null,
         };
         if (editing) await api("PUT", `/api/v1/templates/${encodeURIComponent(item.id)}`, body);
         else await api("POST", "/api/v1/templates", body);
