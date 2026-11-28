@@ -1976,10 +1976,35 @@ fn group_names(data: &InventoryData) -> Vec<String> {
 }
 
 fn group_count(data: &InventoryData) -> usize {
+    let mut parents: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for group in &data.groups {
+        for child in &group.children {
+            parents
+                .entry(child.as_str())
+                .or_default()
+                .push(group.name.as_str());
+        }
+    }
+    let mut with_hosts: BTreeSet<&str> = BTreeSet::new();
+    for host in &data.hosts {
+        for group in &host.groups {
+            with_hosts.insert(group.as_str());
+        }
+    }
+    let mut pending: Vec<&str> = with_hosts.iter().copied().collect();
+    while let Some(name) = pending.pop() {
+        if let Some(items) = parents.get(name) {
+            for parent in items {
+                if with_hosts.insert(*parent) {
+                    pending.push(*parent);
+                }
+            }
+        }
+    }
     data.groups
         .iter()
         .filter(|group| group.name != "all" && group.name != "ungrouped")
-        .filter(|group| !inventory::group_hosts(data, &group.name).is_empty())
+        .filter(|group| with_hosts.contains(group.name.as_str()))
         .count()
 }
 

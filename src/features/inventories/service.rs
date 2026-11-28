@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::Path;
@@ -7,10 +7,12 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use url::{Host, Url};
 
+use crate::error::{ApiError, AppResult};
+
 use super::model::{
     EffectiveVar, FoundInventory, InventoryData, InventoryGroup, InventoryHost, InventoryVarFile,
     NetboxPreview, NetboxResult, NetboxSource, ProjectContents, DEFAULT_MAX_HOSTS, MASKED_VALUE,
-    MAX_HOSTS_LIMIT,
+    MAX_HOSTS_LIMIT, MAX_STATIC_BYTES, MAX_STATIC_HOSTS,
 };
 
 const PAGE_SIZE: usize = 100;
@@ -25,10 +27,13 @@ const MAX_VAR_FILE_BYTES: u64 = 256 * 1024;
 /// every group. Variables from a later text replace earlier ones.
 pub fn merge_inventory(bodies: &[&str]) -> InventoryData {
     let mut data = InventoryData::default();
+    let mut host_index: HashMap<String, usize> = HashMap::new();
+    let mut group_index: HashMap<String, usize> = HashMap::new();
     for body in bodies {
         let parsed = parse_inventory(body);
         for host in parsed.hosts {
-            if let Some(existing) = data.hosts.iter_mut().find(|item| item.name == host.name) {
+            if let Some(&index) = host_index.get(&host.name) {
+                let existing = &mut data.hosts[index];
                 for group in host.groups {
                     if !existing.groups.iter().any(|item| item == &group) {
                         existing.groups.push(group);
@@ -36,11 +41,13 @@ pub fn merge_inventory(bodies: &[&str]) -> InventoryData {
                 }
                 existing.vars.extend(host.vars);
             } else {
+                host_index.insert(host.name.clone(), data.hosts.len());
                 data.hosts.push(host);
             }
         }
         for group in parsed.groups {
-            if let Some(existing) = data.groups.iter_mut().find(|item| item.name == group.name) {
+            if let Some(&index) = group_index.get(&group.name) {
+                let existing = &mut data.groups[index];
                 for child in group.children {
                     if !existing.children.iter().any(|item| item == &child) {
                         existing.children.push(child);
@@ -48,6 +55,7 @@ pub fn merge_inventory(bodies: &[&str]) -> InventoryData {
                 }
                 existing.vars.extend(group.vars);
             } else {
+                group_index.insert(group.name.clone(), data.groups.len());
                 data.groups.push(group);
             }
         }
@@ -351,6 +359,22 @@ pub fn parse_inventory(body: &str) -> InventoryData {
     parse_ini(body)
 }
 
+pub fn check_inventory_size(body: &str) -> AppResult<()> {
+    if body.len() > MAX_STATIC_BYTES {
+        return Err(ApiError::bad_vars(
+            "inventory_body_is_too_large",
+            [("max_bytes", MAX_STATIC_BYTES.to_string())],
+        ));
+    }
+    if parse_inventory(body).hosts.len() > MAX_STATIC_HOSTS {
+        return Err(ApiError::bad_vars(
+            "inventory_has_too_many_hosts",
+            [("max", MAX_STATIC_HOSTS.to_string())],
+        ));
+    }
+    Ok(())
+}
+
 /// Group names of a host, including parents that list it through `children`.
 pub fn host_groups(data: &InventoryData, host_name: &str) -> Vec<String> {
     let Some(host) = data.hosts.iter().find(|host| host.name == host_name) else {
@@ -601,6 +625,8 @@ enum IniSection {
 
 fn parse_ini(body: &str) -> InventoryData {
     let mut data = InventoryData::default();
+    let mut group_index: HashMap<String, usize> = HashMap::new();
+    let mut host_index: HashMap<String, usize> = HashMap::new();
     let mut group = "ungrouped".to_string();
     let mut section = IniSection::Hosts;
     for raw in body.lines() {
@@ -613,15 +639,15 @@ fn parse_ini(body: &str) -> InventoryData {
             if let Some(name) = inner.strip_suffix(":vars") {
                 group = name.trim().to_string();
                 section = IniSection::Vars;
-                ensure_group(&mut data.groups, &group);
+                ensure_group_at(&mut data.groups, &mut group_index, &group);
             } else if let Some(name) = inner.strip_suffix(":children") {
                 group = name.trim().to_string();
                 section = IniSection::Children;
-                ensure_group(&mut data.groups, &group);
+                ensure_group_at(&mut data.groups, &mut group_index, &group);
             } else {
                 group = inner.trim().to_string();
                 section = IniSection::Hosts;
-                ensure_group(&mut data.groups, &group);
+                ensure_group_at(&mut data.groups, &mut group_index, &group);
             }
             continue;
         }
@@ -640,7 +666,7 @@ fn parse_ini(body: &str) -> InventoryData {
                     for child in part.split(',') {
                         let child = child.trim();
                         if !child.is_empty() {
-                            ensure_group(&mut data.groups, child);
+                            ensure_group_at(&mut data.groups, &mut group_index, child);
                             add_child(&mut data.groups, &group, child);
                         }
                     }
@@ -662,15 +688,17 @@ fn parse_ini(body: &str) -> InventoryData {
                         }
                     }
                 }
-                ensure_group(&mut data.groups, &group);
-                if let Some(existing) = data.hosts.iter_mut().find(|host| host.name == name) {
+                ensure_group_at(&mut data.groups, &mut group_index, &group);
+                if let Some(&index) = host_index.get(&name) {
+                    let existing = &mut data.hosts[index];
                     if !existing.groups.iter().any(|item| item == &group) {
                         existing.groups.push(group.clone());
                     }
                     existing.vars.extend(vars);
                 } else {
+                    host_index.insert(name.clone(), data.hosts.len());
                     data.hosts.push(InventoryHost {
-                        name: name.to_string(),
+                        name,
                         groups: vec![group.clone()],
                         vars,
                         masked: Vec::new(),
@@ -689,6 +717,21 @@ fn ensure_group(groups: &mut Vec<InventoryGroup>, name: &str) {
             ..InventoryGroup::default()
         });
     }
+}
+
+fn ensure_group_at(
+    groups: &mut Vec<InventoryGroup>,
+    index: &mut HashMap<String, usize>,
+    name: &str,
+) {
+    if index.contains_key(name) {
+        return;
+    }
+    index.insert(name.to_string(), groups.len());
+    groups.push(InventoryGroup {
+        name: name.to_string(),
+        ..InventoryGroup::default()
+    });
 }
 
 fn set_group_var(groups: &mut [InventoryGroup], name: &str, key: &str, value: &str) {
@@ -747,6 +790,8 @@ fn is_yaml_inventory(body: &str) -> bool {
 
 fn parse_yaml_inventory(body: &str) -> InventoryData {
     let mut data = InventoryData::default();
+    let mut group_index: HashMap<String, usize> = HashMap::new();
+    let mut host_index: HashMap<String, usize> = HashMap::new();
     let mut group_stack: Vec<(usize, String)> = Vec::new();
     let mut host: Option<String> = None;
     let mut host_indent: Option<usize> = None;
@@ -797,18 +842,18 @@ fn parse_yaml_inventory(body: &str) -> InventoryData {
             .map(|(_, name)| name.clone())
             .unwrap_or_else(|| "all".to_string());
         if value.is_empty() && key == "hosts" {
-            ensure_group(&mut data.groups, &group);
+            ensure_group_at(&mut data.groups, &mut group_index, &group);
             host = None;
             hosts_indent = Some(indent);
             continue;
         }
         if value.is_empty() && key == "vars" {
-            ensure_group(&mut data.groups, &group);
+            ensure_group_at(&mut data.groups, &mut group_index, &group);
             vars_indent = Some(indent);
             continue;
         }
         if value.is_empty() && key == "children" {
-            ensure_group(&mut data.groups, &group);
+            ensure_group_at(&mut data.groups, &mut group_index, &group);
             children_indent = Some(indent);
             continue;
         }
@@ -823,7 +868,7 @@ fn parse_yaml_inventory(body: &str) -> InventoryData {
                     host = Some(key.to_string());
                     host_indent = Some(indent);
                     var_stack.clear();
-                    remember_host(&mut data, key, &group);
+                    remember_host(&mut data, &mut host_index, key, &group);
                 }
             } else if let Some(name) = &host {
                 let mut full = String::new();
@@ -832,7 +877,7 @@ fn parse_yaml_inventory(body: &str) -> InventoryData {
                     full.push('.');
                 }
                 full.push_str(key);
-                set_var(&mut data.hosts, name, &full, value);
+                set_var(&mut data.hosts, &host_index, name, &full, value);
             }
             continue;
         }
@@ -844,14 +889,14 @@ fn parse_yaml_inventory(body: &str) -> InventoryData {
         }
         if children_indent.is_some() {
             if value.is_empty() {
-                ensure_group(&mut data.groups, key);
+                ensure_group_at(&mut data.groups, &mut group_index, key);
                 add_child(&mut data.groups, &group, key);
                 group_stack.push((indent, key.to_string()));
             }
             continue;
         }
         if value.is_empty() {
-            ensure_group(&mut data.groups, key);
+            ensure_group_at(&mut data.groups, &mut group_index, key);
             group_stack.push((indent, key.to_string()));
         }
     }
@@ -1092,13 +1137,20 @@ fn parse_var_scalar(text: &str) -> String {
     value.to_string()
 }
 
-fn remember_host(data: &mut InventoryData, name: &str, group: &str) {
+fn remember_host(
+    data: &mut InventoryData,
+    index: &mut HashMap<String, usize>,
+    name: &str,
+    group: &str,
+) {
     ensure_group(&mut data.groups, group);
-    if let Some(existing) = data.hosts.iter_mut().find(|host| host.name == name) {
+    if let Some(&position) = index.get(name) {
+        let existing = &mut data.hosts[position];
         if !existing.groups.iter().any(|item| item == group) {
             existing.groups.push(group.to_string());
         }
     } else {
+        index.insert(name.to_string(), data.hosts.len());
         data.hosts.push(InventoryHost {
             name: name.to_string(),
             groups: vec![group.to_string()],
@@ -1108,9 +1160,17 @@ fn remember_host(data: &mut InventoryData, name: &str, group: &str) {
     }
 }
 
-fn set_var(hosts: &mut [InventoryHost], name: &str, key: &str, value: &str) {
-    if let Some(host) = hosts.iter_mut().find(|host| host.name == name) {
-        host.vars.insert(key.to_string(), value.to_string());
+fn set_var(
+    hosts: &mut [InventoryHost],
+    index: &HashMap<String, usize>,
+    name: &str,
+    key: &str,
+    value: &str,
+) {
+    if let Some(&position) = index.get(name) {
+        hosts[position]
+            .vars
+            .insert(key.to_string(), value.to_string());
     }
 }
 
