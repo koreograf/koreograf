@@ -83,6 +83,7 @@ fn template_without_environment() -> db::Template {
         admin_saved: true,
         prompt_on_launch: false,
         prompt_fields: "[]".into(),
+        group_id: None,
     }
 }
 
@@ -605,6 +606,7 @@ fn insert_shell(
             admin_saved: true,
             prompt_on_launch: false,
             prompt_fields: "[]".into(),
+            group_id: None,
         },
     )
     .expect("template");

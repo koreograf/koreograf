@@ -103,34 +103,34 @@ test("the template list filters by tool and across name, description and spec", 
   assert.deepEqual(filterTemplates(items, "ansible", "vpc"), []);
 });
 
-test("templates group into sorted sections and a template in two groups appears in both", async () => {
+test("templates group into sorted sections with one group each", async () => {
   const { groupTemplates } = await load();
   const groups = [
     { id: "g2", name: "Kubernetes", position: 1 },
     { id: "g1", name: "Patchday", position: 0 },
   ];
   const items = [
-    { id: "a", name: "Deploy", tool: "ansible", group_ids: ["g1", "g2"] },
-    { id: "b", name: "Backup", tool: "shell", group_ids: [] },
-    { id: "c", name: "Patch", tool: "shell", group_ids: ["g1"] },
+    { id: "a", name: "Deploy", tool: "ansible", group_id: "g1" },
+    { id: "b", name: "Backup", tool: "shell", group_id: null },
+    { id: "c", name: "Patch", tool: "shell", group_id: "g1" },
   ];
   const sections = groupTemplates(items, groups);
   assert.deepEqual(sections.map((section) => (section.ungrouped ? "ungrouped" : section.id)), ["g1", "g2", "ungrouped"]);
   assert.deepEqual(sections[0].templates.map((item) => item.id), ["a", "c"]);
-  assert.deepEqual(sections[1].templates.map((item) => item.id), ["a"]);
+  assert.deepEqual(sections[1].templates.map((item) => item.id), []);
   assert.deepEqual(sections[2].templates.map((item) => item.id), ["b"]);
-  assert.equal(groupTemplates([{ id: "a", group_ids: ["g1"] }], groups).length, 2);
+  assert.equal(groupTemplates([{ id: "a", group_id: "g1" }], groups).length, 2);
 });
 
 test("the template list filters by group and by ungrouped", async () => {
   const { filterTemplates } = await load();
   const items = [
-    { name: "Deploy", tool: "ansible", group_ids: ["g1", "g2"], spec: {} },
-    { name: "Patch", tool: "shell", group_ids: ["g1"], spec: {} },
-    { name: "Backup", tool: "shell", group_ids: [], spec: {} },
+    { name: "Deploy", tool: "ansible", group_id: "g1", spec: {} },
+    { name: "Patch", tool: "shell", group_id: "g1", spec: {} },
+    { name: "Backup", tool: "shell", group_id: null, spec: {} },
   ];
   assert.deepEqual(filterTemplates(items, "all", "", "g1").map((item) => item.name), ["Deploy", "Patch"]);
-  assert.deepEqual(filterTemplates(items, "all", "", "g2").map((item) => item.name), ["Deploy"]);
+  assert.deepEqual(filterTemplates(items, "all", "", "g2").map((item) => item.name), []);
   assert.deepEqual(filterTemplates(items, "all", "", "ungrouped").map((item) => item.name), ["Backup"]);
   assert.deepEqual(filterTemplates(items, "shell", "", "g1").map((item) => item.name), ["Patch"]);
   assert.deepEqual(filterTemplates(items, "all", "back", "all").map((item) => item.name), ["Backup"]);

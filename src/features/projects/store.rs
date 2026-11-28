@@ -292,23 +292,23 @@ where
 pub(crate) const INSERT_TEMPLATE: &str = "INSERT INTO templates (
         id, team_id, name, description, tool, project_id, inventory_id, credential_id,
         environment_id, no_environment, entrypoint, extra_vars, spec, created_at, update_on_launch,
-        admin_saved, prompt_on_launch, prompt_fields
-     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)";
+        admin_saved, prompt_on_launch, prompt_fields, group_id
+     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)";
 pub(crate) const UPDATE_TEMPLATE: &str =
     "UPDATE templates SET name = ?3, description = ?4, tool = ?5, project_id = ?6,
         inventory_id = ?7, credential_id = ?8, environment_id = ?9, no_environment = ?10,
         entrypoint = ?11, extra_vars = ?12, spec = ?13, update_on_launch = ?14,
-        admin_saved = ?15, prompt_on_launch = ?16, prompt_fields = ?17
+        admin_saved = ?15, prompt_on_launch = ?16, prompt_fields = ?17, group_id = ?18
      WHERE id = ?1 AND team_id = ?2";
 pub(crate) const LIST_TEMPLATES: &str =
     "SELECT id, team_id, name, description, tool, project_id, inventory_id, credential_id,
         environment_id, no_environment, entrypoint, extra_vars, spec, created_at, update_on_launch,
-        admin_saved, prompt_on_launch, prompt_fields
+        admin_saved, prompt_on_launch, prompt_fields, group_id
      FROM templates WHERE team_id = ?1 ORDER BY name";
 pub(crate) const TEMPLATE_BY_ID: &str =
     "SELECT id, team_id, name, description, tool, project_id, inventory_id, credential_id,
         environment_id, no_environment, entrypoint, extra_vars, spec, created_at, update_on_launch,
-        admin_saved, prompt_on_launch, prompt_fields
+        admin_saved, prompt_on_launch, prompt_fields, group_id
      FROM templates WHERE id = ?1";
 pub(crate) const DELETE_TEMPLATE: &str = "DELETE FROM templates WHERE id = ?1 AND team_id = ?2";
 pub(crate) const DELETE_TEMPLATE_SCHEDULES: &str =
@@ -336,19 +336,6 @@ pub(crate) const TEMPLATE_GROUP_BY_ID: &str =
     "SELECT id, team_id, name, position FROM template_groups WHERE id = ?1";
 pub(crate) const DELETE_TEMPLATE_GROUP: &str =
     "DELETE FROM template_groups WHERE id = ?1 AND team_id = ?2";
-pub(crate) const DELETE_TEMPLATE_GROUP_MEMBERS: &str =
-    "DELETE FROM template_group_members WHERE template_id = ?1";
-pub(crate) const INSERT_TEMPLATE_GROUP_MEMBER: &str =
-    "INSERT INTO template_group_members (template_id, group_id) VALUES (?1, ?2)";
-pub(crate) const TEMPLATE_GROUP_IDS: &str = "SELECT m.group_id FROM template_group_members m
-     JOIN template_groups g ON g.id = m.group_id
-     WHERE m.template_id = ?1 ORDER BY g.position, g.name";
-pub(crate) const LIST_TEMPLATE_GROUP_LINKS: &str = "SELECT m.template_id, m.group_id
-     FROM template_group_members m
-     JOIN templates t ON t.id = m.template_id
-     JOIN template_groups g ON g.id = m.group_id
-     WHERE t.team_id = ?1
-     ORDER BY m.template_id, g.position, g.name";
 
 pub(crate) fn insert_template(c: &Connection, item: &Template) -> AppResult<()> {
     c.execute(
@@ -371,7 +358,8 @@ pub(crate) fn insert_template(c: &Connection, item: &Template) -> AppResult<()> 
             item.update_on_launch as i64,
             item.admin_saved as i64,
             item.prompt_on_launch as i64,
-            item.prompt_fields
+            item.prompt_fields,
+            item.group_id
         ],
     )?;
     Ok(())
@@ -397,7 +385,8 @@ pub(crate) fn update_template(c: &Connection, item: &Template) -> AppResult<()> 
             item.update_on_launch as i64,
             item.admin_saved as i64,
             item.prompt_on_launch as i64,
-            item.prompt_fields
+            item.prompt_fields,
+            item.group_id
         ],
     )?;
     if changed == 0 {
@@ -493,36 +482,6 @@ pub(crate) fn delete_template_group(c: &Connection, id: &str, team_id: &str) -> 
     Ok(())
 }
 
-pub(crate) fn template_group_ids(c: &Connection, template_id: &str) -> AppResult<Vec<String>> {
-    sql::sqlite_all(c, TEMPLATE_GROUP_IDS, [template_id], |row| {
-        SqlRow::get(row, 0)
-    })
-}
-
-pub(crate) fn list_template_group_links(
-    c: &Connection,
-    team_id: &str,
-) -> AppResult<Vec<(String, String)>> {
-    sql::sqlite_all(c, LIST_TEMPLATE_GROUP_LINKS, [team_id], |row| {
-        Ok((
-            SqlRow::get::<String>(row, 0)?,
-            SqlRow::get::<String>(row, 1)?,
-        ))
-    })
-}
-
-pub(crate) fn save_template_groups(
-    c: &Connection,
-    template_id: &str,
-    group_ids: &[String],
-) -> AppResult<()> {
-    c.execute(DELETE_TEMPLATE_GROUP_MEMBERS, [template_id])?;
-    for group_id in group_ids {
-        c.execute(INSERT_TEMPLATE_GROUP_MEMBER, params![template_id, group_id])?;
-    }
-    Ok(())
-}
-
 pub(crate) fn row_template_group<R: SqlRow>(row: &R) -> AppResult<TemplateGroup> {
     Ok(TemplateGroup {
         id: row.get(0)?,
@@ -552,32 +511,8 @@ pub(crate) fn row_template<R: SqlRow>(row: &R) -> AppResult<Template> {
         admin_saved: row.get(15)?,
         prompt_on_launch: row.get(16)?,
         prompt_fields: row.get(17)?,
+        group_id: row.get(18)?,
     })
-}
-
-pub(crate) async fn postgres_write_template_groups<C>(
-    client: &C,
-    template_id: &str,
-    group_ids: &[String],
-) -> AppResult<()>
-where
-    C: deadpool_postgres::GenericClient,
-{
-    client
-        .execute(
-            &sql::postgres(DELETE_TEMPLATE_GROUP_MEMBERS),
-            &[&template_id],
-        )
-        .await?;
-    for group_id in group_ids {
-        client
-            .execute(
-                &sql::postgres(INSERT_TEMPLATE_GROUP_MEMBER),
-                &[&template_id, &group_id],
-            )
-            .await?;
-    }
-    Ok(())
 }
 
 pub(crate) async fn postgres_write_template_credentials<C>(

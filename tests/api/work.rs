@@ -199,7 +199,7 @@ async fn templates_return_the_documented_shape() {
         "update_on_launch": false,
         "prompt_on_launch": true,
         "prompt_fields": ["credentials"],
-        "group_ids": [],
+        "group_id": null,
     });
     assert_eq!(created, expected);
 

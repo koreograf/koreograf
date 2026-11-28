@@ -4424,6 +4424,7 @@ mod tests {
             admin_saved: true,
             prompt_on_launch: false,
             prompt_fields: "[]".into(),
+            group_id: None,
         }
     }
 

@@ -80,19 +80,36 @@ test("groups templates into collapsible sections with a group filter", async ({ 
   await page.getByRole("link", { name: templateName, exact: true }).click();
   const templateDialog = page.getByRole("dialog");
   await expect(templateDialog.getByRole("heading", { name: "Edit template" })).toBeVisible();
-  await templateDialog.getByRole("checkbox", { name: patchday, exact: true }).check();
-  await templateDialog.getByRole("checkbox", { name: kubernetes, exact: true }).check();
+  await templateDialog.locator('select[name="group_id"]').selectOption({ label: patchday });
   await templateDialog.getByRole("button", { name: "Save", exact: true }).click();
   await expect(templateDialog).toHaveCount(0);
 
   await expect(patchdaySection.getByRole("link", { name: templateName, exact: true })).toBeVisible();
-  await expect(kubernetesSection.getByRole("link", { name: templateName, exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: templateName, exact: true })).toHaveCount(2);
+  await expect(kubernetesSection.getByRole("link", { name: templateName, exact: true })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: templateName, exact: true })).toHaveCount(1);
   const ungrouped = page.locator(".template-group").filter({
     has: page.getByRole("button", { name: /^Ungrouped/ }),
   });
   await expect(ungrouped.getByRole("link", { name: templateName, exact: true })).toHaveCount(0);
   await noHorizontalScroll(page);
+
+  await page.getByRole("link", { name: templateName, exact: true }).click();
+  await expect(templateDialog.getByRole("heading", { name: "Edit template" })).toBeVisible();
+  await templateDialog.locator('select[name="group_id"]').selectOption({ label: kubernetes });
+  await templateDialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(templateDialog).toHaveCount(0);
+
+  await expect(kubernetesSection.getByRole("link", { name: templateName, exact: true })).toBeVisible();
+  await expect(patchdaySection.getByRole("link", { name: templateName, exact: true })).toHaveCount(0);
+
+  await page.getByRole("link", { name: templateName, exact: true }).click();
+  await expect(templateDialog.getByRole("heading", { name: "Edit template" })).toBeVisible();
+  await templateDialog.locator('select[name="group_id"]').selectOption({ label: patchday });
+  await templateDialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(templateDialog).toHaveCount(0);
+
+  await expect(patchdaySection.getByRole("link", { name: templateName, exact: true })).toBeVisible();
+  await expect(kubernetesSection.getByRole("link", { name: templateName, exact: true })).toHaveCount(0);
 
   const toggle = patchdaySection.getByRole("button", { name: new RegExp(`^${escapeRegex(patchday)}`) });
   await toggle.click();
@@ -105,7 +122,7 @@ test("groups templates into collapsible sections with a group filter", async ({ 
   const reloadedToggle = reloadedPatchday.getByRole("button", { name: new RegExp(`^${escapeRegex(patchday)}`) });
   await expect(reloadedToggle).toHaveAttribute("aria-expanded", "false");
   await expect(reloadedPatchday.getByRole("link", { name: templateName, exact: true })).toBeHidden();
-  await expect(section(page, kubernetes).getByRole("link", { name: templateName, exact: true })).toBeVisible();
+  await expect(section(page, kubernetes).getByRole("link", { name: templateName, exact: true })).toHaveCount(0);
   await noHorizontalScroll(page);
 
   await reloadedToggle.click();

@@ -435,7 +435,7 @@ async fn template_groups_are_team_scoped_and_only_operators_write() {
             "tool": "shell",
             "entrypoint": "",
             "spec": {"script": "true"},
-            "group_ids": [other_group],
+            "group_id": other_group,
         })),
     )
     .await;
@@ -453,7 +453,7 @@ async fn template_groups_are_team_scoped_and_only_operators_write() {
             "tool": "shell",
             "entrypoint": "",
             "spec": {"script": "true"},
-            "group_ids": ["missing-group"],
+            "group_id": "missing-group",
         })),
     )
     .await;
@@ -610,7 +610,7 @@ async fn template_groups_are_team_scoped_and_only_operators_write() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_template_keeps_its_groups_until_the_field_replaces_them() {
+async fn a_template_keeps_its_group_until_the_field_replaces_it() {
     let harness = TestApp::boot("template-group-assign", Options::default());
     let app = harness.app.clone();
     let dir = harness.dir.clone();
@@ -648,7 +648,7 @@ async fn a_template_keeps_its_groups_until_the_field_replaces_them() {
         "tool": "shell",
         "entrypoint": "",
         "spec": {"script": "true"},
-        "group_ids": [group_ids[0], group_ids[1]],
+        "group_id": group_ids[0],
     });
     let (status, created, _) = call(
         &app,
@@ -661,7 +661,7 @@ async fn a_template_keeps_its_groups_until_the_field_replaces_them() {
     .await;
     assert_eq!(status, StatusCode::CREATED, "{created}");
     let template_id = created["id"].as_str().unwrap().to_string();
-    assert_eq!(created["group_ids"], json!([group_ids[0], group_ids[1]]));
+    assert_eq!(created["group_id"], json!(group_ids[0]));
 
     let (status, listed, _) = call(
         &app,
@@ -679,10 +679,10 @@ async fn a_template_keeps_its_groups_until_the_field_replaces_them() {
         .iter()
         .find(|item| item["id"] == template_id)
         .unwrap();
-    assert_eq!(stored["group_ids"], json!([group_ids[0], group_ids[1]]));
+    assert_eq!(stored["group_id"], json!(group_ids[0]));
 
     let mut update = body.clone();
-    update["group_ids"] = json!([group_ids[1]]);
+    update["group_id"] = json!(group_ids[1]);
     let (status, updated, _) = call(
         &app,
         "PUT",
@@ -693,10 +693,10 @@ async fn a_template_keeps_its_groups_until_the_field_replaces_them() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{updated}");
-    assert_eq!(updated["group_ids"], json!([group_ids[1]]));
+    assert_eq!(updated["group_id"], json!(group_ids[1]));
 
     let mut keep = body.clone();
-    keep.as_object_mut().unwrap().remove("group_ids");
+    keep.as_object_mut().unwrap().remove("group_id");
     let (status, kept, _) = call(
         &app,
         "PUT",
@@ -707,10 +707,10 @@ async fn a_template_keeps_its_groups_until_the_field_replaces_them() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{kept}");
-    assert_eq!(kept["group_ids"], json!([group_ids[1]]));
+    assert_eq!(kept["group_id"], json!(group_ids[1]));
 
     let mut clear = body.clone();
-    clear["group_ids"] = json!([]);
+    clear["group_id"] = json!(null);
     let (status, cleared, _) = call(
         &app,
         "PUT",
@@ -721,10 +721,10 @@ async fn a_template_keeps_its_groups_until_the_field_replaces_them() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{cleared}");
-    assert_eq!(cleared["group_ids"], json!([]));
+    assert!(cleared["group_id"].is_null());
 
     let mut assign = body.clone();
-    assign["group_ids"] = json!([group_ids[0]]);
+    assign["group_id"] = json!(group_ids[0]);
     let (status, assigned, _) = call(
         &app,
         "PUT",
@@ -735,7 +735,7 @@ async fn a_template_keeps_its_groups_until_the_field_replaces_them() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{assigned}");
-    assert_eq!(assigned["group_ids"], json!([group_ids[0]]));
+    assert_eq!(assigned["group_id"], json!(group_ids[0]));
 
     let (status, _, _) = call(
         &app,
@@ -759,6 +759,44 @@ async fn a_template_keeps_its_groups_until_the_field_replaces_them() {
     .await;
     assert_eq!(status, StatusCode::OK, "{kept}");
     assert_eq!(kept["name"], "Grouped shell");
-    assert_eq!(kept["group_ids"], json!([]));
+    assert!(kept["group_id"].is_null());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_old_group_ids_field_is_rejected() {
+    let harness = TestApp::boot("template-group-array", Options::default());
+    let app = harness.app.clone();
+    let dir = harness.dir.clone();
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, rejected, _) = call(
+        &app,
+        "POST",
+        "/api/v1/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Old group field",
+            "tool": "shell",
+            "entrypoint": "",
+            "spec": {"script": "true"},
+            "group_ids": [],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
     let _ = std::fs::remove_dir_all(&dir);
 }

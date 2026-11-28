@@ -83,6 +83,7 @@ mod template_groups {
             admin_saved: true,
             prompt_on_launch: false,
             prompt_fields: "[]".into(),
+            group_id: None,
         }
     }
 
@@ -125,10 +126,10 @@ mod template_groups {
             .insert_team("tg-other", "", "Other Team", "", None)
             .unwrap();
         backend
-            .insert_template(&template("tg-template", "tg-team", "One"), &[], None)
+            .insert_template(&template("tg-template", "tg-team", "One"), &[])
             .unwrap();
         backend
-            .insert_template(&template("tg-second", "tg-team", "Two"), &[], None)
+            .insert_template(&template("tg-second", "tg-team", "Two"), &[])
             .unwrap();
         backend
             .insert_template_group(&group("tg-patchday", "tg-team", "Patchday", 0))
@@ -156,24 +157,30 @@ mod template_groups {
             .collect();
         assert_eq!(names, ["Patchday", "Kubernetes"]);
 
-        backend
-            .update_template(
-                &template("tg-template", "tg-team", "One"),
-                &[],
-                Some(&["tg-patchday".to_string(), "tg-kubernetes".to_string()]),
-            )
-            .unwrap();
+        let mut assigned = template("tg-template", "tg-team", "One");
+        assigned.group_id = Some("tg-patchday".into());
+        backend.update_template(&assigned, &[]).unwrap();
         assert_eq!(
-            backend.template_group_ids("tg-template").unwrap(),
-            ["tg-patchday", "tg-kubernetes"]
+            backend
+                .template("tg-template")
+                .unwrap()
+                .unwrap()
+                .group_id
+                .as_deref(),
+            Some("tg-patchday")
         );
 
         backend
             .delete_template_group("tg-kubernetes", "tg-team")
             .unwrap();
         assert_eq!(
-            backend.template_group_ids("tg-template").unwrap(),
-            ["tg-patchday"]
+            backend
+                .template("tg-template")
+                .unwrap()
+                .unwrap()
+                .group_id
+                .as_deref(),
+            Some("tg-patchday")
         );
         assert!(backend.template("tg-template").unwrap().is_some());
 
@@ -183,11 +190,8 @@ mod template_groups {
         backend
             .delete_template_group("tg-patchday", "tg-team")
             .unwrap();
-        assert!(backend
-            .template_group_ids("tg-template")
-            .unwrap()
-            .is_empty());
-        assert!(backend.template("tg-template").unwrap().is_some());
+        let template = backend.template("tg-template").unwrap().unwrap();
+        assert!(template.group_id.is_none());
     }
 
     #[test]
@@ -212,21 +216,26 @@ mod template_groups {
             "that_name_is_already_used_in_this_team"
         );
 
-        store::save_template_groups(
-            &conn,
-            "tg-template",
-            &["tg-patchday".to_string(), "tg-kubernetes".to_string()],
-        )
-        .unwrap();
+        let mut assigned = template("tg-template", "tg-team", "One");
+        assigned.group_id = Some("tg-patchday".into());
+        store::update_template(&conn, &assigned).unwrap();
         assert_eq!(
-            store::template_group_ids(&conn, "tg-template").unwrap(),
-            ["tg-patchday", "tg-kubernetes"]
+            store::template(&conn, "tg-template")
+                .unwrap()
+                .unwrap()
+                .group_id
+                .as_deref(),
+            Some("tg-patchday")
         );
 
         store::delete_template_group(&conn, "tg-kubernetes", "tg-team").unwrap();
         assert_eq!(
-            store::template_group_ids(&conn, "tg-template").unwrap(),
-            ["tg-patchday"]
+            store::template(&conn, "tg-template")
+                .unwrap()
+                .unwrap()
+                .group_id
+                .as_deref(),
+            Some("tg-patchday")
         );
         assert!(store::template(&conn, "tg-template").unwrap().is_some());
 
@@ -236,9 +245,6 @@ mod template_groups {
             .unwrap()
             .is_none());
         assert!(store::template(&conn, "tg-template").unwrap().is_none());
-        assert!(store::template_group_ids(&conn, "tg-template")
-            .unwrap()
-            .is_empty());
         assert!(store::template_group(&conn, "tg-other-group")
             .unwrap()
             .is_some());
