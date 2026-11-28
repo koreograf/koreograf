@@ -582,6 +582,10 @@ export function recapMatches(row, status) {
   return recapHostStatus(row) === status;
 }
 
+export function defaultHostListStatus(job) {
+  return job && job.status === "successful" ? "all" : "problems";
+}
+
 export function sortRecapRows(rows, sort = "severity") {
   const field = String(sort || "severity");
   const descending = field.startsWith("-");
@@ -1570,7 +1574,7 @@ function bindStructuredOutput(job, startedAt) {
     startedAt: Number(startedAt) || 0,
     hostQuery: "",
     hintsOpen: false,
-    listStatus: "problems",
+    listStatus: defaultHostListStatus(job),
     listSearch: "",
     listSort: "severity",
     listPage: 1,
@@ -2302,8 +2306,8 @@ async function pageJob(id) {
           <div class="filter-bar st-host-filters">
             <input class="search" id="host-search" type="search" placeholder="${h("search_hosts")}" aria-label="${h("search_hosts")}" autocomplete="off">
             <label class="field"><span>${h("status")}</span><select id="host-status" aria-label="${h("status")}">
-              <option value="problems" selected>${h("problem_hosts")}</option>
-              <option value="all">${h("all_hosts")}</option>
+              <option value="problems"${defaultHostListStatus(job) === "problems" ? " selected" : ""}>${h("problem_hosts")}</option>
+              <option value="all"${defaultHostListStatus(job) === "all" ? " selected" : ""}>${h("all_hosts")}</option>
               ${RECAP_STATUSES.map((status) => `<option value="${status}">${esc(t(status))}</option>`).join("")}
             </select></label>
             <label class="field"><span>${h("sort_by")}</span><select id="host-sort" aria-label="${h("sort_by")}">
