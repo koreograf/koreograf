@@ -15,6 +15,34 @@ if [ -n "${KOREOGRAF_INVENTORY:-}" ] && [ -f "${KOREOGRAF_INVENTORY}" ]; then
 fi
 count=$(printf '%s\n' "${hosts}" | sed '/^$/d' | wc -l | tr -d ' ')
 
+if [ -n "${KOREOGRAF_EXTRA:-}" ] && [ -f "${KOREOGRAF_EXTRA}" ] && grep -q '^fixture_success: true$' "${KOREOGRAF_EXTRA}"; then
+  printf '%s\n' "${hosts}" | awk -v file="${events}" '
+    { names[NR] = $1 }
+    END {
+      n = NR
+      printf "{\"type\":\"play_start\",\"play\":\"OK demo\",\"index\":1}\n" >> file
+      printf "{\"type\":\"task_start\",\"play\":\"OK demo\",\"play_index\":1,\"index\":1,\"task\":\"Ping\",\"role\":\"ok\"}\n" >> file
+      for (i = 1; i <= n; i++) {
+        printf "{\"type\":\"host_result\",\"play\":\"OK demo\",\"play_index\":1,\"index\":1,\"task\":\"Ping\",\"role\":\"ok\",\"host\":\"%s\",\"status\":\"ok\",\"duration\":0.01,\"msg\":\"ok ping %s\"}\n", names[i], names[i] >> file
+      }
+      printf "{\"type\":\"stats\",\"total\":%d,\"part\":1,\"parts\":1,\"hosts\":[", n >> file
+      for (i = 1; i <= n; i++) {
+        if (i > 1) printf "," >> file
+        printf "{\"host\":\"%s\",\"ok\":1,\"changed\":0,\"unreachable\":0,\"failed\":0,\"skipped\":0,\"rescued\":0,\"ignored\":0}", names[i] >> file
+      }
+      printf "]}\n" >> file
+      printf "{\"type\":\"playbook_end\"}\n" >> file
+      print "PLAY [OK demo] ***************************************************************"
+      print ""
+      print "TASK [Ping] ********************************************************************"
+      for (i = 1; i <= n; i++) printf "ok: [%s]\n", names[i]
+      print ""
+      print "PLAY RECAP *********************************************************************"
+      for (i = 1; i <= n; i++) printf "%-26s : ok=1    changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0\n", names[i]
+    }'
+  exit 0
+fi
+
 if [ "${count:-0}" -ge 100 ]; then
   printf '%s\n' "${hosts}" | awk -v file="${events}" '
     { names[NR] = $1 }

@@ -273,6 +273,15 @@ test("the host list filters by status and substring and sorts by severity", asyn
   assert.deepEqual(byFailed.map((row) => row.host), ["db-1", "db-2", "web-1", "web-3", "web-2"]);
 });
 
+test("a successful job opens the host list on all hosts and a failed job on problems", async () => {
+  const { defaultHostListStatus } = await load();
+  assert.equal(defaultHostListStatus({ status: "successful" }), "all");
+  assert.equal(defaultHostListStatus({ status: "failed" }), "problems");
+  assert.equal(defaultHostListStatus({ status: "canceled" }), "problems");
+  assert.equal(defaultHostListStatus({ status: "running" }), "problems");
+  assert.equal(defaultHostListStatus(null), "problems");
+});
+
 test("the host list pages with a bounded number of rows", async () => {
   const { pageRecapRows } = await load();
   const first = pageRecapRows(recapRows, 1, 2);
