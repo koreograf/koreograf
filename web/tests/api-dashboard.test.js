@@ -127,6 +127,23 @@ test("the seven and fourteen day series keep every day and the empty ones", asyn
   }
 });
 
+test("a chart day counts each job once", async () => {
+  const { dashboardChart } = await load("features/dashboard.js");
+  const html = dashboardChart([
+    { date: "2026-11-27", started: 93, successful: 80, failed: 10, canceled: 3 },
+    { date: "2026-11-28", started: 5, successful: 5, failed: 0, canceled: 0 },
+  ], "jobs_per_day");
+  assert.match(html, /class="chart-day-total">93</, "the day total adds started and finished");
+  assert.doesNotMatch(html, /class="chart-day-total">186</, "the day total double counts a job");
+  assert.match(html, /class="chart-day-total">5</, "the second day total is wrong");
+  assert.match(html, /class="chart-pair" style="height:100%">/, "the busiest day does not fill the chart");
+  assert.match(html, /class="chart-pair" style="height:5%">/, "the bar height does not follow the day total");
+  const title = /data-chart-title="([^"]*)"/.exec(html)[1];
+  for (const count of ["93", "80", "10", "3"]) {
+    assert.match(title, new RegExp(` ${count}(?: |$)`), `the tooltip lost the ${count} figure`);
+  }
+});
+
 test("the dashboard omits zero totals and uses the short day in the detail", async () => {
   const { dashboardChart } = await load("features/dashboard.js");
   const html = dashboardChart([

@@ -175,7 +175,7 @@ test("the dashboard writes the chart count into the visible day", async () => {
   const en = catalog("en");
   const html = dashboardBody({ series: [{ date: "2026-11-20", started: 9, successful: 3, failed: 1, canceled: 0 }], cache: {} }, "1");
   assert.match(html, new RegExp(en.jobs_per_hour));
-  assert.match(html, /class="chart-day-total"[^>]*>13</, "the combined day total is not visible");
+  assert.match(html, /class="chart-day-total"[^>]*>9</, "the day total adds started and finished");
   assert.match(html, /data-chart-day data-chart-target="[^"]+" data-chart-title="[^"]*Failed 1[^"]*"/, "the status split is not reachable on tap");
   assert.match(html, /class="chart-swatch canceled"/, "the legend lost its swatches");
   assert.match(stylesheet(), /\.chart-day-total\s*\{[^}]*font-size:\s*11px/, "the day total does not fit a narrow chart");
