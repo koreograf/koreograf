@@ -22,7 +22,7 @@
   "default_environment_opentofu": "Standard-Ausführungsumgebung: OpenTofu",
   "default_environment_shell": "Standard-Ausführungsumgebung: Shell",
   "directory": "Verzeichnis",
-  "discard_the_saved_settings_and_use_the_environment": "Gespeicherte Einstellungen verwerfen und wieder die Umgebungsvariablen vom Start nutzen?",
+  "discard_the_saved_settings_and_use_the_environment": "Gespeicherte Einstellungen verwerfen und wieder die Umgebungsvariablen vom Start nutzen? Die Standard-Ausführungsumgebungen werden auf die vorhandene globale Umgebung des jeweiligen Werkzeugs zurückgesetzt.",
   "exceptions": "Ausnahmen",
   "group_attribute": "Gruppenattribut",
   "group_base": "Gruppenbasis",

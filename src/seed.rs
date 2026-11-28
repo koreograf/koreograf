@@ -356,6 +356,13 @@ fn ensure_admin<S: SeedStore + ?Sized>(store: &S, cfg: &Config) -> AppResult<Opt
     Ok(generated)
 }
 
+pub(crate) fn seeded_environment_id(tool: &str) -> Option<&'static str> {
+    SEEDED_ENVIRONMENTS
+        .iter()
+        .find(|item| item.tool == tool)
+        .map(|item| item.id)
+}
+
 fn environments_seeded_by_env() -> bool {
     match std::env::var("KOREOGRAF_SEED_ENVIRONMENTS") {
         Ok(value) => !matches!(

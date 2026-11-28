@@ -236,8 +236,11 @@ pub fn view(state: &Shared) -> AppResult<Effective> {
 
 pub fn save(state: &Shared, input: &SettingsWrite) -> AppResult<Effective> {
     if input.reset {
-        state.store().replace_settings(&[])?;
-        let effective = from_env(state);
+        let environments = state.store().global_environments()?;
+        state
+            .store()
+            .replace_settings(&reset_settings_rows(&environments))?;
+        let effective = load(state)?;
         crate::tls::warn_directory(&effective.ldap);
         return Ok(effective);
     }
@@ -641,6 +644,25 @@ fn valid_llm_url(url: &str) -> bool {
         && parsed.username().is_empty()
         && parsed.password().is_none()
         && !url.chars().any(char::is_control)
+}
+
+fn reset_settings_rows(environments: &[db::Environment]) -> Vec<(String, String)> {
+    let mut rows = Vec::new();
+    for key in DEFAULT_ENVIRONMENT_KEYS {
+        let tool = key.trim_start_matches("default_environment_");
+        let chosen = crate::seed::seeded_environment_id(tool)
+            .and_then(|id| environments.iter().find(|item| item.id == id))
+            .filter(|item| crate::runner::environment_fits_tool(tool, &item.tool))
+            .or_else(|| {
+                environments
+                    .iter()
+                    .find(|item| crate::runner::environment_fits_tool(tool, &item.tool))
+            });
+        if let Some(item) = chosen {
+            rows.push((key.to_string(), item.id.clone()));
+        }
+    }
+    rows
 }
 
 fn validate_default_environment(store: &dyn Backend, tool: &str, raw: &str) -> AppResult<String> {

@@ -6,7 +6,16 @@ const { join } = require("node:path");
 const { pathToFileURL } = require("node:url");
 const test = require("node:test");
 
+const { catalog } = require("./catalog.js");
+
 const load = () => import(pathToFileURL(join(__dirname, "..", "js", "features", "settings.js")).href);
+
+test("the reset confirmation names the default execution environments", () => {
+  const en = catalog("en")["discard_the_saved_settings_and_use_the_environment"];
+  const de = catalog("de")["discard_the_saved_settings_and_use_the_environment"];
+  assert.match(en, /default execution environments/i);
+  assert.match(de, /Standard-Ausführungsumgebungen/i);
+});
 
 function form(options = {}) {
   const elements = {};

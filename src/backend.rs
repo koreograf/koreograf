@@ -104,6 +104,7 @@ pub(crate) trait Backend: Send + Sync {
     fn list_user_memberships(&self, user_id: &str) -> AppResult<Vec<UserMembership>>;
     fn replace_settings(&self, rows: &[(String, String)]) -> AppResult<()>;
     fn environment(&self, id: &str) -> AppResult<Option<Environment>>;
+    fn global_environments(&self) -> AppResult<Vec<Environment>>;
     fn team_by_id(&self, id: &str) -> AppResult<Option<Team>>;
     fn role_of(&self, team_id: &str, user_id: &str) -> AppResult<Option<String>>;
     fn insert_team(
@@ -649,6 +650,11 @@ impl Backend for SqliteBackend {
     fn environment(&self, id: &str) -> AppResult<Option<Environment>> {
         let conn = lock(&self.conn)?;
         store::environments::environment(&conn, id)
+    }
+
+    fn global_environments(&self) -> AppResult<Vec<Environment>> {
+        let conn = lock(&self.conn)?;
+        store::environments::global_environments(&conn)
     }
 
     fn team_by_id(&self, id: &str) -> AppResult<Option<Team>> {
@@ -2306,6 +2312,20 @@ impl Backend for PostgresBackend {
             row.as_ref()
                 .map(store::environments::row_environment)
                 .transpose()
+        })
+    }
+
+    fn global_environments(&self) -> AppResult<Vec<Environment>> {
+        self.with_client(|client| async move {
+            let rows = client
+                .query(
+                    &store::sql::postgres(store::environments::GLOBAL_ENVIRONMENTS),
+                    &[],
+                )
+                .await?;
+            rows.iter()
+                .map(store::environments::row_environment)
+                .collect()
         })
     }
 
