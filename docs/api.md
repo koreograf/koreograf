@@ -124,7 +124,7 @@ Disabling the account through `PUT /api/v1/users/{id}` makes its tokens answer 4
 
 ## Catalog responses
 
-`GET /api/v1/teams` returns an array with `id`, `name`, `description`, `ldap_group` (string or `null`), `organization_id`, `organization_name`, `role`, and `created_at`. `POST /api/v1/teams` returns 201 and `PUT /api/v1/teams/{id}` returns 200 with the same object without `role`. `GET /api/v1/teams/{id}/members` returns an array with `user_id`, `username`, `display_name`, `role`, and `source`; `POST` adds one member and returns 201 with `user_id` and `role`.
+`GET /api/v1/teams` returns an array with `id`, `name`, `description`, `ldap_group` (string or `null`), `organization_id`, `organization_name`, `role`, and `created_at`. `POST /api/v1/teams` returns 201 and `PUT /api/v1/teams/{id}` returns 200 with the same object without `role`. `GET /api/v1/teams/{id}/members` returns an array with `user_id`, `username`, `display_name`, `role`, and `source`; `POST` adds one member and returns 201 with `user_id` and `role`. `DELETE /api/v1/teams/{id}/members/{user_id}` removes another member. A caller cannot remove their own membership, including an administrator; that answers 400 `you_cannot_remove_yourself_from_the_team`.
 
 `GET /api/v1/organizations` returns an array with `id`, `name`, `description`, and `created_at`. `GET /api/v1/organizations/{id}` adds `teams`, an array of the team objects above without `role`. `POST /api/v1/organizations` returns 201 and `PUT /api/v1/organizations/{id}` returns 200 with the object without `teams`.
 
