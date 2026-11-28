@@ -7578,7 +7578,9 @@ $ANSIBLE_VAULT;1.1;AES256
   gather_facts: false
   tasks:
     - debug: var=level
-    - debug: var=vaulted_secret
+    - assert:
+        that:
+          - vaulted_secret == 's3cr3t-from-vault'
 ",
         )
         .unwrap();
@@ -7603,7 +7605,6 @@ $ANSIBLE_VAULT;1.1;AES256
             String::from_utf8_lossy(&with_vault.stderr)
         );
         assert!(text.contains("\"level\": \"host\""), "{text}");
-        assert!(text.contains("s3cr3t-from-vault"), "{text}");
 
         let without_vault = std::process::Command::new("ansible-playbook")
             .current_dir(&work)
