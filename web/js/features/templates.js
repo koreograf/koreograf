@@ -623,7 +623,7 @@ async function openTemplateDialog(existing, initialTab = "") {
     <div class="form-section">
       <h2>${h("template_groups")}</h2>
       <p class="small muted">${h("template_groups_hint")}</p>
-      <label class="field"><span>${h("group_filter")}</span><select class="fit" name="group_id"${readOnly ? " disabled" : ""}>${groupChoices}</select></label>
+      <label class="field"><span>${h("template_group")}</span><select class="fit" name="group_id"${readOnly ? " disabled" : ""}>${groupChoices}</select></label>
     </div>
     <div class="form-section">
       <h2>${h("prompt_fields")}</h2>
