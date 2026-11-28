@@ -12,8 +12,8 @@ use crate::config::{DatabaseConfig, PostgresConfig, SslMode};
 use crate::db::{
     self, ApiToken, ApiTokenTimes, Credential, CredentialUsage, Delivery, Environment, Hook,
     Inventory, InventorySource, Job, JobActivity, JobEvent, JobQuery, Member, NewDelivery,
-    Organization, Project, Schedule, ServiceAccount, Session, Team, Template, User, UserMembership,
-    Workflow, WorkflowJob, WorkflowNodeRow,
+    Organization, Project, Schedule, ServiceAccount, Session, Team, Template, TemplateGroup, User,
+    UserMembership, Workflow, WorkflowJob, WorkflowNodeRow,
 };
 use crate::error::{ApiError, AppResult};
 use crate::features::activity::{self as activity, Activity, ActivityQuery};
@@ -227,11 +227,28 @@ pub(crate) trait Backend: Send + Sync {
     fn delete_environment(&self, id: &str) -> AppResult<()>;
     fn list_templates(&self, team_id: &str) -> AppResult<Vec<Template>>;
     fn template(&self, id: &str) -> AppResult<Option<Template>>;
-    fn insert_template(&self, item: &Template, credential_ids: &[String]) -> AppResult<()>;
-    fn update_template(&self, item: &Template, credential_ids: &[String]) -> AppResult<()>;
+    fn insert_template(
+        &self,
+        item: &Template,
+        credential_ids: &[String],
+        group_ids: Option<&[String]>,
+    ) -> AppResult<()>;
+    fn update_template(
+        &self,
+        item: &Template,
+        credential_ids: &[String],
+        group_ids: Option<&[String]>,
+    ) -> AppResult<()>;
     fn delete_template(&self, id: &str, team_id: &str) -> AppResult<()>;
     fn template_credential_ids(&self, template_id: &str) -> AppResult<Vec<String>>;
     fn list_template_credential_links(&self, team_id: &str) -> AppResult<Vec<(String, String)>>;
+    fn list_template_groups(&self, team_id: &str) -> AppResult<Vec<TemplateGroup>>;
+    fn template_group(&self, id: &str) -> AppResult<Option<TemplateGroup>>;
+    fn insert_template_group(&self, item: &TemplateGroup) -> AppResult<()>;
+    fn update_template_group(&self, item: &TemplateGroup) -> AppResult<()>;
+    fn delete_template_group(&self, id: &str, team_id: &str) -> AppResult<()>;
+    fn template_group_ids(&self, template_id: &str) -> AppResult<Vec<String>>;
+    fn list_template_group_links(&self, team_id: &str) -> AppResult<Vec<(String, String)>>;
     fn list_hooks(&self, team_id: &str) -> AppResult<Vec<Hook>>;
     fn hook(&self, id: &str) -> AppResult<Option<Hook>>;
     fn insert_hook(&self, item: &Hook) -> AppResult<()>;
@@ -1070,20 +1087,36 @@ impl Backend for SqliteBackend {
         projects::store::template(&conn, id)
     }
 
-    fn insert_template(&self, item: &Template, credential_ids: &[String]) -> AppResult<()> {
+    fn insert_template(
+        &self,
+        item: &Template,
+        credential_ids: &[String],
+        group_ids: Option<&[String]>,
+    ) -> AppResult<()> {
         let mut conn = lock(&self.conn)?;
         let tx = conn.transaction()?;
         projects::store::insert_template(&tx, item)?;
         projects::store::save_template_credentials(&tx, &item.id, credential_ids)?;
+        if let Some(group_ids) = group_ids {
+            projects::store::save_template_groups(&tx, &item.id, group_ids)?;
+        }
         tx.commit()?;
         Ok(())
     }
 
-    fn update_template(&self, item: &Template, credential_ids: &[String]) -> AppResult<()> {
+    fn update_template(
+        &self,
+        item: &Template,
+        credential_ids: &[String],
+        group_ids: Option<&[String]>,
+    ) -> AppResult<()> {
         let mut conn = lock(&self.conn)?;
         let tx = conn.transaction()?;
         projects::store::update_template(&tx, item)?;
         projects::store::save_template_credentials(&tx, &item.id, credential_ids)?;
+        if let Some(group_ids) = group_ids {
+            projects::store::save_template_groups(&tx, &item.id, group_ids)?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -1101,6 +1134,41 @@ impl Backend for SqliteBackend {
     fn list_template_credential_links(&self, team_id: &str) -> AppResult<Vec<(String, String)>> {
         let conn = lock(&self.conn)?;
         projects::store::list_template_credential_links(&conn, team_id)
+    }
+
+    fn list_template_groups(&self, team_id: &str) -> AppResult<Vec<TemplateGroup>> {
+        let conn = lock(&self.conn)?;
+        projects::store::list_template_groups(&conn, team_id)
+    }
+
+    fn template_group(&self, id: &str) -> AppResult<Option<TemplateGroup>> {
+        let conn = lock(&self.conn)?;
+        projects::store::template_group(&conn, id)
+    }
+
+    fn insert_template_group(&self, item: &TemplateGroup) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        projects::store::insert_template_group(&conn, item)
+    }
+
+    fn update_template_group(&self, item: &TemplateGroup) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        projects::store::update_template_group(&conn, item)
+    }
+
+    fn delete_template_group(&self, id: &str, team_id: &str) -> AppResult<()> {
+        let conn = lock(&self.conn)?;
+        projects::store::delete_template_group(&conn, id, team_id)
+    }
+
+    fn template_group_ids(&self, template_id: &str) -> AppResult<Vec<String>> {
+        let conn = lock(&self.conn)?;
+        projects::store::template_group_ids(&conn, template_id)
+    }
+
+    fn list_template_group_links(&self, team_id: &str) -> AppResult<Vec<(String, String)>> {
+        let conn = lock(&self.conn)?;
+        projects::store::list_template_group_links(&conn, team_id)
     }
 
     fn list_hooks(&self, team_id: &str) -> AppResult<Vec<Hook>> {
@@ -3407,7 +3475,12 @@ impl Backend for PostgresBackend {
         })
     }
 
-    fn insert_template(&self, item: &Template, credential_ids: &[String]) -> AppResult<()> {
+    fn insert_template(
+        &self,
+        item: &Template,
+        credential_ids: &[String],
+        group_ids: Option<&[String]>,
+    ) -> AppResult<()> {
         self.with_client(|mut client| async move {
             let transaction = client.transaction().await?;
             transaction
@@ -3441,12 +3514,21 @@ impl Backend for PostgresBackend {
                 credential_ids,
             )
             .await?;
+            if let Some(group_ids) = group_ids {
+                projects::store::postgres_write_template_groups(&transaction, &item.id, group_ids)
+                    .await?;
+            }
             transaction.commit().await?;
             Ok(())
         })
     }
 
-    fn update_template(&self, item: &Template, credential_ids: &[String]) -> AppResult<()> {
+    fn update_template(
+        &self,
+        item: &Template,
+        credential_ids: &[String],
+        group_ids: Option<&[String]>,
+    ) -> AppResult<()> {
         self.with_client(|mut client| async move {
             let transaction = client.transaction().await?;
             let changed = transaction
@@ -3482,6 +3564,10 @@ impl Backend for PostgresBackend {
                 credential_ids,
             )
             .await?;
+            if let Some(group_ids) = group_ids {
+                projects::store::postgres_write_template_groups(&transaction, &item.id, group_ids)
+                    .await?;
+            }
             transaction.commit().await?;
             Ok(())
         })
@@ -3527,6 +3613,100 @@ impl Backend for PostgresBackend {
             let rows = client
                 .query(
                     &store::sql::postgres(projects::store::LIST_TEMPLATE_CREDENTIAL_LINKS),
+                    &[&team_id],
+                )
+                .await?;
+            Ok(rows.iter().map(|row| (row.get(0), row.get(1))).collect())
+        })
+    }
+
+    fn list_template_groups(&self, team_id: &str) -> AppResult<Vec<TemplateGroup>> {
+        self.with_client(|client| async move {
+            let rows = client
+                .query(
+                    &store::sql::postgres(projects::store::LIST_TEMPLATE_GROUPS),
+                    &[&team_id],
+                )
+                .await?;
+            rows.iter()
+                .map(projects::store::row_template_group)
+                .collect()
+        })
+    }
+
+    fn template_group(&self, id: &str) -> AppResult<Option<TemplateGroup>> {
+        self.with_client(|client| async move {
+            let row = client
+                .query_opt(
+                    &store::sql::postgres(projects::store::TEMPLATE_GROUP_BY_ID),
+                    &[&id],
+                )
+                .await?;
+            row.as_ref()
+                .map(projects::store::row_template_group)
+                .transpose()
+        })
+    }
+
+    fn insert_template_group(&self, item: &TemplateGroup) -> AppResult<()> {
+        self.with_client(|client| async move {
+            client
+                .execute(
+                    &store::sql::postgres(projects::store::INSERT_TEMPLATE_GROUP),
+                    &[&item.id, &item.team_id, &item.name, &(item.position as i32)],
+                )
+                .await?;
+            Ok(())
+        })
+    }
+
+    fn update_template_group(&self, item: &TemplateGroup) -> AppResult<()> {
+        self.with_client(|client| async move {
+            let changed = client
+                .execute(
+                    &store::sql::postgres(projects::store::UPDATE_TEMPLATE_GROUP),
+                    &[&item.id, &item.team_id, &item.name, &(item.position as i32)],
+                )
+                .await?;
+            if changed == 0 {
+                return Err(ApiError::NotFound);
+            }
+            Ok(())
+        })
+    }
+
+    fn delete_template_group(&self, id: &str, team_id: &str) -> AppResult<()> {
+        self.with_client(|client| async move {
+            let changed = client
+                .execute(
+                    &store::sql::postgres(projects::store::DELETE_TEMPLATE_GROUP),
+                    &[&id, &team_id],
+                )
+                .await?;
+            if changed == 0 {
+                return Err(ApiError::NotFound);
+            }
+            Ok(())
+        })
+    }
+
+    fn template_group_ids(&self, template_id: &str) -> AppResult<Vec<String>> {
+        self.with_client(|client| async move {
+            let rows = client
+                .query(
+                    &store::sql::postgres(projects::store::TEMPLATE_GROUP_IDS),
+                    &[&template_id],
+                )
+                .await?;
+            Ok(rows.iter().map(|row| row.get(0)).collect())
+        })
+    }
+
+    fn list_template_group_links(&self, team_id: &str) -> AppResult<Vec<(String, String)>> {
+        self.with_client(|client| async move {
+            let rows = client
+                .query(
+                    &store::sql::postgres(projects::store::LIST_TEMPLATE_GROUP_LINKS),
                     &[&team_id],
                 )
                 .await?;

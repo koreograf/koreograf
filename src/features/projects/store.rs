@@ -1,6 +1,6 @@
 use rusqlite::{params, Connection};
 
-use crate::db::{Project, Template};
+use crate::db::{Project, Template, TemplateGroup};
 use crate::error::{ApiError, AppResult};
 use crate::store::sql::{self, SqlRow};
 
@@ -325,6 +325,30 @@ pub(crate) const DELETE_TEMPLATE_CREDENTIALS: &str =
 pub(crate) const INSERT_TEMPLATE_CREDENTIAL: &str =
     "INSERT INTO template_credentials (template_id, credential_id, position)
      VALUES (?1, ?2, ?3)";
+pub(crate) const INSERT_TEMPLATE_GROUP: &str =
+    "INSERT INTO template_groups (id, team_id, name, position) VALUES (?1, ?2, ?3, ?4)";
+pub(crate) const UPDATE_TEMPLATE_GROUP: &str =
+    "UPDATE template_groups SET name = ?3, position = ?4 WHERE id = ?1 AND team_id = ?2";
+pub(crate) const LIST_TEMPLATE_GROUPS: &str =
+    "SELECT id, team_id, name, position FROM template_groups WHERE team_id = ?1
+     ORDER BY position, name";
+pub(crate) const TEMPLATE_GROUP_BY_ID: &str =
+    "SELECT id, team_id, name, position FROM template_groups WHERE id = ?1";
+pub(crate) const DELETE_TEMPLATE_GROUP: &str =
+    "DELETE FROM template_groups WHERE id = ?1 AND team_id = ?2";
+pub(crate) const DELETE_TEMPLATE_GROUP_MEMBERS: &str =
+    "DELETE FROM template_group_members WHERE template_id = ?1";
+pub(crate) const INSERT_TEMPLATE_GROUP_MEMBER: &str =
+    "INSERT INTO template_group_members (template_id, group_id) VALUES (?1, ?2)";
+pub(crate) const TEMPLATE_GROUP_IDS: &str = "SELECT m.group_id FROM template_group_members m
+     JOIN template_groups g ON g.id = m.group_id
+     WHERE m.template_id = ?1 ORDER BY g.position, g.name";
+pub(crate) const LIST_TEMPLATE_GROUP_LINKS: &str = "SELECT m.template_id, m.group_id
+     FROM template_group_members m
+     JOIN templates t ON t.id = m.template_id
+     JOIN template_groups g ON g.id = m.group_id
+     WHERE t.team_id = ?1
+     ORDER BY m.template_id, g.position, g.name";
 
 pub(crate) fn insert_template(c: &Connection, item: &Template) -> AppResult<()> {
     c.execute(
@@ -432,6 +456,82 @@ pub(crate) fn save_template_credentials(
     Ok(())
 }
 
+pub(crate) fn insert_template_group(c: &Connection, item: &TemplateGroup) -> AppResult<()> {
+    c.execute(
+        INSERT_TEMPLATE_GROUP,
+        params![item.id, item.team_id, item.name, item.position as i32],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn update_template_group(c: &Connection, item: &TemplateGroup) -> AppResult<()> {
+    let changed = c.execute(
+        UPDATE_TEMPLATE_GROUP,
+        params![item.id, item.team_id, item.name, item.position as i32],
+    )?;
+    if changed == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(())
+}
+
+pub(crate) fn list_template_groups(c: &Connection, team_id: &str) -> AppResult<Vec<TemplateGroup>> {
+    sql::sqlite_all(c, LIST_TEMPLATE_GROUPS, [team_id], |row| {
+        row_template_group(row)
+    })
+}
+
+pub(crate) fn template_group(c: &Connection, id: &str) -> AppResult<Option<TemplateGroup>> {
+    sql::sqlite_opt(c, TEMPLATE_GROUP_BY_ID, [id], |row| row_template_group(row))
+}
+
+pub(crate) fn delete_template_group(c: &Connection, id: &str, team_id: &str) -> AppResult<()> {
+    let changed = c.execute(DELETE_TEMPLATE_GROUP, params![id, team_id])?;
+    if changed == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(())
+}
+
+pub(crate) fn template_group_ids(c: &Connection, template_id: &str) -> AppResult<Vec<String>> {
+    sql::sqlite_all(c, TEMPLATE_GROUP_IDS, [template_id], |row| {
+        SqlRow::get(row, 0)
+    })
+}
+
+pub(crate) fn list_template_group_links(
+    c: &Connection,
+    team_id: &str,
+) -> AppResult<Vec<(String, String)>> {
+    sql::sqlite_all(c, LIST_TEMPLATE_GROUP_LINKS, [team_id], |row| {
+        Ok((
+            SqlRow::get::<String>(row, 0)?,
+            SqlRow::get::<String>(row, 1)?,
+        ))
+    })
+}
+
+pub(crate) fn save_template_groups(
+    c: &Connection,
+    template_id: &str,
+    group_ids: &[String],
+) -> AppResult<()> {
+    c.execute(DELETE_TEMPLATE_GROUP_MEMBERS, [template_id])?;
+    for group_id in group_ids {
+        c.execute(INSERT_TEMPLATE_GROUP_MEMBER, params![template_id, group_id])?;
+    }
+    Ok(())
+}
+
+pub(crate) fn row_template_group<R: SqlRow>(row: &R) -> AppResult<TemplateGroup> {
+    Ok(TemplateGroup {
+        id: row.get(0)?,
+        team_id: row.get(1)?,
+        name: row.get(2)?,
+        position: i64::from(row.get::<i32>(3)?),
+    })
+}
+
 pub(crate) fn row_template<R: SqlRow>(row: &R) -> AppResult<Template> {
     Ok(Template {
         id: row.get(0)?,
@@ -453,6 +553,31 @@ pub(crate) fn row_template<R: SqlRow>(row: &R) -> AppResult<Template> {
         prompt_on_launch: row.get(16)?,
         prompt_fields: row.get(17)?,
     })
+}
+
+pub(crate) async fn postgres_write_template_groups<C>(
+    client: &C,
+    template_id: &str,
+    group_ids: &[String],
+) -> AppResult<()>
+where
+    C: deadpool_postgres::GenericClient,
+{
+    client
+        .execute(
+            &sql::postgres(DELETE_TEMPLATE_GROUP_MEMBERS),
+            &[&template_id],
+        )
+        .await?;
+    for group_id in group_ids {
+        client
+            .execute(
+                &sql::postgres(INSERT_TEMPLATE_GROUP_MEMBER),
+                &[&template_id, &group_id],
+            )
+            .await?;
+    }
+    Ok(())
 }
 
 pub(crate) async fn postgres_write_template_credentials<C>(

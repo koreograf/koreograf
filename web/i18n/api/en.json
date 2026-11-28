@@ -192,6 +192,7 @@
   "template.missing_named": "Template for '{name}' is missing.",
   "template.other_team_named": "Template for '{name}' belongs to another team.",
   "template.vars_not_objects": "extra_vars and spec must be JSON objects.",
+  "template_group_is_missing": "Template group is missing.",
   "that_name_is_already_used_in_this_team": "That name is already used in this team.",
   "that_username_is_already_used": "That username is already used.",
   "the_address_must_start_with_https": "The address must start with https://.",

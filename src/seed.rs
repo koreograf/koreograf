@@ -284,7 +284,7 @@ impl<T: Backend + ?Sized> SeedStore for T {
     }
 
     fn insert_template(&self, item: &Template) -> AppResult<()> {
-        Backend::insert_template(self, item, &[])
+        Backend::insert_template(self, item, &[], None)
     }
 
     fn insert_workflow(&self, item: &Workflow) -> AppResult<()> {

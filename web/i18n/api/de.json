@@ -192,6 +192,7 @@
   "template.missing_named": "Vorlage für „{name}“ fehlt.",
   "template.other_team_named": "Vorlage für „{name}“ gehört zu einem anderen Team.",
   "template.vars_not_objects": "extra_vars und spec müssen JSON-Objekte sein.",
+  "template_group_is_missing": "Vorlagengruppe fehlt.",
   "that_name_is_already_used_in_this_team": "Der Name ist in diesem Team schon vergeben.",
   "that_username_is_already_used": "Der Benutzername ist schon vergeben.",
   "the_address_must_start_with_https": "Adresse muss mit https:// beginnen.",

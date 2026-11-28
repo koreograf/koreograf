@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::db::{self, Project, Template};
+use crate::db::{self, Project, Template, TemplateGroup};
 use crate::error::{ApiError, ApiJson, AppResult};
 use crate::features::activity;
 use crate::features::credentials;
@@ -48,6 +48,16 @@ pub(crate) fn routes() -> Router<Shared> {
                 .delete(delete_template),
         )
         .route("/templates/{id}/launch", post(launch_template))
+        .route(
+            "/template-groups",
+            get(list_template_groups).post(create_template_group),
+        )
+        .route(
+            "/template-groups/{id}",
+            get(get_template_group)
+                .put(update_template_group)
+                .delete(delete_template_group),
+        )
 }
 
 pub async fn get_project(
@@ -319,11 +329,44 @@ pub struct TemplateBody {
     /// are ignored.
     #[serde(default)]
     prompt_fields: Vec<String>,
+    /// Group ids that replace the memberships when the field is sent.
+    group_ids: Option<Vec<String>>,
 }
 
 fn default_true() -> bool {
     true
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TemplateGroupBody {
+    name: String,
+    #[serde(default)]
+    position: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub(super) struct TemplateGroupResponse {
+    id: String,
+    team_id: String,
+    name: String,
+    position: i64,
+}
+
+impl TemplateGroupResponse {
+    fn new(group: &TemplateGroup) -> Self {
+        Self {
+            id: group.id.clone(),
+            team_id: group.team_id.clone(),
+            name: group.name.clone(),
+            position: group.position,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(transparent)]
+pub(super) struct TemplateGroupListResponse(Vec<TemplateGroupResponse>);
 #[derive(Serialize)]
 pub(super) struct TemplateResponse {
     id: String,
@@ -344,10 +387,11 @@ pub(super) struct TemplateResponse {
     update_on_launch: bool,
     prompt_on_launch: bool,
     prompt_fields: Vec<String>,
+    group_ids: Vec<String>,
 }
 
 impl TemplateResponse {
-    fn new(template: &Template, credential_ids: &[String]) -> Self {
+    fn new(template: &Template, credential_ids: &[String], group_ids: &[String]) -> Self {
         let credential_ids = if credential_ids.is_empty() {
             template
                 .credential_id
@@ -376,6 +420,7 @@ impl TemplateResponse {
             update_on_launch: template.update_on_launch,
             prompt_on_launch: template.prompt_on_launch,
             prompt_fields: template.prompt_fields(),
+            group_ids: group_ids.to_vec(),
         }
     }
 }
@@ -401,12 +446,24 @@ pub async fn list_templates(
             .or_default()
             .push(credential_id);
     }
+    let group_links = db.list_template_group_links(&team)?;
+    let mut groups_by_template: HashMap<String, Vec<String>> = HashMap::new();
+    for (template_id, group_id) in group_links {
+        groups_by_template
+            .entry(template_id)
+            .or_default()
+            .push(group_id);
+    }
     Ok(Json(TemplateListResponse(
         items
             .iter()
             .map(|item| {
                 let ids = by_template.get(&item.id).map(Vec::as_slice).unwrap_or(&[]);
-                TemplateResponse::new(item, ids)
+                let groups = groups_by_template
+                    .get(&item.id)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]);
+                TemplateResponse::new(item, ids, groups)
             })
             .collect(),
     )))
@@ -426,7 +483,12 @@ pub async fn get_template(
         .filter(|template| template.team_id == team)
         .ok_or(ApiError::NotFound)?;
     let credential_ids = db.template_credential_ids(&template.id)?;
-    Ok(Json(TemplateResponse::new(&template, &credential_ids)))
+    let group_ids = db.template_group_ids(&template.id)?;
+    Ok(Json(TemplateResponse::new(
+        &template,
+        &credential_ids,
+        &group_ids,
+    )))
 }
 
 pub async fn create_template(
@@ -437,10 +499,10 @@ pub async fn create_template(
 ) -> AppResult<(StatusCode, Json<TemplateResponse>)> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let (mut template, credential_ids) = build_template(&state, &team, None, body)?;
+    let (mut template, credential_ids, group_ids) = build_template(&state, &team, None, body)?;
     template.admin_saved = user.is_admin;
     let db = state.store();
-    db.insert_template(&template, &credential_ids)?;
+    db.insert_template(&template, &credential_ids, group_ids.as_deref())?;
     activity::note(
         &state,
         &template.team_id,
@@ -453,7 +515,11 @@ pub async fn create_template(
     );
     Ok((
         StatusCode::CREATED,
-        Json(TemplateResponse::new(&template, &credential_ids)),
+        Json(TemplateResponse::new(
+            &template,
+            &credential_ids,
+            group_ids.as_deref().unwrap_or(&[]),
+        )),
     ))
 }
 
@@ -466,10 +532,14 @@ pub async fn update_template(
 ) -> AppResult<Json<TemplateResponse>> {
     let team = team_header(&headers)?;
     gate(&state, &user, &team, Role::Operator)?;
-    let (mut template, credential_ids) = build_template(&state, &team, Some(id), body)?;
+    let (mut template, credential_ids, group_ids) = build_template(&state, &team, Some(id), body)?;
     template.admin_saved = user.is_admin;
     let db = state.store();
-    db.update_template(&template, &credential_ids)?;
+    db.update_template(&template, &credential_ids, group_ids.as_deref())?;
+    let group_ids = match group_ids {
+        Some(group_ids) => group_ids,
+        None => db.template_group_ids(&template.id)?,
+    };
     activity::note(
         &state,
         &template.team_id,
@@ -480,7 +550,11 @@ pub async fn update_template(
         &template.name,
         "success",
     );
-    Ok(Json(TemplateResponse::new(&template, &credential_ids)))
+    Ok(Json(TemplateResponse::new(
+        &template,
+        &credential_ids,
+        &group_ids,
+    )))
 }
 
 pub async fn delete_template(
@@ -552,12 +626,103 @@ pub async fn launch_template(
     let job = db.job(&job_id)?.ok_or(ApiError::NotFound)?;
     Ok((StatusCode::ACCEPTED, Json(JobResponse::new(&job, None))))
 }
+pub async fn list_template_groups(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    user: AuthUser,
+) -> AppResult<Json<TemplateGroupListResponse>> {
+    let team = team_header(&headers)?;
+    gate(&state, &user, &team, Role::Viewer)?;
+    let db = state.store();
+    Ok(Json(TemplateGroupListResponse(
+        db.list_template_groups(&team)?
+            .iter()
+            .map(TemplateGroupResponse::new)
+            .collect(),
+    )))
+}
+
+pub async fn get_template_group(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Json<TemplateGroupResponse>> {
+    let team = team_header(&headers)?;
+    gate(&state, &user, &team, Role::Viewer)?;
+    let db = state.store();
+    let group = db
+        .template_group(&id)?
+        .filter(|group| group.team_id == team)
+        .ok_or(ApiError::NotFound)?;
+    Ok(Json(TemplateGroupResponse::new(&group)))
+}
+
+pub async fn create_template_group(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    user: AuthUser,
+    ApiJson(body): ApiJson<TemplateGroupBody>,
+) -> AppResult<(StatusCode, Json<TemplateGroupResponse>)> {
+    let team = team_header(&headers)?;
+    gate(&state, &user, &team, Role::Operator)?;
+    let group = TemplateGroup {
+        id: Uuid::new_v4().to_string(),
+        team_id: team,
+        name: require_name(&body.name)?,
+        position: body.position.unwrap_or(0).max(0),
+    };
+    let db = state.store();
+    db.insert_template_group(&group)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(TemplateGroupResponse::new(&group)),
+    ))
+}
+
+pub async fn update_template_group(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Path(id): Path<String>,
+    ApiJson(body): ApiJson<TemplateGroupBody>,
+) -> AppResult<Json<TemplateGroupResponse>> {
+    let team = team_header(&headers)?;
+    gate(&state, &user, &team, Role::Operator)?;
+    let db = state.store();
+    let existing = db
+        .template_group(&id)?
+        .filter(|group| group.team_id == team)
+        .ok_or(ApiError::NotFound)?;
+    let group = TemplateGroup {
+        id: existing.id,
+        team_id: team,
+        name: require_name(&body.name)?,
+        position: body.position.unwrap_or(existing.position).max(0),
+    };
+    db.update_template_group(&group)?;
+    Ok(Json(TemplateGroupResponse::new(&group)))
+}
+
+pub async fn delete_template_group(
+    State(state): State<Shared>,
+    headers: HeaderMap,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    let team = team_header(&headers)?;
+    gate(&state, &user, &team, Role::Operator)?;
+    let db = state.store();
+    db.delete_template_group(&id, &team)?;
+    Ok(no_content())
+}
+
 fn build_template(
     state: &Shared,
     team: &str,
     id: Option<String>,
     body: TemplateBody,
-) -> AppResult<(Template, Vec<String>)> {
+) -> AppResult<(Template, Vec<String>, Option<Vec<String>>)> {
     let requested_ids = requested_credential_ids(&body);
     if !runner::known_tool(&body.tool) {
         return Err(ApiError::bad("tool_is_ansible_opentofu_or_shell"));
@@ -591,7 +756,7 @@ fn build_template(
     let inventory_id = blank(body.inventory_id);
     let environment_id = blank(body.environment_id);
     let no_environment = environment_id.is_none() && body.no_environment;
-    let (created_at, loaded, previous_ids) = {
+    let (created_at, loaded, previous_ids, group_ids) = {
         let db = state.store();
         if let Some(project_id) = &project_id {
             db.project(project_id)?
@@ -638,7 +803,25 @@ fn build_template(
             Some(id) => db.template_credential_ids(id)?,
             None => Vec::new(),
         };
-        (created_at, loaded, previous_ids)
+        let group_ids = match &body.group_ids {
+            Some(ids) => {
+                let mut chosen: Vec<String> = Vec::new();
+                for id in ids {
+                    let id = id.trim();
+                    if id.is_empty() || chosen.iter().any(|item| item == id) {
+                        continue;
+                    }
+                    let group = db
+                        .template_group(id)?
+                        .filter(|group| group.team_id == team)
+                        .ok_or_else(|| ApiError::bad("template_group_is_missing"))?;
+                    chosen.push(group.id);
+                }
+                Some(chosen)
+            }
+            None => None,
+        };
+        (created_at, loaded, previous_ids, group_ids)
     };
     let chosen = credentials::assign_loaded(state, team, &loaded)?;
     for credential in &loaded {
@@ -674,6 +857,7 @@ fn build_template(
                 .unwrap_or_else(|_| "[]".to_string()),
         },
         credential_ids,
+        group_ids,
     ))
 }
 
