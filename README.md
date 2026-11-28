@@ -47,18 +47,18 @@ docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
 
 SQLite remains the default without the overlay.
 
-The UI is at `http://127.0.0.1:8080`. Sign in as `admin`. The generated password is one line in the container. The file is mode `0600`, and the password is not written to the log.
+The UI is at `http://127.0.0.1:8080`. Sign in as `admin`. The generated password is one line in the container. The file is mode `0600`, and the password is not written to the log. The image is `scratch` and has no `cat`, so read the file with `docker compose cp`:
+
+```bash
+docker compose cp koreograf:/var/lib/koreograf/initial-admin-password - | tar -xO
+```
 
 Lists open their create and edit forms as overlays, so the list stays in view. A template uses tabs for General, Target, Options, and Variables. `#/templates?new=1` and `#/templates?edit=<id>&tab=target` open the same overlay after a reload, and Back closes it. A workflow is created in a small overlay and then opens in the editor.
 
-```bash
-docker compose exec koreograf cat /var/lib/koreograf/initial-admin-password
-```
-
-Koreograf does not delete that file. After the first sign-in, remove it and set a new password of at least 8 characters on the account page (the name in the sidebar):
+Koreograf does not delete that file. After the first sign-in, set a new password of at least 8 characters on the account page (the name in the sidebar), then remove the file. The image has no `rm`, so a one-off `alpine` container on the same volume deletes it:
 
 ```bash
-docker compose exec koreograf rm /var/lib/koreograf/initial-admin-password
+docker run --rm -v koreograf_koreograf-data:/data alpine rm /data/initial-admin-password
 ```
 
 The volume is `<project>_koreograf-data`. Compose takes the project name from the directory name, folded to lowercase, so a checkout named `Koreograf` uses `koreograf_koreograf-data`. `docker volume ls` shows it. `COMPOSE_PROJECT_NAME` overrides the project name.

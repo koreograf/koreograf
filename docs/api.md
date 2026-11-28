@@ -14,7 +14,7 @@ These commands assume a fresh Compose stack from the [quick start](../README.md#
 
 ```bash
 BASE=http://127.0.0.1:8080
-PASS=$(docker compose exec -T koreograf cat /var/lib/koreograf/initial-admin-password | tr -d '\r\n')
+PASS=$(docker compose cp koreograf:/var/lib/koreograf/initial-admin-password - | tar -xO)
 JAR=/tmp/koreograf.cookies
 rm -f "$JAR"
 
@@ -90,7 +90,7 @@ curl -fsS -b "$JAR" "$BASE/api/v1/jobs/$JOB_ID/output"
 
 `POST /api/v1/login` takes `username` and `password` and returns 200 with the session cookie. A rejected sign-in returns 401 and `invalid_username_or_password` for a wrong password, an unknown user, an empty password, and a directory failure. A request without a session still returns `sign_in_is_required`. Creating a credential needs an owner. Launch returns 202 and needs a JSON object. `extra_vars` is that object, or `{}`.
 
-On a machine without Compose, read `data/initial-admin-password` instead of `docker compose exec`, and use the same JSON.
+On a machine without Compose, read `data/initial-admin-password` instead of `docker compose cp`, and use the same JSON.
 
 ## Errors
 

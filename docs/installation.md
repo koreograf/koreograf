@@ -111,13 +111,18 @@ cp .env.example .env
 docker compose up -d
 ```
 
-The UI is at `http://127.0.0.1:8080`. Sign in as `admin`. Read the generated password, then delete the file after the first sign-in. Koreograf does not remove it.
+The UI is at `http://127.0.0.1:8080`. Sign in as `admin`. The first start writes the password to `/var/lib/koreograf/initial-admin-password` (mode `0600`) and logs the path, not the password. The image is `scratch` and has no `cat`, so read the file with `docker compose cp`:
+
+```bash
+docker compose cp koreograf:/var/lib/koreograf/initial-admin-password - | tar -xO
+```
 
 The service sets `restart: unless-stopped`, so it starts again after a Docker daemon restart or a host reboot. A container stopped with `docker compose stop` stays stopped.
 
+Koreograf does not delete that file. After the first sign-in, set a new password of at least 8 characters on the account page, then remove the file. The image has no `rm`, so a one-off `alpine` container on the same volume deletes it. The volume is `<project>_koreograf-data`, so a checkout named `Koreograf` uses `koreograf_koreograf-data`; `docker volume ls` shows it:
+
 ```bash
-docker compose exec koreograf cat /var/lib/koreograf/initial-admin-password
-docker compose exec koreograf rm /var/lib/koreograf/initial-admin-password
+docker run --rm -v koreograf_koreograf-data:/data alpine rm /data/initial-admin-password
 ```
 
 ### PostgreSQL
