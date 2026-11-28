@@ -20,6 +20,8 @@ pub(crate) const TABLES: &[&str] = &[
     "memberships",
     "inventory_sources",
     "template_credentials",
+    "template_groups",
+    "template_group_members",
     "workflows",
     "workflow_jobs",
     "jobs",

@@ -4,6 +4,7 @@ import { addLink, emptyState, esc, h, selectOptions, table } from "../core/dom.j
 import { t } from "../core/i18n.js";
 import { registerRedirect, registerRoute } from "../core/router.js";
 import { can, go, handle, markSaved, needTeam, route, shell } from "../core/app.js";
+import { teamId } from "../core/state.js";
 import { bindChips, flushChips } from "../core/chips.js";
 import { credentialKindLabel } from "../core/credentials.js";
 import { clearEditHash, editQuery, openEditDialog, rememberEditHash } from "../core/edit.js";
@@ -107,10 +108,13 @@ export function templateSpec(form) {
   return script.trim() ? { script } : {};
 }
 
-export function filterTemplates(items, tool, query) {
+export function filterTemplates(items, tool, query, group = "all") {
   const needle = String(query || "").trim().toLowerCase();
   return items.filter((item) => {
+    const groups = item.group_ids || [];
     if (tool !== "all" && item.tool !== tool) return false;
+    if (group === "ungrouped" && groups.length) return false;
+    if (group !== "all" && group !== "ungrouped" && !groups.includes(group)) return false;
     if (!needle) return true;
     const spec = item.spec || {};
     return [item.name, item.description, item.tool, item.entrypoint, spec.tags, spec.skip_tags, spec.limit]
@@ -118,6 +122,38 @@ export function filterTemplates(items, tool, query) {
       .toLowerCase()
       .includes(needle);
   });
+}
+
+export function groupTemplates(items, groups) {
+  const ordered = [...(groups || [])].sort((left, right) =>
+    (left.position - right.position) || String(left.name).localeCompare(String(right.name))
+  );
+  const sections = ordered.map((group) => ({
+    id: group.id,
+    name: group.name,
+    ungrouped: false,
+    templates: items.filter((item) => (item.group_ids || []).includes(group.id)),
+  }));
+  const ungrouped = items.filter((item) => !(item.group_ids || []).length);
+  if (ungrouped.length) {
+    sections.push({ id: "__ungrouped__", name: "", ungrouped: true, templates: ungrouped });
+  }
+  return sections;
+}
+
+const COLLAPSED_PREFIX = "koreograf.template-groups.collapsed.";
+
+export function collapsedGroups(team) {
+  try {
+    const stored = JSON.parse(localStorage.getItem(`${COLLAPSED_PREFIX}${team}`) || "[]");
+    return new Set(Array.isArray(stored) ? stored : []);
+  } catch {
+    return new Set();
+  }
+}
+
+export function rememberCollapsed(team, collapsed) {
+  localStorage.setItem(`${COLLAPSED_PREFIX}${team}`, JSON.stringify([...collapsed]));
 }
 
 export function templateEntrypointError(tool, entrypoint) {
@@ -259,28 +295,42 @@ export async function openLaunchPrompt(item, launchWithOptions = false, preset =
 
 async function pageTemplates() {
   if (!needTeam()) return;
-  const items = await api("GET", "/api/v1/templates");
+  const [items, groups] = await Promise.all([
+    api("GET", "/api/v1/templates"),
+    api("GET", "/api/v1/template-groups"),
+  ]);
   shell(t("templates"), `
     <section class="card">
       <div class="spread">
         <input class="search" id="template-search" placeholder="${h("search_templates")}" autocomplete="off">
-        <div class="choice-row" id="template-filters">
-          <button class="btn pill primary" type="button" data-tool="all">${h("all")}</button>
-          <button class="btn pill" type="button" data-tool="ansible">Ansible</button>
-          <button class="btn pill" type="button" data-tool="opentofu">OpenTofu</button>
-          <button class="btn pill" type="button" data-tool="shell">Shell</button>
+        <div class="row">
+          <div class="choice-row" id="template-filters">
+            <button class="btn pill primary" type="button" data-tool="all">${h("all")}</button>
+            <button class="btn pill" type="button" data-tool="ansible">Ansible</button>
+            <button class="btn pill" type="button" data-tool="opentofu">OpenTofu</button>
+            <button class="btn pill" type="button" data-tool="shell">Shell</button>
+          </div>
+          <label class="field template-group-filter"><span>${h("group_filter")}</span>
+            <select class="fit" id="template-group-filter">
+              <option value="all">${h("all_template_groups")}</option>
+              ${groups.map((group) => `<option value="${esc(group.id)}">${esc(group.name)}</option>`).join("")}
+              <option value="ungrouped">${h("ungrouped")}</option>
+            </select>
+          </label>
         </div>
       </div>
       <div id="template-table"></div>
     </section>`,
-    can("operator") ? addLink("#/templates?new=1", "template_2") : "");
+    can("operator")
+      ? `<button class="btn" type="button" id="manage-template-groups">${h("template_groups")}</button>${addLink("#/templates?new=1", "template_2")}`
+      : "");
   let tool = "all";
   let query = "";
-  const draw = () => {
-    const shown = filterTemplates(items, tool, query);
-    const rows = shown.map((item) => {
-      const entry = item.entrypoint || "—";
-      return `
+  let group = "all";
+  const collapsed = collapsedGroups(teamId);
+  const rowsFor = (shown) => shown.map((item) => {
+    const entry = item.entrypoint || "—";
+    return `
       <tr>
         <td><a href="#/templates?edit=${esc(item.id)}">${esc(item.name)}</a><div class="small muted">${esc(item.description)}</div></td>
         <td class="tool narrow-hide">${esc(item.tool)}</td>
@@ -288,18 +338,28 @@ async function pageTemplates() {
         <td class="small narrow-hide">${esc(templateOptionLine(item))}</td>
         <td>${can("operator") ? `<div class="row"><button class="btn primary" type="button" data-launch="${esc(item.id)}">${h("launch")}</button>${(item.tool === "ansible" || item.tool === "opentofu") && !item.prompt_on_launch && !(item.prompt_fields || []).length ? `<button class="btn" type="button" data-launch-options="${esc(item.id)}">${h("launch_with_options")}</button>` : ""}</div>` : ""}</td>
       </tr>`;
-    });
-    const host = document.querySelector("#template-table");
-    if (!shown.length) {
-      host.innerHTML = items.length
-        ? `<p class="small muted">${h("nothing_here")}</p>`
-        : emptyState("empty_templates", can("operator") ? "#/templates?new=1" : "", "new_template");
-      return;
-    }
-    host.innerHTML = table([t("name"), t("tool"), t("entry"), t("run_2"), ""], rows);
+  });
+  const sectionHtml = (section) => {
+    const isCollapsed = collapsed.has(section.id);
+    const label = section.ungrouped ? t("ungrouped") : section.name;
+    const count = section.templates.length;
+    return `<section class="template-group" data-template-group="${esc(section.id)}">
+      <div class="template-group-head">
+        <button class="btn ghost template-group-toggle" type="button" data-group-toggle="${esc(section.id)}" aria-expanded="${isCollapsed ? "false" : "true"}" aria-controls="template-group-${esc(section.id)}">
+          <span class="template-group-chevron" aria-hidden="true">▾</span>
+          <span>${esc(label)}</span>
+          <span class="small muted template-group-count">${count}</span>
+        </button>
+      </div>
+      <div class="template-group-body" id="template-group-${esc(section.id)}"${isCollapsed ? " hidden" : ""}>
+        ${table([t("name"), t("tool"), t("entry"), t("run_2"), ""], rowsFor(section.templates))}
+      </div>
+    </section>`;
+  };
+  const bindLaunch = (shown) => {
     document.querySelectorAll("[data-launch]").forEach((button) => {
       button.addEventListener("click", async () => {
-        const item = items.find((row) => row.id === button.dataset.launch);
+        const item = shown.find((row) => row.id === button.dataset.launch);
         if (item && (item.prompt_on_launch || (item.prompt_fields || []).length)) {
           try {
             await openLaunchPrompt(item);
@@ -321,7 +381,7 @@ async function pageTemplates() {
     });
     document.querySelectorAll("[data-launch-options]").forEach((button) => {
       button.addEventListener("click", async () => {
-        const item = items.find((row) => row.id === button.dataset.launchOptions);
+        const item = shown.find((row) => row.id === button.dataset.launchOptions);
         if (!item) return;
         try {
           await openLaunchPrompt(item, true);
@@ -330,6 +390,33 @@ async function pageTemplates() {
         }
       });
     });
+  };
+  const draw = () => {
+    const shown = filterTemplates(items, tool, query, group);
+    const host = document.querySelector("#template-table");
+    if (!items.length) {
+      host.innerHTML = emptyState("empty_templates", can("operator") ? "#/templates?new=1" : "", "new_template");
+      return;
+    }
+    if (!shown.length) {
+      host.innerHTML = `<p class="small muted">${h("nothing_here")}</p>`;
+      return;
+    }
+    const sections = group === "all" ? groups : groups.filter((row) => row.id === group);
+    host.innerHTML = groupTemplates(shown, sections).map(sectionHtml).join("");
+    host.querySelectorAll("[data-group-toggle]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const id = button.dataset.groupToggle;
+        const body = document.getElementById(`template-group-${id}`);
+        const open = button.getAttribute("aria-expanded") === "true";
+        button.setAttribute("aria-expanded", open ? "false" : "true");
+        if (body) body.hidden = open;
+        if (open) collapsed.add(id);
+        else collapsed.delete(id);
+        rememberCollapsed(teamId, collapsed);
+      });
+    });
+    bindLaunch(shown);
   };
   document.querySelector("#template-search").addEventListener("input", (event) => {
     query = event.target.value;
@@ -344,6 +431,14 @@ async function pageTemplates() {
       draw();
     });
   });
+  document.querySelector("#template-group-filter").addEventListener("change", (event) => {
+    group = event.target.value;
+    draw();
+  });
+  const manage = document.querySelector("#manage-template-groups");
+  if (manage) {
+    manage.addEventListener("click", () => openTemplateGroupsDialog(groups));
+  }
   draw();
   const request = editQuery();
   if (request.create !== null) {
@@ -357,6 +452,106 @@ async function pageTemplates() {
     return;
   }
   await openTemplateDialog(item, request.tab);
+}
+
+async function openTemplateGroupsDialog(groups) {
+  let rows = groups.map((group) => ({ id: group.id, name: group.name }));
+  const deleted = [];
+  const dialog = openDialog({
+    id: "template-groups-dialog",
+    title: t("template_groups"),
+    body: `
+      <p class="small muted">${h("groups_hint")}</p>
+      <div id="template-group-rows"></div>
+      <div class="form-section">
+        <h2>${h("new_group")}</h2>
+        <div class="group-add">
+          <input name="new_group_name" aria-label="${h("group_name")}" placeholder="${h("group_name")}">
+          <button class="btn" type="button" id="add-template-group">${h("add_group")}</button>
+        </div>
+      </div>`,
+    submit: t("save_groups"),
+    onSubmit: async ({ close }) => {
+      for (const [position, row] of rows.entries()) {
+        const name = row.name.trim();
+        if (!name) continue;
+        if (row.id === null) {
+          await api("POST", "/api/v1/template-groups", { name, position });
+        } else {
+          await api("PUT", `/api/v1/template-groups/${encodeURIComponent(row.id)}`, { name, position });
+        }
+      }
+      for (const id of deleted) {
+        await api("DELETE", `/api/v1/template-groups/${encodeURIComponent(id)}`);
+      }
+      close();
+      await route();
+    },
+  });
+  const host = dialog.form.querySelector("#template-group-rows");
+  const drawRows = () => {
+    host.innerHTML = rows.length
+      ? rows.map((row, index) => `
+        <div class="group-row" data-group-row="${index}">
+          <input name="group_name" aria-label="${h("group_name")}" value="${esc(row.name)}" required>
+          <button class="btn compact" type="button" data-group-up="${index}" aria-label="${h("move_group_up")}"${index === 0 ? " disabled" : ""}>↑</button>
+          <button class="btn compact" type="button" data-group-down="${index}" aria-label="${h("move_group_down")}"${index === rows.length - 1 ? " disabled" : ""}>↓</button>
+          <button class="btn compact danger" type="button" data-group-delete="${index}" aria-label="${h("delete_group_name", { name: row.name })}">×</button>
+        </div>`).join("")
+      : `<p class="small muted">${h("no_template_groups")}</p>`;
+    host.querySelectorAll("[data-group-up]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const index = Number(button.dataset.groupUp);
+        if (index < 1) return;
+        [rows[index - 1], rows[index]] = [rows[index], rows[index - 1]];
+        drawRows();
+      });
+    });
+    host.querySelectorAll("[data-group-down]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const index = Number(button.dataset.groupDown);
+        if (index >= rows.length - 1) return;
+        [rows[index + 1], rows[index]] = [rows[index], rows[index + 1]];
+        drawRows();
+      });
+    });
+    host.querySelectorAll("[data-group-delete]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const index = Number(button.dataset.groupDelete);
+        const row = rows[index];
+        if (!(await confirmDialog({ title: t("delete"), body: t("delete_this_template_group", { name: row.name }), confirmLabel: t("delete"), danger: true }))) return;
+        if (row.id !== null) deleted.push(row.id);
+        rows.splice(index, 1);
+        drawRows();
+      });
+    });
+    host.querySelectorAll('input[name="group_name"]').forEach((input) => {
+      input.addEventListener("input", () => {
+        const index = Number(input.closest("[data-group-row]").dataset.groupRow);
+        rows[index].name = input.value;
+      });
+    });
+  };
+  drawRows();
+  const add = dialog.form.querySelector("#add-template-group");
+  const newName = dialog.form.querySelector('input[name="new_group_name"]');
+  const addRow = () => {
+    const name = newName.value.trim();
+    if (!name) {
+      newName.focus();
+      return;
+    }
+    rows.push({ id: null, name });
+    newName.value = "";
+    drawRows();
+  };
+  add.addEventListener("click", addRow);
+  newName.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      addRow();
+    }
+  });
 }
 
 export function environmentRuntimeWarning(mode, runtime, environmentId) {
@@ -381,12 +576,13 @@ export function environmentsFor(environments, tool) {
 
 async function openTemplateDialog(existing, initialTab = "") {
   if (!needTeam()) return;
-  const [projects, inventories, credentials, environments, runner] = await Promise.all([
+  const [projects, inventories, credentials, environments, runner, groups] = await Promise.all([
     api("GET", "/api/v1/projects"),
     api("GET", "/api/v1/inventories"),
     api("GET", "/api/v1/credentials"),
     api("GET", "/api/v1/environments"),
     api("GET", "/api/v1/runner"),
+    api("GET", "/api/v1/template-groups"),
   ]);
   const editing = Boolean(existing);
   const readOnly = !can("operator");
@@ -394,7 +590,7 @@ async function openTemplateDialog(existing, initialTab = "") {
   const item = existing || {
     name: "", description: "", tool: "ansible", project_id: "", inventory_id: "",
     credential_id: "", credential_ids: [], environment_id: "", entrypoint: "", extra_vars: {}, spec: {},
-    prompt_fields: [],
+    prompt_fields: [], group_ids: [],
   };
   const environmentsForTool = (tool) => environmentsFor(environments, tool);
   const environmentDefault = (tool) => runner[`default_environment_${tool}`] || "";
@@ -418,9 +614,17 @@ async function openTemplateDialog(existing, initialTab = "") {
   };
   const verbosity = Number(spec.verbosity) || 0;
   const promptFieldSelected = normalizePromptFields(item.tool, item.prompt_fields || []);
+  const groupChoices = groups.length
+    ? groups.map((group) => `<label class="check-row"><input type="checkbox" name="group_id" value="${esc(group.id)}"${(item.group_ids || []).includes(group.id) ? " checked" : ""}${readOnly ? " disabled" : ""}><span>${esc(group.name)}</span></label>`).join("")
+    : `<p class="small muted">${h("no_template_groups")}</p>`;
   const general = `
     <label class="field required"><span>${h("name")}</span><input name="name" required value="${esc(item.name)}"></label>
     ${descriptionField(item.description)}
+    <div class="form-section">
+      <h2>${h("template_groups")}</h2>
+      <p class="small muted">${h("template_groups_hint")}</p>
+      <div class="check-grid" id="template-groups-field">${groupChoices}</div>
+    </div>
     <div class="form-section">
       <h2>${h("prompt_fields")}</h2>
       <label class="field check"><span>${h("prompt_on_launch")}</span><input name="prompt_on_launch" type="checkbox"${item.prompt_on_launch ? " checked" : ""}${readOnly ? " disabled" : ""}></label>
@@ -519,6 +723,7 @@ async function openTemplateDialog(existing, initialTab = "") {
           prompt_fields: form.prompt_on_launch.checked
             ? []
             : normalizePromptFields(form.tool.value, selectedPromptFields(form)),
+          group_ids: [...form.querySelectorAll('input[name="group_id"]:checked')].map((input) => input.value),
         };
         if (editing) await api("PUT", `/api/v1/templates/${encodeURIComponent(item.id)}`, body);
         else await api("POST", "/api/v1/templates", body);

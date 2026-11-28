@@ -312,3 +312,453 @@ async fn a_template_can_run_the_last_sync_offline() {
     let _ = std::fs::remove_dir_all(&origin);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn template_groups_are_team_scoped_and_only_operators_write() {
+    let harness = TestApp::boot("template-groups", Options::default());
+    let app = harness.app.clone();
+    let dir = harness.dir.clone();
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let (status, second, _) = call(
+        &app,
+        "POST",
+        "/api/v1/teams",
+        Some(&cookie),
+        None,
+        Some(json!({"name": "Second group team", "description": "Second"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{second}");
+    let other_team = second["id"].as_str().unwrap().to_string();
+
+    let (status, later, _) = call(
+        &app,
+        "POST",
+        "/api/v1/template-groups",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Kubernetes", "position": 1})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{later}");
+    let later_id = later["id"].as_str().unwrap().to_string();
+
+    let (status, first, _) = call(
+        &app,
+        "POST",
+        "/api/v1/template-groups",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Patchday", "position": 0})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    let first_id = first["id"].as_str().unwrap().to_string();
+    assert_eq!(first["team_id"], team);
+
+    let (status, listed, _) = call(
+        &app,
+        "GET",
+        "/api/v1/template-groups",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let names: Vec<&str> = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Patchday", "Kubernetes"]);
+
+    let (status, renamed, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/v1/template-groups/{later_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Cluster", "position": 0})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{renamed}");
+    assert_eq!(renamed["name"], "Cluster");
+    assert_eq!(renamed["position"], 0);
+
+    let (status, duplicate, _) = call(
+        &app,
+        "POST",
+        "/api/v1/template-groups",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({"name": "Cluster"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{duplicate}");
+    assert_eq!(duplicate["error"], "that_name_is_already_used_in_this_team");
+
+    let (status, other, _) = call(
+        &app,
+        "POST",
+        "/api/v1/template-groups",
+        Some(&cookie),
+        Some(&other_team),
+        Some(json!({"name": "Patchday"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{other}");
+    let other_group = other["id"].as_str().unwrap().to_string();
+
+    let (status, cross_team, _) = call(
+        &app,
+        "POST",
+        "/api/v1/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Cross team",
+            "tool": "shell",
+            "entrypoint": "",
+            "spec": {"script": "true"},
+            "group_ids": [other_group],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{cross_team}");
+    assert_eq!(cross_team["error"], "template_group_is_missing");
+
+    let (status, unknown, _) = call(
+        &app,
+        "POST",
+        "/api/v1/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "name": "Unknown group",
+            "tool": "shell",
+            "entrypoint": "",
+            "spec": {"script": "true"},
+            "group_ids": ["missing-group"],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{unknown}");
+    assert_eq!(unknown["error"], "template_group_is_missing");
+
+    let (status, viewer, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "username": "group-viewer",
+            "display_name": "Group Viewer",
+            "password": "viewer-pass",
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{viewer}");
+    let (status, operator, _) = call(
+        &app,
+        "POST",
+        "/api/users",
+        Some(&cookie),
+        Some(&team),
+        Some(json!({
+            "username": "group-operator",
+            "display_name": "Group Operator",
+            "password": "operator-pass",
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{operator}");
+    for (username, role) in [("group-viewer", "viewer"), ("group-operator", "operator")] {
+        let (status, _, _) = call(
+            &app,
+            "POST",
+            &format!("/api/teams/{team}/members"),
+            Some(&cookie),
+            Some(&team),
+            Some(json!({"username": username, "role": role})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+    let (_, _, viewer_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "group-viewer", "password": "viewer-pass"})),
+    )
+    .await;
+    let viewer_cookie = viewer_cookie.expect("viewer cookie");
+    let (_, _, operator_cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "group-operator", "password": "operator-pass"})),
+    )
+    .await;
+    let operator_cookie = operator_cookie.expect("operator cookie");
+
+    let (status, listed, _) = call(
+        &app,
+        "GET",
+        "/api/v1/template-groups",
+        Some(&viewer_cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(listed.as_array().unwrap().len(), 2);
+    let (status, denied, _) = call(
+        &app,
+        "POST",
+        "/api/v1/template-groups",
+        Some(&viewer_cookie),
+        Some(&team),
+        Some(json!({"name": "Viewer group"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+    let (status, _, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/v1/template-groups/{first_id}"),
+        Some(&viewer_cookie),
+        Some(&team),
+        Some(json!({"name": "Viewer rename"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/v1/template-groups/{first_id}"),
+        Some(&viewer_cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/v1/template-groups",
+        Some(&operator_cookie),
+        Some(&team),
+        Some(json!({"name": "Operator group", "position": 2})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let operator_group = created["id"].as_str().unwrap().to_string();
+    let (status, updated, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/v1/template-groups/{operator_group}"),
+        Some(&operator_cookie),
+        Some(&team),
+        Some(json!({"name": "Operator renamed", "position": 1})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["name"], "Operator renamed");
+    let (status, _, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/v1/template-groups/{operator_group}"),
+        Some(&operator_cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/v1/template-groups/{other_group}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_template_keeps_its_groups_until_the_field_replaces_them() {
+    let harness = TestApp::boot("template-group-assign", Options::default());
+    let app = harness.app.clone();
+    let dir = harness.dir.clone();
+
+    let (status, me, cookie) = call(
+        &app,
+        "POST",
+        "/api/login",
+        None,
+        None,
+        Some(json!({"username": "admin", "password": "test-admin-pass"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let cookie = cookie.expect("session cookie");
+    let team = me["teams"][0]["id"].as_str().unwrap().to_string();
+
+    let mut group_ids = Vec::new();
+    for (name, position) in [("Patchday", 0), ("Kubernetes", 1)] {
+        let (status, group, _) = call(
+            &app,
+            "POST",
+            "/api/v1/template-groups",
+            Some(&cookie),
+            Some(&team),
+            Some(json!({"name": name, "position": position})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{group}");
+        group_ids.push(group["id"].as_str().unwrap().to_string());
+    }
+
+    let body = json!({
+        "name": "Grouped shell",
+        "tool": "shell",
+        "entrypoint": "",
+        "spec": {"script": "true"},
+        "group_ids": [group_ids[0], group_ids[1]],
+    });
+    let (status, created, _) = call(
+        &app,
+        "POST",
+        "/api/v1/templates",
+        Some(&cookie),
+        Some(&team),
+        Some(body.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let template_id = created["id"].as_str().unwrap().to_string();
+    assert_eq!(created["group_ids"], json!([group_ids[0], group_ids[1]]));
+
+    let (status, listed, _) = call(
+        &app,
+        "GET",
+        "/api/v1/templates",
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let stored = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == template_id)
+        .unwrap();
+    assert_eq!(stored["group_ids"], json!([group_ids[0], group_ids[1]]));
+
+    let mut update = body.clone();
+    update["group_ids"] = json!([group_ids[1]]);
+    let (status, updated, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/v1/templates/{template_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(update),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["group_ids"], json!([group_ids[1]]));
+
+    let mut keep = body.clone();
+    keep.as_object_mut().unwrap().remove("group_ids");
+    let (status, kept, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/v1/templates/{template_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(keep),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{kept}");
+    assert_eq!(kept["group_ids"], json!([group_ids[1]]));
+
+    let mut clear = body.clone();
+    clear["group_ids"] = json!([]);
+    let (status, cleared, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/v1/templates/{template_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(clear),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{cleared}");
+    assert_eq!(cleared["group_ids"], json!([]));
+
+    let mut assign = body.clone();
+    assign["group_ids"] = json!([group_ids[0]]);
+    let (status, assigned, _) = call(
+        &app,
+        "PUT",
+        &format!("/api/v1/templates/{template_id}"),
+        Some(&cookie),
+        Some(&team),
+        Some(assign),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{assigned}");
+    assert_eq!(assigned["group_ids"], json!([group_ids[0]]));
+
+    let (status, _, _) = call(
+        &app,
+        "DELETE",
+        &format!("/api/v1/template-groups/{}", group_ids[0]),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, kept, _) = call(
+        &app,
+        "GET",
+        &format!("/api/v1/templates/{template_id}"),
+        Some(&cookie),
+        Some(&team),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{kept}");
+    assert_eq!(kept["name"], "Grouped shell");
+    assert_eq!(kept["group_ids"], json!([]));
+    let _ = std::fs::remove_dir_all(&dir);
+}

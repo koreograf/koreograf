@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::error::{ApiError, AppResult};
 
-pub(crate) const SCHEMA_VERSION: u32 = 12;
+pub(crate) const SCHEMA_VERSION: u32 = 13;
 const BASELINE_VERSION: u32 = 1;
 
 /// A session row moves its last-seen time at most once per interval, so a
@@ -132,6 +132,12 @@ pub(crate) const SQLITE_MIGRATIONS: &[Migration] = &[
         sql: include_str!("../migrations/sqlite/0012_prompt_fields.sql"),
         legacy_columns: &[("templates", "prompt_fields")],
     },
+    Migration {
+        version: 13,
+        name: "0013_template_groups",
+        sql: include_str!("../migrations/sqlite/0013_template_groups.sql"),
+        legacy_columns: &[],
+    },
 ];
 
 pub(crate) const POSTGRES_MIGRATIONS: &[Migration] = &[
@@ -212,6 +218,12 @@ pub(crate) const POSTGRES_MIGRATIONS: &[Migration] = &[
         version: 12,
         name: "0012_prompt_fields",
         sql: include_str!("../migrations/postgres/0012_prompt_fields.sql"),
+        legacy_columns: &[],
+    },
+    Migration {
+        version: 13,
+        name: "0013_template_groups",
+        sql: include_str!("../migrations/postgres/0013_template_groups.sql"),
         legacy_columns: &[],
     },
 ];
@@ -992,6 +1004,14 @@ pub struct Template {
     pub prompt_on_launch: bool,
     /// JSON list of the fields the launch dialog may replace for this template.
     pub prompt_fields: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct TemplateGroup {
+    pub id: String,
+    pub team_id: String,
+    pub name: String,
+    pub position: i64,
 }
 
 /// Every promptable field, in the order the template form and API responses

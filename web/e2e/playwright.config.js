@@ -7,7 +7,7 @@ const { dataDir, password, port, root, username } = require("./env");
 
 module.exports = defineConfig({
   testDir: __dirname,
-  testMatch: /(smoke|mobile|overview|no-team|structured|tofu|shell|assistant|assistant-phone|relaunch)\.spec\.js/,
+  testMatch: /(smoke|mobile|overview|no-team|structured|tofu|shell|assistant|assistant-phone|relaunch|groups)\.spec\.js/,
   timeout: 30000,
   fullyParallel: false,
   workers: 1,
@@ -33,6 +33,8 @@ module.exports = defineConfig({
     { name: "assistant", testMatch: "assistant.spec.js", use: { ...devices["Desktop Chrome"] } },
     { name: "Pixel 9 assistant", testMatch: "assistant-phone.spec.js", use: { ...devices["Pixel 9"] } },
     { name: "relaunch", testMatch: "relaunch.spec.js", use: { ...devices["Desktop Chrome"] } },
+    { name: "groups", testMatch: "groups.spec.js", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } } },
+    { name: "Pixel 9 groups", testMatch: "groups.spec.js", use: { ...devices["Pixel 9"], viewport: { width: 412, height: 923 } } },
     { name: "Pixel 8 relaunch", testMatch: "relaunch.spec.js", use: { ...devices["Pixel 8"] } },
   ],
   webServer: {
