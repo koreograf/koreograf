@@ -8,6 +8,17 @@ const test = require("node:test");
 
 const load = () => import(pathToFileURL(join(__dirname, "..", "js", "features", "environments.js")).href);
 
+test("the environments list redirects to the runtime page", async () => {
+  await import(pathToFileURL(join(__dirname, "..", "js", "features", "index.js")).href);
+  const { matchRoute } = await import(pathToFileURL(join(__dirname, "..", "js", "core", "router.js")).href);
+  const { navActive } = await import(pathToFileURL(join(__dirname, "..", "js", "core", "app.js")).href);
+  const route = matchRoute("#/environments");
+  assert.ok(route, "#/environments has no route");
+  assert.deepEqual(route.handler(route.params), { redirect: "#/runtime" });
+  assert.equal(navActive("#/environments", "#/runtime"), true);
+  assert.equal(matchRoute("#/no-such-page"), null);
+});
+
 test("the environment list filter matches display fields", async () => {
   const { environmentMatches } = await load();
   const item = { name: "Web", tool: "ansible", image: "quay.io/ansible/awx-ee:latest", pull_policy: "always", scope: "team", team_name: "Ops" };
